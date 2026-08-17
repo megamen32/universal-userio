@@ -1,0 +1,47 @@
+# Universal UserIO
+
+Universal UserIO is the business/control plane above Universal Inbox and
+NoticePlace. It owns conversations, user identities, AI reply drafts and
+approval. It does **not** poll providers, hold browser sessions, or select
+delivery URLs.
+
+```text
+providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
+                           read       send only after approval
+```
+
+## MVP contract
+
+1. `universal.inbox.message.v1` becomes one durable conversation message.
+2. An AI provider produces a draft, never a delivery.
+3. A human approves or rejects the draft.
+4. Only approval emits `userio.reply.v1` to a scoped NoticePlace route.
+
+Provider integrations declare `read` and `reply` capabilities. A VK or
+WhatsApp Web browser worker owns its browser session and translates UI actions
+to/from these contracts; UserIO sees the same conversation API as Telegram or
+Matrix.
+
+## Boundaries
+
+- Universal Inbox owns source cursors, deduplication and canonical ingress.
+- UserIO owns business identity, conversation state, drafts and approval.
+- NoticePlace owns durable delivery, destination credentials, retries and
+  provider receipts.
+
+`route_id` is a UserIO control-plane reference. The deployment maps it to a
+scoped NoticePlace consumer token; neither the AI nor a client submits a
+provider credential or URL.
+
+## Minimal API
+
+`POST /v1/messages` accepts a canonical `universal.inbox.message.v1` envelope
+and a configured `route_id`. It returns a proposed draft; it never sends a
+reply.
+
+`POST /v1/drafts/{draft_id}/approve` is the single send authority. The
+`route_id` resolves to a server-side `NoticePlaceRoute`, so a caller cannot
+supply an arbitrary destination, token, or provider URL.
+
+`GET /v1/conversations/{conversation_id}` returns durable history and draft
+state. All endpoints require a UserIO bearer token.
