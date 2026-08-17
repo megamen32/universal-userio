@@ -18,7 +18,7 @@ _DASHBOARD = """<!doctype html><meta charset=utf-8><title>Universal UserIO</titl
 <style>body{font:16px system-ui;max-width:900px;margin:2rem auto}article{border:1px solid #ddd;padding:1rem;margin:.7rem 0}button{margin:.2rem}small{color:#666}</style>
 <h1>Universal UserIO</h1><p id=status>Loading unified inbox...</p><main id=inbox></main>
 <script>
-const token=prompt('UserIO API token'); const api=(path, options={})=>fetch(path,{...options,headers:{...(options.headers||{}),Authorization:'Bearer '+token}});
+const api=(path, options={})=>fetch(path,options);
 const esc=value=>String(value).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function approve(id){await api('/v1/drafts/'+id+'/approve',{method:'POST',body:'{}'}); await load()}
 async function seen(source,id){await api('/v1/inbox/seen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,message_id:id})}); await load()}
@@ -31,9 +31,11 @@ for(const m of data.messages){const c=await (await api('/v1/conversations/'+m.co
 def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
     class UserIOHandler(BaseHTTPRequestHandler):
-        def _authorized(self) -> bool:
+        def _authorized(self, *, allow_proxy: bool = False) -> bool:
             presented = self.headers.get("Authorization", "")
-            return hmac.compare_digest(presented, f"Bearer {token}")
+            return hmac.compare_digest(presented, f"Bearer {token}") or (
+                allow_proxy and self.headers.get("X-UserIO-Authenticated") == "1"
+            )
 
         def _reply(self, status: int, payload: dict) -> None:
             encoded = json.dumps(payload, ensure_ascii=False).encode()
@@ -58,10 +60,10 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
             return value
 
         def do_POST(self) -> None:  # noqa: N802
-            if not self._authorized():
+            path = urlparse(self.path).path
+            if not self._authorized(allow_proxy=path != "/mcp"):
                 self._reply(401, {"error": "unauthorized"})
                 return
-            path = urlparse(self.path).path
             try:
                 if path == "/mcp":
                     request = self._json()
@@ -134,7 +136,7 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
             if urlparse(self.path).path == "/":
                 self._html(200, _DASHBOARD)
                 return
-            if not self._authorized():
+            if not self._authorized(allow_proxy=True):
                 self._reply(401, {"error": "unauthorized"})
                 return
             path = urlparse(self.path).path

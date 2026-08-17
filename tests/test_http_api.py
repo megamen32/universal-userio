@@ -122,3 +122,24 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_trusted_loopback_proxy_can_use_dashboard_api_but_not_mcp(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        inbox = Request(f"http://127.0.0.1:{server.server_port}/v1/inbox", headers={"X-UserIO-Authenticated": "1"})
+        with urlopen(inbox) as response:
+            assert json.loads(response.read()) == {"messages": []}
+        mcp = Request(f"http://127.0.0.1:{server.server_port}/mcp", data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}', method="POST", headers={"X-UserIO-Authenticated": "1"})
+        try:
+            urlopen(mcp)
+        except HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError("proxy header bypassed MCP bearer authentication")
+    finally:
+        server.shutdown()
+        server.server_close()
