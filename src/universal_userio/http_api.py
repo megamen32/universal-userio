@@ -21,10 +21,11 @@ _DASHBOARD = """<!doctype html><meta charset=utf-8><title>Universal UserIO</titl
 const api=(path, options={})=>fetch(path,options);
 const esc=value=>String(value).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function approve(id){await api('/v1/drafts/'+id+'/approve',{method:'POST',body:'{}'}); await load()}
+async function propose(id){await api('/v1/conversations/'+id+'/ai-drafts',{method:'POST',body:'{}'}); await load()}
 async function seen(source,id){await api('/v1/inbox/seen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,message_id:id})}); await load()}
 async function load(){const r=await api('/v1/inbox'); if(!r.ok){document.querySelector('#status').textContent='Authentication failed';return} const data=await r.json();
 document.querySelector('#status').textContent=`${data.messages.length} new message(s)`; const root=document.querySelector('#inbox');root.innerHTML='';
-for(const m of data.messages){const c=await (await api('/v1/conversations/'+m.conversation_id)).json(); const drafts=(c.drafts||[]).map(d=>`<li>${esc(d.body)} <small>${esc(d.status)}</small>${d.status==='proposed'?` <button onclick="approve('${d.id}')">Approve & send</button>`:''}</li>`).join(''); const node=document.createElement('article'); node.innerHTML=`<b>${esc(m.source)} · ${esc(m.sender)}</b><p>${esc(m.body)}</p><small>${esc(c.identity_id||'unmapped contact')}</small><ul>${drafts}</ul><button onclick="seen('${m.source}','${m.message_id}')">Mark seen</button>`;root.append(node)}} load();
+for(const m of data.messages){const c=await (await api('/v1/conversations/'+m.conversation_id)).json(); const drafts=(c.drafts||[]).map(d=>`<li>${esc(d.body)} <small>${esc(d.status)}</small>${d.status==='proposed'?` <button onclick="approve('${d.id}')">Approve & send</button>`:''}</li>`).join(''); const node=document.createElement('article'); node.innerHTML=`<b>${esc(m.source)} · ${esc(m.sender)}</b><p>${esc(m.body)}</p><small>${esc(c.identity_id||'unmapped contact')}</small><ul>${drafts}</ul><button onclick="propose('${m.conversation_id}')">Ask AI for variants</button><button onclick="seen('${m.source}','${m.message_id}')">Mark seen</button>`;root.append(node)}} load();
 </script>""".encode()
 
 
@@ -87,8 +88,17 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                     if not route_id:
                         raise ValueError("route_id required")
                     message = inbox_message_from_envelope(payload.get("message") or {}, received_at=time.time())
-                    conversation_id, accepted, draft = service.receive_and_plan(message, route_id=route_id)
+                    conversation_id, accepted = service.receive(message, route_id=route_id)
+                    draft = None
+                    conversation = service._store.conversation(conversation_id)
+                    if accepted and conversation and conversation["response_mode"] == "auto_send":
+                        draft = service.approve(service.propose(conversation_id, message).id)
                     self._reply(202, {"conversation_id": conversation_id, "accepted": accepted, "draft": None if draft is None else {"id": draft.id, "body": draft.body, "status": draft.status}})
+                    return
+                if path.startswith("/v1/conversations/") and path.endswith("/ai-drafts"):
+                    conversation_id = path.removeprefix("/v1/conversations/").removesuffix("/ai-drafts").strip("/")
+                    drafts = service.propose_from_conversation(conversation_id)
+                    self._reply(202, {"drafts": [{"id": draft.id, "body": draft.body, "status": draft.status} for draft in drafts]})
                     return
                 if path == "/v1/identities":
                     payload = self._json()

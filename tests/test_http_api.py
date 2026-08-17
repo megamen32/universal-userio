@@ -47,9 +47,14 @@ def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path
         with urlopen(request) as response:
             accepted = json.loads(response.read())
         assert accepted["accepted"] is True
+        assert accepted["draft"] is None
         assert outbox.calls == []
 
-        approve = Request(base + f"/v1/drafts/{accepted['draft']['id']}/approve", data=b"{}", method="POST", headers={"Authorization": "Bearer test-token"})
+        propose = Request(base + f"/v1/conversations/{accepted['conversation_id']}/ai-drafts", data=b"{}", method="POST", headers={"Authorization": "Bearer test-token"})
+        with urlopen(propose) as response:
+            draft = json.loads(response.read())["drafts"][0]
+
+        approve = Request(base + f"/v1/drafts/{draft['id']}/approve", data=b"{}", method="POST", headers={"Authorization": "Bearer test-token"})
         with urlopen(approve) as response:
             assert json.loads(response.read())["status"] == "approved"
         assert outbox.calls[0]["route_id"] == "telegram-reply"
