@@ -112,3 +112,22 @@ def test_identity_rule_enables_autosend_and_new_message_feed(tmp_path) -> None:
     assert store.new_messages() == [{"source": "vk", "message_id": "43", "sender": "42", "body": "urgent", "received_at": 1.0, "conversation_id": conversation_id, "identity_id": "person_anna"}]
     assert store.mark_seen(source="vk", message_id="43") is True
     assert store.new_messages() == []
+
+
+def test_ai_variants_are_independent_approvable_drafts(tmp_path) -> None:
+    class VariantGenerator:
+        def suggest(self, **_kwargs) -> str:
+            return "fallback"
+
+        def suggest_variants(self, **_kwargs):
+            return ["formal reply", "friendly reply", ""]
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, VariantGenerator(), Outbox())
+    message = InboxMessage("telegram", "1", "chat", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+
+    drafts = service.propose_variants(conversation_id, message)
+
+    assert [draft.body for draft in drafts] == ["formal reply", "friendly reply"]
+    assert [draft["status"] for draft in store.conversation(conversation_id)["drafts"]] == ["proposed", "proposed"]
