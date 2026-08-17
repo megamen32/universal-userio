@@ -46,9 +46,29 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                     if not route_id:
                         raise ValueError("route_id required")
                     message = inbox_message_from_envelope(payload.get("message") or {}, received_at=time.time())
-                    conversation_id, accepted = service.receive(message, route_id=route_id)
-                    draft = service.propose(conversation_id, message) if accepted else None
+                    conversation_id, accepted, draft = service.receive_and_plan(message, route_id=route_id)
                     self._reply(202, {"conversation_id": conversation_id, "accepted": accepted, "draft": None if draft is None else {"id": draft.id, "body": draft.body, "status": draft.status}})
+                    return
+                if path == "/v1/identities":
+                    payload = self._json()
+                    service._store.register_identity(
+                        source=str(payload.get("source") or ""), external_id=str(payload.get("external_id") or ""),
+                        identity_id=str(payload.get("identity_id") or ""), display_name=str(payload.get("display_name") or ""),
+                    )
+                    self._reply(202, {"accepted": True})
+                    return
+                if path == "/v1/reply-rules":
+                    payload = self._json()
+                    service._store.set_rule(
+                        identity_id=str(payload.get("identity_id") or ""), source=str(payload.get("source") or ""),
+                        route_id=str(payload.get("route_id") or ""), mode=str(payload.get("mode") or ""),
+                    )
+                    self._reply(202, {"accepted": True})
+                    return
+                if path == "/v1/inbox/seen":
+                    payload = self._json()
+                    changed = service._store.mark_seen(source=str(payload.get("source") or ""), message_id=str(payload.get("message_id") or ""))
+                    self._reply(202, {"changed": changed})
                     return
                 if path.startswith("/v1/drafts/") and path.endswith("/approve"):
                     draft_id = path.removeprefix("/v1/drafts/").removesuffix("/approve").strip("/")
@@ -58,12 +78,18 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                 self._reply(404, {"error": "not found"})
             except (KeyError, ValueError) as error:
                 self._reply(400, {"error": str(error)})
+            except RuntimeError as error:
+                self._reply(502, {"error": str(error)})
 
         def do_GET(self) -> None:  # noqa: N802
             if not self._authorized():
                 self._reply(401, {"error": "unauthorized"})
                 return
-            conversation_id = urlparse(self.path).path.removeprefix("/v1/conversations/")
+            path = urlparse(self.path).path
+            if path == "/v1/inbox":
+                self._reply(200, {"messages": service._store.new_messages()})
+                return
+            conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})
                 return

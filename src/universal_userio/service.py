@@ -21,7 +21,18 @@ class UserIOService:
 
     def receive(self, message: InboxMessage, *, route_id: str) -> tuple[str, bool]:
         conversation_id = self.conversation_id(message)
-        return conversation_id, self._store.ingest(message, conversation_id=conversation_id, route_id=route_id)
+        policy = self._store.policy_for(message, fallback_route_id=route_id)
+        return conversation_id, self._store.ingest(message, conversation_id=conversation_id, policy=policy)
+
+    def receive_and_plan(self, message: InboxMessage, *, route_id: str) -> tuple[str, bool, ReplyDraft | None]:
+        conversation_id, accepted = self.receive(message, route_id=route_id)
+        if not accepted:
+            return conversation_id, False, None
+        draft = self.propose(conversation_id, message)
+        conversation = self._store.conversation(conversation_id)
+        if conversation and conversation["response_mode"] == "auto_send":
+            draft = self.approve(draft.id)
+        return conversation_id, True, draft
 
     def propose(self, conversation_id: str, message: InboxMessage) -> ReplyDraft:
         if self._store.conversation(conversation_id) is None:

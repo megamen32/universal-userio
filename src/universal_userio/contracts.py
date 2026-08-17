@@ -27,6 +27,13 @@ class ReplyDraft:
     status: str
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationPolicy:
+    route_id: str
+    mode: str = "approve"
+    identity_id: str | None = None
+
+
 class DraftGenerator(Protocol):
     def suggest(self, *, conversation_id: str, latest_message: InboxMessage) -> str: ...
 

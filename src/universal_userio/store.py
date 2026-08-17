@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .contracts import InboxMessage, ReplyDraft
+from .contracts import ConversationPolicy
 
 
 class SQLiteUserIOStore:
@@ -25,6 +26,8 @@ class SQLiteUserIOStore:
                     route_id TEXT NOT NULL,
                     source TEXT NOT NULL,
                     sender TEXT NOT NULL,
+                    identity_id TEXT,
+                    response_mode TEXT NOT NULL DEFAULT 'approve',
                     updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS messages (
@@ -34,6 +37,7 @@ class SQLiteUserIOStore:
                     sender TEXT NOT NULL,
                     body TEXT NOT NULL,
                     received_at REAL NOT NULL,
+                    seen_at REAL,
                     PRIMARY KEY(source, message_id)
                 );
                 CREATE TABLE IF NOT EXISTS drafts (
@@ -45,19 +49,70 @@ class SQLiteUserIOStore:
                     approved_at REAL,
                     outbox_receipt TEXT
                 );
+                CREATE TABLE IF NOT EXISTS identities (
+                    source TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    identity_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    PRIMARY KEY(source, external_id)
+                );
+                CREATE TABLE IF NOT EXISTS reply_rules (
+                    identity_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    route_id TEXT NOT NULL,
+                    response_mode TEXT NOT NULL,
+                    PRIMARY KEY(identity_id, source)
+                );
                 """
             )
+            self._add_column_if_missing("conversations", "identity_id", "TEXT")
+            self._add_column_if_missing("conversations", "response_mode", "TEXT NOT NULL DEFAULT 'approve'")
+            self._add_column_if_missing("messages", "seen_at", "REAL")
+
+    def _add_column_if_missing(self, table: str, column: str, declaration: str) -> None:
+        columns = {str(row["name"]) for row in self._connection.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            self._connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
 
     def close(self) -> None:
         with self._lock:
             self._connection.close()
 
-    def ingest(self, message: InboxMessage, *, conversation_id: str, route_id: str) -> bool:
+    def register_identity(self, *, source: str, external_id: str, identity_id: str, display_name: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO identities(source,external_id,identity_id,display_name) VALUES (?,?,?,?)",
+                (source, external_id, identity_id, display_name),
+            )
+
+    def set_rule(self, *, identity_id: str, source: str, route_id: str, mode: str) -> None:
+        if mode not in {"suggest", "approve", "auto_send"}:
+            raise ValueError("unsupported reply mode")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO reply_rules(identity_id,source,route_id,response_mode) VALUES (?,?,?,?)",
+                (identity_id, source, route_id, mode),
+            )
+
+    def policy_for(self, message: InboxMessage, *, fallback_route_id: str) -> ConversationPolicy:
+        with self._lock:
+            identity = self._connection.execute(
+                "SELECT identity_id FROM identities WHERE source=? AND external_id=?", (message.source, message.sender)
+            ).fetchone()
+            identity_id = str(identity["identity_id"]) if identity else None
+            rule = None if identity_id is None else self._connection.execute(
+                "SELECT route_id,response_mode FROM reply_rules WHERE identity_id=? AND source=?", (identity_id, message.source)
+            ).fetchone()
+        if rule:
+            return ConversationPolicy(str(rule["route_id"]), str(rule["response_mode"]), identity_id)
+        return ConversationPolicy(fallback_route_id, "approve", identity_id)
+
+    def ingest(self, message: InboxMessage, *, conversation_id: str, policy: ConversationPolicy) -> bool:
         now = time.time()
         with self._lock, self._connection:
             self._connection.execute(
-                "INSERT OR IGNORE INTO conversations(id, conversation_key, route_id, source, sender, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (conversation_id, message.conversation_key, route_id, message.source, message.sender, now),
+                "INSERT OR IGNORE INTO conversations(id, conversation_key, route_id, source, sender, identity_id, response_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (conversation_id, message.conversation_key, policy.route_id, message.source, message.sender, policy.identity_id, policy.mode, now),
             )
             inserted = self._connection.execute(
                 "INSERT OR IGNORE INTO messages(source, message_id, conversation_id, sender, body, received_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -112,9 +167,23 @@ class SQLiteUserIOStore:
             if row is None:
                 return None
             messages = self._connection.execute(
-                "SELECT source,message_id,sender,body,received_at FROM messages WHERE conversation_id=? ORDER BY received_at", (conversation_id,)
+            "SELECT source,message_id,sender,body,received_at,seen_at FROM messages WHERE conversation_id=? ORDER BY received_at", (conversation_id,)
             ).fetchall()
             drafts = self._connection.execute(
                 "SELECT id,body,status,outbox_receipt FROM drafts WHERE conversation_id=? ORDER BY created_at", (conversation_id,)
             ).fetchall()
-        return {"id": row["id"], "route_id": row["route_id"], "source": row["source"], "sender": row["sender"], "messages": [dict(item) for item in messages], "drafts": [dict(item) for item in drafts]}
+        return {"id": row["id"], "route_id": row["route_id"], "response_mode": row["response_mode"], "identity_id": row["identity_id"], "source": row["source"], "sender": row["sender"], "messages": [dict(item) for item in messages], "drafts": [dict(item) for item in drafts]}
+
+    def new_messages(self, *, limit: int = 50) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT m.source,m.message_id,m.sender,m.body,m.received_at,c.id AS conversation_id,c.identity_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.seen_at IS NULL ORDER BY m.received_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_seen(self, *, source: str, message_id: str) -> bool:
+        with self._lock, self._connection:
+            return self._connection.execute(
+                "UPDATE messages SET seen_at=? WHERE source=? AND message_id=? AND seen_at IS NULL", (time.time(), source, message_id)
+            ).rowcount == 1
