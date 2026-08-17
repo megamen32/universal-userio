@@ -153,3 +153,16 @@ def test_context_aware_ai_receives_prior_messages(tmp_path) -> None:
     service.propose(conversation_id, second)
 
     assert [entry["body"] for entry in generator.history] == ["first", "second"]
+
+
+def test_account_registry_exposes_capabilities_not_browser_session(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="vk-sales", provider="vk", display_name="Sales VK", can_read=True, can_reply=True,
+        credential_ref="secret://userio/vk-sales", enabled=True,
+    )
+
+    assert store.accounts() == [{
+        "id": "vk-sales", "provider": "vk", "display_name": "Sales VK", "capabilities": ["read", "reply"],
+        "credential_ref": "secret://userio/vk-sales", "enabled": True,
+    }]
