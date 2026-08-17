@@ -38,6 +38,16 @@ class UserIOService:
     def propose(self, conversation_id: str, message: InboxMessage) -> ReplyDraft:
         return self.propose_variants(conversation_id, message, limit=1)[0]
 
+    def create_manual_draft(self, conversation_id: str, *, body: str) -> ReplyDraft:
+        if self._store.conversation(conversation_id) is None:
+            raise KeyError("conversation not found")
+        text = body.strip()
+        if not text:
+            raise ValueError("draft body is required")
+        draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, text, "proposed")
+        self._store.add_draft(draft)
+        return draft
+
     def propose_variants(self, conversation_id: str, message: InboxMessage, *, limit: int = 3) -> list[ReplyDraft]:
         if limit < 1:
             raise ValueError("draft limit must be positive")
