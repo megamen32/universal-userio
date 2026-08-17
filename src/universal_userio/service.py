@@ -38,6 +38,21 @@ class UserIOService:
     def propose(self, conversation_id: str, message: InboxMessage) -> ReplyDraft:
         return self.propose_variants(conversation_id, message, limit=1)[0]
 
+    def propose_from_conversation(self, conversation_id: str, *, limit: int = 3) -> list[ReplyDraft]:
+        """Run the opt-in AI action against the latest stored inbound message."""
+        conversation = self._store.conversation(conversation_id)
+        if conversation is None:
+            raise KeyError("conversation not found")
+        messages = list(conversation["messages"])
+        if not messages:
+            raise ValueError("conversation has no messages")
+        latest = messages[-1]
+        message = InboxMessage(
+            source=str(latest["source"]), message_id=str(latest["message_id"]), sender=str(latest["sender"]),
+            body=str(latest["body"]), received_at=float(latest["received_at"]),
+        )
+        return self.propose_variants(conversation_id, message, limit=limit)
+
     def create_manual_draft(self, conversation_id: str, *, body: str) -> ReplyDraft:
         if self._store.conversation(conversation_id) is None:
             raise KeyError("conversation not found")
