@@ -88,3 +88,22 @@ def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_pat
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with urlopen(f"http://127.0.0.1:{server.server_port}/") as response:
+            assert b"Universal UserIO" in response.read()
+        try:
+            urlopen(f"http://127.0.0.1:{server.server_port}/v1/inbox")
+        except HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError("dashboard API data leaked without token")
+    finally:
+        server.shutdown()
+        server.server_close()
