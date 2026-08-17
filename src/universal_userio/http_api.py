@@ -4,29 +4,19 @@ from __future__ import annotations
 
 import hmac
 import json
+import mimetypes
 import time
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from typing import Type
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .adapters import inbox_message_from_envelope
 from .mcp_surface import UserIOMcpSurface
 from .service import UserIOService
 
 
-_DASHBOARD = """<!doctype html><meta charset=utf-8><title>Universal UserIO</title>
-<style>body{font:16px system-ui;max-width:900px;margin:2rem auto}article{border:1px solid #ddd;padding:1rem;margin:.7rem 0}button{margin:.2rem}small{color:#666}</style>
-<h1>Universal UserIO</h1><p id=status>Loading unified inbox...</p><main id=inbox></main>
-<script>
-const api=(path, options={})=>fetch(path,options);
-const esc=value=>String(value).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-async function approve(id){await api('/v1/drafts/'+id+'/approve',{method:'POST',body:'{}'}); await load()}
-async function propose(id){await api('/v1/conversations/'+id+'/ai-drafts',{method:'POST',body:'{}'}); await load()}
-async function seen(source,id){await api('/v1/inbox/seen',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,message_id:id})}); await load()}
-async function load(){const r=await api('/v1/inbox'); if(!r.ok){document.querySelector('#status').textContent='Authentication failed';return} const data=await r.json();
-document.querySelector('#status').textContent=`${data.messages.length} new message(s)`; const root=document.querySelector('#inbox');root.innerHTML='';
-for(const m of data.messages){const c=await (await api('/v1/conversations/'+m.conversation_id)).json(); const drafts=(c.drafts||[]).map(d=>`<li>${esc(d.body)} <small>${esc(d.status)}</small>${d.status==='proposed'?` <button onclick="approve('${d.id}')">Approve & send</button>`:''}</li>`).join(''); const node=document.createElement('article'); node.innerHTML=`<b>${esc(m.source)} · ${esc(m.sender)}</b><p>${esc(m.body)}</p><small>${esc(c.identity_id||'unmapped contact')}</small><ul>${drafts}</ul><button onclick="propose('${m.conversation_id}')">Ask AI for variants</button><button onclick="seen('${m.source}','${m.message_id}')">Mark seen</button>`;root.append(node)}} load();
-</script>""".encode()
+_STATIC_ROOT = Path(__file__).with_name("static")
 
 
 def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandler]:
@@ -52,6 +42,21 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _static(self, path: str) -> bool:
+            relative = path.lstrip("/") or "index.html"
+            candidate = (_STATIC_ROOT / relative).resolve()
+            if _STATIC_ROOT not in candidate.parents and candidate != _STATIC_ROOT:
+                return False
+            if not candidate.is_file():
+                return False
+            body = candidate.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(str(candidate))[0] or "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return True
 
         def _json(self) -> dict:
             length = int(self.headers.get("Content-Length", "0"))
@@ -100,6 +105,11 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                     drafts = service.propose_from_conversation(conversation_id)
                     self._reply(202, {"drafts": [{"id": draft.id, "body": draft.body, "status": draft.status} for draft in drafts]})
                     return
+                if path.startswith("/v1/conversations/") and path.endswith("/drafts"):
+                    conversation_id = path.removeprefix("/v1/conversations/").removesuffix("/drafts").strip("/")
+                    draft = service.create_manual_draft(conversation_id, body=str(self._json().get("body") or ""))
+                    self._reply(202, {"id": draft.id, "body": draft.body, "status": draft.status})
+                    return
                 if path == "/v1/identities":
                     payload = self._json()
                     service._store.register_identity(
@@ -143,8 +153,11 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                 self._reply(502, {"error": str(error)})
 
         def do_GET(self) -> None:  # noqa: N802
-            if urlparse(self.path).path == "/":
-                self._html(200, _DASHBOARD)
+            query = parse_qs(urlparse(self.path).query)
+            requested_path = urlparse(self.path).path
+            if requested_path == "/" and self._static(requested_path):
+                return
+            if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
             if not self._authorized(allow_proxy=True):
                 self._reply(401, {"error": "unauthorized"})
@@ -155,6 +168,10 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                 return
             if path == "/v1/accounts":
                 self._reply(200, {"accounts": service._store.accounts()})
+                return
+            if path == "/v1/conversations":
+                source = query.get("source", [""])[0].strip().lower() or None
+                self._reply(200, {"conversations": service._store.conversations(source=source)})
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -54,6 +55,10 @@ def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path
         with urlopen(propose) as response:
             draft = json.loads(response.read())["drafts"][0]
 
+        manual = Request(base + f"/v1/conversations/{accepted['conversation_id']}/drafts", data=b'{"body":"manual answer"}', method="POST", headers={"Authorization": "Bearer test-token"})
+        with urlopen(manual) as response:
+            assert json.loads(response.read())["body"] == "manual answer"
+
         approve = Request(base + f"/v1/drafts/{draft['id']}/approve", data=b"{}", method="POST", headers={"Authorization": "Bearer test-token"})
         with urlopen(approve) as response:
             assert json.loads(response.read())["status"] == "approved"
@@ -90,9 +95,21 @@ def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_pat
         inbox = Request(base + "/v1/inbox", headers={"Authorization": "Bearer test-token"})
         with urlopen(inbox) as response:
             assert json.loads(response.read())["messages"][0]["identity_id"] == "person_anna"
+        conversations = Request(base + "/v1/conversations?source=vk", headers={"Authorization": "Bearer test-token"})
+        with urlopen(conversations) as response:
+            assert json.loads(response.read())["conversations"][0]["unread_count"] == 1
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_email_messages_share_one_case_insensitive_conversation(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    first = InboxMessage("email", "1", "Anna@Example.com", "first", 1.0)
+    second = InboxMessage("gmail", "2", "anna@example.com", "second", 2.0)
+    first_id, _ = service.receive(first, route_id="email-reply")
+    second_id, _ = service.receive(second, route_id="email-reply")
+    assert first_id == second_id
 
 
 def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tmp_path) -> None:
@@ -102,7 +119,12 @@ def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tm
     thread.start()
     try:
         with urlopen(f"http://127.0.0.1:{server.server_port}/") as response:
-            assert b"Universal UserIO" in response.read()
+            page = response.read()
+        assert b"Universal UserIO" in page
+        asset = re.search(rb'/assets/[^" ]+\.js', page)
+        assert asset is not None
+        with urlopen(f"http://127.0.0.1:{server.server_port}" + asset.group().decode()) as response:
+            assert response.headers["Content-Type"] == "text/javascript"
         try:
             urlopen(f"http://127.0.0.1:{server.server_port}/v1/inbox")
         except HTTPError as error:
