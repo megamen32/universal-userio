@@ -10,6 +10,7 @@ from typing import Type
 from urllib.parse import urlparse
 
 from .adapters import inbox_message_from_envelope
+from .mcp_surface import UserIOMcpSurface
 from .service import UserIOService
 
 
@@ -28,6 +29,7 @@ for(const m of data.messages){const c=await (await api('/v1/conversations/'+m.co
 
 
 def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandler]:
+    surface = UserIOMcpSurface(service._store, service)
     class UserIOHandler(BaseHTTPRequestHandler):
         def _authorized(self) -> bool:
             presented = self.headers.get("Authorization", "")
@@ -61,6 +63,22 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                 return
             path = urlparse(self.path).path
             try:
+                if path == "/mcp":
+                    request = self._json()
+                    request_id = request.get("id")
+                    if request.get("jsonrpc") != "2.0" or request_id is None:
+                        self._reply(400, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid Request"}})
+                        return
+                    method = request.get("method")
+                    if method == "initialize":
+                        result = {"protocolVersion": "2024-11-05", "serverInfo": {"name": "universal-userio", "version": "0.1.0"}, "capabilities": {"tools": {}}}
+                    elif method in {"tools/list", "tools/call"}:
+                        result = surface.dispatch(method, request.get("params", {}))
+                    else:
+                        self._reply(200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}})
+                        return
+                    self._reply(200, {"jsonrpc": "2.0", "id": request_id, "result": result})
+                    return
                 if path == "/v1/messages":
                     payload = self._json()
                     route_id = str(payload.get("route_id") or "")

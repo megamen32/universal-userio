@@ -107,3 +107,18 @@ def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tm
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(f"http://127.0.0.1:{server.server_port}/mcp", data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}', method="POST", headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
+        with urlopen(request) as response:
+            result = json.loads(response.read())["result"]
+        assert "userio.draft.approve_send" in [tool["name"] for tool in result["tools"]]
+    finally:
+        server.shutdown()
+        server.server_close()
