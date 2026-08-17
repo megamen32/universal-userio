@@ -63,6 +63,15 @@ class SQLiteUserIOStore:
                     response_mode TEXT NOT NULL,
                     PRIMARY KEY(identity_id, source)
                 );
+                CREATE TABLE IF NOT EXISTS provider_accounts (
+                    id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    can_read INTEGER NOT NULL,
+                    can_reply INTEGER NOT NULL,
+                    credential_ref TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );
                 """
             )
             self._add_column_if_missing("conversations", "identity_id", "TEXT")
@@ -84,6 +93,27 @@ class SQLiteUserIOStore:
                 "INSERT OR REPLACE INTO identities(source,external_id,identity_id,display_name) VALUES (?,?,?,?)",
                 (source, external_id, identity_id, display_name),
             )
+
+    def register_account(
+        self, *, account_id: str, provider: str, display_name: str, can_read: bool, can_reply: bool, credential_ref: str, enabled: bool = True
+    ) -> None:
+        if not account_id.strip() or not provider.strip() or not credential_ref.strip():
+            raise ValueError("account id, provider and credential reference are required")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO provider_accounts(id,provider,display_name,can_read,can_reply,credential_ref,enabled) VALUES (?,?,?,?,?,?,?)",
+                (account_id, provider.lower(), display_name or account_id, int(can_read), int(can_reply), credential_ref, int(enabled)),
+            )
+
+    def accounts(self) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT id,provider,display_name,can_read,can_reply,credential_ref,enabled FROM provider_accounts ORDER BY id"
+            ).fetchall()
+        return [
+            {"id": row["id"], "provider": row["provider"], "display_name": row["display_name"], "capabilities": [name for name, value in (("read", row["can_read"]), ("reply", row["can_reply"])) if value], "credential_ref": row["credential_ref"], "enabled": bool(row["enabled"])}
+            for row in rows
+        ]
 
     def set_rule(self, *, identity_id: str, source: str, route_id: str, mode: str) -> None:
         if mode not in {"suggest", "approve", "auto_send"}:

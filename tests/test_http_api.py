@@ -72,6 +72,10 @@ def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_pat
             return json.loads(response.read())
 
     try:
+        assert post("/v1/accounts", {"id": "vk-sales", "provider": "vk", "display_name": "Sales VK", "can_read": True, "can_reply": True, "credential_ref": "secret://userio/vk-sales"})["accepted"] is True
+        accounts = Request(base + "/v1/accounts", headers={"Authorization": "Bearer test-token"})
+        with urlopen(accounts) as response:
+            assert json.loads(response.read())["accounts"][0]["capabilities"] == ["read", "reply"]
         assert post("/v1/identities", {"source": "vk", "external_id": "anna-vk", "identity_id": "person_anna", "display_name": "Anna"})["accepted"] is True
         assert post("/v1/reply-rules", {"identity_id": "person_anna", "source": "vk", "route_id": "vip-vk", "mode": "auto_send"})["accepted"] is True
         received = post("/v1/messages", {"route_id": "ordinary-vk", "message": {"schema": "universal.inbox.message.v1", "source": "vk", "message_id": "1", "sender": "anna-vk", "body": "help"}})

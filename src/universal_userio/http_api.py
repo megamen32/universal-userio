@@ -57,6 +57,16 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                     )
                     self._reply(202, {"accepted": True})
                     return
+                if path == "/v1/accounts":
+                    payload = self._json()
+                    service._store.register_account(
+                        account_id=str(payload.get("id") or ""), provider=str(payload.get("provider") or ""),
+                        display_name=str(payload.get("display_name") or ""), can_read=bool(payload.get("can_read")),
+                        can_reply=bool(payload.get("can_reply")), credential_ref=str(payload.get("credential_ref") or ""),
+                        enabled=bool(payload.get("enabled", True)),
+                    )
+                    self._reply(202, {"accepted": True})
+                    return
                 if path == "/v1/reply-rules":
                     payload = self._json()
                     service._store.set_rule(
@@ -88,6 +98,9 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
             path = urlparse(self.path).path
             if path == "/v1/inbox":
                 self._reply(200, {"messages": service._store.new_messages()})
+                return
+            if path == "/v1/accounts":
+                self._reply(200, {"accounts": service._store.accounts()})
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:

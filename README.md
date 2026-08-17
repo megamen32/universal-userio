@@ -65,6 +65,14 @@ variants. It does not pass Outbox credentials, provider credentials, or browser
 session data to the model. The endpoint, model and token are deployment-owned
 configuration for UserIO alone.
 
+## Accounts and browser workers
+
+`POST`/`GET /v1/accounts` maintain provider accounts as business capabilities:
+`read`, `reply`, enabled state, and an opaque `credential_ref`. A VK or
+WhatsApp Web worker receives that reference through deployment-owned capability
+binding and returns its own receipt. UserIO and the AI never receive browser
+cookies, an automation handle, or raw credential material.
+
 ## Run
 
 Copy `.env.example` into deployment-owned secret configuration, set the UserIO
