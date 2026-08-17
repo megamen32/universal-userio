@@ -159,6 +159,39 @@ class SQLiteUserIOStore:
                 (draft.id, draft.conversation_id, draft.body, draft.status, time.time()),
             )
 
+    def update_draft(self, draft_id: str, *, body: str) -> ReplyDraft:
+        text = body.strip()
+        if not text:
+            raise ValueError("draft body is required")
+        with self._lock, self._connection:
+            row = self._connection.execute("SELECT id,conversation_id,status FROM drafts WHERE id=?", (draft_id,)).fetchone()
+            if row is None:
+                raise KeyError("draft not found")
+            if row["status"] != "proposed":
+                raise ValueError("only proposed drafts can be edited")
+            self._connection.execute("UPDATE drafts SET body=? WHERE id=?", (text, draft_id))
+        return ReplyDraft(str(row["id"]), str(row["conversation_id"]), text, "proposed")
+
+    def delete_draft(self, draft_id: str) -> bool:
+        with self._lock, self._connection:
+            row = self._connection.execute("SELECT status FROM drafts WHERE id=?", (draft_id,)).fetchone()
+            if row is None:
+                return False
+            if row["status"] == "approved":
+                raise ValueError("approved drafts are immutable receipts")
+            return self._connection.execute("DELETE FROM drafts WHERE id=?", (draft_id,)).rowcount == 1
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete UserIO's local business copy only; source-provider data is untouched."""
+        with self._lock, self._connection:
+            exists = self._connection.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+            if exists is None:
+                return False
+            self._connection.execute("DELETE FROM drafts WHERE conversation_id=?", (conversation_id,))
+            self._connection.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
+            self._connection.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+        return True
+
     def draft(self, draft_id: str) -> ReplyDraft:
         with self._lock:
             row = self._connection.execute("SELECT id,conversation_id,body,status FROM drafts WHERE id=?", (draft_id,)).fetchone()

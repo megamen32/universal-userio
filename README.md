@@ -5,6 +5,17 @@ NoticePlace. It owns conversations, user identities, AI reply drafts and
 approval. It does **not** poll providers, hold browser sessions, or select
 delivery URLs.
 
+## MCP first
+
+Run `python -m universal_userio` to expose a stdio MCP server. Its primary
+tools list unread messages, read a conversation, mark messages seen, create or
+edit drafts, explicitly approve-and-send an exact draft, and delete only the
+local UserIO copy. `userio.ai.propose` is the separate opt-in model tool.
+
+No MCP tool claims remote provider edit/delete unless that account's adapter
+declares and implements the capability; UserIO never silently deletes provider
+data.
+
 ```text
 providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
                            read       send only after approval
