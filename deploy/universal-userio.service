@@ -1,0 +1,22 @@
+[Unit]
+Description=Universal UserIO business control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/universal-userio
+Environment=PYTHONPATH=/opt/universal-userio/src
+EnvironmentFile=/etc/universal-userio.env
+ExecStart=/usr/bin/python3 -m universal_userio.runtime
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/universal-userio
+
+[Install]
+WantedBy=multi-user.target
