@@ -9,6 +9,9 @@ description = "Business control plane for AI-assisted cross-channel conversation
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+universal-userio = "universal_userio.runtime:main"
+
 [project.optional-dependencies]
 test = ["pytest>=8,<9"]
 

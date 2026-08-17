@@ -44,8 +44,13 @@ class UserIOService:
         if self._store.conversation(conversation_id) is None:
             raise KeyError("conversation not found")
         suggest_variants = getattr(self._generator, "suggest_variants", None)
+        suggest_with_context = getattr(self._generator, "suggest_with_context", None)
         generated: Sequence[str]
-        if callable(suggest_variants):
+        record = self._store.conversation(conversation_id)
+        history = [] if record is None else list(record["messages"])
+        if callable(suggest_with_context):
+            generated = suggest_with_context(conversation_id=conversation_id, latest_message=message, history=history, limit=limit)
+        elif callable(suggest_variants):
             generated = suggest_variants(conversation_id=conversation_id, latest_message=message, limit=limit)
         else:
             generated = [self._generator.suggest(conversation_id=conversation_id, latest_message=message)]

@@ -56,3 +56,18 @@ state. All endpoints require a UserIO bearer token.
 `POST /v1/identities` and `POST /v1/reply-rules` administer the control plane;
 `GET /v1/inbox` returns unread cross-channel messages, and
 `POST /v1/inbox/seen` marks one canonical source message as seen.
+
+## AI boundary
+
+`OpenAICompatibleDraftGenerator` is the initial AI capability adapter. UserIO
+passes it the recent canonical conversation history and receives text drafts or
+variants. It does not pass Outbox credentials, provider credentials, or browser
+session data to the model. The endpoint, model and token are deployment-owned
+configuration for UserIO alone.
+
+## Run
+
+Copy `.env.example` into deployment-owned secret configuration, set the UserIO
+API token, AI token/model, and the token variables referenced by the route
+registry. Then run `universal-userio`. The service binds to `127.0.0.1:18093`
+by default; publish it only through an authenticated internal ingress.

@@ -131,3 +131,25 @@ def test_ai_variants_are_independent_approvable_drafts(tmp_path) -> None:
 
     assert [draft.body for draft in drafts] == ["formal reply", "friendly reply"]
     assert [draft["status"] for draft in store.conversation(conversation_id)["drafts"]] == ["proposed", "proposed"]
+
+
+def test_context_aware_ai_receives_prior_messages(tmp_path) -> None:
+    class ContextGenerator:
+        def suggest(self, **_kwargs) -> str:
+            return "unused"
+
+        def suggest_with_context(self, **kwargs):
+            self.history = kwargs["history"]
+            return ["contextual reply"]
+
+    generator = ContextGenerator()
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, generator, Outbox())
+    first = InboxMessage("telegram", "1", "chat", "first", 1.0)
+    second = InboxMessage("telegram", "2", "chat", "second", 2.0)
+    conversation_id, _ = service.receive(first, route_id="telegram")
+    service.receive(second, route_id="telegram")
+
+    service.propose(conversation_id, second)
+
+    assert [entry["body"] for entry in generator.history] == ["first", "second"]
