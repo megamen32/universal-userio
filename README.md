@@ -79,3 +79,15 @@ Copy `.env.example` into deployment-owned secret configuration, set the UserIO
 API token, AI token/model, and the token variables referenced by the route
 registry. Then run `universal-userio`. The service binds to `127.0.0.1:18093`
 by default; publish it only through an authenticated internal ingress.
+
+## Universal Inbox connection
+
+Configure Universal Inbox with `UNIVERSAL_USERIO_INGRESS_URL`, a UserIO API
+token, and a `source → route_id` map. Inbox forwards each canonical durable
+message to `POST /v1/messages`; UserIO acknowledges the message before Inbox
+advances its source cursor. The map is business routing metadata only.
+
+UserIO's `USERIO_ROUTES_JSON` is the reverse safe boundary: each `route_id`
+resolves to one NoticePlace endpoint and the name of a deployment-owned scoped
+token variable. Thus the model, HTTP caller, and Inbox cannot choose an
+arbitrary recipient or send provider credentials.
