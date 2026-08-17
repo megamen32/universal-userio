@@ -17,6 +17,11 @@ providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
 3. A human approves or rejects the draft.
 4. Only approval emits `userio.reply.v1` to a scoped NoticePlace route.
 
+The business control plane adds identity mapping (`channel external ID → person`)
+and a per-person/channel reply rule. Modes are `suggest` (draft only),
+`approve` (draft awaiting human confirmation), and `auto_send` (a configured
+business rule permits immediate delivery through its scoped Outbox route).
+
 Provider integrations declare `read` and `reply` capabilities. A VK or
 WhatsApp Web browser worker owns its browser session and translates UI actions
 to/from these contracts; UserIO sees the same conversation API as Telegram or
@@ -45,3 +50,7 @@ supply an arbitrary destination, token, or provider URL.
 
 `GET /v1/conversations/{conversation_id}` returns durable history and draft
 state. All endpoints require a UserIO bearer token.
+
+`POST /v1/identities` and `POST /v1/reply-rules` administer the control plane;
+`GET /v1/inbox` returns unread cross-channel messages, and
+`POST /v1/inbox/seen` marks one canonical source message as seen.

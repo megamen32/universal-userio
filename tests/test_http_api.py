@@ -56,3 +56,31 @@ def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_path) -> None:
+    outbox = Outbox()
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), outbox)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    def post(path: str, body: dict) -> dict:
+        request = Request(base + path, data=json.dumps(body).encode(), method="POST", headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
+        with urlopen(request) as response:
+            return json.loads(response.read())
+
+    try:
+        assert post("/v1/identities", {"source": "vk", "external_id": "anna-vk", "identity_id": "person_anna", "display_name": "Anna"})["accepted"] is True
+        assert post("/v1/reply-rules", {"identity_id": "person_anna", "source": "vk", "route_id": "vip-vk", "mode": "auto_send"})["accepted"] is True
+        received = post("/v1/messages", {"route_id": "ordinary-vk", "message": {"schema": "universal.inbox.message.v1", "source": "vk", "message_id": "1", "sender": "anna-vk", "body": "help"}})
+
+        assert received["draft"]["status"] == "approved"
+        assert outbox.calls[0]["route_id"] == "vip-vk"
+        inbox = Request(base + "/v1/inbox", headers={"Authorization": "Bearer test-token"})
+        with urlopen(inbox) as response:
+            assert json.loads(response.read())["messages"][0]["identity_id"] == "person_anna"
+    finally:
+        server.shutdown()
+        server.server_close()

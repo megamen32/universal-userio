@@ -93,3 +93,22 @@ def test_canonical_inbox_envelope_and_policy_bound_outbox_contract() -> None:
     assert payload["event_type"] == "userio.reply.v1"
     assert "target" not in payload
     assert requests[0][0].get_header("Authorization") == "Bearer scoped-token"
+
+
+def test_identity_rule_enables_autosend_and_new_message_feed(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_identity(source="vk", external_id="42", identity_id="person_anna", display_name="Anna")
+    store.set_rule(identity_id="person_anna", source="vk", route_id="vip-vk", mode="auto_send")
+    outbox = Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    message = InboxMessage("vk", "43", "42", "urgent", 1.0)
+
+    conversation_id, accepted, draft = service.receive_and_plan(message, route_id="ordinary-vk")
+
+    assert accepted is True
+    assert draft is not None and draft.status == "approved"
+    assert outbox.calls == [("vip-vk", conversation_id, draft.id, "Thanks for: urgent")]
+    assert store.conversation(conversation_id)["identity_id"] == "person_anna"
+    assert store.new_messages() == [{"source": "vk", "message_id": "43", "sender": "42", "body": "urgent", "received_at": 1.0, "conversation_id": conversation_id, "identity_id": "person_anna"}]
+    assert store.mark_seen(source="vk", message_id="43") is True
+    assert store.new_messages() == []
