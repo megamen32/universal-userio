@@ -245,6 +245,28 @@ class SQLiteUserIOStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def conversations(self, *, source: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        """Compact chat-list records for the operator UI."""
+        clauses = ""
+        values: list[object] = [limit]
+        if source:
+            clauses = "WHERE c.source=?"
+            values.insert(0, source)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,
+                       (SELECT body FROM messages WHERE conversation_id=c.id ORDER BY received_at DESC LIMIT 1) AS preview,
+                       (SELECT COUNT(*) FROM messages WHERE conversation_id=c.id AND seen_at IS NULL) AS unread_count
+                FROM conversations c
+                {clauses}
+                ORDER BY c.updated_at DESC
+                LIMIT ?
+                """,
+                values,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def mark_seen(self, *, source: str, message_id: str) -> bool:
         with self._lock, self._connection:
             return self._connection.execute(

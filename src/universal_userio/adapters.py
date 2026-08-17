@@ -19,7 +19,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     message_id = str(payload.get("message_id") or "").strip()
     sender = str(payload.get("sender") or "").strip()
     body = str(payload.get("body") or "").strip()
-    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone"}:
+    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "email", "gmail"}:
         raise ValueError("unsupported message source")
     if not message_id or not sender or not body:
         raise ValueError("inbox message requires message_id, sender and body")
