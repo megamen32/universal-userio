@@ -84,6 +84,9 @@ API token, AI token/model, and the token variables referenced by the route
 registry. Then run `universal-userio`. The service binds to `127.0.0.1:18093`
 by default; publish it only through an authenticated internal ingress.
 
+`deploy/universal-userio.service` and `deploy/INSTALL.md` provide the
+loopback-only systemd deployment contract.
+
 ## Universal Inbox connection
 
 Configure Universal Inbox with `UNIVERSAL_USERIO_INGRESS_URL`, a UserIO API
