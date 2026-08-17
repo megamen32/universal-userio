@@ -57,6 +57,10 @@ state. All endpoints require a UserIO bearer token.
 `GET /v1/inbox` returns unread cross-channel messages, and
 `POST /v1/inbox/seen` marks one canonical source message as seen.
 
+`GET /` serves a small human dashboard. It contains no message data itself;
+the browser supplies the UserIO API token only when calling the protected API.
+An authenticated internal reverse proxy is recommended for production.
+
 ## AI boundary
 
 `OpenAICompatibleDraftGenerator` is the initial AI capability adapter. UserIO
