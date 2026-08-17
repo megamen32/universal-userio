@@ -16,6 +16,11 @@ No MCP tool claims remote provider edit/delete unless that account's adapter
 declares and implements the capability; UserIO never silently deletes provider
 data.
 
+The deployed service exposes the same JSON-RPC surface at `POST /mcp`; it
+requires the UserIO bearer token and is intended for an authenticated internal
+MCP client. This is the preferred operational connection because the server,
+not the caller, owns AI and Outbox credentials.
+
 ```text
 providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
                            read       send only after approval
