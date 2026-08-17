@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Sequence
 
 from .contracts import DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
@@ -35,14 +36,26 @@ class UserIOService:
         return conversation_id, True, draft
 
     def propose(self, conversation_id: str, message: InboxMessage) -> ReplyDraft:
+        return self.propose_variants(conversation_id, message, limit=1)[0]
+
+    def propose_variants(self, conversation_id: str, message: InboxMessage, *, limit: int = 3) -> list[ReplyDraft]:
+        if limit < 1:
+            raise ValueError("draft limit must be positive")
         if self._store.conversation(conversation_id) is None:
             raise KeyError("conversation not found")
-        body = self._generator.suggest(conversation_id=conversation_id, latest_message=message).strip()
-        if not body:
-            raise ValueError("AI produced an empty reply")
-        draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, body, "proposed")
-        self._store.add_draft(draft)
-        return draft
+        suggest_variants = getattr(self._generator, "suggest_variants", None)
+        generated: Sequence[str]
+        if callable(suggest_variants):
+            generated = suggest_variants(conversation_id=conversation_id, latest_message=message, limit=limit)
+        else:
+            generated = [self._generator.suggest(conversation_id=conversation_id, latest_message=message)]
+        bodies = [str(body).strip() for body in generated if str(body).strip()][:limit]
+        if not bodies:
+            raise ValueError("AI produced no reply variants")
+        drafts = [ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, body, "proposed") for body in bodies]
+        for draft in drafts:
+            self._store.add_draft(draft)
+        return drafts
 
     def approve(self, draft_id: str) -> ReplyDraft:
         draft = self._store.draft(draft_id)

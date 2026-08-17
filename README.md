@@ -21,6 +21,8 @@ The business control plane adds identity mapping (`channel external ID → perso
 and a per-person/channel reply rule. Modes are `suggest` (draft only),
 `approve` (draft awaiting human confirmation), and `auto_send` (a configured
 business rule permits immediate delivery through its scoped Outbox route).
+An AI provider may return several independent drafts for the operator to pick
+from; approval is tied to one selected draft.
 
 Provider integrations declare `read` and `reply` capabilities. A VK or
 WhatsApp Web browser worker owns its browser session and translates UI actions
