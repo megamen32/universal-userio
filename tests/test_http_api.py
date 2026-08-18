@@ -112,6 +112,15 @@ def test_email_messages_share_one_case_insensitive_conversation(tmp_path) -> Non
     assert first_id == second_id
 
 
+def test_gmail_account_lane_is_accepted_and_groups_by_sender(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    first = InboxMessage("gmail", "1", "Anna@Example.com", "first", 1.0)
+    second = InboxMessage("gmail:careviolan", "2", "anna@example.com", "second", 2.0)
+    first_id, _ = service.receive(first, route_id="gmail-read-only")
+    second_id, _ = service.receive(second, route_id="gmail-read-only")
+    assert first_id == second_id
+
+
 def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))

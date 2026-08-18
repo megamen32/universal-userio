@@ -16,7 +16,7 @@ class InboxMessage:
 
     @property
     def conversation_key(self) -> str:
-        if self.source in {"email", "gmail"}:
+        if self.source == "email" or self.source == "gmail" or self.source.startswith("gmail:"):
             return "email:" + self.sender.strip().casefold()
         return f"{self.source}:{self.sender}"
 
