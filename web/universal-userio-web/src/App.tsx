@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Bot, Check, Inbox, Mail, MessageCircle, Send, Sparkles } from "lucide-react"
+import { Check, ChevronDown, Inbox, Mail, MessageCircle, PanelLeftClose, PanelLeftOpen, Send, Sparkles } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
 
 type Account = { id: string; provider: string; display_name: string; capabilities: string[] }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number }
@@ -20,8 +19,9 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-const channelIcon = (source: string) => source === "email" || source.startsWith("gmail") ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
-const displayChannel = (source: string) => source === "email" || source.startsWith("gmail") ? "Email" : source[0].toUpperCase() + source.slice(1)
+const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source
+const channelIcon = (source: string) => providerForSource(source) === "gmail" ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
+const displayChannel = (source: string) => providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 const initials = (value: string) => value.split(/[.@\s_-]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()
 
 export function App() {
@@ -33,10 +33,11 @@ export function App() {
   const [selectedChat, setSelectedChat] = useState<string>("")
   const [draft, setDraft] = useState("")
   const [search, setSearch] = useState("")
+  const [sidebarOpen, setSidebarOpen] = useState(true)
 
   const account = accounts.find((item) => item.id === selectedAccount)
-  const activeChannel = selectedChannel !== "all" ? selectedChannel : account?.provider
-  const channels = useMemo(() => Array.from(new Set([...accounts.map((item) => item.provider), ...chats.map((item) => item.source)])).sort(), [accounts, chats])
+  const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
+  const platforms = useMemo(() => Array.from(new Set([...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
   const refreshChats = useCallback(async () => {
     const suffix = activeChannel ? `?source=${encodeURIComponent(activeChannel)}` : ""
@@ -67,26 +68,18 @@ export function App() {
   const markSeen = async () => { const message = conversation?.messages.at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
   const visibleChats = chats.filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
 
-  return <main className="grid h-svh min-h-0 overflow-hidden grid-cols-[72px_260px_340px_minmax(0,1fr)] bg-background text-foreground">
-    <aside className="flex min-h-0 flex-col items-center gap-3 border-r bg-muted/30 py-4">
-      <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div>
-      <Separator className="w-8" />
-      <Button variant={selectedAccount === "all" ? "secondary" : "ghost"} size="icon" onClick={() => setSelectedAccount("all")} title="All accounts"><MessageCircle /></Button>
-      {accounts.map((item) => <Button key={item.id} variant={selectedAccount === item.id ? "secondary" : "ghost"} size="icon" onClick={() => { setSelectedAccount(item.id); setSelectedChannel("all") }} title={item.display_name}><Avatar className="size-7"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar></Button>)}
-      <div className="mt-auto"><Button variant="ghost" size="icon" title="AI is opt-in"><Bot /></Button></div>
-    </aside>
-
-    <aside className="flex min-h-0 min-w-0 flex-col border-r bg-card">
-      <header className="p-4"><p className="text-xs font-medium text-muted-foreground">ACCOUNTS</p><h1 className="mt-1 text-lg font-semibold">Universal UserIO</h1></header>
+  return <main className={`grid h-svh min-h-0 overflow-hidden bg-background text-foreground ${sidebarOpen ? "grid-cols-[260px_340px_minmax(0,1fr)]" : "grid-cols-[0px_340px_minmax(0,1fr)]"}`}>
+    <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-card">
+      <header className="flex items-center gap-3 p-4"><div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div><div><p className="text-xs font-medium text-muted-foreground">PLATFORMS</p><h1 className="text-lg font-semibold">Universal UserIO</h1></div></header>
       <ScrollArea className="min-h-0 flex-1 px-2">
-        <Button className="mb-1 w-full justify-start" variant={selectedChannel === "all" ? "secondary" : "ghost"} onClick={() => setSelectedChannel("all")}><Inbox /> All channels</Button>
-        {channels.map((channel) => <Button key={channel} className="mb-1 w-full justify-start" variant={selectedChannel === channel ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(channel); setSelectedAccount("all") }}>{channelIcon(channel)} {displayChannel(channel)}</Button>)}
+        <Button className="mb-2 w-full justify-start" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all") }}><Inbox /> All conversations</Button>
+        {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all") }}>All {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => <Button key={item.id} className="mt-1 w-full justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { setSelectedAccount(item.id); setSelectedChannel("all") }}><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar>{item.display_name}</Button>)}</div></details>)}
       </ScrollArea>
       <div className="border-t p-3 text-xs text-muted-foreground">AI proposes only when you ask.</div>
     </aside>
 
     <section className="flex min-h-0 min-w-0 flex-col border-r bg-card">
-      <header className="space-y-3 p-4"><div><p className="text-xs font-medium text-muted-foreground">CHATS</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "All conversations"}</p></div><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats" /></header>
+      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Hide platforms" : "Show platforms"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div><p className="text-xs font-medium text-muted-foreground">CHATS</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "All conversations"}</p></div></div><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats" /></header>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         {visibleChats.map((chat) => <button key={chat.id} onClick={() => setSelectedChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-lg p-3 text-left transition-colors ${selectedChat === chat.id ? "bg-accent" : "hover:bg-muted"}`}>
           <Avatar><AvatarFallback>{initials(chat.sender)}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><b className="truncate text-sm">{chat.identity_id || chat.sender}</b>{chat.unread_count > 0 && <Badge className="rounded-full px-1.5">{chat.unread_count}</Badge>}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{chat.preview || "No messages yet"}</span></span>
