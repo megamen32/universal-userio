@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Check, ChevronDown, Inbox, Mail, MessageCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Send, Sparkles } from "lucide-react"
+import { Check, ChevronDown, Expand, Inbox, Mail, MessageCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Send, Sparkles, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -35,6 +35,7 @@ export function App() {
   const [search, setSearch] = useState("")
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [chatsOpen, setChatsOpen] = useState(true)
+  const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
@@ -95,11 +96,12 @@ export function App() {
       {conversation ? <>
         <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Button variant="ghost" size="icon" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Hide chats" : "Show chats"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
-          {conversation.messages.map((message) => <div key={`${message.source}:${message.message_id}`} className="max-w-[78%] overflow-hidden rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm">{message.source.startsWith("gmail") && /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body) ? <iframe className="min-h-40 w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /> : <p className="whitespace-pre-wrap">{message.body}</p>}<p className="mt-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div>)}
+          {conversation.messages.map((message) => { const isHtmlEmail = message.source.startsWith("gmail") && /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body); return <div key={`${message.source}:${message.message_id}`} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : "max-w-[78%] overflow-hidden rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm"}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: conversation.sender })}><Expand /> Expand</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <p className="whitespace-pre-wrap">{message.body}</p>}<p className="mt-1 px-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div> })}
           {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[78%] rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm"><p>{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" onClick={() => approve(item.id)}>Approve & send</Button>}</div></div>)}
         </div></ScrollArea>
         <footer className="border-t bg-card p-4"><div className="flex gap-2"><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder="Write a draft reply…" /><Button onClick={() => void submitDraft()} size="icon" title="Create draft"><Send /></Button><Button variant="outline" onClick={() => void askAi()} title="Ask AI for variants"><Sparkles /></Button></div><p className="mt-2 text-xs text-muted-foreground">Create a draft, then explicitly approve it before delivery.</p></footer>
       </> : <div className="grid flex-1 place-items-center text-center"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Hide chats" : "Show chats"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Choose a chat</h2><p className="mt-1 text-sm text-muted-foreground">Accounts, channels, and conversations stay separate.</p></div></div>}
+      {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Close</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Expanded email" /></div>}
     </section>
   </main>
 }
