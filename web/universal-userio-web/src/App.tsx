@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Check, ChevronDown, Inbox, Mail, MessageCircle, PanelLeftClose, PanelLeftOpen, Send, Sparkles } from "lucide-react"
+import { Check, ChevronDown, Inbox, Mail, MessageCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Send, Sparkles } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -34,6 +34,7 @@ export function App() {
   const [draft, setDraft] = useState("")
   const [search, setSearch] = useState("")
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [chatsOpen, setChatsOpen] = useState(true)
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
@@ -68,7 +69,9 @@ export function App() {
   const markSeen = async () => { const message = conversation?.messages.at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
   const visibleChats = chats.filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
 
-  return <main className={`grid h-svh min-h-0 overflow-hidden bg-background text-foreground ${sidebarOpen ? "grid-cols-[260px_340px_minmax(0,1fr)]" : "grid-cols-[0px_340px_minmax(0,1fr)]"}`}>
+  const columns = sidebarOpen ? chatsOpen ? "grid-cols-[260px_340px_minmax(0,1fr)]" : "grid-cols-[260px_minmax(0,1fr)]" : chatsOpen ? "grid-cols-[0px_340px_minmax(0,1fr)]" : "grid-cols-[0px_minmax(0,1fr)]"
+
+  return <main className={`grid h-svh min-h-0 overflow-hidden bg-background text-foreground ${columns}`}>
     <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-card">
       <header className="flex items-center gap-3 p-4"><div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div><div><p className="text-xs font-medium text-muted-foreground">PLATFORMS</p><h1 className="text-lg font-semibold">Universal UserIO</h1></div></header>
       <ScrollArea className="min-h-0 flex-1 px-2">
@@ -78,7 +81,7 @@ export function App() {
       <div className="border-t p-3 text-xs text-muted-foreground">AI proposes only when you ask.</div>
     </aside>
 
-    <section className="flex min-h-0 min-w-0 flex-col border-r bg-card">
+    <section className={`flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-card ${chatsOpen ? "" : "hidden"}`}>
       <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Hide platforms" : "Show platforms"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div><p className="text-xs font-medium text-muted-foreground">CHATS</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "All conversations"}</p></div></div><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats" /></header>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         {visibleChats.map((chat) => <button key={chat.id} onClick={() => setSelectedChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-lg p-3 text-left transition-colors ${selectedChat === chat.id ? "bg-accent" : "hover:bg-muted"}`}>
@@ -90,13 +93,13 @@ export function App() {
 
     <section className="flex min-h-0 min-w-0 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))]">
       {conversation ? <>
-        <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
+        <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Button variant="ghost" size="icon" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Hide chats" : "Show chats"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
-          {conversation.messages.map((message) => <div key={`${message.source}:${message.message_id}`} className="max-w-[78%] rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm"><p>{message.body}</p><p className="mt-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div>)}
+          {conversation.messages.map((message) => <div key={`${message.source}:${message.message_id}`} className="max-w-[78%] overflow-hidden rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm">{message.source.startsWith("gmail") && /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body) ? <iframe className="min-h-40 w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /> : <p className="whitespace-pre-wrap">{message.body}</p>}<p className="mt-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div>)}
           {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[78%] rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm"><p>{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" onClick={() => approve(item.id)}>Approve & send</Button>}</div></div>)}
         </div></ScrollArea>
         <footer className="border-t bg-card p-4"><div className="flex gap-2"><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder="Write a draft reply…" /><Button onClick={() => void submitDraft()} size="icon" title="Create draft"><Send /></Button><Button variant="outline" onClick={() => void askAi()} title="Ask AI for variants"><Sparkles /></Button></div><p className="mt-2 text-xs text-muted-foreground">Create a draft, then explicitly approve it before delivery.</p></footer>
-      </> : <div className="grid flex-1 place-items-center text-center"><div><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Choose a chat</h2><p className="mt-1 text-sm text-muted-foreground">Accounts, channels, and conversations stay separate.</p></div></div>}
+      </> : <div className="grid flex-1 place-items-center text-center"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Hide chats" : "Show chats"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Choose a chat</h2><p className="mt-1 text-sm text-muted-foreground">Accounts, channels, and conversations stay separate.</p></div></div>}
     </section>
   </main>
 }
