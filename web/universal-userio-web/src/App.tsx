@@ -20,8 +20,8 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-const channelIcon = (source: string) => source === "email" || source === "gmail" ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
-const displayChannel = (source: string) => source === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
+const channelIcon = (source: string) => source === "email" || source.startsWith("gmail") ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
+const displayChannel = (source: string) => source === "email" || source.startsWith("gmail") ? "Email" : source[0].toUpperCase() + source.slice(1)
 const initials = (value: string) => value.split(/[.@\s_-]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()
 
 export function App() {
@@ -67,8 +67,8 @@ export function App() {
   const markSeen = async () => { const message = conversation?.messages.at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
   const visibleChats = chats.filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
 
-  return <main className="grid h-svh grid-cols-[72px_260px_340px_minmax(0,1fr)] bg-background text-foreground">
-    <aside className="flex flex-col items-center gap-3 border-r bg-muted/30 py-4">
+  return <main className="grid h-svh min-h-0 overflow-hidden grid-cols-[72px_260px_340px_minmax(0,1fr)] bg-background text-foreground">
+    <aside className="flex min-h-0 flex-col items-center gap-3 border-r bg-muted/30 py-4">
       <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div>
       <Separator className="w-8" />
       <Button variant={selectedAccount === "all" ? "secondary" : "ghost"} size="icon" onClick={() => setSelectedAccount("all")} title="All accounts"><MessageCircle /></Button>
@@ -76,18 +76,18 @@ export function App() {
       <div className="mt-auto"><Button variant="ghost" size="icon" title="AI is opt-in"><Bot /></Button></div>
     </aside>
 
-    <aside className="flex min-w-0 flex-col border-r bg-card">
+    <aside className="flex min-h-0 min-w-0 flex-col border-r bg-card">
       <header className="p-4"><p className="text-xs font-medium text-muted-foreground">ACCOUNTS</p><h1 className="mt-1 text-lg font-semibold">Universal UserIO</h1></header>
-      <ScrollArea className="flex-1 px-2">
+      <ScrollArea className="min-h-0 flex-1 px-2">
         <Button className="mb-1 w-full justify-start" variant={selectedChannel === "all" ? "secondary" : "ghost"} onClick={() => setSelectedChannel("all")}><Inbox /> All channels</Button>
         {channels.map((channel) => <Button key={channel} className="mb-1 w-full justify-start" variant={selectedChannel === channel ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(channel); setSelectedAccount("all") }}>{channelIcon(channel)} {displayChannel(channel)}</Button>)}
       </ScrollArea>
       <div className="border-t p-3 text-xs text-muted-foreground">AI proposes only when you ask.</div>
     </aside>
 
-    <section className="flex min-w-0 flex-col border-r bg-card">
+    <section className="flex min-h-0 min-w-0 flex-col border-r bg-card">
       <header className="space-y-3 p-4"><div><p className="text-xs font-medium text-muted-foreground">CHATS</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "All conversations"}</p></div><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats" /></header>
-      <ScrollArea className="flex-1 px-2 pb-3">
+      <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         {visibleChats.map((chat) => <button key={chat.id} onClick={() => setSelectedChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-lg p-3 text-left transition-colors ${selectedChat === chat.id ? "bg-accent" : "hover:bg-muted"}`}>
           <Avatar><AvatarFallback>{initials(chat.sender)}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><b className="truncate text-sm">{chat.identity_id || chat.sender}</b>{chat.unread_count > 0 && <Badge className="rounded-full px-1.5">{chat.unread_count}</Badge>}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{chat.preview || "No messages yet"}</span></span>
         </button>)}
@@ -95,10 +95,10 @@ export function App() {
       </ScrollArea>
     </section>
 
-    <section className="flex min-w-0 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))]">
+    <section className="flex min-h-0 min-w-0 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))]">
       {conversation ? <>
         <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
-        <ScrollArea className="flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
+        <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
           {conversation.messages.map((message) => <div key={`${message.source}:${message.message_id}`} className="max-w-[78%] rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm"><p>{message.body}</p><p className="mt-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div>)}
           {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[78%] rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm"><p>{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" onClick={() => approve(item.id)}>Approve & send</Button>}</div></div>)}
         </div></ScrollArea>
