@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import mimetypes
+import os
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -142,6 +143,19 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     )
                     self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": "vkid_identity_only"})
                     return
+                if path == "/v1/gmail/accounts":
+                    payload = self._json()
+                    alias = str(payload.get("account") or "").strip()
+                    allowed = {item.strip() for item in os.getenv("UNIVERSAL_USERIO_GMAIL_ACCOUNTS", "gmail,careviolan").split(",") if item.strip()}
+                    if alias not in allowed:
+                        raise ValueError("Gmail mailbox is not configured in himalaya")
+                    account_id = f"gmail-{alias}"
+                    service._store.register_account(
+                        account_id=account_id, provider="gmail", display_name=alias,
+                        can_read=True, can_reply=False, credential_ref=f"himalaya:{alias}", enabled=True,
+                    )
+                    self._reply(202, {"accepted": True, "account_id": account_id, "mode": "configured_himalaya_mailbox"})
+                    return
                 if path == "/v1/reply-rules":
                     payload = self._json()
                     service._store.set_rule(
@@ -172,6 +186,9 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
             if requested_path in {"/vk/connect/new", "/vk/callback"}:
                 body = _vk_connect_page(vkid_app_id).encode()
                 self._html(200, body)
+                return
+            if requested_path == "/gmail/connect/new":
+                self._html(200, _gmail_connect_page().encode())
                 return
             if requested_path == "/" and self._static(requested_path):
                 return
@@ -243,4 +260,21 @@ def _vk_connect_page(app_id: str) -> str:
         .catch(error => {{ status.textContent = 'Could not connect VK'; console.error(error); }});
     }});
 }})();
+</script></body></html>'''
+
+
+def _gmail_connect_page() -> str:
+    allowed = [item.strip() for item in os.getenv("UNIVERSAL_USERIO_GMAIL_ACCOUNTS", "gmail,careviolan").split(",") if item.strip()]
+    options = "".join(f"<option value='{item}'>{item}</option>" for item in allowed)
+    return f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect Gmail</title><style>body{{font:16px system-ui;max-width:560px;margin:10vh auto;padding:24px;background:#111;color:#eee}}select,button{{font:inherit;padding:10px;margin-top:12px}}#status{{margin-top:20px;color:#aaa}}a{{color:#8ab4f8}}</style></head>
+<body><h1>Connect Gmail</h1><p>UserIO uses the local read-only Himalaya configuration. This page adds only a mailbox that is already configured there; it never asks for or stores a Gmail password.</p>
+<label for="account">Configured mailbox</label><br><select id="account">{options}</select><br><button id="connect">Add Gmail account</button><p id="status"></p><p><a href="/">Back to UserIO</a></p>
+<script>
+document.getElementById('connect').onclick = async () => {{
+  const status = document.getElementById('status');
+  try {{ const response = await fetch('/v1/gmail/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{account:document.getElementById('account').value}})}}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not add mailbox'); status.textContent = 'Added. Returning to UserIO…'; setTimeout(() => location.assign('/'), 400); }}
+  catch (error) {{ status.textContent = error.message; }}
+}};
 </script></body></html>'''
