@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Universal UserIO — VK Inbox",
+  "version": "0.1.0",
+  "description": "Reads the currently open VK Web conversation through the existing browser session and forwards normalized inbox events to UserIO.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["https://vk.com/*", "https://msg.bezrabotnyi.com/*"],
+  "action": {"default_popup": "popup.html"},
+  "content_scripts": [{"matches": ["https://vk.com/*"], "js": ["content.js"], "run_at": "document_idle"}],
+  "options_page": "options.html"
+}
