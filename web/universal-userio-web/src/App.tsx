@@ -20,6 +20,7 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 }
 
 const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source
+const sourceForAccount = (account: Account) => account.provider === "gmail" && account.id.toLowerCase().includes("careviolan") ? "gmail:careviolan" : account.provider
 const channelIcon = (source: string) => providerForSource(source) === "gmail" ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
 const displayChannel = (source: string) => providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 const initials = (value: string) => value.split(/[.@\s_-]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()
@@ -43,7 +44,7 @@ export function App() {
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
   const refreshChats = useCallback(async () => {
-    const sourceFilter = account ? account.provider : activeChannel
+    const sourceFilter = account ? sourceForAccount(account) : activeChannel
     const suffix = sourceFilter ? `?source=${encodeURIComponent(sourceFilter)}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     setChats(data.conversations)
@@ -82,7 +83,7 @@ export function App() {
     setAccounts((current) => current.filter((item) => item.id !== id))
     if (selectedAccount === id) setSelectedAccount("all")
   }
-  const visibleChats = chats.filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && (chat.source === item.provider || (item.provider === "gmail" && chat.source.startsWith("gmail:")))))
+  const visibleChats = chats.filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
     .filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
 
   const columns = sidebarOpen ? chatsOpen ? "grid-cols-[260px_340px_minmax(0,1fr)]" : "grid-cols-[260px_minmax(0,1fr)]" : chatsOpen ? "grid-cols-[0px_340px_minmax(0,1fr)]" : "grid-cols-[0px_minmax(0,1fr)]"
