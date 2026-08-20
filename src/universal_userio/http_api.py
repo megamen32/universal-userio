@@ -9,7 +9,7 @@ import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Type
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .adapters import inbox_message_from_envelope
 from .mcp_surface import UserIOMcpSurface
@@ -199,6 +199,17 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                 return
             record = service._store.conversation(conversation_id)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            if not self._authorized(allow_proxy=True):
+                self._reply(401, {"error": "unauthorized"})
+                return
+            if path.startswith("/v1/accounts/"):
+                account_id = unquote(path.removeprefix("/v1/accounts/").strip("/"))
+                self._reply(200, {"deleted": service._store.delete_account(account_id)})
+                return
+            self._reply(404, {"error": "not found"})
 
         def log_message(self, _format: str, *_args: object) -> None:
             return
