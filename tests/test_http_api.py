@@ -179,3 +179,27 @@ def test_trusted_loopback_proxy_can_use_dashboard_api_but_not_mcp(tmp_path) -> N
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token", vkid_app_id="54729441"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        page = Request(base + "/vk/connect/new", headers={"X-UserIO-Authenticated": "1"})
+        with urlopen(page) as response:
+            assert response.status == 200
+            assert b"54729441" in response.read()
+        request = Request(
+            base + "/v1/vk/accounts", data=b'{"user_id":"42","display_name":"VK Person"}',
+            method="POST", headers={"X-UserIO-Authenticated": "1", "Content-Type": "application/json"},
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+        assert result["mode"] == "vkid_identity_only"
+        assert service._store.accounts()[0]["capabilities"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
