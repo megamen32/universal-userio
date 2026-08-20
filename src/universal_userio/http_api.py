@@ -19,7 +19,7 @@ from .service import UserIOService
 _STATIC_ROOT = Path(__file__).with_name("static")
 
 
-def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandler]:
+def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
     class UserIOHandler(BaseHTTPRequestHandler):
         def _authorized(self, *, allow_proxy: bool = False) -> bool:
@@ -128,6 +128,20 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
                     )
                     self._reply(202, {"accepted": True})
                     return
+                if path == "/v1/vk/accounts":
+                    payload = self._json()
+                    external_id = str(payload.get("user_id") or "").strip()
+                    display_name = str(payload.get("display_name") or "VK account").strip()
+                    if not external_id:
+                        raise ValueError("user_id required")
+                    # VK ID confirms the identity only. Message access belongs to the
+                    # user-owned browser extension and must not be implied here.
+                    service._store.register_account(
+                        account_id=f"vk:{external_id}", provider="vk", display_name=display_name,
+                        can_read=False, can_reply=False, credential_ref=f"vkid:{external_id}", enabled=True,
+                    )
+                    self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": "vkid_identity_only"})
+                    return
                 if path == "/v1/reply-rules":
                     payload = self._json()
                     service._store.set_rule(
@@ -155,6 +169,10 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)
             requested_path = urlparse(self.path).path
+            if requested_path in {"/vk/connect/new", "/vk/callback"}:
+                body = _vk_connect_page(vkid_app_id).encode()
+                self._html(200, body)
+                return
             if requested_path == "/" and self._static(requested_path):
                 return
             if requested_path.startswith("/assets/") and self._static(requested_path):
@@ -184,3 +202,32 @@ def handler(service: UserIOService, *, token: str) -> Type[BaseHTTPRequestHandle
             return
 
     return UserIOHandler
+
+
+def _vk_connect_page(app_id: str) -> str:
+    safe_app_id = app_id.strip() or "0"
+    return f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connect VK</title><style>body{{font:16px system-ui;max-width:560px;margin:10vh auto;padding:24px;background:#111;color:#eee}}#status{{margin-top:20px;color:#aaa}}a{{color:#8ab4f8}}</style></head>
+<body><h1>Connect VK</h1><p>VK ID links the account. Reading chats is enabled separately by the VK browser extension.</p>
+<div id="vk_auth"></div><p id="status">Waiting for VK ID…</p>
+<script src="https://unpkg.com/@vkid/sdk@<3.0.0/dist-sdk/umd/index.js"></script>
+<script>
+(() => {{
+  const status = document.getElementById('status');
+  const VKID = window.VKIDSDK;
+  if (!VKID) {{ status.textContent = 'VK ID SDK failed to load'; return; }}
+  VKID.Config.init({{app:{safe_app_id}, redirectUrl:location.origin + '/vk/callback', responseMode:VKID.ConfigResponseMode.Callback, source:VKID.ConfigSource.LOWCODE, scope:''}});
+  const tap = new VKID.OneTap();
+  tap.render({{container:document.getElementById('vk_auth'), showAlternativeLogin:true}})
+    .on(VKID.WidgetEvents.ERROR, error => {{ status.textContent = 'VK ID error'; console.error(error); }})
+    .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, payload => {{
+      status.textContent = 'Authorizing…';
+      VKID.Auth.exchangeCode(payload.code, payload.device_id)
+        .then(result => VKID.Auth.userInfo(result.access_token))
+        .then(info => fetch('/v1/vk/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{user_id:String(info.user_id), display_name:info.user_name || info.first_name || 'VK account'}})}}))
+        .then(response => {{ if (!response.ok) throw new Error('UserIO rejected account'); status.textContent = 'VK identity connected. Install the browser extension to read chats.'; }})
+        .catch(error => {{ status.textContent = 'Could not connect VK'; console.error(error); }});
+    }});
+}})();
+</script></body></html>'''

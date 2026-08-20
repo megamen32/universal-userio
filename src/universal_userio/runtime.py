@@ -55,7 +55,10 @@ def main() -> None:
     environment = os.environ
     service = build_service(environment)
     token = _required(environment, "USERIO_API_TOKEN")
-    server = ThreadingHTTPServer((environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))), handler(service, token=token))
+    server = ThreadingHTTPServer(
+        (environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))),
+        handler(service, token=token, vkid_app_id=environment.get("USERIO_VKID_APP_ID", "")),
+    )
     server.serve_forever()
 
 
