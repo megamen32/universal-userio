@@ -203,3 +203,22 @@ def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> No
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_accounts_can_be_removed_without_deleting_provider_data(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/accounts", data=b'{"id":"gmail:old","provider":"gmail:old","display_name":"Old","credential_ref":"gmail:old"}', method="POST", headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
+        with urlopen(request):
+            pass
+        request = Request(base + "/v1/accounts/gmail%3Aold", method="DELETE", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            assert json.loads(response.read())["deleted"] is True
+        assert service._store.accounts() == []
+    finally:
+        server.shutdown()
+        server.server_close()

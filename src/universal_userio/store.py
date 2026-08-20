@@ -115,6 +115,11 @@ class SQLiteUserIOStore:
             for row in rows
         ]
 
+    def delete_account(self, account_id: str) -> bool:
+        """Remove only UserIO's account registry row; provider credentials stay untouched."""
+        with self._lock, self._connection:
+            return self._connection.execute("DELETE FROM provider_accounts WHERE id=?", (account_id,)).rowcount == 1
+
     def set_rule(self, *, identity_id: str, source: str, route_id: str, mode: str) -> None:
         if mode not in {"suggest", "approve", "auto_send"}:
             raise ValueError("unsupported reply mode")
@@ -250,8 +255,12 @@ class SQLiteUserIOStore:
         clauses = ""
         values: list[object] = [limit]
         if source:
-            clauses = "WHERE c.source=?"
-            values.insert(0, source)
+            if source == "gmail":
+                clauses = "WHERE (c.source=? OR c.source LIKE ?)"
+                values[0:0] = [source, "gmail:%"]
+            else:
+                clauses = "WHERE c.source=?"
+                values.insert(0, source)
         with self._lock:
             rows = self._connection.execute(
                 f"""

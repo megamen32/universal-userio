@@ -36,17 +36,19 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [chatsOpen, setChatsOpen] = useState(true)
   const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
+  const [hiddenAccounts, setHiddenAccounts] = useState<string[]>(() => JSON.parse(localStorage.getItem("userio-hidden-accounts") || "[]"))
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
   const refreshChats = useCallback(async () => {
-    const suffix = activeChannel ? `?source=${encodeURIComponent(activeChannel)}` : ""
+    const sourceFilter = account ? account.provider : activeChannel
+    const suffix = sourceFilter ? `?source=${encodeURIComponent(sourceFilter)}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     setChats(data.conversations)
     setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : data.conversations[0]?.id ?? "")
-  }, [activeChannel])
+  }, [account, activeChannel])
 
   const loadConversation = useCallback(async (id: string) => setConversation(await api<Conversation>(`/v1/conversations/${id}`)), [])
 
@@ -68,7 +70,20 @@ export function App() {
   const askAi = async () => { if (conversation) { await api(`/v1/conversations/${conversation.id}/ai-drafts`, { method: "POST", body: "{}" }); await loadConversation(conversation.id) } }
   const approve = async (id: string) => { await api(`/v1/drafts/${id}/approve`, { method: "POST", body: "{}" }); if (conversation) await loadConversation(conversation.id) }
   const markSeen = async () => { const message = conversation?.messages.at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
-  const visibleChats = chats.filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
+  const toggleAccount = (id: string, visible: boolean) => {
+    const next = visible ? hiddenAccounts.filter((item) => item !== id) : Array.from(new Set([...hiddenAccounts, id]))
+    setHiddenAccounts(next)
+    localStorage.setItem("userio-hidden-accounts", JSON.stringify(next))
+    if (!visible && selectedAccount === id) setSelectedAccount("all")
+  }
+  const removeAccount = async (id: string) => {
+    if (!window.confirm("Удалить аккаунт из UserIO? Данные у провайдера не удаляются.")) return
+    await api(`/v1/accounts/${encodeURIComponent(id)}`, { method: "DELETE" })
+    setAccounts((current) => current.filter((item) => item.id !== id))
+    if (selectedAccount === id) setSelectedAccount("all")
+  }
+  const visibleChats = chats.filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && (chat.source === item.provider || (item.provider === "gmail" && chat.source.startsWith("gmail:")))))
+    .filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
 
   const columns = sidebarOpen ? chatsOpen ? "grid-cols-[260px_340px_minmax(0,1fr)]" : "grid-cols-[260px_minmax(0,1fr)]" : chatsOpen ? "grid-cols-[0px_340px_minmax(0,1fr)]" : "grid-cols-[0px_minmax(0,1fr)]"
 
@@ -77,7 +92,7 @@ export function App() {
       <header className="flex items-center gap-3 p-4"><div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div><div><p className="text-xs font-medium text-muted-foreground">PLATFORMS</p><h1 className="text-lg font-semibold">Universal UserIO</h1></div></header>
       <ScrollArea className="min-h-0 flex-1 px-2">
         <Button className="mb-2 w-full justify-start" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all") }}><Inbox /> All conversations</Button>
-        {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all") }}>All {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => <Button key={item.id} className="mt-1 w-full justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { setSelectedAccount(item.id); setSelectedChannel("all") }}><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar>{item.display_name}{item.capabilities.length === 0 && <span className="ml-auto text-[10px] text-muted-foreground">ID only</span>}</Button>)}{platform === "telegram" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/telegram-qr/new")}><Plus /> Add Telegram account</Button>}{platform === "vk" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/vk/connect/new")}><Plus /> Add VK account</Button>}{platform === "whatsapp" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus /> Add WhatsApp account</Button>}</div></details>)}
+        {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all") }}>All {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => { const visible = !hiddenAccounts.includes(item.id); return <div key={item.id} className="mt-1 flex items-center gap-1"><Button className="min-w-0 flex-1 justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all") } }}><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar><span className="truncate">{item.display_name}</span>{item.capabilities.length === 0 && <span className="ml-auto text-[10px] text-muted-foreground">ID only</span>}</Button><input aria-label={`Show ${item.display_name}`} type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} /><Button aria-label={`Remove ${item.display_name}`} title="Remove account" variant="ghost" size="icon" onClick={() => void removeAccount(item.id)}><X className="size-3" /></Button></div> })}{platform === "telegram" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/telegram-qr/new")}><Plus /> Add Telegram account</Button>}{platform === "vk" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/vk/connect/new")}><Plus /> Add VK account</Button>}{platform === "whatsapp" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus /> Add WhatsApp account</Button>}</div></details>)}
       </ScrollArea>
       <div className="border-t p-3 text-xs text-muted-foreground">AI proposes only when you ask.</div>
     </aside>
