@@ -177,6 +177,8 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                 return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
+            if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip"} and self._static(requested_path):
+                return
             if not self._authorized(allow_proxy=True):
                 self._reply(401, {"error": "unauthorized"})
                 return
