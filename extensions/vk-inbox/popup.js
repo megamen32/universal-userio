@@ -12,5 +12,6 @@ document.getElementById("capture").onclick = async () => {
     if (!response.ok) throw new Error(`UserIO ответил ${response.status}`);
     sent += 1;
   }
+  await chrome.scripting.executeScript({target: {tabId: tab.id}, func: (ids) => window.userioVkMark?.(ids), args: [(result?.messages || []).map((message) => message.id)]});
   status.textContent = sent ? `Отправлено в UserIO: ${sent}` : "Новых сообщений в открытом чате не найдено.";
 };

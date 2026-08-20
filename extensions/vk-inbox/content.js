@@ -15,9 +15,7 @@
     }).filter((item) => item.body && !sent.has(item.id));
   };
   window.userioVkCapture = () => {
-    const items = collect();
-    items.forEach((item) => sent.add(item.id));
-    return {peer: currentPeer(), messages: items};
+    return {peer: currentPeer(), messages: collect()};
   };
-  new MutationObserver(() => window.userioVkCapture()).observe(document.documentElement, {subtree: true, childList: true});
+  window.userioVkMark = (ids) => ids.forEach((id) => sent.add(String(id)));
 })();
