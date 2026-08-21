@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hmac
+import imaplib
 import json
 import mimetypes
 import os
+import re
+import subprocess
 import time
+from email.utils import parseaddr
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Type
@@ -18,6 +22,10 @@ from .service import UserIOService
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
+_HIMALAYA_CONFIG = Path("/home/roomhacker/.config/himalaya/config.toml")
+_GMAIL_SECRET_ROOT = Path("/home/roomhacker/.hermes/secrets/universal-userio-gmail")
+_GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-inbox/gmail-accounts.txt")
+_GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
 
 
 def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Type[BaseHTTPRequestHandler]:
@@ -145,16 +153,14 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     return
                 if path == "/v1/gmail/accounts":
                     payload = self._json()
-                    alias = str(payload.get("account") or "").strip()
-                    allowed = {item.strip() for item in os.getenv("UNIVERSAL_USERIO_GMAIL_ACCOUNTS", "gmail,careviolan").split(",") if item.strip()}
-                    if alias not in allowed:
-                        raise ValueError("Gmail mailbox is not configured in himalaya")
-                    account_id = f"gmail-{alias}"
+                    email = str(payload.get("email") or "").strip().lower()
+                    app_password = re.sub(r"\s+", "", str(payload.get("app_password") or ""))
+                    account_id, display_name = _connect_gmail_account(email, app_password)
                     service._store.register_account(
-                        account_id=account_id, provider="gmail", display_name=alias,
-                        can_read=True, can_reply=False, credential_ref=f"himalaya:{alias}", enabled=True,
+                        account_id=account_id, provider="gmail", display_name=display_name,
+                        can_read=True, can_reply=False, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
                     )
-                    self._reply(202, {"accepted": True, "account_id": account_id, "mode": "configured_himalaya_mailbox"})
+                    self._reply(202, {"accepted": True, "account_id": account_id, "mode": "himalaya_imap_app_password"})
                     return
                 if path == "/v1/reply-rules":
                     payload = self._json()
@@ -264,17 +270,61 @@ def _vk_connect_page(app_id: str) -> str:
 
 
 def _gmail_connect_page() -> str:
-    allowed = [item.strip() for item in os.getenv("UNIVERSAL_USERIO_GMAIL_ACCOUNTS", "gmail,careviolan").split(",") if item.strip()]
-    options = "".join(f"<option value='{item}'>{item}</option>" for item in allowed)
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Connect Gmail</title><style>body{{font:16px system-ui;max-width:560px;margin:10vh auto;padding:24px;background:#111;color:#eee}}select,button{{font:inherit;padding:10px;margin-top:12px}}#status{{margin-top:20px;color:#aaa}}a{{color:#8ab4f8}}</style></head>
-<body><h1>Connect Gmail</h1><p>UserIO uses the local read-only Himalaya configuration. This page adds only a mailbox that is already configured there; it never asks for or stores a Gmail password.</p>
-<label for="account">Configured mailbox</label><br><select id="account">{options}</select><br><button id="connect">Add Gmail account</button><p id="status"></p><p><a href="/">Back to UserIO</a></p>
+<title>Connect Gmail</title><style>body{{font:16px system-ui;max-width:560px;margin:10vh auto;padding:24px;background:#111;color:#eee}}input,button{{box-sizing:border-box;width:100%;font:inherit;padding:10px;margin-top:12px}}#status{{margin-top:20px;color:#aaa}}a{{color:#8ab4f8}}small{{color:#aaa}}</style></head>
+<body><h1>Connect Gmail</h1><p>Use a Google App Password for this mailbox. The normal Gmail password is never accepted.</p><small>The connection is checked against Gmail IMAP over TLS, then the App Password is stored in the local secret directory and never returned to the browser.</small>
+<form id="connect"><input id="email" type="email" autocomplete="username" placeholder="you@gmail.com" required><input id="app_password" type="password" autocomplete="new-password" placeholder="16-character App Password" minlength="16" required><button type="submit">Add Gmail account</button></form><p id="status"></p><p><a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Create an App Password</a> · <a href="/">Back to UserIO</a></p>
 <script>
-document.getElementById('connect').onclick = async () => {{
+document.getElementById('connect').onsubmit = async (event) => {{
+  event.preventDefault();
   const status = document.getElementById('status');
-  try {{ const response = await fetch('/v1/gmail/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{account:document.getElementById('account').value}})}}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not add mailbox'); status.textContent = 'Added. Returning to UserIO…'; setTimeout(() => location.assign('/'), 400); }}
+  try {{ const response = await fetch('/v1/gmail/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{email:document.getElementById('email').value, app_password:document.getElementById('app_password').value}})}}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not add mailbox'); document.getElementById('app_password').value = ''; status.textContent = 'Added and verified. Returning to UserIO…'; setTimeout(() => location.assign('/'), 700); }}
   catch (error) {{ status.textContent = error.message; }}
 }};
 </script></body></html>'''
+
+
+def _connect_gmail_account(email: str, app_password: str) -> tuple[str, str]:
+    """Verify and install one Gmail IMAP account without exposing its secret."""
+    parsed = parseaddr(email)[1]
+    if parsed != email or not re.fullmatch(r"[^@\s]+@gmail\.com", email) or not 16 <= len(app_password) <= 32:
+        raise ValueError("Gmail address and App Password are invalid")
+    alias = "gmail_" + re.sub(r"[^a-z0-9_-]", "_", email.replace("@", "_at_").lower())
+    try:
+        connection = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=20)
+        connection.login(email, app_password)
+        connection.logout()
+    except (OSError, imaplib.IMAP4.error) as error:
+        raise ValueError("Gmail rejected the App Password") from error
+    _GMAIL_SECRET_ROOT.mkdir(parents=True, exist_ok=True)
+    secret_path = _GMAIL_SECRET_ROOT / alias
+    secret_path.write_text(app_password + "\n", encoding="utf-8")
+    secret_path.chmod(0o600)
+    try:
+        import pwd
+        os.chown(secret_path, pwd.getpwnam("roomhacker").pw_uid, pwd.getpwnam("roomhacker").pw_gid)
+    except (KeyError, PermissionError):
+        pass
+    _append_himalaya_account(alias, email)
+    _append_gmail_account(alias)
+    subprocess.run(["systemctl", "restart", "universal-inbox-gmail.service"], check=True, timeout=30)
+    return f"gmail-{alias}", email
+
+
+def _append_himalaya_account(alias: str, email: str) -> None:
+    current = _HIMALAYA_CONFIG.read_text(encoding="utf-8") if _HIMALAYA_CONFIG.exists() else ""
+    if f"[accounts.{alias}]" in current:
+        return
+    block = f'''\n[accounts.{alias}]\nimap.server = "imaps://imap.gmail.com:993"\nimap.sasl.plain.username = "{email}"\nimap.sasl.plain.password.command = ["{_GMAIL_PASSWORD_HELPER}", "{alias}"]\nsmtp.server = "smtp://smtp.gmail.com:587"\nsmtp.starttls = true\nsmtp.sasl.plain.username = "{email}"\nsmtp.sasl.plain.password.command = ["{_GMAIL_PASSWORD_HELPER}", "{alias}"]\nmailbox.alias.inbox = "INBOX"\nmailbox.alias.sent = "[Gmail]/Sent Mail"\nmailbox.alias.drafts = "[Gmail]/Drafts"\nmailbox.alias.trash = "[Gmail]/Trash"\n'''
+    _HIMALAYA_CONFIG.write_text(current.rstrip() + "\n" + block, encoding="utf-8")
+    _HIMALAYA_CONFIG.chmod(0o600)
+
+
+def _append_gmail_account(alias: str) -> None:
+    _GMAIL_ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    existing = _GMAIL_ACCOUNTS_FILE.read_text(encoding="utf-8").split() if _GMAIL_ACCOUNTS_FILE.exists() else ["gmail", "careviolan"]
+    if alias not in existing:
+        existing.append(alias)
+    _GMAIL_ACCOUNTS_FILE.write_text("\n".join(dict.fromkeys(existing)) + "\n", encoding="utf-8")
+    _GMAIL_ACCOUNTS_FILE.chmod(0o640)
