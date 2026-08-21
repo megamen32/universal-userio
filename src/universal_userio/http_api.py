@@ -288,7 +288,7 @@ document.getElementById('connect').onsubmit = async (event) => {{
 def _connect_gmail_account(email: str, app_password: str) -> tuple[str, str]:
     """Verify and install one Gmail IMAP account without exposing its secret."""
     parsed = parseaddr(email)[1]
-    if parsed != email or not re.fullmatch(r"[^@\s]+@gmail\.com", email) or not 16 <= len(app_password) <= 32:
+    if parsed != email or not re.fullmatch(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@gmail\.com", email) or not re.fullmatch(r"[A-Za-z0-9]{16}", app_password):
         raise ValueError("Gmail address and App Password are invalid")
     alias = "gmail_" + re.sub(r"[^a-z0-9_-]", "_", email.replace("@", "_at_").lower())
     try:
