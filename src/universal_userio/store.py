@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
@@ -55,12 +56,52 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,
                 token_hash BLOB UNIQUE NOT NULL,
                 created_at REAL NOT NULL,
-                revoked_at REAL
+                revoked_at REAL,
+                kind TEXT NOT NULL DEFAULT 'personal',
+                token_type TEXT NOT NULL DEFAULT 'access',
+                expires_at REAL,
+                oauth_client_id TEXT,
+                scope TEXT
             );
             CREATE INDEX IF NOT EXISTS api_tokens_user_idx ON api_tokens(user_id,revoked_at);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS oauth_clients (
+                id TEXT PRIMARY KEY,
+                secret_hash BLOB,
+                redirect_uris TEXT NOT NULL,
+                token_endpoint_auth_method TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+                code_hash BLOB PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                client_id TEXT NOT NULL,
+                redirect_uri TEXT NOT NULL,
+                code_challenge TEXT,
+                scope TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                used_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS oauth_sessions (
+                session_hash BLOB PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            );
             """
         )
+        # Existing v1 databases have the original, smaller api_tokens table.
+        columns = {
+            str(row["name"]) for row in self._connection.execute("PRAGMA table_info(api_tokens)")
+        }
+        for name, definition in (
+            ("kind", "TEXT NOT NULL DEFAULT 'personal'"),
+            ("token_type", "TEXT NOT NULL DEFAULT 'access'"),
+            ("expires_at", "REAL"),
+            ("oauth_client_id", "TEXT"),
+            ("scope", "TEXT"),
+        ):
+            if name not in columns:
+                self._connection.execute(f"ALTER TABLE api_tokens ADD COLUMN {name} {definition}")
 
     def _bootstrap_owner(self) -> None:
         row = self._connection.execute(
@@ -274,6 +315,14 @@ class SQLiteUserIOStore:
         return UserPrincipal(user_id, username, role), token
 
     def login(self, username: str, password: str) -> tuple[UserPrincipal, str] | None:
+        principal = self.authenticate_credentials(username, password)
+        if principal is None:
+            return None
+        with self._lock, self._connection:
+            token = self._issue_token(principal.user_id)
+        return principal, token
+
+    def authenticate_credentials(self, username: str, password: str) -> UserPrincipal | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT * FROM users WHERE username=? COLLATE NOCASE", (username.strip(),)
@@ -284,14 +333,16 @@ class SQLiteUserIOStore:
             expected = bytes(32) if row is None else bytes(row["password_hash"])
             if row is None or not hmac.compare_digest(digest, expected):
                 return None
-            with self._connection:
-                token = self._issue_token(str(row["id"]))
-        return UserPrincipal(str(row["id"]), str(row["username"]), str(row["role"])), token
+        return UserPrincipal(str(row["id"]), str(row["username"]), str(row["role"]))
 
     def _issue_token(self, user_id: str) -> str:
         token = "uio_" + secrets.token_urlsafe(32)
         self._connection.execute(
-            "INSERT INTO api_tokens VALUES (?,?,?,?,NULL)",
+            """
+            INSERT INTO api_tokens
+            (id,user_id,token_hash,created_at,revoked_at,kind,token_type)
+            VALUES (?,?,?,?,NULL,'personal','access')
+            """,
             ("token_" + uuid.uuid4().hex, user_id, self._token_hash(token), time.time()),
         )
         return token
@@ -301,12 +352,173 @@ class SQLiteUserIOStore:
             row = self._connection.execute(
                 """
                 SELECT u.id,u.username,u.role FROM api_tokens t JOIN users u ON u.id=t.user_id
-                WHERE t.token_hash=? AND t.revoked_at IS NULL
+                WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.token_type='access'
+                  AND (t.expires_at IS NULL OR t.expires_at>?)
                 """,
-                (self._token_hash(token),),
+                (self._token_hash(token), time.time()),
             ).fetchone()
         return None if row is None else UserPrincipal(
             str(row["id"]), str(row["username"]), str(row["role"])
+        )
+
+    def register_oauth_client(
+        self, *, redirect_uris: list[str], token_endpoint_auth_method: str
+    ) -> tuple[str, str | None]:
+        client_id = "client_" + secrets.token_urlsafe(24)
+        secret = None if token_endpoint_auth_method == "none" else secrets.token_urlsafe(32)
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT INTO oauth_clients VALUES (?,?,?,?,?)",
+                (
+                    client_id, None if secret is None else self._token_hash(secret),
+                    json.dumps(redirect_uris), token_endpoint_auth_method, time.time(),
+                ),
+            )
+        return client_id, secret
+
+    def oauth_client(self, client_id: str) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT id,redirect_uris,token_endpoint_auth_method FROM oauth_clients WHERE id=?",
+                (client_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "client_id": str(row["id"]),
+            "redirect_uris": json.loads(str(row["redirect_uris"])),
+            "token_endpoint_auth_method": str(row["token_endpoint_auth_method"]),
+        }
+
+    def authenticate_oauth_client(self, client_id: str, secret: str | None) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM oauth_clients WHERE id=?", (client_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        method = str(row["token_endpoint_auth_method"])
+        if method == "none":
+            if secret:
+                return None
+        elif not secret or not hmac.compare_digest(bytes(row["secret_hash"]), self._token_hash(secret)):
+            return None
+        return {
+            "client_id": str(row["id"]),
+            "redirect_uris": json.loads(str(row["redirect_uris"])),
+            "token_endpoint_auth_method": method,
+        }
+
+    def create_oauth_session(self, user_id: str, *, lifetime: int = 600) -> str:
+        session = secrets.token_urlsafe(32)
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT INTO oauth_sessions VALUES (?,?,?)",
+                (self._token_hash(session), user_id, time.time() + lifetime),
+            )
+        return session
+
+    def oauth_session_user(self, session: str) -> UserPrincipal | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT u.id,u.username,u.role FROM oauth_sessions s JOIN users u ON u.id=s.user_id
+                WHERE s.session_hash=? AND s.expires_at>?
+                """,
+                (self._token_hash(session), time.time()),
+            ).fetchone()
+        return None if row is None else UserPrincipal(
+            str(row["id"]), str(row["username"]), str(row["role"])
+        )
+
+    def create_oauth_code(
+        self, *, user_id: str, client_id: str, redirect_uri: str, code_challenge: str | None,
+        scope: str,
+    ) -> str:
+        code = "code_" + secrets.token_urlsafe(32)
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT INTO oauth_authorization_codes VALUES (?,?,?,?,?,?,?,NULL)",
+                (
+                    self._token_hash(code), user_id, client_id, redirect_uri, code_challenge,
+                    scope, time.time() + 60,
+                ),
+            )
+        return code
+
+    def redeem_oauth_code(
+        self, *, code: str, client_id: str, redirect_uri: str, code_challenge: str | None
+    ) -> tuple[str, str] | None:
+        now = time.time()
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT * FROM oauth_authorization_codes WHERE code_hash=?",
+                (self._token_hash(code),),
+            ).fetchone()
+            if (
+                row is None or row["used_at"] is not None or float(row["expires_at"]) <= now
+                or str(row["client_id"]) != client_id or str(row["redirect_uri"]) != redirect_uri
+                or not hmac.compare_digest(str(row["code_challenge"] or ""), code_challenge or "")
+            ):
+                return None
+            changed = self._connection.execute(
+                "UPDATE oauth_authorization_codes SET used_at=? WHERE code_hash=? AND used_at IS NULL",
+                (now, self._token_hash(code)),
+            ).rowcount
+        return None if not changed else (str(row["user_id"]), str(row["scope"]))
+
+    def issue_oauth_tokens(self, *, user_id: str, client_id: str, scope: str) -> dict[str, object]:
+        access_token = "uio_oauth_" + secrets.token_urlsafe(32)
+        refresh_token = "uio_refresh_" + secrets.token_urlsafe(32)
+        now = time.time()
+        with self._lock, self._connection:
+            self._insert_oauth_token(access_token, user_id, client_id, scope, "access", now + 3600)
+            self._insert_oauth_token(refresh_token, user_id, client_id, scope, "refresh", now + 30 * 86400)
+        return {
+            "access_token": access_token, "token_type": "Bearer", "expires_in": 3600,
+            "refresh_token": refresh_token, "scope": scope,
+        }
+
+    def rotate_oauth_refresh(self, *, refresh_token: str, client_id: str) -> dict[str, object] | None:
+        now = time.time()
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                """
+                SELECT * FROM api_tokens WHERE token_hash=? AND kind='oauth'
+                AND token_type='refresh' AND revoked_at IS NULL AND expires_at>?
+                """,
+                (self._token_hash(refresh_token), now),
+            ).fetchone()
+            if row is None or str(row["oauth_client_id"]) != client_id:
+                return None
+            if not self._connection.execute(
+                "UPDATE api_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL",
+                (now, str(row["id"])),
+            ).rowcount:
+                return None
+            access_token = "uio_oauth_" + secrets.token_urlsafe(32)
+            next_refresh = "uio_refresh_" + secrets.token_urlsafe(32)
+            user_id, scope = str(row["user_id"]), str(row["scope"])
+            self._insert_oauth_token(access_token, user_id, client_id, scope, "access", now + 3600)
+            self._insert_oauth_token(next_refresh, user_id, client_id, scope, "refresh", now + 30 * 86400)
+        return {
+            "access_token": access_token, "token_type": "Bearer", "expires_in": 3600,
+            "refresh_token": next_refresh, "scope": scope,
+        }
+
+    def _insert_oauth_token(
+        self, token: str, user_id: str, client_id: str, scope: str, token_type: str, expires_at: float
+    ) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO api_tokens
+            (id,user_id,token_hash,created_at,revoked_at,kind,token_type,expires_at,oauth_client_id,scope)
+            VALUES (?,?,?,?,NULL,'oauth',?,?,?,?)
+            """,
+            (
+                "token_" + uuid.uuid4().hex, user_id, self._token_hash(token), time.time(),
+                token_type, expires_at, client_id, scope,
+            ),
         )
 
     def user(self, reference: str) -> UserPrincipal | None:

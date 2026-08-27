@@ -10,6 +10,9 @@ import os
 import re
 import subprocess
 import time
+from base64 import b64decode
+from binascii import Error as BinasciiError
+from http.cookies import CookieError, SimpleCookie
 from email.utils import parseaddr
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -20,6 +23,7 @@ from .adapters import inbox_message_from_envelope
 from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import json_rpc_response, sse_message
+from .oauth import OAuthError, OAuthProvider
 from .service import UserIOService
 
 
@@ -35,6 +39,7 @@ def handler(
     trusted_proxy_token: str = "",
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
+    oauth = OAuthProvider(service._store)
 
     class UserIOHandler(BaseHTTPRequestHandler):
         def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
@@ -56,11 +61,13 @@ def handler(
                 return UserPrincipal(owner.user_id, owner.username, owner.role)
             return None
 
-        def _reply(self, status: int, payload: dict) -> None:
+        def _reply(self, status: int, payload: dict, headers: dict[str, str] | None = None) -> None:
             encoded = json.dumps(payload, ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(encoded)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -74,10 +81,12 @@ def handler(
             self.end_headers()
             self.wfile.write(encoded)
 
-        def _html(self, status: int, body: bytes) -> None:
+        def _html(self, status: int, body: bytes, headers: dict[str, str] | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
 
@@ -103,8 +112,80 @@ def handler(
                 raise ValueError("JSON object required")
             return value
 
+        def _form(self) -> dict[str, str]:
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            return {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
+
+        def _base_url(self) -> str:
+            scheme = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
+            if scheme not in {"http", "https"}:
+                scheme = "https" if self.headers.get("Forwarded", "").startswith("proto=https") else "http"
+            return f"{scheme}://{self.headers.get('Host', 'localhost')}"
+
+        def _oauth_session(self) -> UserPrincipal | None:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except (CookieError, ValueError):
+                return None
+            morsel = cookie.get("userio_oauth_session")
+            return None if morsel is None else service._store.oauth_session_user(morsel.value)
+
+        def _basic_client(self) -> tuple[str, str] | None:
+            value = self.headers.get("Authorization", "")
+            if not value.startswith("Basic "):
+                return None
+            try:
+                decoded = b64decode(value.removeprefix("Basic "), validate=True).decode()
+                client_id, secret = decoded.split(":", 1)
+            except (BinasciiError, UnicodeDecodeError, ValueError):
+                raise OAuthError("invalid_client", "malformed basic authentication", 401) from None
+            return client_id, secret
+
+        def _oauth_error(self, error: OAuthError) -> None:
+            headers = {"WWW-Authenticate": "Basic realm=\"token\""} if error.status == 401 else None
+            self._reply(error.status, {"error": error.error, "error_description": error.description}, headers)
+
+        def _mcp_unauthorized(self) -> None:
+            metadata = self._base_url() + "/.well-known/oauth-protected-resource"
+            self._reply(
+                401, {"error": "unauthorized"},
+                {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'},
+            )
+
+        def _redirect(self, location: str, *, session: str | None = None) -> None:
+            self.send_response(302)
+            self.send_header("Location", location)
+            if session is not None:
+                cookie = f"userio_oauth_session={session}; Max-Age=600; Path=/authorize; HttpOnly; SameSite=Lax"
+                if self._base_url().startswith("https://"):
+                    cookie += "; Secure"
+                self.send_header("Set-Cookie", cookie)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/register":
+                try:
+                    self._reply(201, oauth.register(self._json()))
+                except (OAuthError, ValueError, json.JSONDecodeError) as error:
+                    self._oauth_error(error if isinstance(error, OAuthError) else OAuthError("invalid_request", str(error)))
+                return
+            if path == "/token":
+                try:
+                    self._reply(200, oauth.token(self._form(), self._basic_client()))
+                except OAuthError as error:
+                    self._oauth_error(error)
+                return
+            if path == "/authorize":
+                try:
+                    location, principal = oauth.authorize(self._form(), self._oauth_session())
+                    self._redirect(location, session=service._store.create_oauth_session(principal.user_id))
+                except OAuthError as error:
+                    self._oauth_error(error)
+                return
             if path == "/auth/login":
                 try:
                     payload = self._json()
@@ -124,6 +205,9 @@ def handler(
                 return
             principal = self._principal(allow_proxy=path != "/mcp")
             if principal is None:
+                if path == "/mcp":
+                    self._mcp_unauthorized()
+                    return
                 self._reply(401, {"error": "unauthorized"})
                 return
             try:
@@ -281,10 +365,25 @@ def handler(
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)
             requested_path = urlparse(self.path).path
+            if requested_path == "/.well-known/oauth-protected-resource":
+                self._reply(200, oauth.protected_resource_metadata(self._base_url()))
+                return
+            if requested_path == "/.well-known/oauth-authorization-server":
+                self._reply(200, oauth.authorization_server_metadata(self._base_url()))
+                return
+            if requested_path == "/authorize":
+                try:
+                    values = {key: value[-1] for key, value in query.items()}
+                    self._html(200, oauth.authorization_form(
+                        oauth.authorize_request(values), self._oauth_session()
+                    ))
+                except OAuthError as error:
+                    self._oauth_error(error)
+                return
             if requested_path == "/mcp":
                 principal = self._principal()
                 if principal is None:
-                    self._reply(401, {"error": "unauthorized"})
+                    self._mcp_unauthorized()
                     return
                 if "text/event-stream" not in self.headers.get("Accept", ""):
                     self._reply(405, {"error": "Accept: text/event-stream required"})
