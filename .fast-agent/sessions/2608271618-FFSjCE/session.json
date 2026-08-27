@@ -1,0 +1,69 @@
+{
+  "schema_version": 4,
+  "session_id": "2608271618-FFSjCE",
+  "created_at": "2026-08-27T16:18:04.547290",
+  "last_activity": "2026-08-27T16:18:21.362088",
+  "metadata": {
+    "title": null,
+    "label": null,
+    "first_user_preview": "# Task: userio multi-user OAuth rework + unified channel abstraction + ChatGPT-connectable MCP Repository: /home/roomhacker/agents-projects/universal-userio (Python, stdlib-first). Work ONLY in that repository. Tests: `python -m pytest test",
+    "pinned": false,
+    "extras": {
+      "harness_session_id": "2608271618-FFSjCE"
+    }
+  },
+  "continuation": {
+    "active_agent": "agent",
+    "cwd": null,
+    "git": null,
+    "lineage": {
+      "forked_from": null,
+      "acp_session_id": null
+    },
+    "agents": {
+      "agent": {
+        "history_file": "history_agent.json",
+        "resolved_prompt": "You are a helpful AI Agent.\n\n\n\n\nEnvironment:\n- Workspace root: /home/roomhacker/agents-projects/universal-userio\n- Execution environment: local local (shell: bash, cwd: /home/roomhacker/agents-projects/universal-userio)\n- Client: fast-agent\n- Fast-agent runtime: CPython 3.12.13\n- Host platform: Linux-6.8.0-136-generic-x86_64-with-glibc2.35\n\nMermaid diagrams between code fences are supported.\n\nBefore making tool calls, send a brief preamble to the user explaining what you\u2019re about to do.\n\nThe current date is 27 August 2026.",
+        "model": "gpt-5.6-sol",
+        "model_spec": "codexresponses.gpt-5.6-sol?reasoning=high",
+        "provider": "codexresponses",
+        "request_settings": {
+          "max_tokens": 128000,
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "min_p": null,
+          "presence_penalty": null,
+          "frequency_penalty": null,
+          "repetition_penalty": null,
+          "use_history": true,
+          "parallel_tool_calls": true,
+          "max_iterations": 9999,
+          "tool_result_mode": "postprocess",
+          "streaming_timeout": 120.0,
+          "service_tier": null
+        },
+        "card_provenance": [],
+        "attachment_refs": [],
+        "model_overlay_refs": []
+      }
+    }
+  },
+  "analysis": {
+    "usage_summary": {
+      "prompt_tokens": 1096,
+      "completion_tokens": 516,
+      "total_tokens": 1612
+    },
+    "timing_summary": null,
+    "provider_diagnostics": [],
+    "transport_diagnostics": []
+  },
+  "execution": {
+    "resumable": true,
+    "child_link": null,
+    "status": "completed",
+    "started_at": null,
+    "completed_at": null
+  }
+}

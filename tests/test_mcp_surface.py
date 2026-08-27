@@ -49,3 +49,19 @@ def test_mcp_transport_advertises_tools_and_local_delete_is_explicit(tmp_path) -
     assert "userio.draft.approve_send" in output_stream.getvalue()
     assert UserIOMcpSurface(store, service).dispatch("userio.conversation.delete_local", {"conversation_id": conversation_id, "confirm": True})["scope"] == "local_userio_only"
     assert store.conversation(conversation_id) is None
+
+
+def test_mcp_tool_call_uses_standard_content_result(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    input_stream = StringIO(
+        '{"jsonrpc":"2.0","id":1,"method":"tools/call",'
+        '"params":{"name":"userio.channels.list","arguments":{}}}\n'
+    )
+    output_stream = StringIO()
+
+    StdioJsonRpcTransport(UserIOMcpSurface(store, service), input_stream, output_stream).serve()
+
+    result = __import__("json").loads(output_stream.getvalue())["result"]
+    assert result["content"][0]["type"] == "text"
+    assert result["structuredContent"] == {"ok": True, "chats": []}
