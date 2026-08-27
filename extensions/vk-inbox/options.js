@@ -1,4 +1,18 @@
-const endpoint = document.getElementById("endpoint");
-const token = document.getElementById("token");
-chrome.storage.local.get({endpoint: "https://msg.bezrabotnyi.com/v1/messages", token: ""}).then((data) => { endpoint.value = data.endpoint; token.value = data.token; });
-document.getElementById("save").onclick = async () => { await chrome.storage.local.set({endpoint: endpoint.value.trim(), token: token.value}); document.getElementById("status").textContent = " Сохранено"; };
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const DEFAULTS = { endpoint: "http://127.0.0.1:18093", token: "", routeId: "vk-browser" };
+  chrome.storage.local.get(DEFAULTS).then((s) => {
+    $("endpoint").value = s.endpoint;
+    $("token").value = s.token;
+    $("routeId").value = s.routeId || "vk-browser";
+  });
+  $("save").addEventListener("click", async () => {
+    await chrome.storage.local.set({
+      endpoint: $("endpoint").value.trim() || DEFAULTS.endpoint,
+      token: $("token").value,
+      routeId: $("routeId").value.trim() || DEFAULTS.routeId,
+    });
+    $("status").textContent = "Сохранено";
+    setTimeout(() => { $("status").textContent = ""; }, 1500);
+  });
+})();

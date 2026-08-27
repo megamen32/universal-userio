@@ -93,6 +93,45 @@ WhatsApp Web worker receives that reference through deployment-owned capability
 binding and returns its own receipt. UserIO and the AI never receive browser
 cookies, an automation handle, or raw credential material.
 
+### VK Web sidecar (browser extension)
+
+`extensions/vk-inbox/` is a Chrome MV3 connector that runs **inside the user's
+already-logged-in VK Web browser**. It is a true sidecar: it does not hold VK
+credentials or cookies on the UserIO side, it only translates the live VK Web
+DOM into the same `universal.inbox.message.v1` envelope the rest of UserIO
+sees.
+
+Responsibilities:
+
+- Capture every visible chat and message in real time (`MutationObserver` on
+  `[data-testid="me_convo_list"]`, `.FCThumb`, and the open conversation).
+- Index them locally (IndexedDB) so the popup can search across all messages.
+- Forward each capture to `POST /v1/messages` with the configured `route_id`.
+- Send messages: types text into the active composer and clicks the VK send
+  button, then logs the outbound message locally with `direction: "out"`,
+  `status: "sent"`. No provider credential ever leaves the browser profile.
+
+Install once per machine where the user wants VK Web capture (typically the
+operator's own machine — not a shared server):
+
+```
+cd extensions/vk-inbox
+./scripts/build.sh                      # rebuilds static zips
+# Then in the target Chromium:
+#   1. open chrome://extensions, enable Developer mode
+#   2. Load unpacked -> select extensions/vk-inbox/
+#   3. open the extension options, set endpoint + route_id
+```
+
+The service serves the packaged zips at `/vk-userio-extension.zip` and
+`/vk-userio-extension-mv3.zip` for clients that prefer drag-and-drop
+downloads over a local checkout. Both zips are produced from the same
+`extensions/vk-inbox/` source tree by `extensions/vk-inbox/scripts/build.sh`.
+
+See `extensions/vk-inbox/INSTALL.md` for the full install procedure and
+`extensions/vk-inbox/README.md` for the connector's own notes (DOM selectors,
+IndexedDB schema, security boundary).
+
 ## Run
 
 Copy `.env.example` into deployment-owned secret configuration, set the UserIO

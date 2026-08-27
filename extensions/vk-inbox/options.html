@@ -1,6 +1,22 @@
-<!doctype html><meta charset="utf-8"><title>VK Inbox settings</title>
-<style>body{font:16px system-ui;max-width:680px;margin:40px auto;padding:0 20px}input{display:block;width:100%;padding:9px;margin:6px 0 16px;box-sizing:border-box}button{padding:9px 18px}</style>
-<h1>VK Inbox connector</h1><p>Расширение использует уже открытую VK-сессию. Токен VK не извлекается и не отправляется.</p>
-<label>UserIO endpoint<input id="endpoint" value="https://msg.bezrabotnyi.com/v1/messages"></label>
-<label>UserIO API token (необязательно, хранится только в этом профиле Chrome)<input id="token" type="password" autocomplete="off"></label>
-<button id="save">Сохранить</button><span id="status"></span><script src="options.js"></script>
+<!doctype html>
+<meta charset="utf-8">
+<title>VK connector settings</title>
+<style>
+  body { font: 16px system-ui, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 20px; background: #1c1c1c; color: #eaeaea; }
+  h1 { font-size: 22px; }
+  label { display: block; margin-top: 16px; font-size: 13px; color: #aaa; }
+  input { display: block; width: 100%; padding: 9px; margin: 6px 0 0; box-sizing: border-box; background: #2a2a2a; color: #eaeaea; border: 1px solid #3a3a3a; border-radius: 6px; font: inherit; }
+  button { margin-top: 18px; padding: 9px 18px; background: #4a7dff; color: white; border: none; border-radius: 6px; cursor: pointer; }
+  .status { margin-left: 12px; color: #6dcc6d; }
+  p { color: #aaa; font-size: 13px; }
+</style>
+<h1>VK connector</h1>
+<p>Расширение использует открытую VK Web-сессию в этом профиле Chrome. VK-токен не извлекается.</p>
+
+<label>UserIO endpoint<input id="endpoint" placeholder="http://127.0.0.1:18093"></label>
+<label>UserIO API token (опционально; хранится только в этом профиле)<input id="token" type="password" autocomplete="off"></label>
+<label>route_id (привязка к UserIO)<input id="routeId" placeholder="vk-browser"></label>
+
+<button id="save">Сохранить</button><span class="status" id="status"></span>
+
+<script src="options.js"></script>

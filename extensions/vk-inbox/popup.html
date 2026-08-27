@@ -1,7 +1,36 @@
-<!doctype html><meta charset="utf-8"><title>VK Inbox</title>
-<style>body{width:280px;font:14px system-ui;padding:14px;background:#111;color:#eee}button{width:100%;padding:9px;margin-top:8px}#status{color:#aaa;margin-top:10px;white-space:pre-wrap}</style>
-<h3>Universal UserIO · VK</h3>
-<button id="capture">Забрать текущий чат</button>
-<button id="options">Настройки</button>
-<div id="status">Используется текущая VK Web-сессия.</div>
+<!doctype html>
+<meta charset="utf-8">
+<title>Universal UserIO · VK</title>
+<link rel="stylesheet" href="popup.css">
+<script src="lib/userio.js"></script>
 <script src="popup.js"></script>
+<header>
+  <strong>Universal UserIO · VK</strong>
+  <button id="openOptions" title="Настройки">⚙</button>
+</header>
+<nav>
+  <button data-tab="chats" class="active">Чаты</button>
+  <button data-tab="search">Поиск</button>
+  <button data-tab="compose">Отправить</button>
+</nav>
+<section id="tab-chats" class="active">
+  <div class="list" id="chatList"><div class="empty">Нет данных. Откройте VK Web.</div></div>
+</section>
+<section id="tab-search">
+  <input id="searchInput" placeholder="Поиск по всем чатам…" autofocus>
+  <div class="list" id="searchResults"><div class="empty">Введите запрос.</div></div>
+</section>
+<section id="tab-compose">
+  <label>Peer
+    <input id="composePeer" placeholder="peer_id или screen_name">
+  </label>
+  <label>Сообщение
+    <textarea id="composeBody" rows="4" placeholder="Текст…"></textarea>
+  </label>
+  <button id="composeSend" class="primary">Отправить через VK Web</button>
+  <div id="composeStatus" class="status"></div>
+</section>
+<footer>
+  <span id="stats">…</span>
+  <button id="purge" title="Очистить локальный кеш">Очистить</button>
+</footer>
