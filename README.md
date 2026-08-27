@@ -16,10 +16,11 @@ No MCP tool claims remote provider edit/delete unless that account's adapter
 declares and implements the capability; UserIO never silently deletes provider
 data.
 
-The deployed service exposes the same JSON-RPC surface at `POST /mcp`; it
-requires the UserIO bearer token and is intended for an authenticated internal
-MCP client. This is the preferred operational connection because the server,
-not the caller, owns AI and Outbox credentials.
+The deployed service exposes the same JSON-RPC surface at `POST /mcp`. It
+returns JSON normally and SSE when the client sends
+`Accept: text/event-stream`. Every request requires a user bearer token. The
+legacy `USERIO_API_TOKEN` remains a service-account token mapped to the seeded
+owner, so existing exmanager configuration keeps working.
 
 ```text
 providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
@@ -58,6 +59,17 @@ provider credential or URL.
 
 ## Minimal API
 
+`POST /auth/login` accepts `{"username":"…","password":"…"}` and issues a
+user bearer token. An owner can create a user with `POST /v1/users` or
+`userio.users.create`; both return the initial token once. Passwords are stored
+only as salted PBKDF2-SHA256 hashes, while API tokens are stored only as
+SHA-256 digests.
+
+On startup, a gitignored `.env.owner-seed` containing
+`USERIO_SEED_USERNAME` and `USERIO_SEED_PASSWORD` creates or updates the
+service owner. Its values are never logged. Set `USERIO_OWNER_SEED_FILE` only
+when the private file lives elsewhere.
+
 `POST /v1/messages` accepts a canonical `universal.inbox.message.v1` envelope
 and a configured `route_id`. It returns a proposed draft; it never sends a
 reply.
@@ -69,6 +81,13 @@ supply an arbitrary destination, token, or provider URL.
 `GET /v1/conversations/{conversation_id}` returns durable history and draft
 state. All endpoints require a UserIO bearer token.
 
+The unified MCP tools are `userio.channels.list`, `userio.channels.read`,
+`userio.channels.download`, and `userio.channels.send_draft`. Mail, Telegram,
+WhatsApp, and VK wrappers share that contract. `send_draft` only creates a
+user-scoped proposed draft; `userio.draft.approve_send` with exact
+`confirm: true` remains the sole delivery authority. Unsupported provider
+features return `not supported by adapter`.
+
 `POST /v1/identities` and `POST /v1/reply-rules` administer the control plane;
 `GET /v1/inbox` returns unread cross-channel messages, and
 `POST /v1/inbox/seen` marks one canonical source message as seen.
@@ -76,6 +95,54 @@ state. All endpoints require a UserIO bearer token.
 `GET /` serves a small human dashboard. It contains no message data itself;
 the browser supplies the UserIO API token only when calling the protected API.
 An authenticated internal reverse proxy is recommended for production.
+
+## Подключение ChatGPT как MCP-коннектора
+
+1. Опубликуйте loopback-сервис через свой reverse proxy по **HTTPS**, например
+   `https://userio.example.com/mcp`. Сам UserIO по умолчанию по-прежнему
+   слушает только `127.0.0.1:18093`; TLS и публичный DNS находятся на proxy.
+2. Создайте отдельного пользователя от имени owner. Начальный токен
+   возвращается только в этом ответе:
+
+   ```bash
+   curl -sS https://userio.example.com/v1/users \
+     -H "Authorization: Bearer $USERIO_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     --data '{"username":"chatgpt-user","password":"use-a-long-private-password"}'
+   ```
+
+   Новый токен также можно получить через
+   `POST https://userio.example.com/auth/login` с теми же
+   `username`/`password`. Не помещайте пароль или токен в git, логи и README.
+   Перед ingestion/отправкой owner привязывает разрешённый server-side route к
+   пользователю и каналу (чужой `route_id` обычный пользователь выбрать не
+   может):
+
+   ```bash
+   curl -sS https://userio.example.com/v1/channel-routes \
+     -H "Authorization: Bearer $USERIO_API_TOKEN" \
+     -H "Content-Type: application/json" \
+     --data '{"user":"chatgpt-user","source":"telegram","route_id":"telegram-reply"}'
+   ```
+
+3. В настройках custom connector ChatGPT укажите URL
+   `https://userio.example.com/mcp` и аутентификацию API key/Bearer. Значение
+   заголовка: `Authorization: Bearer <USER_TOKEN>`.
+4. Endpoint поддерживает обычный JSON-RPC POST и streamable SSE на том же URL.
+   Быстрая проверка SSE:
+
+   ```bash
+   curl -N https://userio.example.com/mcp \
+     -H "Authorization: Bearer $USER_TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: text/event-stream" \
+     --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+   ```
+
+Каждый токен жёстко привязан к одному пользователю: списки каналов, сообщения,
+аккаунты, черновики, подтверждение отправки и локальное удаление изолированы по
+`user_id`. Для ChatGPT не используйте legacy `USERIO_API_TOKEN`: он оставлен
+только для совместимости сервисного аккаунта exmanager и видит данные owner.
 
 ## AI boundary
 
@@ -147,7 +214,10 @@ loopback-only systemd deployment contract.
 Configure Universal Inbox with `UNIVERSAL_USERIO_INGRESS_URL`, a UserIO API
 token, and a `source → route_id` map. Inbox forwards each canonical durable
 message to `POST /v1/messages`; UserIO acknowledges the message before Inbox
-advances its source cursor. The map is business routing metadata only.
+advances its source cursor. A shared trusted watcher should include its
+`account_id`; Gmail sources in the form `gmail:<alias>` are also resolved
+against the owning account automatically. The map is business routing metadata
+only, and non-owner routes must first be assigned with `/v1/channel-routes`.
 
 UserIO's `USERIO_ROUTES_JSON` is the reverse safe boundary: each `route_id`
 resolves to one NoticePlace endpoint and the name of a deployment-owned scoped

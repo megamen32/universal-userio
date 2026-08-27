@@ -6,6 +6,7 @@ import json
 import os
 from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from .adapters import NoticePlaceOutboxClient, NoticePlaceRoute
 from .ai import OpenAICompatibleDraftGenerator
@@ -42,9 +43,31 @@ def routes_from_environment(environment: Mapping[str, str]) -> dict[str, NoticeP
     return routes
 
 
+def seed_owner_from_file(store: SQLiteUserIOStore, path: str | Path) -> bool:
+    """Apply the private owner seed without returning or logging either secret."""
+    seed_path = Path(path)
+    if not seed_path.is_file():
+        return False
+    values: dict[str, str] = {}
+    for raw_line in seed_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() in {"USERIO_SEED_USERNAME", "USERIO_SEED_PASSWORD"}:
+            values[key.strip()] = value.strip()
+    username = values.get("USERIO_SEED_USERNAME", "")
+    password = values.get("USERIO_SEED_PASSWORD", "")
+    if not username or not password:
+        raise ValueError("owner seed requires USERIO_SEED_USERNAME and USERIO_SEED_PASSWORD")
+    store.seed_owner(username, password)
+    return True
+
+
 def build_service(environment: Mapping[str, str] | None = None) -> UserIOService:
     environment = os.environ if environment is None else environment
     store = SQLiteUserIOStore(_required(environment, "USERIO_DB_PATH"))
+    seed_owner_from_file(store, environment.get("USERIO_OWNER_SEED_FILE", ".env.owner-seed"))
     generator = OpenAICompatibleDraftGenerator(
         endpoint=_required(environment, "USERIO_AI_ENDPOINT"), token=_required(environment, "USERIO_AI_TOKEN"), model=_required(environment, "USERIO_AI_MODEL"),
     )
@@ -57,7 +80,10 @@ def main() -> None:
     token = _required(environment, "USERIO_API_TOKEN")
     server = ThreadingHTTPServer(
         (environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))),
-        handler(service, token=token, vkid_app_id=environment.get("USERIO_VKID_APP_ID", "")),
+        handler(
+            service, token=token, vkid_app_id=environment.get("USERIO_VKID_APP_ID", ""),
+            trusted_proxy_token=environment.get("USERIO_TRUSTED_PROXY_TOKEN", ""),
+        ),
     )
     server.serve_forever()
 

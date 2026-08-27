@@ -17,7 +17,9 @@ from typing import Type
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .adapters import inbox_message_from_envelope
+from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
+from .mcp_transport import json_rpc_response, sse_message
 from .service import UserIOService
 
 
@@ -28,19 +30,46 @@ _GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-inbox/gmail-accounts.txt")
 _GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
 
 
-def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Type[BaseHTTPRequestHandler]:
+def handler(
+    service: UserIOService, *, token: str, vkid_app_id: str = "",
+    trusted_proxy_token: str = "",
+) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
+
     class UserIOHandler(BaseHTTPRequestHandler):
-        def _authorized(self, *, allow_proxy: bool = False) -> bool:
+        def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
             presented = self.headers.get("Authorization", "")
-            return hmac.compare_digest(presented, f"Bearer {token}") or (
-                allow_proxy and self.headers.get("X-UserIO-Authenticated") == "1"
-            )
+            if token and hmac.compare_digest(presented, f"Bearer {token}"):
+                return service._store.owner()
+            if presented.startswith("Bearer "):
+                principal = service._store.authenticate_token(presented.removeprefix("Bearer ").strip())
+                if principal is not None:
+                    return principal
+            if (
+                allow_proxy and trusted_proxy_token
+                and self.headers.get("X-UserIO-Authenticated") == "1"
+                and hmac.compare_digest(
+                    self.headers.get("X-UserIO-Proxy-Token", ""), trusted_proxy_token
+                )
+            ):
+                owner = service._store.owner()
+                return UserPrincipal(owner.user_id, owner.username, owner.role)
+            return None
 
         def _reply(self, status: int, payload: dict) -> None:
             encoded = json.dumps(payload, ensure_ascii=False).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def _sse(self, payload: dict) -> None:
+            encoded = sse_message(payload)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -76,25 +105,67 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            if not self._authorized(allow_proxy=path != "/mcp"):
+            if path == "/auth/login":
+                try:
+                    payload = self._json()
+                    result = service._store.login(
+                        str(payload.get("username") or ""), str(payload.get("password") or "")
+                    )
+                except (ValueError, json.JSONDecodeError):
+                    result = None
+                if result is None:
+                    self._reply(401, {"error": "invalid credentials"})
+                    return
+                principal, issued_token = result
+                self._reply(200, {
+                    "token": issued_token, "token_type": "Bearer",
+                    "user": {"id": principal.user_id, "username": principal.username, "role": principal.role},
+                })
+                return
+            principal = self._principal(allow_proxy=path != "/mcp")
+            if principal is None:
                 self._reply(401, {"error": "unauthorized"})
                 return
             try:
                 if path == "/mcp":
                     request = self._json()
-                    request_id = request.get("id")
-                    if request.get("jsonrpc") != "2.0" or request_id is None:
-                        self._reply(400, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": "Invalid Request"}})
-                        return
-                    method = request.get("method")
-                    if method == "initialize":
-                        result = {"protocolVersion": "2024-11-05", "serverInfo": {"name": "universal-userio", "version": "0.1.0"}, "capabilities": {"tools": {}}}
-                    elif method in {"tools/list", "tools/call"}:
-                        result = surface.dispatch(method, request.get("params", {}))
+                    response = json_rpc_response(surface, request, principal=principal)
+                    if response is None:
+                        self.send_response(202)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                    elif "text/event-stream" in self.headers.get("Accept", ""):
+                        self._sse(response)
                     else:
-                        self._reply(200, {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}})
+                        self._reply(200, response)
+                    return
+                user_id = principal.user_id
+                if path == "/v1/users":
+                    if principal.role != "owner":
+                        self._reply(403, {"error": "owner required"})
                         return
-                    self._reply(200, {"jsonrpc": "2.0", "id": request_id, "result": result})
+                    payload = self._json()
+                    user, issued_token = service._store.create_user(
+                        str(payload.get("username") or ""), str(payload.get("password") or "")
+                    )
+                    self._reply(201, {
+                        "user": {"id": user.user_id, "username": user.username, "role": user.role},
+                        "token": issued_token, "token_returned_once": True,
+                    })
+                    return
+                if path == "/v1/channel-routes":
+                    if principal.role != "owner":
+                        self._reply(403, {"error": "owner required"})
+                        return
+                    payload = self._json()
+                    target = service._store.user(str(payload.get("user") or ""))
+                    if target is None:
+                        raise ValueError("user not found")
+                    service._store.bind_channel_route(
+                        user_id=target.user_id, source=str(payload.get("source") or ""),
+                        route_id=str(payload.get("route_id") or ""),
+                    )
+                    self._reply(201, {"accepted": True})
                     return
                 if path == "/v1/messages":
                     payload = self._json()
@@ -102,21 +173,35 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     if not route_id:
                         raise ValueError("route_id required")
                     message = inbox_message_from_envelope(payload.get("message") or {}, received_at=time.time())
-                    conversation_id, accepted = service.receive(message, route_id=route_id)
+                    target_user_id = user_id
+                    if principal.service_account:
+                        target_user_id = service._store.ingress_user(
+                            source=message.source, account_id=str(payload.get("account_id") or "")
+                        ) or user_id
+                    conversation_id, accepted = service.receive(
+                        message, route_id=route_id, user_id=target_user_id
+                    )
                     draft = None
-                    conversation = service._store.conversation(conversation_id)
+                    conversation = service._store.conversation(
+                        conversation_id, user_id=target_user_id
+                    )
                     if accepted and conversation and conversation["response_mode"] == "auto_send":
-                        draft = service.approve(service.propose(conversation_id, message).id)
+                        proposed = service.propose(
+                            conversation_id, message, user_id=target_user_id
+                        )
+                        draft = service.approve(proposed.id, user_id=target_user_id)
                     self._reply(202, {"conversation_id": conversation_id, "accepted": accepted, "draft": None if draft is None else {"id": draft.id, "body": draft.body, "status": draft.status}})
                     return
                 if path.startswith("/v1/conversations/") and path.endswith("/ai-drafts"):
                     conversation_id = path.removeprefix("/v1/conversations/").removesuffix("/ai-drafts").strip("/")
-                    drafts = service.propose_from_conversation(conversation_id)
+                    drafts = service.propose_from_conversation(conversation_id, user_id=user_id)
                     self._reply(202, {"drafts": [{"id": draft.id, "body": draft.body, "status": draft.status} for draft in drafts]})
                     return
                 if path.startswith("/v1/conversations/") and path.endswith("/drafts"):
                     conversation_id = path.removeprefix("/v1/conversations/").removesuffix("/drafts").strip("/")
-                    draft = service.create_manual_draft(conversation_id, body=str(self._json().get("body") or ""))
+                    draft = service.create_manual_draft(
+                        conversation_id, body=str(self._json().get("body") or ""), user_id=user_id
+                    )
                     self._reply(202, {"id": draft.id, "body": draft.body, "status": draft.status})
                     return
                 if path == "/v1/identities":
@@ -124,6 +209,7 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     service._store.register_identity(
                         source=str(payload.get("source") or ""), external_id=str(payload.get("external_id") or ""),
                         identity_id=str(payload.get("identity_id") or ""), display_name=str(payload.get("display_name") or ""),
+                        user_id=user_id,
                     )
                     self._reply(202, {"accepted": True})
                     return
@@ -133,7 +219,7 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                         account_id=str(payload.get("id") or ""), provider=str(payload.get("provider") or ""),
                         display_name=str(payload.get("display_name") or ""), can_read=bool(payload.get("can_read")),
                         can_reply=bool(payload.get("can_reply")), credential_ref=str(payload.get("credential_ref") or ""),
-                        enabled=bool(payload.get("enabled", True)),
+                        enabled=bool(payload.get("enabled", True)), user_id=user_id,
                     )
                     self._reply(202, {"accepted": True})
                     return
@@ -148,6 +234,7 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     service._store.register_account(
                         account_id=f"vk:{external_id}", provider="vk", display_name=display_name,
                         can_read=False, can_reply=False, credential_ref=f"vkid:{external_id}", enabled=True,
+                        user_id=user_id,
                     )
                     self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": "vkid_identity_only"})
                     return
@@ -159,6 +246,7 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     service._store.register_account(
                         account_id=account_id, provider="gmail", display_name=display_name,
                         can_read=True, can_reply=False, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
+                        user_id=user_id,
                     )
                     self._reply(202, {"accepted": True, "account_id": account_id, "mode": "himalaya_imap_app_password"})
                     return
@@ -167,17 +255,21 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                     service._store.set_rule(
                         identity_id=str(payload.get("identity_id") or ""), source=str(payload.get("source") or ""),
                         route_id=str(payload.get("route_id") or ""), mode=str(payload.get("mode") or ""),
+                        user_id=user_id,
                     )
                     self._reply(202, {"accepted": True})
                     return
                 if path == "/v1/inbox/seen":
                     payload = self._json()
-                    changed = service._store.mark_seen(source=str(payload.get("source") or ""), message_id=str(payload.get("message_id") or ""))
+                    changed = service._store.mark_seen(
+                        source=str(payload.get("source") or ""),
+                        message_id=str(payload.get("message_id") or ""), user_id=user_id,
+                    )
                     self._reply(202, {"changed": changed})
                     return
                 if path.startswith("/v1/drafts/") and path.endswith("/approve"):
                     draft_id = path.removeprefix("/v1/drafts/").removesuffix("/approve").strip("/")
-                    draft = service.approve(draft_id)
+                    draft = service.approve(draft_id, user_id=user_id)
                     self._reply(202, {"id": draft.id, "status": draft.status})
                     return
                 self._reply(404, {"error": "not found"})
@@ -189,6 +281,19 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)
             requested_path = urlparse(self.path).path
+            if requested_path == "/mcp":
+                principal = self._principal()
+                if principal is None:
+                    self._reply(401, {"error": "unauthorized"})
+                    return
+                if "text/event-stream" not in self.headers.get("Accept", ""):
+                    self._reply(405, {"error": "Accept: text/event-stream required"})
+                    return
+                self._sse({
+                    "jsonrpc": "2.0", "method": "userio/ready",
+                    "params": {"endpoint": "/mcp", "username": principal.username},
+                })
+                return
             if requested_path in {"/vk/connect/new", "/vk/callback"}:
                 body = _vk_connect_page(vkid_app_id).encode()
                 self._html(200, body)
@@ -202,35 +307,42 @@ def handler(service: UserIOService, *, token: str, vkid_app_id: str = "") -> Typ
                 return
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip"} and self._static(requested_path):
                 return
-            if not self._authorized(allow_proxy=True):
+            principal = self._principal(allow_proxy=True)
+            if principal is None:
                 self._reply(401, {"error": "unauthorized"})
                 return
             path = urlparse(self.path).path
+            user_id = principal.user_id
             if path == "/v1/inbox":
-                self._reply(200, {"messages": service._store.new_messages()})
+                self._reply(200, {"messages": service._store.new_messages(user_id=user_id)})
                 return
             if path == "/v1/accounts":
-                self._reply(200, {"accounts": service._store.accounts()})
+                self._reply(200, {"accounts": service._store.accounts(user_id=user_id)})
                 return
             if path == "/v1/conversations":
                 source = query.get("source", [""])[0].strip().lower() or None
-                self._reply(200, {"conversations": service._store.conversations(source=source)})
+                self._reply(200, {
+                    "conversations": service._store.conversations(source=source, user_id=user_id)
+                })
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})
                 return
-            record = service._store.conversation(conversation_id)
+            record = service._store.conversation(conversation_id, user_id=user_id)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
-            if not self._authorized(allow_proxy=True):
+            principal = self._principal(allow_proxy=True)
+            if principal is None:
                 self._reply(401, {"error": "unauthorized"})
                 return
             if path.startswith("/v1/accounts/"):
                 account_id = unquote(path.removeprefix("/v1/accounts/").strip("/"))
-                self._reply(200, {"deleted": service._store.delete_account(account_id)})
+                self._reply(200, {
+                    "deleted": service._store.delete_account(account_id, user_id=principal.user_id)
+                })
                 return
             self._reply(404, {"error": "not found"})
 

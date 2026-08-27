@@ -162,14 +162,26 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
 
 def test_trusted_loopback_proxy_can_use_dashboard_api_but_not_mcp(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler(service, token="test-token", trusted_proxy_token="proxy-secret"),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        inbox = Request(f"http://127.0.0.1:{server.server_port}/v1/inbox", headers={"X-UserIO-Authenticated": "1"})
+        proxy_headers = {
+            "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+        }
+        inbox = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/inbox", headers=proxy_headers
+        )
         with urlopen(inbox) as response:
             assert json.loads(response.read()) == {"messages": []}
-        mcp = Request(f"http://127.0.0.1:{server.server_port}/mcp", data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}', method="POST", headers={"X-UserIO-Authenticated": "1"})
+        mcp = Request(
+            f"http://127.0.0.1:{server.server_port}/mcp",
+            data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+            method="POST", headers=proxy_headers,
+        )
         try:
             urlopen(mcp)
         except HTTPError as error:
@@ -183,7 +195,13 @@ def test_trusted_loopback_proxy_can_use_dashboard_api_but_not_mcp(tmp_path) -> N
 
 def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token", vkid_app_id="54729441"))
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler(
+            service, token="test-token", vkid_app_id="54729441",
+            trusted_proxy_token="proxy-secret",
+        ),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
@@ -194,7 +212,10 @@ def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> No
             assert b"54729441" in response.read()
         request = Request(
             base + "/v1/vk/accounts", data=b'{"user_id":"42","display_name":"VK Person"}',
-            method="POST", headers={"X-UserIO-Authenticated": "1", "Content-Type": "application/json"},
+            method="POST", headers={
+                "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+                "Content-Type": "application/json",
+            },
         )
         with urlopen(request) as response:
             result = json.loads(response.read())
