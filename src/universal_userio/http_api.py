@@ -32,6 +32,7 @@ _HIMALAYA_CONFIG = Path("/home/roomhacker/.config/himalaya/config.toml")
 _GMAIL_SECRET_ROOT = Path("/home/roomhacker/.hermes/secrets/universal-userio-gmail")
 _GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-inbox/gmail-accounts.txt")
 _GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
+_DASHBOARD_SESSION_LIFETIME = 12 * 60 * 60
 
 
 def handler(
@@ -50,6 +51,9 @@ def handler(
                 principal = service._store.authenticate_token(presented.removeprefix("Bearer ").strip())
                 if principal is not None:
                     return principal
+            principal = self._cookie_principal("userio_web_session")
+            if principal is not None:
+                return principal
             if (
                 allow_proxy and trusted_proxy_token
                 and self.headers.get("X-UserIO-Authenticated") == "1"
@@ -123,14 +127,17 @@ def handler(
                 scheme = "https" if self.headers.get("Forwarded", "").startswith("proto=https") else "http"
             return f"{scheme}://{self.headers.get('Host', 'localhost')}"
 
-        def _oauth_session(self) -> UserPrincipal | None:
+        def _cookie_principal(self, name: str) -> UserPrincipal | None:
             cookie = SimpleCookie()
             try:
                 cookie.load(self.headers.get("Cookie", ""))
             except (CookieError, ValueError):
                 return None
-            morsel = cookie.get("userio_oauth_session")
+            morsel = cookie.get(name)
             return None if morsel is None else service._store.oauth_session_user(morsel.value)
+
+        def _oauth_session(self) -> UserPrincipal | None:
+            return self._cookie_principal("userio_oauth_session")
 
         def _basic_client(self) -> tuple[str, str] | None:
             value = self.headers.get("Authorization", "")
@@ -154,19 +161,43 @@ def handler(
                 {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'},
             )
 
-        def _redirect(self, location: str, *, session: str | None = None) -> None:
+        def _redirect(self, location: str, *, cookie: str | None = None) -> None:
             self.send_response(302)
             self.send_header("Location", location)
-            if session is not None:
-                cookie = f"userio_oauth_session={session}; Max-Age=600; Path=/authorize; HttpOnly; SameSite=Lax"
-                if self._base_url().startswith("https://"):
-                    cookie += "; Secure"
+            if cookie is not None:
                 self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Length", "0")
             self.end_headers()
 
+        def _session_cookie(self, name: str, value: str, *, max_age: int, path: str) -> str:
+            cookie = f"{name}={value}; Max-Age={max_age}; Path={path}; HttpOnly; SameSite=Lax"
+            if self._base_url().startswith("https://"):
+                cookie += "; Secure"
+            return cookie
+
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/auth/session":
+                values = self._form()
+                principal = service._store.authenticate_credentials(
+                    values.get("username", ""), values.get("password", "")
+                )
+                if principal is None:
+                    self._html(401, _dashboard_login_page(invalid=True).encode())
+                    return
+                session = service._store.create_oauth_session(
+                    principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
+                )
+                self._redirect("/", cookie=self._session_cookie(
+                    "userio_web_session", session,
+                    max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
+                ))
+                return
+            if path == "/auth/logout":
+                self._redirect("/login", cookie=self._session_cookie(
+                    "userio_web_session", "", max_age=0, path="/",
+                ))
+                return
             if path == "/register":
                 try:
                     self._reply(201, oauth.register(self._json()))
@@ -182,7 +213,10 @@ def handler(
             if path == "/authorize":
                 try:
                     location, principal = oauth.authorize(self._form(), self._oauth_session())
-                    self._redirect(location, session=service._store.create_oauth_session(principal.user_id))
+                    session = service._store.create_oauth_session(principal.user_id)
+                    self._redirect(location, cookie=self._session_cookie(
+                        "userio_oauth_session", session, max_age=600, path="/authorize",
+                    ))
                 except OAuthError as error:
                     self._oauth_error(error)
                 return
@@ -393,19 +427,35 @@ def handler(
                     "params": {"endpoint": "/mcp", "username": principal.username},
                 })
                 return
-            if requested_path in {"/vk/connect/new", "/vk/callback"}:
-                body = _vk_connect_page(vkid_app_id).encode()
-                self._html(200, body)
-                return
-            if requested_path == "/gmail/connect/new":
-                self._html(200, _gmail_connect_page().encode())
-                return
-            if requested_path == "/" and self._static(requested_path):
+            if requested_path == "/login":
+                if self._cookie_principal("userio_web_session") is not None:
+                    self._redirect("/")
+                    return
+                self._html(200, _dashboard_login_page().encode())
                 return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip"} and self._static(requested_path):
                 return
+            if requested_path in {"/vk/connect/new", "/vk/callback"}:
+                if self._principal(allow_proxy=True) is None:
+                    self._redirect("/login")
+                    return
+                body = _vk_connect_page(vkid_app_id).encode()
+                self._html(200, body)
+                return
+            if requested_path == "/gmail/connect/new":
+                if self._principal(allow_proxy=True) is None:
+                    self._redirect("/login")
+                    return
+                self._html(200, _gmail_connect_page().encode())
+                return
+            if requested_path == "/":
+                if self._principal(allow_proxy=True) is None:
+                    self._redirect("/login")
+                    return
+                if self._static(requested_path):
+                    return
             principal = self._principal(allow_proxy=True)
             if principal is None:
                 self._reply(401, {"error": "unauthorized"})
@@ -449,6 +499,43 @@ def handler(
             return
 
     return UserIOHandler
+
+
+def _dashboard_login_page(*, invalid: bool = False) -> str:
+    error = (
+        '<p class="error" role="alert">Неверный логин или пароль.</p>' if invalid else ""
+    )
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — Universal UserIO</title>
+  <style>
+    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
+    body {{ min-height:100vh; margin:0; display:grid; place-items:center; background:#0b1020; color:#edf2ff; }}
+    main {{ width:min(360px, calc(100vw - 48px)); padding:32px; border:1px solid #2b3554; border-radius:18px; background:#121a2e; box-shadow:0 24px 70px #0008; }}
+    h1 {{ margin:0 0 8px; font-size:24px; }}
+    p {{ color:#aebbd7; }}
+    label {{ display:block; margin-top:18px; font-size:14px; }}
+    input {{ box-sizing:border-box; width:100%; margin-top:7px; padding:11px 12px; border:1px solid #3a4769; border-radius:9px; background:#0b1020; color:inherit; font:inherit; }}
+    button {{ width:100%; margin-top:22px; padding:11px; border:0; border-radius:9px; background:#6d7cff; color:white; font:inherit; font-weight:700; cursor:pointer; }}
+    .error {{ padding:10px 12px; border-radius:8px; background:#5b1f2a; color:#ffd9df; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Universal UserIO</h1>
+    <p>Войдите, чтобы открыть свои каналы и аккаунты.</p>
+    {error}
+    <form method="post" action="/auth/session">
+      <label>Логин<input name="username" autocomplete="username" required autofocus></label>
+      <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Войти</button>
+    </form>
+  </main>
+</body>
+</html>"""
 
 
 def _vk_connect_page(app_id: str) -> str:

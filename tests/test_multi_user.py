@@ -4,7 +4,9 @@ import json
 import sqlite3
 import threading
 from http.server import ThreadingHTTPServer
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 import pytest
 
@@ -35,6 +37,11 @@ class Outbox:
     def send_reply(self, **kwargs):
         self.calls.append(kwargs)
         return "receipt"
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *_args):
+        return None
 
 
 def test_users_with_same_provider_ids_are_isolated_and_approval_is_scoped(tmp_path) -> None:
@@ -229,6 +236,54 @@ def test_http_user_creation_login_and_sse_mcp(tmp_path) -> None:
         assert body.startswith(b"event: message\ndata: ")
         payload = json.loads(body.split(b"data: ", 1)[1])
         assert payload["result"]["tools"][0]["name"] == "userio.channels.list"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_requires_login_and_uses_user_scoped_session(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    roomhacker, _ = store.create_user("roomhacker", "dashboard-password")
+    other, _ = store.create_user("other-user", "other-password")
+    store.register_account(
+        account_id="gmail-roomhacker", provider="gmail", display_name="roomhacker@gmail.com",
+        can_read=True, can_reply=False, credential_ref="himalaya:roomhacker",
+        user_id=roomhacker.user_id,
+    )
+    store.register_account(
+        account_id="gmail-other", provider="gmail", display_name="other@gmail.com",
+        can_read=True, can_reply=False, credential_ref="himalaya:other", user_id=other.user_id,
+    )
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="service-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    opener = build_opener(NoRedirect())
+    try:
+        with pytest.raises(HTTPError) as anonymous:
+            opener.open(base + "/")
+        assert anonymous.value.code == 302
+        assert anonymous.value.headers["Location"] == "/login"
+
+        with urlopen(base + "/login") as response:
+            page = response.read().decode()
+        assert 'name="username"' in page
+        assert 'name="password"' in page
+
+        with pytest.raises(HTTPError) as login:
+            opener.open(Request(
+                base + "/auth/session",
+                data=urlencode({"username": "roomhacker", "password": "dashboard-password"}).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            ))
+        assert login.value.code == 302
+        assert login.value.headers["Location"] == "/"
+        cookie = login.value.headers["Set-Cookie"].split(";", 1)[0]
+
+        with urlopen(Request(base + "/v1/accounts", headers={"Cookie": cookie})) as response:
+            accounts = json.loads(response.read())["accounts"]
+        assert [account["display_name"] for account in accounts] == ["roomhacker@gmail.com"]
     finally:
         server.shutdown()
         server.server_close()

@@ -8,8 +8,9 @@
 3. Install `deploy/universal-userio.service`, run `systemctl daemon-reload`, then `systemctl enable --now universal-userio`.
 4. Configure Universal Inbox with the three `UNIVERSAL_USERIO_*` variables from its `deploy/universal-inbox.env.example` and restart only the Inbox watcher after validating UserIO's loopback API.
 
-The service is loopback-only by default. Put an authenticated internal reverse
-proxy in front of the dashboard if browser access is required. Do not copy
+The service is loopback-only by default. Publish the dashboard only through an
+HTTPS reverse proxy; UserIO itself redirects anonymous browsers to `/login`
+and scopes the dashboard session to the authenticated user. Do not copy
 provider cookies, browser profiles, or raw NoticePlace credentials into UserIO.
 If the proxy uses the dashboard trust header, configure
 `USERIO_TRUSTED_PROXY_TOKEN` and make the proxy overwrite both
