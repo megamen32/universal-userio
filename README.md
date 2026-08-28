@@ -92,9 +92,11 @@ features return `not supported by adapter`.
 `GET /v1/inbox` returns unread cross-channel messages, and
 `POST /v1/inbox/seen` marks one canonical source message as seen.
 
-`GET /` serves a small human dashboard. It contains no message data itself;
-the browser supplies the UserIO API token only when calling the protected API.
-An authenticated internal reverse proxy is recommended for production.
+`GET /` serves a small human dashboard and redirects anonymous browsers to
+`/login`. The same UserIO username/password used by OAuth creates an HttpOnly,
+SameSite dashboard session; every `/v1/*` request is scoped to that user.
+Bearer tokens and the authenticated internal reverse-proxy seam remain
+available for non-browser integrations.
 
 ## Подключение к ChatGPT как коннектор
 

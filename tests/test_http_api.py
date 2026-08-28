@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -121,7 +120,7 @@ def test_gmail_account_lane_is_accepted_and_groups_by_sender(tmp_path) -> None:
     assert first_id == second_id
 
 
-def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tmp_path) -> None:
+def test_dashboard_redirects_to_login_and_message_data_remains_protected(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -129,11 +128,10 @@ def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tm
     try:
         with urlopen(f"http://127.0.0.1:{server.server_port}/") as response:
             page = response.read()
+            assert response.geturl().endswith("/login")
         assert b"Universal UserIO" in page
-        asset = re.search(rb'/assets/[^" ]+\.js', page)
-        assert asset is not None
-        with urlopen(f"http://127.0.0.1:{server.server_port}" + asset.group().decode()) as response:
-            assert response.headers["Content-Type"] == "text/javascript"
+        assert b'name="username"' in page
+        assert b'name="password"' in page
         try:
             urlopen(f"http://127.0.0.1:{server.server_port}/v1/inbox")
         except HTTPError as error:
@@ -206,7 +204,9 @@ def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> No
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     try:
-        page = Request(base + "/vk/connect/new", headers={"X-UserIO-Authenticated": "1"})
+        page = Request(base + "/vk/connect/new", headers={
+            "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+        })
         with urlopen(page) as response:
             assert response.status == 200
             assert b"54729441" in response.read()
