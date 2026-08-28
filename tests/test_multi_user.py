@@ -287,3 +287,45 @@ def test_dashboard_requires_login_and_uses_user_scoped_session(tmp_path) -> None
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_dashboard_signup_creates_an_isolated_user_session(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="owner-mail", provider="gmail", display_name="owner@gmail.com",
+        can_read=True, can_reply=False, credential_ref="himalaya:owner",
+    )
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="service-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    opener = build_opener(NoRedirect())
+    try:
+        with urlopen(base + "/login") as response:
+            assert b'href="/signup"' in response.read()
+        with urlopen(base + "/signup") as response:
+            page = response.read()
+        assert b'action="/auth/signup"' in page
+        assert b'name="password_confirm"' in page
+
+        with pytest.raises(HTTPError) as signup:
+            opener.open(Request(
+                base + "/auth/signup",
+                data=urlencode({
+                    "username": "new-person", "password": "new-password",
+                    "password_confirm": "new-password",
+                }).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            ))
+        assert signup.value.code == 302
+        assert signup.value.headers["Location"] == "/"
+        cookie = signup.value.headers["Set-Cookie"].split(";", 1)[0]
+
+        with urlopen(Request(base + "/v1/accounts", headers={"Cookie": cookie})) as response:
+            assert json.loads(response.read()) == {"accounts": []}
+        principal = store.authenticate_credentials("new-person", "new-password")
+        assert principal is not None and principal.role == "user"
+    finally:
+        server.shutdown()
+        server.server_close()

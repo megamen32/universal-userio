@@ -193,6 +193,31 @@ def handler(
                     max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
                 ))
                 return
+            if path == "/auth/signup":
+                values = self._form()
+                password = values.get("password", "")
+                if not hmac.compare_digest(password, values.get("password_confirm", "")):
+                    self._html(400, _dashboard_signup_page("Пароли не совпадают.").encode())
+                    return
+                try:
+                    principal = service._store.register_user(values.get("username", ""), password)
+                except ValueError as error:
+                    message = (
+                        "Такой логин уже занят."
+                        if "already exists" in str(error)
+                        else "Логин должен содержать 3–64 безопасных символа, а пароль — минимум 8."
+                    )
+                    self._html(409 if "already exists" in str(error) else 400,
+                               _dashboard_signup_page(message).encode())
+                    return
+                session = service._store.create_oauth_session(
+                    principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
+                )
+                self._redirect("/", cookie=self._session_cookie(
+                    "userio_web_session", session,
+                    max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
+                ))
+                return
             if path == "/auth/logout":
                 self._redirect("/login", cookie=self._session_cookie(
                     "userio_web_session", "", max_age=0, path="/",
@@ -433,6 +458,12 @@ def handler(
                     return
                 self._html(200, _dashboard_login_page().encode())
                 return
+            if requested_path == "/signup":
+                if self._cookie_principal("userio_web_session") is not None:
+                    self._redirect("/")
+                    return
+                self._html(200, _dashboard_signup_page().encode())
+                return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip"} and self._static(requested_path):
@@ -533,6 +564,44 @@ def _dashboard_login_page(*, invalid: bool = False) -> str:
       <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
       <button type="submit">Войти</button>
     </form>
+    <p>Нет аккаунта? <a href="/signup">Зарегистрироваться</a></p>
+  </main>
+</body>
+</html>"""
+
+
+def _dashboard_signup_page(error: str = "") -> str:
+    error_html = f'<p class="error" role="alert">{error}</p>' if error else ""
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Регистрация — Universal UserIO</title>
+  <style>
+    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
+    body {{ min-height:100vh; margin:0; display:grid; place-items:center; background:#0b1020; color:#edf2ff; }}
+    main {{ width:min(360px, calc(100vw - 48px)); padding:32px; border:1px solid #2b3554; border-radius:18px; background:#121a2e; box-shadow:0 24px 70px #0008; }}
+    h1 {{ margin:0 0 8px; font-size:24px; }}
+    p {{ color:#aebbd7; }} a {{ color:#9eabff; }}
+    label {{ display:block; margin-top:18px; font-size:14px; }}
+    input {{ box-sizing:border-box; width:100%; margin-top:7px; padding:11px 12px; border:1px solid #3a4769; border-radius:9px; background:#0b1020; color:inherit; font:inherit; }}
+    button {{ width:100%; margin-top:22px; padding:11px; border:0; border-radius:9px; background:#6d7cff; color:white; font:inherit; font-weight:700; cursor:pointer; }}
+    .error {{ padding:10px 12px; border-radius:8px; background:#5b1f2a; color:#ffd9df; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Создать аккаунт</h1>
+    <p>Ваши каналы и сообщения будут изолированы от других пользователей.</p>
+    {error_html}
+    <form method="post" action="/auth/signup">
+      <label>Логин<input name="username" autocomplete="username" minlength="3" maxlength="64" required autofocus></label>
+      <label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+      <label>Повторите пароль<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+      <button type="submit">Зарегистрироваться</button>
+    </form>
+    <p>Уже есть аккаунт? <a href="/login">Войти</a></p>
   </main>
 </body>
 </html>"""
