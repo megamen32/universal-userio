@@ -297,7 +297,9 @@ class SQLiteUserIOStore:
             )
         return UserPrincipal(user_id, username, "owner")
 
-    def create_user(self, username: str, password: str, *, role: str = "user") -> tuple[UserPrincipal, str]:
+    def _create_user_record(
+        self, username: str, password: str, *, role: str, issue_token: bool
+    ) -> tuple[UserPrincipal, str | None]:
         username, password = self._credentials(username, password)
         if role not in {"user", "owner"}:
             raise ValueError("unsupported user role")
@@ -309,10 +311,23 @@ class SQLiteUserIOStore:
                     "INSERT INTO users VALUES (?,?,?,?,?,?,?,?)",
                     (user_id, username, salt, digest, _ITERATIONS, role, now, now),
                 )
-                token = self._issue_token(user_id)
+                token = self._issue_token(user_id) if issue_token else None
         except sqlite3.IntegrityError as error:
             raise ValueError("username already exists") from error
         return UserPrincipal(user_id, username, role), token
+
+    def create_user(self, username: str, password: str, *, role: str = "user") -> tuple[UserPrincipal, str]:
+        principal, token = self._create_user_record(
+            username, password, role=role, issue_token=True
+        )
+        assert token is not None
+        return principal, token
+
+    def register_user(self, username: str, password: str) -> UserPrincipal:
+        principal, _ = self._create_user_record(
+            username, password, role="user", issue_token=False
+        )
+        return principal
 
     def login(self, username: str, password: str) -> tuple[UserPrincipal, str] | None:
         principal = self.authenticate_credentials(username, password)

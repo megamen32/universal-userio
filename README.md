@@ -95,6 +95,9 @@ features return `not supported by adapter`.
 `GET /` serves a small human dashboard and redirects anonymous browsers to
 `/login`. The same UserIO username/password used by OAuth creates an HttpOnly,
 SameSite dashboard session; every `/v1/*` request is scoped to that user.
+New users can self-register at `/signup`; registration creates a normal
+isolated `user` account and signs the browser in without issuing a bearer token.
+OAuth dynamic client registration remains separately available at `/register`.
 Bearer tokens and the authenticated internal reverse-proxy seam remain
 available for non-browser integrations.
 
