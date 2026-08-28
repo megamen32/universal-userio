@@ -23,7 +23,7 @@ Evidence so far:
 
 Started at 2026-08-28T17:04:21+03:00 (manual clock)
 Estimate: 15-45 active minutes; active time not continuously measured.
-Status: locally verified; deployment and browser canary pending
+Status: complete
 
 Wanted result: any new person can create an isolated UserIO login/password from the public auth screen.
 Shortest real canary: register a unique browser user, land in an empty dashboard, sign out, and sign back in without seeing `roomhacker` data.
@@ -35,3 +35,6 @@ Evidence:
 - Regression first failed because `/login` had no signup link.
 - `/signup` now creates a hashed normal user without a bearer token and starts a user-scoped dashboard session.
 - Full local suite passes: 35 tests.
+- Deployed signup and rebuilt dashboard assets; `universal-userio.service` is active and public `/signup` returns `200`.
+- Browser canary registered a unique user, landed in a dashboard with no chats/accounts, logged out through the visible `Выйти` button, and signed back in with the new credentials.
+- The exact canary user was removed after verifying it owned no provider or conversation data; `roomhacker` was untouched.
