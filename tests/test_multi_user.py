@@ -12,6 +12,7 @@ import pytest
 
 from universal_userio.adapters import (
     AdapterNotSupported,
+    ChatGPTCDPChannelAdapter,
     MailChannelAdapter,
     TelegramChannelAdapter,
     VKChannelAdapter,
@@ -109,6 +110,41 @@ def test_each_provider_wrapper_implements_unified_contract(adapter_type, source,
     assert adapter.send(chat_id=chat_id, text="reply").status == "proposed"
     with pytest.raises(AdapterNotSupported, match="not supported by adapter"):
         adapter.download(file_ref="missing")
+
+
+def test_chatgpt_cdp_adapter_reads_page_visible_chats_without_provider_credentials(tmp_path) -> None:
+    class CdpMcp:
+        def call(self, name, arguments):
+            assert name == "list_chats" or arguments["chatRef"] == "chat_ref_1"
+            if name == "list_chats":
+                return {"chats": [{"chatRef": "chat_ref_1", "title": "Roadmap", "updatedAt": "2026-08-30T12:00:00Z", "unread": True}]}
+            assert name == "export_chat"
+            return {"content": json.dumps({"chatRef": "chat_ref_1", "title": "Roadmap", "messages": [{"messageRef": "msg_ref_1", "role": "user", "text": "status?"}]})}
+
+    store = SQLiteUserIOStore(tmp_path / "chatgpt.sqlite3")
+    adapter = ChatGPTCDPChannelAdapter(store, UserIOService(store, Generator(), Outbox()), store.default_user_id, client=CdpMcp())
+
+    assert adapter.list() == [{"id": "chat_ref_1", "channel": "chatgpt", "title": "Roadmap", "last_message_snippet": "", "unread": True}]
+    assert adapter.read(chat_id="chat_ref_1")["chat"]["messages"][0]["text"] == "status?"
+    draft = adapter.send(chat_id="chat_ref_1", text="reply")
+
+    class ChatGPTOutbox:
+        def __init__(self):
+            self.calls = []
+
+        def send_reply(self, **_kwargs):
+            raise AssertionError("ChatGPT must not use the NoticePlace route")
+
+        def send_chatgpt_reply(self, **kwargs):
+            self.calls.append(kwargs)
+            return "message_ref_sent"
+
+    outbox = ChatGPTOutbox()
+    service = UserIOService(store, Generator(), outbox)
+    approved = service.approve(draft.id)
+
+    assert approved.status == "approved"
+    assert outbox.calls == [{"chat_ref": "chat_ref_1", "draft_id": draft.id, "body": "reply"}]
 
 
 def test_private_seed_creates_owner_login_without_exposing_password(tmp_path) -> None:

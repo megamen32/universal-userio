@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shlex
+import subprocess
+import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -86,6 +91,19 @@ class NoticePlaceOutboxClient:
         if not isinstance(event_id, str) or not event_id:
             raise RuntimeError("NoticePlace returned invalid acceptance receipt")
         return event_id
+
+    def send_chatgpt_reply(self, *, chat_ref: str, draft_id: str, body: str) -> str:
+        """Deliver an approved UserIO draft through the configured CDP MCP sidecar."""
+        result = _configured_chatgpt_cdp_client().call("send_message", {
+            "chatRef": chat_ref,
+            "text": body,
+            "confirmation": "SEND_MESSAGE",
+            "idempotencyKey": draft_id,
+        })
+        message_ref = result.get("messageRef")
+        if not isinstance(message_ref, str) or not message_ref:
+            raise RuntimeError("chatgpt-cdp-mcp returned no sent-message receipt")
+        return message_ref
 
 
 class AdapterNotSupported(ValueError):
@@ -171,6 +189,165 @@ class VKChannelAdapter(StoredChannelAdapter):
     channel = "vk"
 
 
+class ChatGPTCDPMcpClient:
+    """Small persistent stdio client for the local chatgpt-cdp-mcp sidecar."""
+
+    def __init__(self, command: str | None = None) -> None:
+        command = command or os.environ.get("USERIO_CHATGPT_CDP_MCP_COMMAND", "")
+        if not command.strip():
+            raise AdapterNotSupported(
+                "ChatGPT CDP adapter is not configured; set USERIO_CHATGPT_CDP_MCP_COMMAND"
+            )
+        self._command = shlex.split(command)
+        self._process: subprocess.Popen[str] | None = None
+        self._request_id = 0
+        self._lock = threading.Lock()
+
+    def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._start()
+            result = self._request("tools/call", {"name": name, "arguments": dict(arguments)})
+        content = result.get("content")
+        if not isinstance(content, list) or not content or not isinstance(content[0], Mapping):
+            raise RuntimeError("chatgpt-cdp-mcp returned an invalid tool result")
+        text = content[0].get("text")
+        if not isinstance(text, str):
+            raise RuntimeError("chatgpt-cdp-mcp returned a non-text tool result")
+        value = json.loads(text)
+        if not isinstance(value, dict):
+            raise RuntimeError("chatgpt-cdp-mcp returned a non-object tool result")
+        return value
+
+    def _start(self) -> None:
+        if self._process is not None and self._process.poll() is None:
+            return
+        try:
+            self._process = subprocess.Popen(
+                self._command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as error:
+            raise AdapterNotSupported(f"could not start chatgpt-cdp-mcp: {error}") from error
+        self._request(
+            "initialize",
+            {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "universal-userio", "version": "0.1.0"}},
+        )
+        assert self._process.stdin is not None
+        self._process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}) + "\n")
+        self._process.stdin.flush()
+
+    def _request(self, method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+        process = self._process
+        if process is None or process.stdin is None or process.stdout is None:
+            raise RuntimeError("chatgpt-cdp-mcp is not running")
+        self._request_id += 1
+        request_id = self._request_id
+        process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": dict(params)}) + "\n")
+        process.stdin.flush()
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                raise RuntimeError("chatgpt-cdp-mcp closed its stdio transport")
+            response = json.loads(line)
+            if response.get("id") != request_id:
+                continue
+            if "error" in response:
+                message = response["error"].get("message", "unknown MCP error")
+                raise AdapterNotSupported(f"chatgpt-cdp-mcp: {message}")
+            result = response.get("result")
+            if not isinstance(result, dict):
+                raise RuntimeError("chatgpt-cdp-mcp returned an invalid JSON-RPC result")
+            return result
+
+
+_chatgpt_cdp_client: ChatGPTCDPMcpClient | None = None
+_chatgpt_cdp_client_lock = threading.Lock()
+
+
+def _configured_chatgpt_cdp_client() -> ChatGPTCDPMcpClient:
+    """Keep opaque refs valid across independent UserIO MCP requests."""
+    global _chatgpt_cdp_client
+    with _chatgpt_cdp_client_lock:
+        if _chatgpt_cdp_client is None:
+            _chatgpt_cdp_client = ChatGPTCDPMcpClient()
+        return _chatgpt_cdp_client
+
+
+class ChatGPTCDPChannelAdapter:
+    """Read page-visible ChatGPT chats via one explicitly configured CDP MCP sidecar."""
+
+    channel = "chatgpt"
+
+    def __init__(
+        self, store: SQLiteUserIOStore, service: UserIOService, user_id: str,
+        *, client: ChatGPTCDPMcpClient | Any | None = None,
+    ) -> None:
+        self._store, self._service, self._user_id = store, service, user_id
+        self._client = client or _configured_chatgpt_cdp_client()
+
+    def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        result = self._client.call("list_chats", {"view": "recent", "limit": max(1, min(limit, 100))})
+        chats = result.get("chats")
+        if not isinstance(chats, list):
+            raise RuntimeError("chatgpt-cdp-mcp returned chats in an invalid format")
+        return [self._chat_summary(chat) for chat in chats if isinstance(chat, Mapping)]
+
+    def read(self, *, chat_id: str | None = None, message_id: str | None = None) -> dict[str, Any]:
+        if bool(chat_id) == bool(message_id):
+            raise ValueError("provide exactly one of chat_id or message_id")
+        if message_id:
+            raise AdapterNotSupported("ChatGPT CDP adapter reads chats, not individual messages")
+        result = self._client.call("export_chat", {"chatRef": chat_id, "format": "json"})
+        content = result.get("content")
+        if not isinstance(content, str):
+            raise RuntimeError("chatgpt-cdp-mcp returned an export without content")
+        chat = json.loads(content)
+        if not isinstance(chat, dict):
+            raise RuntimeError("chatgpt-cdp-mcp returned an invalid chat export")
+        return {"chat": chat}
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        del file_ref
+        raise AdapterNotSupported("not supported by adapter")
+
+    def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
+        if attachments:
+            raise AdapterNotSupported("attachments are not supported by adapter")
+        exported = self.read(chat_id=chat_id)["chat"]
+        messages = exported.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
+        latest = messages[-1]
+        if not isinstance(latest, Mapping):
+            raise RuntimeError("chatgpt-cdp-mcp returned an invalid message export")
+        body = str(latest.get("text") or latest.get("body") or "").strip()
+        message_ref = str(latest.get("messageRef") or latest.get("id") or "").strip()
+        if not body or not message_ref:
+            raise RuntimeError("chatgpt-cdp-mcp returned a message without text or reference")
+        conversation_id, _ = self._service.receive(
+            InboxMessage("chatgpt", message_ref, chat_id, body, time.time()),
+            route_id="chatgpt", user_id=self._user_id,
+        )
+        return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
+
+    @classmethod
+    def _chat_summary(cls, chat: Mapping[str, Any]) -> dict[str, Any]:
+        chat_ref = chat.get("chatRef")
+        if not isinstance(chat_ref, str) or not chat_ref:
+            raise RuntimeError("chatgpt-cdp-mcp returned a chat without chatRef")
+        return {
+            "id": chat_ref,
+            "channel": cls.channel,
+            "title": str(chat.get("title") or "ChatGPT"),
+            "last_message_snippet": str(chat.get("preview") or "")[:500],
+            "unread": bool(chat.get("unread", False)),
+        }
+
+
 # Provider-facing compatibility names; all expose the same four-method contract.
 GmailChannelAdapter = MailChannelAdapter
 
@@ -185,6 +362,7 @@ class UnifiedChannels(StoredChannelAdapter):
         "telegram": TelegramChannelAdapter,
         "whatsapp": WhatsAppChannelAdapter,
         "vk": VKChannelAdapter,
+        "chatgpt": ChatGPTCDPChannelAdapter,
     }
 
     def adapter(self, channel: str | None) -> StoredChannelAdapter:
