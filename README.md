@@ -88,6 +88,17 @@ user-scoped proposed draft; `userio.draft.approve_send` with exact
 `confirm: true` remains the sole delivery authority. Unsupported provider
 features return `not supported by adapter`.
 
+### ChatGPT CDP adapter
+
+`chatgpt` is a read-only channel backed by [chatgpt-cdp-mcp](https://github.com/megamen32/chatgpt-cdp-mcp). Install that project and its **local, authorized** CDP driver separately, then configure the UserIO service with:
+
+```ini
+USERIO_CHATGPT_CDP_MCP_COMMAND=chatgpt-cdp-mcp
+CDP_CHAT_DRIVER_MODULE=/opt/chatgpt-driver.mjs
+```
+
+The adapter keeps a single local stdio session so its opaque chat references remain page-bound. It exposes `userio.channels.list/read/send_draft` for `channel: "chatgpt"`; `userio.draft.approve_send` then invokes `send_message` with the MCP's exact confirmation and the UserIO draft ID as its one-shot idempotency key. It never copies browser credentials.
+
 `POST /v1/identities` and `POST /v1/reply-rules` administer the control plane;
 `GET /v1/inbox` returns unread cross-channel messages, and
 `POST /v1/inbox/seen` marks one canonical source message as seen.

@@ -123,7 +123,16 @@ class UserIOService:
             user_id=user_id, source=str(conversation["source"]), route_id=str(conversation["route_id"])
         ):
             raise ValueError("route is not assigned to user")
-        receipt = self._outbox.send_reply(
-            route_id=str(conversation["route_id"]), conversation_id=draft.conversation_id, draft_id=draft.id, body=draft.body
-        )
+        if conversation["source"] == "chatgpt":
+            send_chatgpt_reply = getattr(self._outbox, "send_chatgpt_reply", None)
+            if not callable(send_chatgpt_reply):
+                raise ValueError("configured outbox does not support ChatGPT delivery")
+            receipt = send_chatgpt_reply(
+                chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body
+            )
+        else:
+            receipt = self._outbox.send_reply(
+                route_id=str(conversation["route_id"]), conversation_id=draft.conversation_id,
+                draft_id=draft.id, body=draft.body,
+            )
         return self._store.approve(draft_id, receipt, user_id=user_id)
