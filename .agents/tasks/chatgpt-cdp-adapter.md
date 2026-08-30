@@ -10,4 +10,4 @@ Started at 2026-08-31T00:56:56+03:00 (system `date`; host uptime since 2026-08-0
 - Не делаем: CDP-драйвер, хранение браузерных сессий/секретов, автоматическую отправку, деплой или изменения ChatGPT-аккаунта.
 
 Estimate: minimum 15 active minutes; maximum 35 active minutes.
-Status: approved delivery is wired through `userio.draft.approve_send` to `chatgpt-cdp-mcp.send_message`; both project suites pass. A real browser canary remains configuration-dependent (`CDP_CHAT_DRIVER_MODULE` is not configured in this checkout).
+Status: complete. Both project suites pass; a cross-repository mock-driver canary proved `send_draft → approve → chatgpt-cdp-mcp.send_message`. No real ChatGPT browser profile is configured in this checkout.
