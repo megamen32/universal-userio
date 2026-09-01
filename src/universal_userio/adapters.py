@@ -111,8 +111,11 @@ class NoticePlaceOutboxClient:
 class HimalayaGmailOutbox:
     """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""
 
-    def __init__(self, *, binary: str = "himalaya", runner: Any = subprocess.run) -> None:
-        self._binary, self._runner = binary, runner
+    def __init__(
+        self, *, binary: str = "himalaya", config: str = "/home/roomhacker/.config/himalaya/config.toml",
+        runner: Any = subprocess.run,
+    ) -> None:
+        self._binary, self._config, self._runner = binary, config, runner
 
     def send_reply(self, *, account: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
         address = parseaddr(recipient)[1]
@@ -122,7 +125,7 @@ class HimalayaGmailOutbox:
         raw = f"To: {address}\nSubject: Re: UserIO reply\nIn-Reply-To: <{reference}>\nReferences: <{reference}>\n\n{body}\n"
         try:
             completed = self._runner(
-                [self._binary, "--account", account, "message", "send", "--save", "Sent"],
+                [self._binary, "--config", self._config, "--account", account, "message", "send", "--save", "Sent"],
                 input=raw, text=True, capture_output=True, timeout=30, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
