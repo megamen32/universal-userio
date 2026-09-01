@@ -190,6 +190,49 @@ See `extensions/vk-inbox/INSTALL.md` for the full install procedure and
 `extensions/vk-inbox/README.md` for the connector's own notes (DOM selectors,
 IndexedDB schema, security boundary).
 
+### Universal site collection agent (same extension, v0.3+)
+
+The same extension is also a generic site-data collection agent. The operator
+publishes tasks to `/var/lib/universal-userio/collect-tasks.json` (a JSON
+list; `USERIO_COLLECT_TASKS_FILE` overrides the path):
+
+```json
+[
+  {
+    "id": "sitecart-orders",
+    "title": "SiteCart orders",
+    "site": "https://admin.sitecart.ru",
+    "active": true,
+    "every_sec": 300,
+    "recipe": {
+      "kind": "fetch",
+      "url": "https://admin.sitecart.ru/api/orders?limit=20",
+      "method": "GET",
+      "headers": {"Accept": "application/json"},
+      "credentials": "include",
+      "response": "json"
+    }
+  }
+]
+```
+
+Installed agents poll `GET /v1/collect/tasks` once a minute, execute each due
+task as a real `fetch` from the browser — so `credentials: "include"` sends the
+user's own logged-in session cookies, which is the entire point — and POST
+`universal.collect.result.v1` envelopes to `POST /v1/collect/results`. The
+operator reads results back via
+`GET /v1/collect/results?task_id=…&limit=…`; every result is appended to
+`/var/lib/universal-userio/collect-results.jsonl`
+(`USERIO_COLLECT_RESULTS_FILE` overrides). Editing the tasks file takes effect
+on the next poll — no restart. Only `kind: "fetch"` recipes exist today;
+DOM-scraping recipes and a per-extension transfer history are deliberately
+deferred follow-ups.
+
+Trust boundary: tasks come only from the configured UserIO endpoint, and
+results go only back to it. The extension never sends site cookies or tokens
+to UserIO — only the fetched response payloads. See
+`extensions/vk-inbox/collect-tasks.example.json` for a starting template.
+
 ## Run
 
 Copy `.env.example` into deployment-owned secret configuration, set the UserIO
