@@ -7,4 +7,4 @@ Started at 2026-09-01T20:00:29+03:00 (manual clock). Cycle estimate: minimum 12,
 Срез: выявить конкретное условие 400, добавить узкий регрессионный тест, исправить обработчик/данные и проверить API; затем, если безопасно, проверить UI.
 Не делаем: favicon, редизайн UI, новые каналы доставки, расширение схемы авторизации, массовый resend.
 
-Status: implementation verified locally: focused 17/17, full 41/41, and dashboard production build pass. Pending deployment and live read-only UI/API canary; no external message will be sent.
+Status: complete. `af7f5a7` pushed to `main`; matching runtime files deployed and `universal-userio.service` active on 127.0.0.1:18093. Live canary of the reported draft returned 409 `delivery_unavailable`; it remains `proposed` with no receipt, so no external message was sent. Local proof: focused 17/17 and full 41/41; dashboard build passed.
