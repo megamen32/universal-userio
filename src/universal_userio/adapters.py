@@ -117,12 +117,13 @@ class HimalayaGmailOutbox:
     ) -> None:
         self._binary, self._config, self._runner = binary, config, runner
 
-    def send_reply(self, *, account: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
+    def send_reply(self, *, account: str, sender: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
         address = parseaddr(recipient)[1]
-        if not account or not address or not message_id:
-            raise ValueError("Gmail reply requires account, recipient, and message id")
+        from_address = parseaddr(sender)[1]
+        if not account or not from_address or not address or not message_id:
+            raise ValueError("Gmail reply requires account, sender, recipient, and message id")
         reference = message_id.strip("<>")
-        raw = f"To: {address}\nSubject: Re: UserIO reply\nIn-Reply-To: <{reference}>\nReferences: <{reference}>\n\n{body}\n"
+        raw = f"From: {from_address}\nTo: {address}\nSubject: Re: UserIO reply\nIn-Reply-To: <{reference}>\nReferences: <{reference}>\n\n{body}\n"
         try:
             completed = self._runner(
                 [self._binary, "--config", self._config, "--account", account, "message", "send"],
