@@ -1,7 +1,6 @@
 // Popup UI: tabs (chats, search, compose). Communicates with the background SW.
 
 (function () {
-  const U = self.UserIO;
   const $ = (id) => document.getElementById(id);
   const tabs = document.querySelectorAll("nav button");
   const sections = {
