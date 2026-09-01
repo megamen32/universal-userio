@@ -10,6 +10,10 @@ from .contracts import DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
 
 
+class DeliveryUnavailableError(ValueError):
+    """The configured source intentionally has no outbound delivery capability."""
+
+
 class UserIOService:
     def __init__(
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
@@ -123,6 +127,8 @@ class UserIOService:
         if conversation is None:
             raise KeyError("conversation not found")
         user_id = self._store.default_user_id if user_id is None else user_id
+        if self._store.source_can_reply(str(conversation["source"]), user_id=user_id) is False:
+            raise DeliveryUnavailableError("delivery is unavailable: this account is read-only")
         if not self._store.route_allowed(
             user_id=user_id, source=str(conversation["source"]), route_id=str(conversation["route_id"])
         ):

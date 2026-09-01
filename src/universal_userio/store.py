@@ -645,6 +645,18 @@ class SQLiteUserIOStore:
             "credential_ref": row["credential_ref"], "enabled": bool(row["enabled"]),
         } for row in rows]
 
+    def source_can_reply(self, source: str, *, user_id: str | None = None) -> bool | None:
+        """Return a configured source account's reply capability, when it exists."""
+        account_id = source.strip().lower()
+        if account_id.startswith("gmail:"):
+            account_id = "gmail-" + account_id.removeprefix("gmail:")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT can_reply FROM provider_accounts WHERE user_id=? AND id=? AND enabled=1",
+                (self._user(user_id), account_id),
+            ).fetchone()
+        return None if row is None else bool(row["can_reply"])
+
     def delete_account(self, account_id: str, *, user_id: str | None = None) -> bool:
         with self._lock, self._connection:
             return self._connection.execute(

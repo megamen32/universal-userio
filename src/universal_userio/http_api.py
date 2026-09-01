@@ -25,7 +25,7 @@ from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
-from .service import UserIOService
+from .service import DeliveryUnavailableError, UserIOService
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
@@ -421,6 +421,8 @@ def handler(
                     self._reply(202, {"id": draft.id, "status": draft.status})
                     return
                 self._reply(404, {"error": "not found"})
+            except DeliveryUnavailableError as error:
+                self._reply(409, {"error": str(error), "code": "delivery_unavailable"})
             except (KeyError, ValueError) as error:
                 self._reply(400, {"error": str(error)})
             except RuntimeError as error:
