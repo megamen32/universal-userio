@@ -173,6 +173,21 @@
     }
   }
 
+  async function refreshCollect() {
+    const el = $("collect");
+    const res = await callSW({ kind: "collectStatus" });
+    const last = res && res.ok && res.state && res.state.last;
+    el.textContent = last
+      ? `сбор: ${last.task_id} · ${last.status} · ${fmtTime(last.at)}`
+      : "сбор: —";
+  }
+
+  $("collectRun").addEventListener("click", async () => {
+    $("collect").textContent = "сбор: выполняю…";
+    await callSW({ kind: "collectRun" });
+    refreshCollect();
+  });
+
   $("composeSend").addEventListener("click", send);
   $("composeBody").addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
@@ -194,4 +209,5 @@
 
   refreshChats();
   refreshStats();
+  refreshCollect();
 })();

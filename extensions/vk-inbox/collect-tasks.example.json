@@ -1,0 +1,32 @@
+[
+  {
+    "id": "example-public-api",
+    "title": "Пример: публичный JSON API без авторизации",
+    "site": "https://api.ipify.org",
+    "active": false,
+    "every_sec": 600,
+    "recipe": {
+      "kind": "fetch",
+      "url": "https://api.ipify.org?format=json",
+      "method": "GET",
+      "headers": { "Accept": "application/json" },
+      "credentials": "omit",
+      "response": "json"
+    }
+  },
+  {
+    "id": "example-sitecart-orders",
+    "title": "Пример: заказы SiteCart — подставьте свой магазин и убедитесь, что браузер залогинен в админку",
+    "site": "https://admin.sitecart.ru",
+    "active": false,
+    "every_sec": 300,
+    "recipe": {
+      "kind": "fetch",
+      "url": "https://admin.sitecart.ru/api/orders?limit=20",
+      "method": "GET",
+      "headers": { "Accept": "application/json" },
+      "credentials": "include",
+      "response": "json"
+    }
+  }
+]
