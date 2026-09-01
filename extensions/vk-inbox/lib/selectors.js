@@ -220,6 +220,9 @@
   // Send button. Returns Element or null.
   lib.sendButton = () => {
     const candidates = [
+      '[aria-label="Отправить сообщение"]',
+      '[aria-label="Send message"]',
+      '.ConvoComposer__sendButton--submit',
       '[data-testid="send-message-button"]',
       '[data-testid="im-send-btn"]',
       '[aria-label="Отправить"]',
@@ -227,15 +230,19 @@
       'button[class*="SendMessage"]',
       'button[class*="send-btn"]',
       ".im-send-btn",
-      ".ConvoComposer__sendButton", // VK redesign 2026 (also matches --mic variant)
-      ".ConvoComposer__sendButton--mic",
-      'button svg[class*="send_24"]', // by inner SVG
+      // VK redesign 2026: mic and submit share the sendButton class — never
+      // return the mic variant, clicking it does nothing.
+      ".ConvoComposer__sendButton:not(.ConvoComposer__sendButton--mic)",
     ];
     for (const sel of candidates) {
       const el = document.querySelector(sel);
       if (el) return el;
     }
-    // text-content fallback
+    // svg fallback: return the BUTTON wrapping the send icon, never the bare
+    // svg element (click() on svg is a no-op).
+    const svg = document.querySelector('button svg[class*="send_24"]');
+    const wrap = svg && svg.closest("button");
+    if (wrap) return wrap;
     const btns = document.querySelectorAll("button");
     for (const b of btns) {
       const t = (b.innerText || "").trim().toLowerCase();
@@ -244,20 +251,20 @@
     return null;
   };
 
-  // Insert text into a contenteditable element as plain text, then dispatch
-  // input event so VK's React bindings register the change.
+  // Insert text into a contenteditable element so VK's React bindings
+  // register the change. innerHTML-style insertion is silently discarded by
+  // the VK composer — execCommand('insertText') is what it accepts.
   lib.setInputText = (input, text) => {
     if (!input) return false;
     input.focus();
-    // clear
     input.innerHTML = "";
-    // VK uses a contenteditable; inserting a <br>-separated plain text works.
-    const lines = String(text || "").split("\n");
+    const value = String(text || "");
+    const lines = value.split("\n");
     lines.forEach((line, i) => {
-      if (i > 0) input.appendChild(document.createElement("br"));
-      input.appendChild(document.createTextNode(line));
+      if (i > 0) document.execCommand("insertLineBreak");
+      if (line) document.execCommand("insertText", false, line);
     });
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   };
