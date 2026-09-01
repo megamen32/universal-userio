@@ -27,6 +27,10 @@
         '[data-testid="me_convo_list"] > *, [data-testid="me_convo_list"] [role="link"], [data-testid="me_convo_list"] [role="button"]'
       )
       .forEach((n) => all.push(n));
+    // VK redesign 2026: chat rows are DIV.ConvoList__item[data-itemkey]
+    document
+      .querySelectorAll(".ConvoList__item[data-itemkey]")
+      .forEach((n) => all.push(n));
     document
       .querySelectorAll(".FCThumb")
       .forEach((n) => all.push(n));
@@ -51,13 +55,23 @@
   lib.chatPeerId = (item) => {
     if (!item) return "";
     const ds = item.dataset || {};
-    return (
-      ds.peer ||
-      ds.peerId ||
-      ds.id ||
-      ds.convId ||
-      ""
-    );
+    // VK redesign 2026: data-itemkey="convo_-239277144" on DIV.ConvoList__item
+    if (ds.itemkey || ds.itemKey) {
+      return String(ds.itemkey || ds.itemKey).replace(/^convo_/, "");
+    }
+    const fromDs = ds.peer || ds.peerId || ds.id || ds.convId || "";
+    if (fromDs) return fromDs;
+    const href = item.getAttribute && (item.getAttribute("href") || "");
+    const fromHref = lib.peerIdFromUrl(href || "");
+    if (fromHref) return fromHref;
+    // Floating-panel thumbs carry no key either — recover the numeric id from
+    // the avatar clip-path mask (e.g. #mePeerFrameOffline48Mask-239277144).
+    const styled =
+      item.matches && item.matches('[style*="Mask-"]')
+        ? item
+        : item.querySelector && item.querySelector('[style*="Mask-"]');
+    const m = styled && (styled.getAttribute("style") || "").match(/Mask-(\d+)/);
+    return m ? m[1] : "";
   };
 
   // Chat peer id from URL.
