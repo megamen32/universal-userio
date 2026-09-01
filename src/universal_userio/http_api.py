@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Type
 from urllib.parse import parse_qs, unquote, urlparse
 
+from . import collect
 from .adapters import inbox_message_from_envelope
 from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
@@ -410,6 +411,10 @@ def handler(
                     )
                     self._reply(202, {"changed": changed})
                     return
+                if path == "/v1/collect/results":
+                    collect.append_result(self._json(), user=principal.username)
+                    self._reply(202, {"accepted": True})
+                    return
                 if path.startswith("/v1/drafts/") and path.endswith("/approve"):
                     draft_id = path.removeprefix("/v1/drafts/").removesuffix("/approve").strip("/")
                     draft = service.approve(draft_id, user_id=user_id)
@@ -504,6 +509,21 @@ def handler(
                 self._reply(200, {
                     "conversations": service._store.conversations(source=source, user_id=user_id)
                 })
+                return
+            if path == "/v1/collect/tasks":
+                try:
+                    self._reply(200, collect.active_tasks())
+                except (ValueError, json.JSONDecodeError) as error:
+                    self._reply(500, {"error": f"collect tasks: {error}"})
+                return
+            if path == "/v1/collect/results":
+                try:
+                    self._reply(200, collect.read_results(
+                        task_id=(query.get("task_id", [""])[0].strip() or None),
+                        limit=query.get("limit", ["50"])[0],
+                    ))
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
