@@ -82,7 +82,7 @@ def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
 
     approved = service.approve(draft.id)
     assert approved.status == "approved"
-    assert gmail_outbox.calls == [{"account": "careviolan", "recipient": "sender", "message_id": "m-1", "body": "reply", "draft_id": draft.id}]
+    assert gmail_outbox.calls == [{"account": "careviolan", "sender": "careviolan@gmail.com", "recipient": "sender", "message_id": "m-1", "body": "reply", "draft_id": draft.id}]
     assert outbox.calls == []
 
 

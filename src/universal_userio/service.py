@@ -136,9 +136,13 @@ class UserIOService:
         if str(conversation["source"]).startswith("gmail:"):
             if self.gmail_outbox is None:
                 raise DeliveryUnavailableError("Gmail delivery is not configured")
+            account_alias = str(conversation["source"]).partition(":")[2]
+            account = next((item for item in self._store.accounts(user_id=user_id) if item["id"] == f"gmail-{account_alias}"), None)
+            if account is None:
+                raise DeliveryUnavailableError("Gmail account is not configured")
             latest = list(conversation["messages"])[-1]
             receipt = self.gmail_outbox.send_reply(
-                account=str(conversation["source"]).partition(":")[2], recipient=str(conversation["sender"]),
+                account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),
                 message_id=str(latest["message_id"]), body=draft.body, draft_id=draft.id,
             )
         elif conversation["source"] == "chatgpt":
