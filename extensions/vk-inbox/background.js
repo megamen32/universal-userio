@@ -115,7 +115,40 @@ async function sendViaVK(peer_id, body) {
   } else {
     await chrome.tabs.update(tab.id, { active: true });
   }
-  // Ask the content script to type + send
+  // Type + send from the MAIN world: VK's React composer ignores synthetic
+  // clicks and input events dispatched from the extension's isolated world.
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["lib/selectors.js"],
+      world: "MAIN",
+    });
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: async (text) => {
+        const SEL = window.VKSelectors;
+        if (!SEL) return { ok: false, error: "selectors missing in MAIN world" };
+        const input = await SEL.waitFor(() => SEL.messageInput(), 8000).catch(() => null);
+        if (!input) return { ok: false, error: "input not found" };
+        SEL.setInputText(input, text || "");
+        await new Promise((r) => setTimeout(r, 250));
+        const sendBtn = await SEL.waitFor(() => SEL.sendButton(), 5000).catch(() => null);
+        if (sendBtn) {
+          sendBtn.click();
+        } else {
+          input.focus();
+          input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+        }
+        return { ok: true };
+      },
+      args: [String(body)],
+    });
+    if (injection && injection.result && injection.result.ok) return injection.result;
+  } catch (e) {
+    console.warn("[userio-vk] main-world send failed, falling back to content bridge", e && e.message);
+  }
+  // Ask the content script to type + send (legacy fallback)
   return chrome.tabs.sendMessage(tab.id, { kind: "sendText", body: String(body || ""), peer_id: norm });
 }
 
