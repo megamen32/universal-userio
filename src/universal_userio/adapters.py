@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from email.utils import parseaddr
 from datetime import datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
@@ -105,6 +106,30 @@ class NoticePlaceOutboxClient:
         if not isinstance(message_ref, str) or not message_ref:
             raise RuntimeError("chatgpt-cdp-mcp returned no sent-message receipt")
         return message_ref
+
+
+class HimalayaGmailOutbox:
+    """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""
+
+    def __init__(self, *, binary: str = "himalaya", runner: Any = subprocess.run) -> None:
+        self._binary, self._runner = binary, runner
+
+    def send_reply(self, *, account: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
+        address = parseaddr(recipient)[1]
+        if not account or not address or not message_id:
+            raise ValueError("Gmail reply requires account, recipient, and message id")
+        reference = message_id.strip("<>")
+        raw = f"To: {address}\nSubject: Re: UserIO reply\nIn-Reply-To: <{reference}>\nReferences: <{reference}>\n\n{body}\n"
+        try:
+            completed = self._runner(
+                [self._binary, "--account", account, "message", "send", "--save", "Sent"],
+                input=raw, text=True, capture_output=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError("Himalaya Gmail delivery did not complete") from error
+        if completed.returncode != 0:
+            raise RuntimeError("Himalaya Gmail delivery failed")
+        return f"himalaya:{account}:{draft_id}"
 
 
 class AndroidSmsGatewayClient:

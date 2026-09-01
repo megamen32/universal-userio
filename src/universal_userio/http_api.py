@@ -389,7 +389,7 @@ def handler(
                     account_id, display_name = _connect_gmail_account(email, app_password)
                     service._store.register_account(
                         account_id=account_id, provider="gmail", display_name=display_name,
-                        can_read=True, can_reply=False, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
+                        can_read=True, can_reply=True, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
                         user_id=user_id,
                     )
                     self._reply(202, {"accepted": True, "account_id": account_id, "mode": "himalaya_imap_app_password"})

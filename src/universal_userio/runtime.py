@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from .adapters import AndroidSmsGatewayClient, NoticePlaceOutboxClient, NoticePlaceRoute
+from .adapters import AndroidSmsGatewayClient, HimalayaGmailOutbox, NoticePlaceOutboxClient, NoticePlaceRoute
 from .ai import OpenAICompatibleDraftGenerator
 from .http_api import handler
 from .service import UserIOService
@@ -79,6 +79,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     return UserIOService(
         store, generator, NoticePlaceOutboxClient(routes_from_environment(environment)), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
+        gmail_outbox=HimalayaGmailOutbox(),
     )
 
 

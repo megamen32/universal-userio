@@ -60,25 +60,29 @@ def test_duplicate_ingress_is_suppressed_and_rejection_never_sends(tmp_path) -> 
     assert outbox.calls == []
 
 
-def test_read_only_source_cannot_approve_a_draft_or_call_the_outbox(tmp_path) -> None:
+def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     store.register_account(
         account_id="gmail-careviolan", provider="gmail", display_name="careviolan@gmail.com",
-        can_read=True, can_reply=False, credential_ref="local:test",
+        can_read=True, can_reply=True, credential_ref="himalaya:careviolan",
     )
     outbox = Outbox()
-    service = UserIOService(store, Generator(), outbox)
+    class GmailOutbox:
+        def __init__(self) -> None:
+            self.calls = []
+        def send_reply(self, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "himalaya:careviolan:draft"
+    gmail_outbox = GmailOutbox()
+    service = UserIOService(store, Generator(), outbox, gmail_outbox=gmail_outbox)
     conversation_id, _ = service.receive(
         InboxMessage("gmail:careviolan", "m-1", "sender", "hello", 1.0), route_id="gmail-read-only"
     )
     draft = service.create_manual_draft(conversation_id, body="reply")
 
-    try:
-        service.approve(draft.id)
-    except DeliveryUnavailableError as error:
-        assert str(error) == "delivery is unavailable: this account is read-only"
-    else:
-        raise AssertionError("read-only account approved a draft")
+    approved = service.approve(draft.id)
+    assert approved.status == "approved"
+    assert gmail_outbox.calls == [{"account": "careviolan", "recipient": "sender", "message_id": "m-1", "body": "reply", "draft_id": draft.id}]
     assert outbox.calls == []
 
 

@@ -18,11 +18,13 @@ class UserIOService:
     def __init__(
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
         *, sms_gateway: object | None = None, sms_user_id: str = "", sms_route_id: str = "sms",
+        gmail_outbox: object | None = None,
     ) -> None:
         self._store = store
         self._generator = generator
         self._outbox = outbox
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
+        self.gmail_outbox = gmail_outbox
 
     @staticmethod
     def conversation_id(message: InboxMessage, *, user_id: str = "") -> str:
@@ -127,13 +129,19 @@ class UserIOService:
         if conversation is None:
             raise KeyError("conversation not found")
         user_id = self._store.default_user_id if user_id is None else user_id
-        if self._store.source_can_reply(str(conversation["source"]), user_id=user_id) is False:
-            raise DeliveryUnavailableError("delivery is unavailable: this account is read-only")
         if not self._store.route_allowed(
             user_id=user_id, source=str(conversation["source"]), route_id=str(conversation["route_id"])
         ):
             raise ValueError("route is not assigned to user")
-        if conversation["source"] == "chatgpt":
+        if str(conversation["source"]).startswith("gmail:"):
+            if self.gmail_outbox is None:
+                raise DeliveryUnavailableError("Gmail delivery is not configured")
+            latest = list(conversation["messages"])[-1]
+            receipt = self.gmail_outbox.send_reply(
+                account=str(conversation["source"]).partition(":")[2], recipient=str(conversation["sender"]),
+                message_id=str(latest["message_id"]), body=draft.body, draft_id=draft.id,
+            )
+        elif conversation["source"] == "chatgpt":
             send_chatgpt_reply = getattr(self._outbox, "send_chatgpt_reply", None)
             if not callable(send_chatgpt_reply):
                 raise ValueError("configured outbox does not support ChatGPT delivery")
