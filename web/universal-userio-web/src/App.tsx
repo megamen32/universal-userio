@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Bot, Check, Inbox, Mail, MessageCircle, Send, Sparkles } from "lucide-react"
+import { Check, ChevronDown, Expand, Inbox, Mail, MessageCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Send, Sparkles, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
 
 type Account = { id: string; provider: string; display_name: string; capabilities: string[] }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number }
@@ -20,8 +19,14 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-const channelIcon = (source: string) => source === "email" || source === "gmail" ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
-const displayChannel = (source: string) => source === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
+const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source
+const sourceForAccount = (account: Account) => {
+  if (account.provider !== "gmail") return account.provider
+  const alias = account.id.match(/^gmail-(.+)$/i)?.[1]
+  return alias ? `gmail:${alias}` : account.provider
+}
+const channelIcon = (source: string) => providerForSource(source) === "gmail" ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
+const displayChannel = (source: string) => providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 const initials = (value: string) => value.split(/[.@\s_-]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()
 
 export function App() {
@@ -33,17 +38,22 @@ export function App() {
   const [selectedChat, setSelectedChat] = useState<string>("")
   const [draft, setDraft] = useState("")
   const [search, setSearch] = useState("")
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [chatsOpen, setChatsOpen] = useState(true)
+  const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
+  const [hiddenAccounts, setHiddenAccounts] = useState<string[]>(() => JSON.parse(localStorage.getItem("userio-hidden-accounts") || "[]"))
 
   const account = accounts.find((item) => item.id === selectedAccount)
-  const activeChannel = selectedChannel !== "all" ? selectedChannel : account?.provider
-  const channels = useMemo(() => Array.from(new Set([...accounts.map((item) => item.provider), ...chats.map((item) => item.source)])).sort(), [accounts, chats])
+  const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
+  const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
   const refreshChats = useCallback(async () => {
-    const suffix = activeChannel ? `?source=${encodeURIComponent(activeChannel)}` : ""
+    const sourceFilter = account ? sourceForAccount(account) : activeChannel
+    const suffix = sourceFilter ? `?source=${encodeURIComponent(sourceFilter)}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     setChats(data.conversations)
     setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : data.conversations[0]?.id ?? "")
-  }, [activeChannel])
+  }, [account, activeChannel])
 
   const loadConversation = useCallback(async (id: string) => setConversation(await api<Conversation>(`/v1/conversations/${id}`)), [])
 
@@ -65,29 +75,36 @@ export function App() {
   const askAi = async () => { if (conversation) { await api(`/v1/conversations/${conversation.id}/ai-drafts`, { method: "POST", body: "{}" }); await loadConversation(conversation.id) } }
   const approve = async (id: string) => { await api(`/v1/drafts/${id}/approve`, { method: "POST", body: "{}" }); if (conversation) await loadConversation(conversation.id) }
   const markSeen = async () => { const message = conversation?.messages.at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
-  const visibleChats = chats.filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
+  const toggleAccount = (id: string, visible: boolean) => {
+    const next = visible ? hiddenAccounts.filter((item) => item !== id) : Array.from(new Set([...hiddenAccounts, id]))
+    setHiddenAccounts(next)
+    localStorage.setItem("userio-hidden-accounts", JSON.stringify(next))
+    if (!visible && selectedAccount === id) setSelectedAccount("all")
+  }
+  const removeAccount = async (id: string) => {
+    if (!window.confirm("Удалить аккаунт из UserIO? Данные у провайдера не удаляются.")) return
+    await api(`/v1/accounts/${encodeURIComponent(id)}`, { method: "DELETE" })
+    setAccounts((current) => current.filter((item) => item.id !== id))
+    if (selectedAccount === id) setSelectedAccount("all")
+  }
+  const visibleChats = chats.filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
+    .filter((chat) => `${chat.sender} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
 
-  return <main className="grid h-svh grid-cols-[72px_260px_340px_minmax(0,1fr)] bg-background text-foreground">
-    <aside className="flex flex-col items-center gap-3 border-r bg-muted/30 py-4">
-      <div className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div>
-      <Separator className="w-8" />
-      <Button variant={selectedAccount === "all" ? "secondary" : "ghost"} size="icon" onClick={() => setSelectedAccount("all")} title="All accounts"><MessageCircle /></Button>
-      {accounts.map((item) => <Button key={item.id} variant={selectedAccount === item.id ? "secondary" : "ghost"} size="icon" onClick={() => { setSelectedAccount(item.id); setSelectedChannel("all") }} title={item.display_name}><Avatar className="size-7"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar></Button>)}
-      <div className="mt-auto"><Button variant="ghost" size="icon" title="AI is opt-in"><Bot /></Button></div>
-    </aside>
+  const columns = sidebarOpen ? chatsOpen ? "grid-cols-[260px_340px_minmax(0,1fr)]" : "grid-cols-[260px_minmax(0,1fr)]" : chatsOpen ? "grid-cols-[0px_340px_minmax(0,1fr)]" : "grid-cols-[0px_minmax(0,1fr)]"
 
-    <aside className="flex min-w-0 flex-col border-r bg-card">
-      <header className="p-4"><p className="text-xs font-medium text-muted-foreground">ACCOUNTS</p><h1 className="mt-1 text-lg font-semibold">Universal UserIO</h1></header>
-      <ScrollArea className="flex-1 px-2">
-        <Button className="mb-1 w-full justify-start" variant={selectedChannel === "all" ? "secondary" : "ghost"} onClick={() => setSelectedChannel("all")}><Inbox /> All channels</Button>
-        {channels.map((channel) => <Button key={channel} className="mb-1 w-full justify-start" variant={selectedChannel === channel ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(channel); setSelectedAccount("all") }}>{channelIcon(channel)} {displayChannel(channel)}</Button>)}
+  return <main className={`grid h-svh min-h-0 overflow-hidden bg-background text-foreground ${columns}`}>
+    <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-card">
+      <header className="flex items-center gap-3 p-4"><div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div><div><p className="text-xs font-medium text-muted-foreground">PLATFORMS</p><h1 className="text-lg font-semibold">Universal UserIO</h1></div></header>
+      <ScrollArea className="min-h-0 flex-1 px-2">
+        <Button className="mb-2 w-full justify-start" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all") }}><Inbox /> All conversations</Button>
+        {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all") }}>All {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => { const visible = !hiddenAccounts.includes(item.id); return <div key={item.id} className="mt-1 flex items-center gap-1"><Button className="min-w-0 flex-1 justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all") } }}><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar><span className="truncate">{item.display_name}</span>{item.capabilities.length === 0 && <span className="ml-auto text-[10px] text-muted-foreground">ID only</span>}</Button><input aria-label={`Show ${item.display_name}`} type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} /><Button aria-label={`Remove ${item.display_name}`} title="Remove account" variant="ghost" size="icon" onClick={() => void removeAccount(item.id)}><X className="size-3" /></Button></div> })}{platform === "gmail" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/gmail/connect/new")}><Plus /> Add Gmail account</Button>}{platform === "telegram" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/telegram-qr/new")}><Plus /> Add Telegram account</Button>}{platform === "vk" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/vk/connect/new")}><Plus /> Add VK account</Button>}{platform === "whatsapp" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus /> Add WhatsApp account</Button>}</div></details>)}
       </ScrollArea>
       <div className="border-t p-3 text-xs text-muted-foreground">AI proposes only when you ask.</div>
     </aside>
 
-    <section className="flex min-w-0 flex-col border-r bg-card">
-      <header className="space-y-3 p-4"><div><p className="text-xs font-medium text-muted-foreground">CHATS</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "All conversations"}</p></div><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats" /></header>
-      <ScrollArea className="flex-1 px-2 pb-3">
+    <section className={`flex min-h-0 min-w-0 flex-col overflow-hidden border-r bg-card ${chatsOpen ? "" : "hidden"}`}>
+      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Hide platforms" : "Show platforms"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div><p className="text-xs font-medium text-muted-foreground">CHATS</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "All conversations"}</p></div></div><Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search chats" /></header>
+      <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         {visibleChats.map((chat) => <button key={chat.id} onClick={() => setSelectedChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-lg p-3 text-left transition-colors ${selectedChat === chat.id ? "bg-accent" : "hover:bg-muted"}`}>
           <Avatar><AvatarFallback>{initials(chat.sender)}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><b className="truncate text-sm">{chat.identity_id || chat.sender}</b>{chat.unread_count > 0 && <Badge className="rounded-full px-1.5">{chat.unread_count}</Badge>}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{chat.preview || "No messages yet"}</span></span>
         </button>)}
@@ -95,15 +112,16 @@ export function App() {
       </ScrollArea>
     </section>
 
-    <section className="flex min-w-0 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))]">
+    <section className="flex min-h-0 min-w-0 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))]">
       {conversation ? <>
-        <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
-        <ScrollArea className="flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
-          {conversation.messages.map((message) => <div key={`${message.source}:${message.message_id}`} className="max-w-[78%] rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm"><p>{message.body}</p><p className="mt-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div>)}
+        <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Button variant="ghost" size="icon" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Hide chats" : "Show chats"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
+        <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
+          {conversation.messages.map((message) => { const isHtmlEmail = message.source.startsWith("gmail") && /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body); return <div key={`${message.source}:${message.message_id}`} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : "max-w-[78%] overflow-hidden rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm"}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: conversation.sender })}><Expand /> Expand</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <p className="whitespace-pre-wrap">{message.body}</p>}<p className="mt-1 px-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div> })}
           {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[78%] rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm"><p>{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" onClick={() => approve(item.id)}>Approve & send</Button>}</div></div>)}
         </div></ScrollArea>
         <footer className="border-t bg-card p-4"><div className="flex gap-2"><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder="Write a draft reply…" /><Button onClick={() => void submitDraft()} size="icon" title="Create draft"><Send /></Button><Button variant="outline" onClick={() => void askAi()} title="Ask AI for variants"><Sparkles /></Button></div><p className="mt-2 text-xs text-muted-foreground">Create a draft, then explicitly approve it before delivery.</p></footer>
-      </> : <div className="grid flex-1 place-items-center text-center"><div><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Choose a chat</h2><p className="mt-1 text-sm text-muted-foreground">Accounts, channels, and conversations stay separate.</p></div></div>}
+      </> : <div className="grid flex-1 place-items-center text-center"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Hide chats" : "Show chats"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Choose a chat</h2><p className="mt-1 text-sm text-muted-foreground">Accounts, channels, and conversations stay separate.</p></div></div>}
+      {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Close</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Expanded email" /></div>}
     </section>
   </main>
 }

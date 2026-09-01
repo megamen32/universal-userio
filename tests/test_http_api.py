@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import threading
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -121,7 +120,7 @@ def test_gmail_account_lane_is_accepted_and_groups_by_sender(tmp_path) -> None:
     assert first_id == second_id
 
 
-def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tmp_path) -> None:
+def test_dashboard_redirects_to_login_and_message_data_remains_protected(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -129,11 +128,10 @@ def test_dashboard_is_a_public_shell_but_message_data_remains_token_protected(tm
     try:
         with urlopen(f"http://127.0.0.1:{server.server_port}/") as response:
             page = response.read()
+            assert response.geturl().endswith("/login")
         assert b"Universal UserIO" in page
-        asset = re.search(rb'/assets/[^" ]+\.js', page)
-        assert asset is not None
-        with urlopen(f"http://127.0.0.1:{server.server_port}" + asset.group().decode()) as response:
-            assert response.headers["Content-Type"] == "text/javascript"
+        assert b'name="username"' in page
+        assert b'name="password"' in page
         try:
             urlopen(f"http://127.0.0.1:{server.server_port}/v1/inbox")
         except HTTPError as error:
@@ -162,20 +160,86 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
 
 def test_trusted_loopback_proxy_can_use_dashboard_api_but_not_mcp(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler(service, token="test-token", trusted_proxy_token="proxy-secret"),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        inbox = Request(f"http://127.0.0.1:{server.server_port}/v1/inbox", headers={"X-UserIO-Authenticated": "1"})
+        proxy_headers = {
+            "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+        }
+        inbox = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/inbox", headers=proxy_headers
+        )
         with urlopen(inbox) as response:
             assert json.loads(response.read()) == {"messages": []}
-        mcp = Request(f"http://127.0.0.1:{server.server_port}/mcp", data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}', method="POST", headers={"X-UserIO-Authenticated": "1"})
+        mcp = Request(
+            f"http://127.0.0.1:{server.server_port}/mcp",
+            data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+            method="POST", headers=proxy_headers,
+        )
         try:
             urlopen(mcp)
         except HTTPError as error:
             assert error.code == 401
         else:
             raise AssertionError("proxy header bypassed MCP bearer authentication")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler(
+            service, token="test-token", vkid_app_id="54729441",
+            trusted_proxy_token="proxy-secret",
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        page = Request(base + "/vk/connect/new", headers={
+            "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+        })
+        with urlopen(page) as response:
+            assert response.status == 200
+            assert b"54729441" in response.read()
+        request = Request(
+            base + "/v1/vk/accounts", data=b'{"user_id":"42","display_name":"VK Person"}',
+            method="POST", headers={
+                "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+                "Content-Type": "application/json",
+            },
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+        assert result["mode"] == "vkid_identity_only"
+        assert service._store.accounts()[0]["capabilities"] == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_accounts_can_be_removed_without_deleting_provider_data(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/accounts", data=b'{"id":"gmail:old","provider":"gmail:old","display_name":"Old","credential_ref":"gmail:old"}', method="POST", headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
+        with urlopen(request):
+            pass
+        request = Request(base + "/v1/accounts/gmail%3Aold", method="DELETE", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            assert json.loads(response.read())["deleted"] is True
+        assert service._store.accounts() == []
     finally:
         server.shutdown()
         server.server_close()
