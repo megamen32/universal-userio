@@ -2,10 +2,11 @@
 // Holds the IndexedDB cache (lib/db.js), forwards captures to UserIO
 // (lib/userio.js), and exposes search/send RPCs.
 
-importScripts("lib/db.js", "lib/userio.js");
+importScripts("lib/db.js", "lib/userio.js", "lib/collect.js");
 
 const DB = self.UserIODB;
 const USERIO = self.UserIO;
+const COLLECT = self.Collect;
 
 const SEEN = new Set(); // dedupe msg ids in-memory; persistent dedupe lives in IDB
 const FORWARD_QUEUE = [];
@@ -169,6 +170,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "stats":
           sendResponse({ ok: true, stats: await DB.stats() });
           break;
+        case "collectStatus":
+          sendResponse({ ok: true, state: await COLLECT.state() });
+          break;
+        case "collectRun":
+          sendResponse(await COLLECT.runDue());
+          break;
         case "purge":
           await DB.purgeAll();
           SEEN.clear();
@@ -192,3 +199,5 @@ chrome.alarms.onAlarm.addListener((a) => {
     flushQueue();
   }
 });
+
+COLLECT.start();

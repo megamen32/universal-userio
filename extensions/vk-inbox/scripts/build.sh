@@ -83,6 +83,9 @@ if "action" in m:
 if "background" in m and "service_worker" in m.get("background", {}):
     m["background"] = {"scripts": [m["background"]["service_worker"]]}
 m["content_scripts"] = []  # MV2 alias ships without content scripts
+host = m.pop("host_permissions", [])
+if host:
+    m["permissions"] = list(dict.fromkeys(list(m.get("permissions", [])) + host))
 p.write_text(json.dumps(m, indent=2, ensure_ascii=False))
 PYEOF
 

@@ -37,6 +37,8 @@
     return data;
   }
 
+  lib.call = call;
+
   lib.postMessage = async (message) => {
     const s = await lib.settings();
     return call("POST", "/v1/messages", { route_id: s.routeId, message });
