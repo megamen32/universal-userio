@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from universal_userio.contracts import InboxMessage
 from universal_userio.adapters import NoticePlaceOutboxClient, NoticePlaceRoute, inbox_message_from_envelope
-from universal_userio.service import UserIOService
+from universal_userio.service import DeliveryUnavailableError, UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
 
@@ -57,6 +57,28 @@ def test_duplicate_ingress_is_suppressed_and_rejection_never_sends(tmp_path) -> 
         assert str(error) == "draft is not approvable"
     else:
         raise AssertionError("rejected draft was sent")
+    assert outbox.calls == []
+
+
+def test_read_only_source_cannot_approve_a_draft_or_call_the_outbox(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="gmail-careviolan", provider="gmail", display_name="careviolan@gmail.com",
+        can_read=True, can_reply=False, credential_ref="local:test",
+    )
+    outbox = Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail:careviolan", "m-1", "sender", "hello", 1.0), route_id="gmail-read-only"
+    )
+    draft = service.create_manual_draft(conversation_id, body="reply")
+
+    try:
+        service.approve(draft.id)
+    except DeliveryUnavailableError as error:
+        assert str(error) == "delivery is unavailable: this account is read-only"
+    else:
+        raise AssertionError("read-only account approved a draft")
     assert outbox.calls == []
 
 

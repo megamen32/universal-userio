@@ -15,7 +15,10 @@ type Draft = { id: string; body: string; status: string }
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } })
-  if (!response.ok) throw new Error("Request failed")
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null
+    throw new Error(payload?.error || "Request failed")
+  }
   return response.json() as Promise<T>
 }
 
@@ -44,6 +47,8 @@ export function App() {
   const [hiddenAccounts, setHiddenAccounts] = useState<string[]>(() => JSON.parse(localStorage.getItem("userio-hidden-accounts") || "[]"))
 
   const account = accounts.find((item) => item.id === selectedAccount)
+  const conversationAccount = conversation && accounts.find((item) => item.id === (item.provider === "gmail" && conversation.source.startsWith("gmail:") ? conversation.source.replace(/^gmail:/, "gmail-") : conversation.source))
+  const canReply = !conversationAccount || conversationAccount.capabilities.includes("reply")
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
@@ -66,14 +71,14 @@ export function App() {
   useEffect(() => { if (selectedChat) void loadConversation(selectedChat) }, [loadConversation, selectedChat])
 
   const submitDraft = async () => {
-    if (!conversation || !draft.trim()) return
+    if (!conversation || !canReply || !draft.trim()) return
     await api(`/v1/conversations/${conversation.id}/drafts`, { method: "POST", body: JSON.stringify({ body: draft }) })
     setDraft("")
     await loadConversation(conversation.id)
     await refreshChats()
   }
-  const askAi = async () => { if (conversation) { await api(`/v1/conversations/${conversation.id}/ai-drafts`, { method: "POST", body: "{}" }); await loadConversation(conversation.id) } }
-  const approve = async (id: string) => { await api(`/v1/drafts/${id}/approve`, { method: "POST", body: "{}" }); if (conversation) await loadConversation(conversation.id) }
+  const askAi = async () => { if (conversation && canReply) { await api(`/v1/conversations/${conversation.id}/ai-drafts`, { method: "POST", body: "{}" }); await loadConversation(conversation.id) } }
+  const approve = async (id: string) => { if (canReply) { await api(`/v1/drafts/${id}/approve`, { method: "POST", body: "{}" }); if (conversation) await loadConversation(conversation.id) } }
   const markSeen = async () => { const message = conversation?.messages.at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
   const toggleAccount = (id: string, visible: boolean) => {
     const next = visible ? hiddenAccounts.filter((item) => item !== id) : Array.from(new Set([...hiddenAccounts, id]))
@@ -117,9 +122,9 @@ export function App() {
         <header className="flex items-center gap-3 border-b bg-card/90 px-5 py-3 backdrop-blur"><Button variant="ghost" size="icon" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Hide chats" : "Show chats"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback>{initials(conversation.sender)}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{conversation.identity_id || conversation.sender}</h2><p className="text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen}><Check /> Mark seen</Button></header>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-6">
           {conversation.messages.map((message) => { const isHtmlEmail = message.source.startsWith("gmail") && /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body); return <div key={`${message.source}:${message.message_id}`} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : "max-w-[78%] overflow-hidden rounded-2xl rounded-tl-sm bg-card px-4 py-3 text-sm shadow-sm"}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: conversation.sender })}><Expand /> Expand</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <p className="whitespace-pre-wrap">{message.body}</p>}<p className="mt-1 px-1 text-[11px] text-muted-foreground">{new Date(message.received_at * 1000).toLocaleString()}</p></div> })}
-          {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[78%] rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm"><p>{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" onClick={() => approve(item.id)}>Approve & send</Button>}</div></div>)}
+          {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[78%] rounded-2xl rounded-tr-sm bg-primary px-4 py-3 text-sm text-primary-foreground shadow-sm"><p>{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" disabled={!canReply} title={canReply ? undefined : "This account is read-only"} onClick={() => approve(item.id)}>Approve & send</Button>}</div></div>)}
         </div></ScrollArea>
-        <footer className="border-t bg-card p-4"><div className="flex gap-2"><Input value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder="Write a draft reply…" /><Button onClick={() => void submitDraft()} size="icon" title="Create draft"><Send /></Button><Button variant="outline" onClick={() => void askAi()} title="Ask AI for variants"><Sparkles /></Button></div><p className="mt-2 text-xs text-muted-foreground">Create a draft, then explicitly approve it before delivery.</p></footer>
+        <footer className="border-t bg-card p-4"><div className="flex gap-2"><Input value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Write a draft reply…" : "Replies are unavailable for this read-only account"} /><Button disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Create draft"><Send /></Button><Button disabled={!canReply} variant="outline" onClick={() => void askAi()} title="Ask AI for variants"><Sparkles /></Button></div><p className="mt-2 text-xs text-muted-foreground">{canReply ? "Create a draft, then explicitly approve it before delivery." : "This account is read-only; delivery is not configured."}</p></footer>
       </> : <div className="grid flex-1 place-items-center text-center"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Hide chats" : "Show chats"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Choose a chat</h2><p className="mt-1 text-sm text-muted-foreground">Accounts, channels, and conversations stay separate.</p></div></div>}
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Close</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Expanded email" /></div>}
     </section>
