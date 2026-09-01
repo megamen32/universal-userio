@@ -112,7 +112,7 @@ class HimalayaGmailOutbox:
     """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""
 
     def __init__(
-        self, *, binary: str = "himalaya", config: str = "/home/roomhacker/.config/himalaya/config.toml",
+        self, *, binary: str = "/home/roomhacker/.cargo/bin/himalaya", config: str = "/home/roomhacker/.config/himalaya/config.toml",
         runner: Any = subprocess.run,
     ) -> None:
         self._binary, self._config, self._runner = binary, config, runner
