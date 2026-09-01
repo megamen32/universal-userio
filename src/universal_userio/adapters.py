@@ -125,7 +125,7 @@ class HimalayaGmailOutbox:
         raw = f"To: {address}\nSubject: Re: UserIO reply\nIn-Reply-To: <{reference}>\nReferences: <{reference}>\n\n{body}\n"
         try:
             completed = self._runner(
-                [self._binary, "--config", self._config, "--account", account, "message", "send", "--save", "Sent"],
+                [self._binary, "--config", self._config, "--account", account, "message", "send"],
                 input=raw, text=True, capture_output=True, timeout=30, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
