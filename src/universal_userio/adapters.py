@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -28,7 +29,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     message_id = str(payload.get("message_id") or "").strip()
     sender = str(payload.get("sender") or "").strip()
     body = str(payload.get("body") or "").strip()
-    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "email", "gmail"} and not source.startswith("gmail:"):
+    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail"} and not source.startswith("gmail:"):
         raise ValueError("unsupported message source")
     if not message_id or not sender or not body:
         raise ValueError("inbox message requires message_id, sender and body")
@@ -104,6 +105,62 @@ class NoticePlaceOutboxClient:
         if not isinstance(message_ref, str) or not message_ref:
             raise RuntimeError("chatgpt-cdp-mcp returned no sent-message receipt")
         return message_ref
+
+
+class AndroidSmsGatewayClient:
+    """Bounded authenticated client for one Android SMS Gateway instance."""
+
+    def __init__(self, url: str, token: str, *, runner: Any = urllib.request.urlopen) -> None:
+        self._url, self._token, self._runner = url.rstrip("/"), token, runner
+
+    def inbound(self) -> list[InboxMessage]:
+        result = self._request("GET", "/v1/inbound")
+        messages = result.get("messages")
+        if not isinstance(messages, list):
+            raise RuntimeError("Android SMS Gateway returned invalid inbound messages")
+        converted: list[InboxMessage] = []
+        for item in messages:
+            if not isinstance(item, Mapping):
+                continue
+            message_id, sender, body = item.get("id"), item.get("from"), item.get("body")
+            received_at = item.get("receivedAt")
+            if not all(isinstance(value, str) and value.strip() for value in (message_id, sender, body, received_at)):
+                continue
+            try:
+                timestamp = datetime.fromisoformat(received_at.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            converted.append(InboxMessage("sms", message_id, sender, body, timestamp))
+        return converted
+
+    def send(self, *, to: str, body: str) -> str:
+        result = self._request("POST", "/v1/messages", {"to": to, "body": body})
+        receipt = result.get("id")
+        if not isinstance(receipt, str) or not receipt:
+            raise RuntimeError("Android SMS Gateway returned no accepted-message receipt")
+        if result.get("status") != "accepted_by_android":
+            raise RuntimeError("Android SMS Gateway did not accept the message")
+        return receipt
+
+    def _request(self, method: str, path: str, payload: Mapping[str, str] | None = None) -> dict[str, Any]:
+        request = urllib.request.Request(
+            self._url + path,
+            data=None if payload is None else json.dumps(payload, ensure_ascii=False).encode(),
+            headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}, method=method,
+        )
+        try:
+            with self._runner(request, timeout=8) as response:
+                status, raw = int(response.status), response.read()
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(f"Android SMS Gateway returned HTTP {error.code}") from error
+        except urllib.error.URLError as error:
+            raise AdapterNotSupported(f"Android SMS Gateway is unavailable: {error.reason}") from error
+        if status not in {200, 202}:
+            raise RuntimeError(f"Android SMS Gateway returned HTTP {status}")
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise RuntimeError("Android SMS Gateway returned invalid JSON")
+        return result
 
 
 class AdapterNotSupported(ValueError):
@@ -187,6 +244,25 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
 
 class VKChannelAdapter(StoredChannelAdapter):
     channel = "vk"
+
+
+class AndroidSmsChannelAdapter(StoredChannelAdapter):
+    channel = "sms"
+
+    def _sync(self) -> None:
+        gateway = self._service.sms_gateway
+        if gateway is None or self._service.sms_user_id != self._user_id:
+            raise AdapterNotSupported("Android SMS adapter is not configured for this UserIO user")
+        for message in gateway.inbound():
+            self._service.receive(message, route_id=self._service.sms_route_id, user_id=self._user_id)
+
+    def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        self._sync()
+        return super().list(limit=limit)
+
+    def read(self, *, chat_id: str | None = None, message_id: str | None = None) -> dict[str, Any]:
+        self._sync()
+        return super().read(chat_id=chat_id, message_id=message_id)
 
 
 class ChatGPTCDPMcpClient:
@@ -362,6 +438,7 @@ class UnifiedChannels(StoredChannelAdapter):
         "telegram": TelegramChannelAdapter,
         "whatsapp": WhatsAppChannelAdapter,
         "vk": VKChannelAdapter,
+        "sms": AndroidSmsChannelAdapter,
         "chatgpt": ChatGPTCDPChannelAdapter,
     }
 

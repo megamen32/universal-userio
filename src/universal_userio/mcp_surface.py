@@ -31,11 +31,11 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 TOOL_SPECS = (
     ToolSpec("userio.channels.list", "List this user's chats across connected channels.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "vk", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "vk", "sms", "chatgpt"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
     })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "vk", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "vk", "sms", "chatgpt"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
     })),
     ToolSpec("userio.channels.download", "Download a file when its adapter supports it.", _schema({

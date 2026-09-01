@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from .adapters import NoticePlaceOutboxClient, NoticePlaceRoute
+from .adapters import AndroidSmsGatewayClient, NoticePlaceOutboxClient, NoticePlaceRoute
 from .ai import OpenAICompatibleDraftGenerator
 from .http_api import handler
 from .service import UserIOService
@@ -71,7 +71,15 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     generator = OpenAICompatibleDraftGenerator(
         endpoint=_required(environment, "USERIO_AI_ENDPOINT"), token=_required(environment, "USERIO_AI_TOKEN"), model=_required(environment, "USERIO_AI_MODEL"),
     )
-    return UserIOService(store, generator, NoticePlaceOutboxClient(routes_from_environment(environment)))
+    sms_url, sms_token = environment.get("USERIO_SMS_GATEWAY_URL", "").strip(), environment.get("USERIO_SMS_GATEWAY_TOKEN", "").strip()
+    if bool(sms_url) != bool(sms_token):
+        raise ValueError("USERIO_SMS_GATEWAY_URL and USERIO_SMS_GATEWAY_TOKEN must be set together")
+    gateway = AndroidSmsGatewayClient(sms_url, sms_token) if sms_url else None
+    sms_user_id = environment.get("USERIO_SMS_USER_ID", store.default_user_id).strip()
+    return UserIOService(
+        store, generator, NoticePlaceOutboxClient(routes_from_environment(environment)), sms_gateway=gateway,
+        sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
+    )
 
 
 def main() -> None:

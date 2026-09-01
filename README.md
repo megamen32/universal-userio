@@ -46,6 +46,22 @@ WhatsApp Web browser worker owns its browser session and translates UI actions
 to/from these contracts; UserIO sees the same conversation API as Telegram or
 Matrix.
 
+### Android SMS Gateway adapter
+
+Set `USERIO_SMS_GATEWAY_URL` and `USERIO_SMS_GATEWAY_TOKEN` to a private
+[Android SMS Gateway](https://github.com/megamen32/android-sms-gateway) instance.
+Opening the `sms` channel pulls its retained inbound SMS into normal UserIO
+conversations. `userio.channels.send_draft` still only creates a draft; only
+`userio.draft.approve_send` sends the exact text through the Android device.
+The gateway reports command acceptance by Android, not carrier delivery. By
+default the channel is bound to the UserIO owner; set `USERIO_SMS_USER_ID` to
+another user's id only after binding that user's `sms` channel route.
+
+The two services are intentionally independent: deploy the gateway first on
+localhost, add its normal API token to UserIO's private environment file, then
+restart UserIO. Do not put either token in a route map, browser extension, or
+MCP call.
+
 ## Boundaries
 
 - Universal Inbox owns source cursors, deduplication and canonical ingress.
