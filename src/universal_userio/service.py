@@ -11,10 +11,14 @@ from .store import SQLiteUserIOStore
 
 
 class UserIOService:
-    def __init__(self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient) -> None:
+    def __init__(
+        self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
+        *, sms_gateway: object | None = None, sms_user_id: str = "", sms_route_id: str = "sms",
+    ) -> None:
         self._store = store
         self._generator = generator
         self._outbox = outbox
+        self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
 
     @staticmethod
     def conversation_id(message: InboxMessage, *, user_id: str = "") -> str:
@@ -130,6 +134,10 @@ class UserIOService:
             receipt = send_chatgpt_reply(
                 chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body
             )
+        elif conversation["source"] == "sms":
+            if self.sms_gateway is None or user_id != self.sms_user_id:
+                raise ValueError("Android SMS adapter is not configured for this UserIO user")
+            receipt = self.sms_gateway.send(to=str(conversation["sender"]), body=draft.body)
         else:
             receipt = self._outbox.send_reply(
                 route_id=str(conversation["route_id"]), conversation_id=draft.conversation_id,
