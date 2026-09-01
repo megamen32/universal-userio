@@ -131,7 +131,8 @@ class HimalayaGmailOutbox:
         except (OSError, subprocess.TimeoutExpired) as error:
             raise RuntimeError("Himalaya Gmail delivery did not complete") from error
         if completed.returncode != 0:
-            raise RuntimeError("Himalaya Gmail delivery failed")
+            detail = completed.stderr.strip().splitlines()[-1] if completed.stderr else "unknown Himalaya error"
+            raise RuntimeError(f"Himalaya Gmail delivery failed: {detail[:240]}")
         return f"himalaya:{account}:{draft_id}"
 
 
