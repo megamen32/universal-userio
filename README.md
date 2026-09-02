@@ -62,6 +62,54 @@ localhost, add its normal API token to UserIO's private environment file, then
 restart UserIO. Do not put either token in a route map, browser extension, or
 MCP call.
 
+## Universal channel adapters library (`universal_userio.channels`)
+
+One adapter codebase for Telegram, email (SMTP/IMAP), WhatsApp (Baileys
+bridge), SMS (Android gateway) and VK (browser worker), usable **in-process
+from any project** and wrapped by the UserIO service itself. Spec:
+`docs/2026-09-03-universal-adapters-spec.md`. The core contracts
+(`ChatPort`/`Channel`, `ChatMessage`, `ChatSummary`, `DownloadedMedia`, the
+`Chat*Error` hierarchy, `AdapterNotSupported`) are stdlib-only and were ported
+from the battle-tested AutoSellBot contracts; install extras only for the
+platforms you use:
+
+```bash
+pip install -e /path/to/universal-userio            # core (stdlib only)
+pip install -e '/path/to/universal-userio[telegram]'  # + telethon/pydantic
+```
+
+```python
+from universal_userio.channels.telegram import TelegramAPI      # userbot (OpenTele2/Telethon)
+from universal_userio.channels.email import EmailChannel        # smtp-imap, stdlib
+from universal_userio.channels.whatsapp import WhatsAppChannel  # Baileys HTTP bridge
+from universal_userio.channels.sms import AndroidSmsChannel     # Android SMS Gateway
+from universal_userio.channels.vk import VkChannel              # reader/sender injection
+
+adapter = TelegramAPI(my_client)          # inject your own client, or
+adapter = TelegramAPI.from_env()          # USERIO_TELEGRAM_* / TG_* credentials
+messages = await adapter.read_chat(chat)  # one async ChatPort for every platform
+```
+
+Every adapter declares `platform` and `capabilities` (`read`, `send`, `edit`,
+`delete`, `media`, `typing`, `react`, `forward`, `ack`); an operation outside
+the declared set raises `AdapterNotSupported` instead of pretending.
+
+Environment (all optional, read one step from env/`.env`, never stored in
+routes or code):
+
+| Adapter | Variables |
+|---|---|
+| telegram | `USERIO_TELEGRAM_API_ID/API_HASH/SESSION/PROXY` (fallbacks `TG_API_ID/API_HASH/SESSION`, `TG_PROXY`) |
+| email | `USERIO_SMTP_HOST/PORT/USER/PASSWORD`, `USERIO_IMAP_HOST/PORT/USER/PASSWORD`, or shared `USERIO_EMAIL_ADDRESS` + `USERIO_EMAIL_PASSWORD` |
+| whatsapp | `USERIO_WHATSAPP_BRIDGE_URL` (default `http://127.0.0.1:30100`); bridge sidecar: `deploy/whatsapp-bridge/` |
+| sms | `USERIO_SMS_GATEWAY_URL`, `USERIO_SMS_GATEWAY_TOKEN` |
+| vk | injected `reader`/`sender` callables (extension-owned delivery) |
+
+Service integration: `USERIO_LIVE_TELEGRAM=1` makes the UserIO service
+deliver approved `telegram` drafts in-process through
+`LiveTelegramOutbox`/`SyncChannelRunner` instead of a NoticePlace route;
+without the flag the store-view + NoticePlace flow is unchanged.
+
 ## Boundaries
 
 - Universal Inbox owns source cursors, deduplication and canonical ingress.
