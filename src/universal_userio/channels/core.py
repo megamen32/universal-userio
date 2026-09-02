@@ -8,6 +8,7 @@ docs/2026-09-03-universal-adapters-spec.md.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -18,6 +19,12 @@ from typing import Any, Protocol, runtime_checkable
 ChatId = int | str
 ChatRef = ChatId
 MessageRef = Any
+
+
+def stable_ref_id(message_id: str) -> int:
+    """Map an opaque provider message id to the stable int ``ChatMessage.id``."""
+
+    return int(hashlib.sha256(str(message_id).encode()).hexdigest()[:12], 16)
 
 
 class ChatOperationError(Exception):
@@ -276,6 +283,7 @@ __all__ = [
     "ChatId",
     "ChatRef",
     "MessageRef",
+    "stable_ref_id",
     "ChatOperationError",
     "ChatPermissionError",
     "ChatInvalidPeerError",

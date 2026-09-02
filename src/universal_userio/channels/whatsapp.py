@@ -10,7 +10,6 @@ has no inbound media download endpoint, so ``media`` is not declared.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import os
 import urllib.request
@@ -24,6 +23,7 @@ from universal_userio.channels.core import (
     ChatRef,
     ChatSummary,
     MessageRef,
+    stable_ref_id,
 )
 
 DEFAULT_BRIDGE_URL = "http://127.0.0.1:30100"
@@ -32,7 +32,7 @@ DEFAULT_BRIDGE_URL = "http://127.0.0.1:30100"
 def _ref_id(message_id: str) -> int:
     """Map a Baileys string message id to the stable int ChatMessage.id."""
 
-    return int(hashlib.sha256(str(message_id).encode()).hexdigest()[:12], 16)
+    return stable_ref_id(message_id)
 
 
 def normalize_chat_id(chat: ChatRef) -> str:
