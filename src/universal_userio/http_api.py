@@ -473,7 +473,11 @@ def handler(
                 return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
-            if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip"} and self._static(requested_path):
+            if requested_path == "/download":
+                self._html(200, _download_page().encode())
+                return
+            if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
+                                  "/chatgpt-cdp-setup.zip"} and self._static(requested_path):
                 return
             if requested_path in {"/vk/connect/new", "/vk/callback"}:
                 if self._principal(allow_proxy=True) is None:
@@ -552,6 +556,57 @@ def handler(
             return
 
     return UserIOHandler
+
+
+def _download_page() -> str:
+    return """<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloads — Universal UserIO</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { min-height:100vh; margin:0; background:#0b1020; color:#edf2ff; }
+  main { max-width: 720px; margin: 8vh auto; padding: 0 24px 48px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  p.lead { color:#aebbd7; margin-top: 0; }
+  .card { border:1px solid #2b3554; border-radius:16px; background:#121a2e; padding:22px 24px; margin-top:18px; }
+  .card h2 { margin:0 0 8px; font-size:19px; }
+  .card p { color:#aebbd7; margin:6px 0; font-size:14px; }
+  .btn { display:inline-block; margin-top:12px; margin-right:10px; padding:10px 18px; border-radius:9px; background:#6d7cff; color:white; font-weight:700; text-decoration:none; }
+  .btn.secondary { background:#2b3554; }
+  code { background:#0b1020; border:1px solid #2b3554; border-radius:6px; padding:2px 7px; font-size:13px; }
+  ol { color:#aebbd7; font-size:14px; padding-left: 20px; }
+  .tag { display:inline-block; font-size:11px; border-radius:999px; padding:2px 10px; margin-left:8px; background:#24345c; color:#9eabff; vertical-align: middle; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Universal UserIO — загрузки</h1>
+  <p class="lead">Скачайте коннектор, распакуйте и загрузите как unpacked-расширение в Chrome / Chromium / BrowserOS / Brave.</p>
+
+  <div class="card">
+    <h2>Universal UserIO Agent <span class="tag">браузерное расширение</span></h2>
+    <p>Захват VK Web (чаты, поиск, отправка) + универсальный агент сбора данных с сайтов через пользовательские сессии. Никаких куки и токенов сайтов наружу — только ваш настроенный UserIO.</p>
+    <a class="btn" href="/vk-userio-extension-mv3.zip">Скачать для Chrome / Chromium (MV3)</a>
+    <a class="btn secondary" href="/vk-userio-extension.zip">Legacy MV2</a>
+    <ol>
+      <li>Распакуйте zip в постоянную папку.</li>
+      <li>Откройте <code>chrome://extensions</code>, включите Developer mode → <b>Load unpacked</b> → выберите папку.</li>
+      <li>В настройках расширения укажите endpoint <code>https://msg.bezrabotnyi.com</code> и свой UserIO API token.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>ChatGPT CDP starter <span class="tag">экспериментально</span></h2>
+    <p>Серверный пакет <code>chatgpt-cdp-mcp</code>: превращает одну залогиненную страницу ChatGPT в ограниченный MCP-инструмент для UserIO. Требует Node.js 20+ и CDP-драйвер к вашему браузеру (см. README внутри пакета).</p>
+    <a class="btn" href="/chatgpt-cdp-setup.zip">Скачать setup-пакет</a>
+    <a class="btn secondary" href="https://github.com/megamen32/chatgpt-cdp-mcp">GitHub</a>
+  </div>
+</main>
+</body>
+</html>"""
 
 
 def _dashboard_login_page(*, invalid: bool = False) -> str:
