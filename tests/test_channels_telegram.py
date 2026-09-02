@@ -4,7 +4,7 @@ import pytest
 
 from universal_userio.channels.telegram import (
     TelegramAPI,
-    _proxy_tuple,
+    _proxy_spec,
     parse_msg_url,
     telegram_env_config,
 )
@@ -35,7 +35,12 @@ def test_env_config_resolution_and_fallbacks() -> None:
         }
     )
     assert config.api_id == 12345
-    assert config.proxy == ("socks5", "127.0.0.1", 1080)
+    assert config.proxy == {
+        "proxy_type": "socks5",
+        "addr": "127.0.0.1",
+        "port": 1080,
+        "rdns": True,
+    }
 
     preferred = telegram_env_config(
         {
@@ -53,7 +58,15 @@ def test_env_config_missing_raises() -> None:
         telegram_env_config({"TG_API_ID": "1", "TG_SESSION": "s"})
 
 
-def test_proxy_tuple_variants() -> None:
-    assert _proxy_tuple(None) is None
-    assert _proxy_tuple("socks5h://proxy.local:9050") == ("socks5", "proxy.local", 9050)
-    assert _proxy_tuple("http://proxy.local") is None
+def test_proxy_spec_variants() -> None:
+    assert _proxy_spec(None) is None
+    assert _proxy_spec("http://proxy.local") is None
+    authenticated = _proxy_spec("socks5h://user:pass@proxy.local:9050")
+    assert authenticated == {
+        "proxy_type": "socks5",
+        "addr": "proxy.local",
+        "port": 9050,
+        "rdns": True,
+        "username": "user",
+        "password": "pass",
+    }

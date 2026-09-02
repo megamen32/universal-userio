@@ -140,6 +140,15 @@ def _parse_email_message(uid: int, raw: bytes) -> dict[str, Any]:
     }
 
 
+def _quote_mailbox(mailbox: str) -> str:
+    """IMAP SELECT needs quoted mailbox names with spaces or slashes."""
+
+    if mailbox.startswith('"') and mailbox.endswith('"'):
+        return mailbox
+    escaped = mailbox.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 class SmtpImapTransport:
     """Blocking stdlib SMTP/IMAP transport; :class:`EmailChannel` runs it in a thread."""
 
@@ -201,7 +210,7 @@ class SmtpImapTransport:
 
         client = self._imap()
         try:
-            client.select(mailbox)
+            client.select(_quote_mailbox(mailbox))
             status, data = client.uid("search", None, "ALL")
             if status != "OK":
                 raise RuntimeError(f"IMAP search failed: {status}")
@@ -224,7 +233,7 @@ class SmtpImapTransport:
 
         client = self._imap()
         try:
-            client.select(mailbox)
+            client.select(_quote_mailbox(mailbox))
             status, parts = client.uid("fetch", str(uid).encode(), "(RFC822)")
             if status != "OK":
                 return None
