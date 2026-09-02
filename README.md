@@ -94,6 +94,24 @@ Every adapter declares `platform` and `capabilities` (`read`, `send`, `edit`,
 `delete`, `media`, `typing`, `react`, `forward`, `ack`); an operation outside
 the declared set raises `AdapterNotSupported` instead of pretending.
 
+### Telegram session provisioning (QR login, two proven originals)
+
+Interactive terminal QR — the overpod/mcp-telegram UX (QR-only, no phone
+number; 2FA password answered locally, never persisted):
+
+```bash
+python -m universal_userio.channels.telegram_login          # ~/.userio/telegram.session
+USERIO_TELEGRAM_API_ID=… USERIO_TELEGRAM_API_HASH=… \
+USERIO_TELEGRAM_2FA_PASSWORD=… python -m universal_userio.channels.telegram_login /path/s.session
+```
+
+Scan the QR with Telegram > Settings > Devices > Link Desktop Device; the
+session file is written with owner-only permissions and reused via
+`USERIO_TELEGRAM_SESSION`.  For farms, `create_independent_session_via_qr()`
+(ported from TelegramAuto/TGC `qr_session_login.py`) mints fresh independent
+sessions from one authorized client via `auth.acceptLoginToken` — no camera,
+no SMS, no reCAPTCHA wall, no `AUTH_KEY_DUPLICATED`.
+
 Environment (all optional, read one step from env/`.env`, never stored in
 routes or code):
 
