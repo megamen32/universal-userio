@@ -32,7 +32,7 @@ def test_sms_channel_read_and_send() -> None:
     channel = AndroidSmsChannel(gateway)
 
     chats = asyncio.run(channel.list_chats())
-    assert sorted(chat.id for chat in chats) == ["+79990002222", "+79990003333"]
+    assert sorted(chat.id for chat in chats) == ["79990002222", "79990003333"]
 
     messages = asyncio.run(channel.read_chat("+79990002222"))
     assert [m.text for m in messages] == ["first inbound"]
