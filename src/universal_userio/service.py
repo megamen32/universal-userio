@@ -19,12 +19,14 @@ class UserIOService:
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
         *, sms_gateway: object | None = None, sms_user_id: str = "", sms_route_id: str = "sms",
         gmail_outbox: object | None = None,
+        telegram_outbox: object | None = None,
     ) -> None:
         self._store = store
         self._generator = generator
         self._outbox = outbox
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
         self.gmail_outbox = gmail_outbox
+        self.telegram_outbox = telegram_outbox
 
     @staticmethod
     def conversation_id(message: InboxMessage, *, user_id: str = "") -> str:
@@ -156,6 +158,10 @@ class UserIOService:
             if self.sms_gateway is None or user_id != self.sms_user_id:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")
             receipt = self.sms_gateway.send(to=str(conversation["sender"]), body=draft.body)
+        elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
+            receipt = self.telegram_outbox.send_reply(
+                chat=str(conversation["sender"]), body=draft.body, draft_id=draft.id
+            )
         else:
             receipt = self._outbox.send_reply(
                 route_id=str(conversation["route_id"]), conversation_id=draft.conversation_id,
