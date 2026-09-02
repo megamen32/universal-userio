@@ -16,6 +16,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
+from .channels.core import AdapterNotSupported
 from .contracts import ChannelFile, InboxMessage, ReplyDraft
 
 if TYPE_CHECKING:
@@ -191,10 +192,6 @@ class AndroidSmsGatewayClient:
         if not isinstance(result, dict):
             raise RuntimeError("Android SMS Gateway returned invalid JSON")
         return result
-
-
-class AdapterNotSupported(ValueError):
-    """The selected adapter honestly does not implement this capability."""
 
 
 class StoredChannelAdapter:
