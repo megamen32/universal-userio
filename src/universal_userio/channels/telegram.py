@@ -629,11 +629,11 @@ class TelegramEnvConfig:
     api_id: int
     api_hash: str
     session: str
-    proxy: tuple[str, str, int] | None
+    proxy: dict[str, object] | None
 
 
-def _proxy_tuple(url: str | None) -> tuple[str, str, int] | None:
-    """Convert a proxy URL into the ``(scheme, host, port)`` tuple Telethon expects."""
+def _proxy_spec(url: str | None) -> dict[str, object] | None:
+    """Convert a proxy URL (optionally with userinfo) into a Telethon proxy dict."""
 
     if not url:
         return None
@@ -643,7 +643,17 @@ def _proxy_tuple(url: str | None) -> tuple[str, str, int] | None:
     scheme = parsed.scheme.lower()
     if scheme == "socks5h":
         scheme = "socks5"
-    return (scheme, parsed.hostname, parsed.port)
+    spec: dict[str, object] = {
+        "proxy_type": scheme,
+        "addr": parsed.hostname,
+        "port": parsed.port,
+        "rdns": True,
+    }
+    if parsed.username:
+        spec["username"] = parsed.username
+    if parsed.password:
+        spec["password"] = parsed.password
+    return spec
 
 
 def telegram_env_config(env: Mapping[str, str] | None = None) -> TelegramEnvConfig:
@@ -681,5 +691,5 @@ def telegram_env_config(env: Mapping[str, str] | None = None) -> TelegramEnvConf
         api_id=int(api_id),
         api_hash=str(api_hash),
         session=str(session),
-        proxy=_proxy_tuple(pick("USERIO_TELEGRAM_PROXY", "TG_PROXY")),
+        proxy=_proxy_spec(pick("USERIO_TELEGRAM_PROXY", "TG_PROXY")),
     )
