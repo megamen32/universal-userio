@@ -182,6 +182,8 @@ class UserIOMcpSurface:
                 return self._propose(arguments, principal)
         except AdapterNotSupported as error:
             return {"ok": False, "error": str(error)}
+        except RuntimeError as error:
+            return {"ok": False, "error": str(error)}
         except (KeyError, TypeError, ValueError) as error:
             return {"ok": False, "error": str(error).strip("'") or "invalid_arguments"}
         return {"ok": False, "error": "unknown_tool"}
