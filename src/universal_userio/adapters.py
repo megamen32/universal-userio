@@ -472,7 +472,7 @@ class ChatGPTWebChannelAdapter:
         self._store, self._service, self._user_id = store, service, user_id
         self._session_file = session_file or os.environ.get(self.SESSION_ENV, "")
         self._client_factory = client_factory
-        self._token: str | None = None
+        self._access_token: str | None = None
         self._expires: float = 0.0
 
     @classmethod
@@ -506,16 +506,27 @@ class ChatGPTWebChannelAdapter:
         return client
 
     def _request(self, url: str) -> dict[str, Any]:
-        client = self._client_factory() if self._client_factory else self._client()
-        response = client.get(url, headers={
+        headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
             ),
             "Accept": "application/json",
-            **({"Authorization": f"Bearer {self._token}"} if self._token else {}),
-        })
-        if response.status_code in (401, 403) and self._token:
+            **({"Authorization": f"Bearer {self._access_token}"} if self._access_token else {}),
+        }
+        response = None
+        last_error: Exception | None = None
+        for _ in range(3):  # chatgpt.com occasionally closes connections mid-transfer
+            client = self._client_factory() if self._client_factory else self._client()
+            try:
+                response = client.get(url, headers=headers)
+                break
+            except Exception as error:  # curl_cffi raises its own hierarchy
+                last_error = error
+                time.sleep(1)
+        if response is None:
+            raise RuntimeError(f"ChatGPT transport failed: {last_error}")
+        if response.status_code in (401, 403) and self._access_token:
             raise RuntimeError("ChatGPT rejected the access token; refresh the session cookie")
         if response.status_code != 200:
             raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {url.split('?')[0]}")
@@ -526,15 +537,15 @@ class ChatGPTWebChannelAdapter:
         token = str(session.get("accessToken") or "")
         if not token:
             raise RuntimeError("ChatGPT session cookie was rejected: no accessToken in /api/auth/session")
-        self._token, self._expires = token, time.time() + 600
+        self._access_token, self._expires = token, time.time() + 600
 
-    def _token(self) -> str:
-        if not self._token or time.time() >= self._expires:
+    def _bearer(self) -> str:
+        if not self._access_token or time.time() >= self._expires:
             self._renew()
-        return self._token  # type: ignore[return-value]
+        return self._access_token  # type: ignore[return-value]
 
     def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        self._token()
+        self._bearer()
         query = urllib.parse.urlencode({
             "offset": 0, "limit": max(1, min(limit, 100)), "order": "updated", "is_archived": "false",
         })
@@ -549,7 +560,7 @@ class ChatGPTWebChannelAdapter:
             raise ValueError("provide exactly one of chat_id or message_id")
         if message_id:
             raise AdapterNotSupported("ChatGPT web adapter reads chats, not individual messages")
-        self._token()
+        self._bearer()
         chat = self._request(f"https://chatgpt.com/backend-api/conversation/{urllib.parse.quote(chat_id)}")
         if not isinstance(chat, dict):
             raise RuntimeError("ChatGPT returned an invalid conversation export")
