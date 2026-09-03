@@ -7,3 +7,5 @@ __pycache__/
 .env.owner-seed
 .agents/shared-session/
 .tmp/
+build/
+*.egg-info/
