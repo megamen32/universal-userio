@@ -201,6 +201,11 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
                 ON messages(user_id,conversation_id,received_at);
+            CREATE TABLE IF NOT EXISTS contact_names (
+                user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
+                name TEXT NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,source,sender)
+            );
             CREATE TABLE IF NOT EXISTS drafts (
                 user_id TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 body TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,
@@ -733,6 +738,14 @@ class SQLiteUserIOStore:
                     message.sender, message.body, message.received_at,
                 ),
             ).rowcount == 1
+            if getattr(message, "sender_name", ""):
+                self._connection.execute(
+                    """
+                    INSERT OR REPLACE INTO contact_names
+                    (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)
+                    """,
+                    (user_id, message.source, message.sender, message.sender_name, now),
+                )
             if inserted:
                 self._connection.execute(
                     "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
@@ -870,6 +883,10 @@ class SQLiteUserIOStore:
                 """,
                 (user_id, conversation_id),
             ).fetchall()
+            name_row = self._connection.execute(
+                "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
+                (user_id, row["source"], row["sender"]),
+            ).fetchone()
         message_records = [dict(item) for item in messages]
         if text_limit is not None:
             for item in message_records:
@@ -877,6 +894,7 @@ class SQLiteUserIOStore:
         return {
             "id": row["id"], "route_id": row["route_id"], "response_mode": row["response_mode"],
             "identity_id": row["identity_id"], "source": row["source"], "sender": row["sender"],
+            "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
         }
 
@@ -939,8 +957,12 @@ class SQLiteUserIOStore:
                 SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,
                        (SELECT body FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
                         ORDER BY received_at DESC LIMIT 1) AS preview,
+                       (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
+                        ORDER BY received_at DESC LIMIT 1) AS last_at,
                        (SELECT COUNT(*) FROM messages WHERE user_id=c.user_id
-                        AND conversation_id=c.id AND seen_at IS NULL) AS unread_count
+                        AND conversation_id=c.id AND seen_at IS NULL) AS unread_count,
+                       (SELECT name FROM contact_names WHERE user_id=c.user_id
+                        AND source=c.source AND sender=c.sender) AS display_name
                 FROM conversations c WHERE c.user_id=? {source_sql}
                 ORDER BY c.updated_at DESC LIMIT ?
                 """,
