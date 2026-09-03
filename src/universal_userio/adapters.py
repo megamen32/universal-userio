@@ -36,7 +36,8 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         raise ValueError("unsupported message source")
     if not message_id or not sender or not body:
         raise ValueError("inbox message requires message_id, sender and body")
-    return InboxMessage(source, message_id, sender, body, received_at)
+    sender_name = str(payload.get("sender_name") or "").strip()
+    return InboxMessage(source, message_id, sender, body, received_at, sender_name=sender_name)
 
 
 @dataclass(frozen=True, slots=True)

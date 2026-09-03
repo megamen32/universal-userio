@@ -13,6 +13,7 @@ class InboxMessage:
     sender: str
     body: str
     received_at: float
+    sender_name: str = ""
 
     @property
     def conversation_key(self) -> str:
