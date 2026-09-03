@@ -7,7 +7,7 @@ import { defineConfig } from "vite"
 export default defineConfig({
   build: {
     outDir: "../../src/universal_userio/static",
-    emptyOutDir: true,
+    emptyOutDir: false,
   },
   plugins: [react(), tailwindcss()],
   resolve: {
