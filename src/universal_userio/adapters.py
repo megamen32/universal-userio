@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from email.utils import parseaddr
 from datetime import datetime
@@ -451,6 +452,167 @@ class ChatGPTCDPChannelAdapter:
         }
 
 
+class ChatGPTWebChannelAdapter:
+    """Read ChatGPT chats headlessly from a stored session cookie.
+
+    The ``__Secure-next-auth.session-token`` cookie (lives for months, renewed
+    whenever the user is active in a browser) is exchanged for a ~10-day
+    ``accessToken`` at ``/api/auth/session``, and that token drives the
+    ``backend-api`` chat endpoints. Requires ``curl_cffi`` for the Chrome TLS
+    fingerprint: Cloudflare rejects plain urllib clients.
+    """
+
+    channel = "chatgpt"
+    SESSION_ENV = "USERIO_CHATGPT_SESSION_FILE"
+
+    def __init__(
+        self, store: SQLiteUserIOStore, service: UserIOService, user_id: str,
+        *, session_file: str | None = None, client_factory: Any | None = None,
+    ) -> None:
+        self._store, self._service, self._user_id = store, service, user_id
+        self._session_file = session_file or os.environ.get(self.SESSION_ENV, "")
+        self._client_factory = client_factory
+        self._token: str | None = None
+        self._expires: float = 0.0
+
+    @classmethod
+    def configured(cls) -> bool:
+        return bool(os.environ.get(cls.SESSION_ENV, "").strip())
+
+    def _client(self) -> Any:
+        path = self._session_file.strip()
+        if not path:
+            raise AdapterNotSupported(
+                f"ChatGPT web adapter is not configured; set {self.SESSION_ENV}"
+            )
+        try:
+            state = json.loads(open(path, encoding="utf-8").read())
+        except FileNotFoundError as error:
+            raise AdapterNotSupported(f"ChatGPT session file is missing: {path}") from error
+        except json.JSONDecodeError as error:
+            raise AdapterNotSupported(f"ChatGPT session file is not valid JSON: {path}") from error
+        session_token = str(state.get("session_token") or state.get("sessionToken") or "").strip()
+        if not session_token:
+            raise AdapterNotSupported(f"ChatGPT session file has no session_token: {path}")
+        try:
+            from curl_cffi import requests as cffi_requests
+        except ImportError as error:
+            raise AdapterNotSupported(
+                "curl-cffi is required for the ChatGPT web adapter; "
+                "install with: pip install 'universal-userio[chatgpt]'"
+            ) from error
+        client = cffi_requests.Session(impersonate="chrome", timeout=30)
+        client.cookies.set("__Secure-next-auth.session-token", session_token, domain=".chatgpt.com")
+        return client
+
+    def _request(self, url: str) -> dict[str, Any]:
+        client = self._client_factory() if self._client_factory else self._client()
+        response = client.get(url, headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
+            **({"Authorization": f"Bearer {self._token}"} if self._token else {}),
+        })
+        if response.status_code in (401, 403) and self._token:
+            raise RuntimeError("ChatGPT rejected the access token; refresh the session cookie")
+        if response.status_code != 200:
+            raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {url.split('?')[0]}")
+        return json.loads(response.text)
+
+    def _renew(self) -> None:
+        session = self._request("https://chatgpt.com/api/auth/session")
+        token = str(session.get("accessToken") or "")
+        if not token:
+            raise RuntimeError("ChatGPT session cookie was rejected: no accessToken in /api/auth/session")
+        self._token, self._expires = token, time.time() + 600
+
+    def _token(self) -> str:
+        if not self._token or time.time() >= self._expires:
+            self._renew()
+        return self._token  # type: ignore[return-value]
+
+    def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        self._token()
+        query = urllib.parse.urlencode({
+            "offset": 0, "limit": max(1, min(limit, 100)), "order": "updated", "is_archived": "false",
+        })
+        result = self._request(f"https://chatgpt.com/backend-api/conversations?{query}")
+        items = result.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError("ChatGPT returned conversations in an invalid format")
+        return [self._chat_summary(chat) for chat in items if isinstance(chat, Mapping)]
+
+    def read(self, *, chat_id: str | None = None, message_id: str | None = None) -> dict[str, Any]:
+        if bool(chat_id) == bool(message_id):
+            raise ValueError("provide exactly one of chat_id or message_id")
+        if message_id:
+            raise AdapterNotSupported("ChatGPT web adapter reads chats, not individual messages")
+        self._token()
+        chat = self._request(f"https://chatgpt.com/backend-api/conversation/{urllib.parse.quote(chat_id)}")
+        if not isinstance(chat, dict):
+            raise RuntimeError("ChatGPT returned an invalid conversation export")
+        return {"chat": self._conversation(chat_id or "", chat)}
+
+    @classmethod
+    def _conversation(cls, chat_id: str, chat: Mapping[str, Any]) -> dict[str, Any]:
+        mapping = chat.get("mapping")
+        messages: list[dict[str, Any]] = []
+        if isinstance(mapping, dict):
+            for node in mapping.values():
+                if not isinstance(node, Mapping):
+                    continue
+                message = node.get("message")
+                if not isinstance(message, Mapping):
+                    continue
+                role = str((message.get("author") or {}).get("role") or "")
+                if role == "system":
+                    continue
+                created = float(message.get("create_time") or 0)
+                parts = (message.get("content") or {}).get("parts") or []
+                text = " ".join(
+                    part if isinstance(part, str) else f"[{part.get('content_type')}]" for part in parts
+                ).strip()
+                if text:
+                    messages.append({"role": role, "text": text[:8000], "created_at": created})
+        messages.sort(key=lambda m: m["created_at"])
+        return {
+            "id": chat_id or str(chat.get("conversation_id") or ""),
+            "title": str(chat.get("title") or "ChatGPT"),
+            "messages": messages,
+        }
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        del file_ref
+        raise AdapterNotSupported("not supported by adapter")
+
+    def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
+        if attachments:
+            raise AdapterNotSupported("attachments are not supported by adapter")
+        chat = self.read(chat_id=chat_id)["chat"]
+        messages = chat.get("messages") or []
+        if not messages:
+            raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
+        latest = messages[-1]
+        message_ref = f"{chat_id}:{latest.get('created_at', 0)}:{len(messages)}"
+        conversation_id, _ = self._service.receive(
+            InboxMessage("chatgpt", message_ref, chat_id, str(latest.get("text", ""))[:8000], time.time()),
+            route_id="chatgpt", user_id=self._user_id,
+        )
+        return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
+
+    @classmethod
+    def _chat_summary(cls, chat: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "id": str(chat.get("id") or ""),
+            "channel": cls.channel,
+            "title": str(chat.get("title") or "ChatGPT"),
+            "last_message_snippet": "",
+            "unread": 0,
+        }
+
+
 # Provider-facing compatibility names; all expose the same four-method contract.
 GmailChannelAdapter = MailChannelAdapter
 
@@ -472,7 +634,10 @@ class UnifiedChannels(StoredChannelAdapter):
     def adapter(self, channel: str | None) -> StoredChannelAdapter:
         if not channel:
             return self
-        adapter_type = self._types.get(channel.strip().lower())
+        name = channel.strip().lower()
+        if name == "chatgpt" and ChatGPTWebChannelAdapter.configured():
+            return ChatGPTWebChannelAdapter(self._store, self._service, self._user_id)
+        adapter_type = self._types.get(name)
         if adapter_type is None:
             raise ValueError("unknown channel")
         return adapter_type(self._store, self._service, self._user_id)
