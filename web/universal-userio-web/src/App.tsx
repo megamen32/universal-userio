@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, Check, ChevronDown, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Send, Sparkles, Video, X } from "lucide-react"
+import { ArrowLeft, Check, ChevronDown, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Phone, Plus, Send, Sparkles, Video, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
-type Account = { id: string; provider: string; display_name: string; capabilities: string[] }
-type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string }
+type Account = { id: string; provider: string; display_name: string; capabilities: string[]; last_synced_at?: number }
+type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; messages: Message[]; drafts: Draft[] }
 type Message = { source: string; message_id: string; sender: string; body: string; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
@@ -28,7 +28,14 @@ const sourceForAccount = (account: Account) => {
   const alias = account.id.match(/^gmail-(.+)$/i)?.[1]
   return alias ? `gmail:${alias}` : account.provider
 }
-const channelIcon = (source: string) => providerForSource(source) === "gmail" ? <Mail className="size-4" /> : <MessageCircle className="size-4" />
+const channelIcon = (source: string) => {
+  const provider = providerForSource(source)
+  if (provider === "gmail") return <Mail className="size-4" />
+  if (provider === "telegram") return <Send className="size-4" />
+  if (provider === "vk") return <MessagesSquare className="size-4" />
+  if (provider === "whatsapp") return <Phone className="size-4" />
+  return <MessageCircle className="size-4" />
+}
 const displayChannel = (source: string) => providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 
 // Human-readable chat titles instead of raw provider JIDs.
@@ -57,7 +64,38 @@ const previewText = (raw: string | undefined) => {
     .trim()
     .slice(0, 140) || "HTML email"
 }
-const initials = (value: string) => value.split(/[.@\s_-]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase()
+const initials = (value: string) => {
+  if (/^\+?\d[\d\s()-]*$/.test(value)) {
+    const digits = value.replace(/\D/g, "")
+    if (digits.length >= 2) return digits.slice(-2)
+    if (digits.length === 1) return digits
+    return value[0]?.toUpperCase() ?? ""
+  }
+  const parts = value.split(/[.@\s_-]/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "")
+  return parts.join("") || value[0]?.toUpperCase() || ""
+}
+
+// Tiny Russian-aware query normalisation for the chat search box.
+// Strips the most common Russian inflectional suffixes so "договор" finds
+// "договору", "договором", "договора". ASCII queries pass through unchanged.
+const RUSSIAN_SUFFIXES = ["ами", "ями", "ах", "ях", "ов", "ев", "ой", "ый", "ий", "ая", "ое", "ее", "ую", "юю", "ам", "ям", "а", "я", "у", "ю", "е", "и", "о", "ы", "ть"]
+const stripRussianSuffix = (token: string) => {
+  if (token.length <= 4 || !/[а-яё]/i.test(token)) return token
+  for (const suffix of RUSSIAN_SUFFIXES) {
+    if (token.length - suffix.length >= 3 && token.toLowerCase().endsWith(suffix)) return token.slice(0, -suffix.length)
+  }
+  return token
+}
+const searchStems = (query: string) =>
+  query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .flatMap((token) => {
+      const stem = stripRussianSuffix(token)
+      return stem === token ? [token] : [token, stem]
+    })
 
 // Telegram-style timestamps: HH:MM in bubbles, "вчера"/"12 сент" in the chat list,
 // «Сегодня»/«Вчера»/«12 августа» day separators in the feed.
@@ -172,7 +210,7 @@ export function App() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedChat) void loadConversation(selectedChat) }, [loadConversation, selectedChat])
 
-  const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat") }
+  const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
 
   const submitDraft = async () => {
     if (!conversation || !canReply || !draft.trim()) return
@@ -219,8 +257,17 @@ export function App() {
     setAccounts((current) => current.filter((item) => item.id !== id))
     if (selectedAccount === id) setSelectedAccount("all")
   }
-  const visibleChats = chats.filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
-    .filter((chat) => `${titleOf(chat)} ${chat.preview ?? ""}`.toLowerCase().includes(search.toLowerCase()))
+  const visibleChats = chats
+    .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
+    .filter((chat) => {
+      if (!search.trim()) return true
+      const haystack = `${titleOf(chat)} ${chat.preview ?? ""}`.toLowerCase()
+      return searchStems(search).every((stem) => haystack.includes(stem))
+    })
+    .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
+  // A draft only belongs to the chat whose messages it was composed for.
+  // Clearing on selectedChat guarantees we never leak text into the next reply.
+  useEffect(() => { setDraft("") }, [selectedChat])
   const unreadByPlatform = useMemo(() => {
     const map: Record<string, number> = {}
     for (const chat of chats) {
@@ -254,7 +301,13 @@ export function App() {
           <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className={`mt-1 block truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span></span>
         </button>
         })}
-        {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">Ничего не найдено</p>}
+        {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
+          {search.trim()
+            ? <>Ничего не найдено по запросу <span className="font-medium text-foreground">«{search.trim()}»</span></>
+            : selectedChannel !== "all"
+              ? <>В канале {displayChannel(selectedChannel)} чатов нет</>
+              : "Ничего не найдено"}
+        </p>}
       </ScrollArea>
     </section>
 
