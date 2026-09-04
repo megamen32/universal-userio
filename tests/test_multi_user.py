@@ -91,7 +91,6 @@ def test_users_with_same_provider_ids_are_isolated_and_approval_is_scoped(tmp_pa
 @pytest.mark.parametrize(
     ("adapter_type", "source"),
     [
-        (MailChannelAdapter, "gmail"),
         (TelegramChannelAdapter, "telegram"),
         (WhatsAppChannelAdapter, "whatsapp"),
         (VKChannelAdapter, "vk"),
@@ -110,6 +109,37 @@ def test_each_provider_wrapper_implements_unified_contract(adapter_type, source,
     assert adapter.send(chat_id=chat_id, text="reply").status == "proposed"
     with pytest.raises(AdapterNotSupported, match="not supported by adapter"):
         adapter.download(file_ref="missing")
+
+
+def test_mail_channel_adapter_downloads_through_injected_channel(tmp_path) -> None:
+    """MailChannelAdapter now routes download() through a real email channel.
+    The factory hook lets tests inject a fake channel without touching IMAP."""
+    from universal_userio.adapters import MailChannelAdapter
+    from universal_userio.channels.core import ChatRef, DownloadedMedia, MessageRef
+
+    class FakeChannel:
+        last_call = None
+
+        async def download_media(self, *, chat: ChatRef, message: MessageRef) -> DownloadedMedia:
+            type(self).last_call = (chat, message)
+            return DownloadedMedia(
+                chat_id=chat, message_id=int(message),
+                data=b"%PDF-1.4 fake", mime_type="application/pdf", filename="invoice.pdf",
+            )
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("gmail", "1042", "billing@example.com", "[Gmail document]", 1.0),
+        route_id="gmail",
+    )
+    fake = FakeChannel()
+    adapter = MailChannelAdapter(store, service, store.default_user_id, channel_factory=lambda: fake)
+    file = adapter.download(file_ref="1042")
+    assert file.filename == "invoice.pdf"
+    assert file.content_type == "application/pdf"
+    assert file.data.startswith(b"%PDF-1.4")
+    assert FakeChannel.last_call == ("billing@example.com", 1042)
 
 
 def test_chatgpt_cdp_adapter_reads_page_visible_chats_without_provider_credentials(tmp_path) -> None:

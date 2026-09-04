@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import collect
 from .adapters import inbox_message_from_envelope
+from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import json_rpc_response, sse_message
@@ -101,6 +102,16 @@ def handler(
             self.send_header("Content-Length", str(len(body)))
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _reply_raw(self, status: int, body: bytes, *, content_type: str, filename: str) -> None:
+            disposition = 'attachment; filename="' + filename.replace('"', "") + '"'
+            self.send_response(status)
+            self.send_header("Content-Type", content_type or "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", disposition)
+            self.send_header("Cache-Control", "private, max-age=0")
             self.end_headers()
             self.wfile.write(body)
 
@@ -563,6 +574,27 @@ def handler(
             # StoredChannelAdapter.download implementation actually returns
             # them; today every adapter raises AdapterNotSupported, so the
             # honest answer for any platform is `available: false`.
+            if conversation_id.endswith("/raw"):
+                real_id, _, message_id = conversation_id.removesuffix("/raw").rpartition("/media/")
+                if not real_id or not message_id:
+                    self._reply(404, {"error": "raw path requires /v1/conversations/{id}/media/{message_id}/raw"})
+                    return
+                message = service._store.message(message_id, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    self._reply(404, {"error": "message not found"})
+                    return
+                adapter = _adapter_for_message(service, message, user_id)
+                try:
+                    file = adapter.download(file_ref=message_id)
+                except KeyError:
+                    self._reply(404, {"error": "message not found"})
+                    return
+                except (AdapterNotSupported, ValueError) as error:
+                    self._reply(503, {"error": str(error)})
+                    return
+                self._reply_raw(200, file.data, content_type=file.content_type,
+                                filename=file.filename)
+                return
             if "/media/" in conversation_id:
                 real_id, _, message_id = conversation_id.rpartition("/media/")
                 if not real_id or not message_id or message_id == conversation_id:
@@ -573,7 +605,7 @@ def handler(
                     self._reply(404, {"error": "message not found"})
                     return
                 placeholder = _PLACEHOLDER_RE.match(str(message.get("body") or "").strip())
-                self._reply(200, {
+                payload = {
                     "conversation_id": real_id,
                     "message_id": str(message.get("message_id") or ""),
                     "source": str(message.get("source") or ""),
@@ -581,7 +613,20 @@ def handler(
                     "kind": placeholder.group(1).lower() if placeholder else None,
                     "available": False,
                     "reason": "media download is not connected for this account yet",
-                })
+                }
+                adapter = _adapter_for_message(service, message, user_id)
+                try:
+                    file = adapter.download(file_ref=message_id)
+                except (AdapterNotSupported, KeyError, ValueError) as error:
+                    payload["reason"] = str(error)
+                else:
+                    payload["available"] = True
+                    payload["reason"] = ""
+                    payload["filename"] = file.filename
+                    payload["content_type"] = file.content_type
+                    payload["size"] = len(file.data)
+                    payload["download_url"] = f"/v1/conversations/{real_id}/media/{message_id}/raw"
+                self._reply(200, payload)
                 return
             record = service._store.conversation(conversation_id, user_id=user_id)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})
@@ -604,6 +649,32 @@ def handler(
             return
 
     return UserIOHandler
+
+
+def _adapter_for_message(service, message: dict[str, object], user_id: str):
+    """Pick the StoredChannelAdapter that owns this message's source."""
+    from .adapters import (
+        MailChannelAdapter,
+        TelegramChannelAdapter,
+        WhatsAppChannelAdapter,
+        VKChannelAdapter,
+        AndroidSmsChannelAdapter,
+    )
+    source = str(message.get("source") or "")
+    table = {
+        "mail": MailChannelAdapter,
+        "email": MailChannelAdapter,
+        "gmail": MailChannelAdapter,
+        "telegram": TelegramChannelAdapter,
+        "whatsapp": WhatsAppChannelAdapter,
+        "vk": VKChannelAdapter,
+        "sms": AndroidSmsChannelAdapter,
+    }
+    key = source.split(":", 1)[0] if ":" in source else source
+    adapter_type = table.get(key)
+    if adapter_type is None:
+        raise ValueError(f"unsupported channel for media: {source!r}")
+    return adapter_type(service._store, service, user_id)
 
 
 def _download_page() -> str:

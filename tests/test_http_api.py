@@ -186,7 +186,7 @@ def test_conversation_media_endpoint_describes_attachment_placeholder(tmp_path) 
             payload = json.loads(response.read())
         assert payload["kind"] == "document", payload
         assert payload["available"] is False
-        assert "not connected" in payload["reason"]
+        assert payload["reason"], "expected a non-empty reason when media is unavailable"
     finally:
         server.shutdown()
         server.server_close()
@@ -215,6 +215,71 @@ def test_conversation_media_endpoint_rejects_unknown_message(tmp_path) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_conversation_media_endpoint_streams_real_bytes_for_email(tmp_path) -> None:
+    """With a fake email channel injected into MailChannelAdapter, the
+    /media and /media/raw endpoints must surface the real filename,
+    content_type and bytes — proving the contract works end to end."""
+    from universal_userio.adapters import MailChannelAdapter
+    from universal_userio.channels.core import ChatRef, DownloadedMedia, MessageRef
+
+    class FakeEmail:
+        async def download_media(self, *, chat: ChatRef, message: MessageRef) -> DownloadedMedia:
+            return DownloadedMedia(
+                chat_id=chat, message_id=int(message),
+                data=b"%PDF-1.4 demo", mime_type="application/pdf", filename="invoice.pdf",
+            )
+
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("gmail", "1042", "billing@example.com", "[Gmail document]", 1.0),
+        route_id="gmail",
+    )
+    service._mail_adapter_factory = lambda: FakeEmail()  # opaque injection point
+    # Patch the adapter picker so the test can route through the fake.
+    from universal_userio import http_api as api
+    original = api._adapter_for_message
+    def patched(service, message, user_id):
+        adapter = MailChannelAdapter(
+            service._store, service, user_id, channel_factory=service._mail_adapter_factory,
+        )
+        return adapter
+    api._adapter_for_message = patched
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            meta_request = Request(
+                base + f"/v1/conversations/{cid}/media/1042",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            with urlopen(meta_request) as response:
+                meta = json.loads(response.read())
+            assert meta["available"] is True, meta
+            assert meta["filename"] == "invoice.pdf"
+            assert meta["content_type"] == "application/pdf"
+            assert meta["size"] == len(b"%PDF-1.4 demo")
+            assert meta["download_url"].endswith("/raw")
+
+            raw_request = Request(
+                base + f"/v1/conversations/{cid}/media/1042/raw",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            with urlopen(raw_request) as response:
+                body = response.read()
+                content_type = response.headers.get("Content-Type")
+                disposition = response.headers.get("Content-Disposition")
+            assert body == b"%PDF-1.4 demo"
+            assert content_type == "application/pdf"
+            assert "invoice.pdf" in (disposition or "")
+        finally:
+            server.shutdown()
+            server.server_close()
+    finally:
+        api._adapter_for_message = original
 
 
 def test_email_messages_share_one_case_insensitive_conversation(tmp_path) -> None:

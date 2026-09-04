@@ -64,6 +64,11 @@ const previewText = (raw: string | undefined) => {
     .trim()
     .slice(0, 140) || "HTML email"
 }
+const humanSize = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} Б`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`
+}
 const initials = (value: string) => {
   if (/^\+?\d[\d\s()-]*$/.test(value)) {
     const digits = value.replace(/\D/g, "")
@@ -191,7 +196,7 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<"chats" | "chat">("chats")
   const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
-  const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; meta: { kind: string | null; available: boolean; reason?: string } | null; loading: boolean } | null>(null)
+  const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; meta: { kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number } | null; loading: boolean } | null>(null)
   const [hiddenAccounts, setHiddenAccounts] = useState<string[]>(() => JSON.parse(localStorage.getItem("userio-hidden-accounts") || "[]"))
   const [toast, setToast] = useState("")
   const toastTimer = useRef<number | undefined>(undefined)
@@ -242,13 +247,34 @@ export function App() {
     if (!conversation) return
     setAttachmentPreview({ message, meta: null, loading: true })
     try {
-      const data = await api<{ kind: string | null; available: boolean; reason?: string }>(
+      const data = await api<{ kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number }>(
         `/v1/conversations/${conversation.id}/media/${encodeURIComponent(message.message_id)}`,
       )
       setAttachmentPreview({ message, meta: data, loading: false })
     } catch (error) {
       notify(`Не удалось открыть вложение: ${(error as Error).message}`)
       setAttachmentPreview(null)
+    }
+  }
+
+  const downloadAttachment = async (url: string, filename: string, contentType: string) => {
+    try {
+      const response = await fetch(url, { credentials: "include" })
+      if (!response.ok) {
+        notify(`Скачивание не удалось: HTTP ${response.status}`)
+        return
+      }
+      const blob = await response.blob()
+      const objectUrl = URL.createObjectURL(new Blob([blob], { type: contentType }))
+      const anchor = document.createElement("a")
+      anchor.href = objectUrl
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      URL.revokeObjectURL(objectUrl)
+    } catch (error) {
+      notify(`Скачивание не удалось: ${(error as Error).message}`)
     }
   }
 
@@ -373,7 +399,7 @@ export function App() {
       </> : <div className="hidden flex-1 place-items-center text-center md:grid"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Скрыть список" : "Показать список"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Выберите чат</h2><p className="mt-1 text-sm text-muted-foreground">Аккаунты, платформы и переписки остаются раздельными.</p></div></div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Закрыть</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Письмо" /></div>}
-      {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">Сообщение {attachmentPreview.message.message_id}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available !== false && (<p className="text-muted-foreground">Файл не найден.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button><Button size="sm" disabled title="Скачивание появится, когда адаптер канала его поддержит"><ImageIcon /> Скачать</Button></div></div></div>}
+      {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">Сообщение {attachmentPreview.message.message_id}{attachmentPreview.meta?.size ? ` · ${humanSize(attachmentPreview.meta.size)}` : ""}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : attachmentPreview.meta.content_type === "application/pdf" ? <iframe title="PDF preview" src={attachmentPreview.meta.download_url} className="h-72 w-full rounded-lg border bg-white" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.content_type || "Файл"} · {humanSize(attachmentPreview.meta.size ?? 0)} — превью недоступно, скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
     </section>
   </main>
 }
