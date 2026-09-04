@@ -951,6 +951,12 @@ class SQLiteUserIOStore:
         self, *, source: str | None = None, limit: int = 100, user_id: str | None = None
     ) -> list[dict[str, object]]:
         source_sql, values = self._source_filter(source)
+        # Sort strictly by the latest message timestamp so the UI's "fresh on top"
+        # rule never drifts because of bookkeeping fields like updated_at.
+        # `preview` is the latest body; if that happens to be an attachment
+        # placeholder ([image], [document] …) the service layer swaps in the
+        # newest text body via `last_text_bodies_for` so the search and the
+        # list item show real content.
         with self._lock:
             rows = self._connection.execute(
                 f"""
@@ -962,13 +968,55 @@ class SQLiteUserIOStore:
                        (SELECT COUNT(*) FROM messages WHERE user_id=c.user_id
                         AND conversation_id=c.id AND seen_at IS NULL) AS unread_count,
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
-                        AND source=c.source AND sender=c.sender) AS display_name
+                        AND source=c.source AND sender=c.sender) AS display_name,
+                       (SELECT MAX(received_at) FROM messages
+                        WHERE user_id=c.user_id AND source=c.source) AS account_last_at
                 FROM conversations c WHERE c.user_id=? {source_sql}
-                ORDER BY c.updated_at DESC LIMIT ?
+                ORDER BY last_at DESC, c.updated_at DESC LIMIT ?
                 """,
                 [self._user(user_id), *values, limit],
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def last_text_bodies_for(
+        self, conversation_ids: list[str], *, user_id: str | None = None,
+    ) -> dict[str, str]:
+        """For each conversation_id return the newest non-placeholder body, or ''.
+
+        Walks at most 30 most recent messages per conversation. Attachment
+        placeholders ([image], [video], [document] and their Russian siblings)
+        never count as text, so callers can substitute them for the placeholder
+        that `conversations()` returns in the `preview` column.
+        """
+        if not conversation_ids:
+            return {}
+        placeholders = ",".join("?" for _ in conversation_ids)
+        params: list[object] = [self._user(user_id), *conversation_ids]
+        query = f"""
+            SELECT conversation_id, body, received_at
+            FROM (
+              SELECT conversation_id, body, received_at,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY conversation_id ORDER BY received_at DESC
+                     ) AS rn
+              FROM messages
+              WHERE user_id=?
+                AND conversation_id IN ({placeholders})
+            ) WHERE rn <= 30
+            ORDER BY conversation_id, received_at DESC
+        """
+        out: dict[str, str] = {}
+        with self._lock:
+            rows = self._connection.execute(query, params).fetchall()
+        for row in rows:
+            cid = str(row["conversation_id"])
+            body = str(row["body"])
+            # Placeholder bodies like "[image]" still match `body NOT LIKE '[[]%]'`
+            # because of how SQLite expands the wildcard; skip them explicitly.
+            if body.startswith("[") and body.endswith("]"):
+                continue
+            out.setdefault(cid, body)
+        return out
 
     def mark_seen(
         self, *, source: str, message_id: str, user_id: str | None = None

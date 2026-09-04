@@ -512,9 +512,21 @@ def handler(
                 return
             if path == "/v1/conversations":
                 source = query.get("source", [""])[0].strip().lower() or None
-                self._reply(200, {
-                    "conversations": service._store.conversations(source=source, user_id=user_id)
-                })
+                conversations = service._store.conversations(source=source, user_id=user_id)
+                # If the latest message in a conversation is an attachment
+                # placeholder ([image], [document] …) replace it with the most
+                # recent text body so the chat list and the search box always
+                # point at real content the operator can act on.
+                text_overrides = service._store.last_text_bodies_for(
+                    [str(c["id"]) for c in conversations], user_id=user_id,
+                )
+                for entry in conversations:
+                    preview = str(entry.get("preview") or "")
+                    if preview.startswith("[") and preview.endswith("]"):
+                        replacement = text_overrides.get(str(entry["id"]))
+                        if replacement:
+                            entry["preview"] = replacement
+                self._reply(200, {"conversations": conversations})
                 return
             if path == "/v1/collect/tasks":
                 try:
