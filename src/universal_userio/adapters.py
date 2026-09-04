@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -234,6 +235,12 @@ class StoredChannelAdapter:
     def __init__(self, store: SQLiteUserIOStore, service: UserIOService, user_id: str) -> None:
         self._store, self._service, self._user_id = store, service, user_id
 
+    # Hooks subclasses override to plug a real channel adapter without
+    # touching the canonical UserIO store. Tests use these to inject mock
+    # transports; production code can keep the default factory.
+    def _build_channel(self) -> Any:
+        return None
+
     def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
         records = self._store.conversations(
             source=self.channel, limit=max(1, min(limit, 100)), user_id=self._user_id
@@ -291,6 +298,42 @@ class StoredChannelAdapter:
 
 class MailChannelAdapter(StoredChannelAdapter):
     channel = "mail"
+
+    def __init__(self, store: SQLiteUserIOStore, service: UserIOService, user_id: str, *, channel_factory=None) -> None:
+        super().__init__(store, service, user_id)
+        self._channel_factory = channel_factory
+
+    def _build_channel(self) -> Any:
+        if self._channel_factory is not None:
+            return self._channel_factory()
+        from .channels.email import EmailChannel
+        return EmailChannel.from_env()
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        try:
+            uid = int(file_ref)
+        except (TypeError, ValueError) as exc:
+            raise AdapterNotSupported(f"email download requires integer uid, got {file_ref!r}") from exc
+        message = self._store.message(str(uid), user_id=self._user_id)
+        if message is None or str(message.get("source") or "") not in {"mail", "email", "gmail"} \
+                and not str(message.get("source") or "").startswith("gmail:"):
+            raise KeyError(f"email message {uid} not found")
+        peer = str(message.get("sender") or "").strip()
+        if not peer:
+            raise AdapterNotSupported("email message has no peer")
+        try:
+            channel = self._build_channel()
+        except Exception as exc:
+            raise AdapterNotSupported(f"email channel not configured: {exc}") from exc
+        try:
+            media = asyncio.run(channel.download_media(chat=peer, message=uid))
+        except Exception as exc:
+            raise AdapterNotSupported(f"email download failed for uid {uid}: {exc}") from exc
+        return ChannelFile(
+            filename=str(media.filename or f"attachment-{uid}"),
+            content_type=str(media.mime_type or "application/octet-stream"),
+            data=bytes(media.data or b""),
+        )
 
 
 class TelegramChannelAdapter(StoredChannelAdapter):
