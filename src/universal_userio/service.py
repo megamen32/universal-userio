@@ -159,8 +159,10 @@ class UserIOService:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")
             receipt = self.sms_gateway.send(to=str(conversation["sender"]), body=draft.body)
         elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
+            messages = list(conversation["messages"])
+            chat_id = str(messages[-1]["message_id"]).partition(":")[0] if messages else ""
             receipt = self.telegram_outbox.send_reply(
-                chat=str(conversation["sender"]), body=draft.body, draft_id=draft.id
+                chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id
             )
         else:
             receipt = self._outbox.send_reply(
