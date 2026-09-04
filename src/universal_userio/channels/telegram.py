@@ -336,6 +336,32 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
             )
         )
 
+    async def send_sticker(self, chat: ChatRef, file_path: str, alt: str = "🙂") -> ChatMessage:
+        """Send a local sticker file (.webp static) to the chat."""
+
+        target = self._chat_id(chat)
+        try:
+            raw = await self.client.send_file(
+                target,
+                file_path,
+                attributes=[
+                    types.DocumentAttributeSticker(
+                        alt=alt, stickerset=types.InputStickerSetEmpty()
+                    )
+                ],
+                force_document=False,
+            )
+        except ForbiddenError as exc:
+            raise ChatPermissionError(getattr(exc, "message", str(exc))) from exc
+        except PeerIdInvalidError as exc:
+            raise ChatInvalidPeerError(str(exc)) from exc
+        except PeerFloodError as exc:
+            raise ChatRateLimitError(str(exc)) from exc
+        fallback_text = f"[sticker {alt}]"
+        if raw is None:
+            return ChatMessage(chat_id=target, message_id=0, text=fallback_text)
+        return self._chat_message(target, raw, fallback_text=fallback_text)
+
     @asynccontextmanager
     async def typing(self, chat: ChatRef):
         """Keep the provider's typing indicator active for the context body."""
