@@ -35,6 +35,15 @@ _GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-inbox/gmail-accounts.txt")
 _GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
 _DASHBOARD_SESSION_LIFETIME = 12 * 60 * 60
 
+# Mirrors the web client's MEDIA_PLACEHOLDER regex so the /media endpoint can
+# describe a bubble without trusting the client.
+_PLACEHOLDER_RE = re.compile(
+    r"^\[\s*(?:WhatsApp|Telegram)?\s*"
+    r"(image|video|audio|voice|document|sticker|фото|видео|аудио|голосовое|файл)"
+    r"\s*\]$",
+    re.IGNORECASE,
+)
+
 
 def handler(
     service: UserIOService, *, token: str, vkid_app_id: str = "",
@@ -546,6 +555,33 @@ def handler(
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})
+                return
+            # /v1/conversations/{id}/media/{message_id} -> describe one
+            # message's media: its placeholder kind, source channel, and the
+            # bare minimum the chat bubble needs to render a clickable
+            # preview. Real bytes flow only when an adapter's
+            # StoredChannelAdapter.download implementation actually returns
+            # them; today every adapter raises AdapterNotSupported, so the
+            # honest answer for any platform is `available: false`.
+            if "/media/" in conversation_id:
+                real_id, _, message_id = conversation_id.rpartition("/media/")
+                if not real_id or not message_id or message_id == conversation_id:
+                    self._reply(404, {"error": "media path requires /v1/conversations/{id}/media/{message_id}"})
+                    return
+                message = service._store.message(message_id, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    self._reply(404, {"error": "message not found"})
+                    return
+                placeholder = _PLACEHOLDER_RE.match(str(message.get("body") or "").strip())
+                self._reply(200, {
+                    "conversation_id": real_id,
+                    "message_id": str(message.get("message_id") or ""),
+                    "source": str(message.get("source") or ""),
+                    "received_at": message.get("received_at"),
+                    "kind": placeholder.group(1).lower() if placeholder else None,
+                    "available": False,
+                    "reason": "media download is not connected for this account yet",
+                })
                 return
             record = service._store.conversation(conversation_id, user_id=user_id)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})

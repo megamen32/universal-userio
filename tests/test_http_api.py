@@ -164,6 +164,59 @@ def test_conversations_are_sorted_by_latest_message_not_conversation_updated_at(
         server.server_close()
 
 
+def test_conversation_media_endpoint_describes_attachment_placeholder(tmp_path) -> None:
+    """The /media endpoint pins the contract for attachment bubbles: every
+    adapter currently reports `available=false` because StoredChannelAdapter
+    does not implement download. The frontend relies on this contract to
+    render an honest "not yet wired" modal instead of a silently dead click."""
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("telegram", "doc-1", "client", "[Telegram document]", 1.0), route_id="tg-reply",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(
+            base + f"/v1/conversations/{cid}/media/doc-1",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert payload["kind"] == "document", payload
+        assert payload["available"] is False
+        assert "not connected" in payload["reason"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversation_media_endpoint_rejects_unknown_message(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("telegram", "x", "client", "hi", 1.0), route_id="tg-reply",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(
+            base + f"/v1/conversations/{cid}/media/missing",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        try:
+            urlopen(request)
+        except HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("expected 404 for unknown message_id")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_email_messages_share_one_case_insensitive_conversation(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     first = InboxMessage("email", "1", "Anna@Example.com", "first", 1.0)
