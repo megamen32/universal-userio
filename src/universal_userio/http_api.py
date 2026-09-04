@@ -579,7 +579,12 @@ def handler(
                 if not real_id or not message_id:
                     self._reply(404, {"error": "raw path requires /v1/conversations/{id}/media/{message_id}/raw"})
                     return
-                message = service._store.message(message_id, user_id=user_id)
+                conv = service._store.conversation(real_id, user_id=user_id)
+                if conv is None:
+                    self._reply(404, {"error": "conversation not found"})
+                    return
+                source_hint = str(conv.get("source") or "")
+                message = service._store.message(message_id, source=source_hint, user_id=user_id)
                 if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return
@@ -600,7 +605,12 @@ def handler(
                 if not real_id or not message_id or message_id == conversation_id:
                     self._reply(404, {"error": "media path requires /v1/conversations/{id}/media/{message_id}"})
                     return
-                message = service._store.message(message_id, user_id=user_id)
+                conv = service._store.conversation(real_id, user_id=user_id)
+                if conv is None:
+                    self._reply(404, {"error": "conversation not found"})
+                    return
+                source_hint = str(conv.get("source") or "")
+                message = service._store.message(message_id, source=source_hint, user_id=user_id)
                 if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return
