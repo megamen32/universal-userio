@@ -65,6 +65,17 @@ def seed_owner_from_file(store: SQLiteUserIOStore, path: str | Path) -> bool:
     return True
 
 
+def telegram_outbox_from_env(environment: Mapping[str, str]):
+    """Prefer the telegram-qr connector HTTP outbox; fall back to in-process Telethon."""
+    qr_url = environment.get("USERIO_TELEGRAM_QR_URL", "").strip()
+    if qr_url:
+        from .adapters import TelegramQrHttpOutbox
+
+        token = environment.get("USERIO_TELEGRAM_QR_TOKEN", "").strip() or environment.get("USERIO_API_TOKEN", "")
+        return TelegramQrHttpOutbox(qr_url, token)
+    return live_telegram_outbox_from_env(environment)
+
+
 def build_service(environment: Mapping[str, str] | None = None) -> UserIOService:
     environment = os.environ if environment is None else environment
     store = SQLiteUserIOStore(_required(environment, "USERIO_DB_PATH"))
@@ -81,7 +92,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
         store, generator, NoticePlaceOutboxClient(routes_from_environment(environment)), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
         gmail_outbox=HimalayaGmailOutbox(),
-        telegram_outbox=live_telegram_outbox_from_env(environment),
+        telegram_outbox=telegram_outbox_from_env(environment),
     )
 
 

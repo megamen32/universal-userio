@@ -111,6 +111,36 @@ class NoticePlaceOutboxClient:
         return message_ref
 
 
+class TelegramQrHttpOutbox:
+    """Deliver approved Telegram drafts through the telegram-qr connector.
+
+    The connector owns every Telegram session (login, live ingest, delivery),
+    so auth keys are never shared between processes. ``send_reply`` posts the
+    chat label and body to its ``POST /send`` endpoint.
+    """
+
+    def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen, timeout: int = 20) -> None:
+        self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
+
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "") -> str:
+        if not chat or not body:
+            raise ValueError("Telegram delivery requires chat and body")
+        payload = json.dumps({"chat": chat, "chat_id": chat_id, "body": body}).encode()
+        request = urllib.request.Request(  # noqa: S310
+            f"{self._base_url}/send", data=payload, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                data = json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode()[:200]
+            raise RuntimeError(f"telegram-qr delivery failed: HTTP {error.code} {detail}") from error
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError("telegram-qr connector is unreachable") from error
+        return f"telegram-qr:{data.get('slot', '?')}:{data.get('message_id', 'sent')}:{draft_id}"
+
+
 class HimalayaGmailOutbox:
     """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""
 
