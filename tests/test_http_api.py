@@ -102,6 +102,68 @@ def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_pat
         server.server_close()
 
 
+def test_conversations_preview_falls_back_to_last_text_when_latest_is_attachment(tmp_path) -> None:
+    """When the latest message is an attachment placeholder, the chat list and
+    search results must surface the most recent real text body instead. This is
+    what made "догов" miss `+79103332444` in the Marat review."""
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    route_id = "tg-reply"
+    cid, _ = service.receive(
+        InboxMessage("telegram", "1", "client", "И приложите договор пожалуйста", 100.0),
+        route_id=route_id,
+    )
+    service.receive(
+        InboxMessage("telegram", "2", "client", "[Telegram document]", 200.0),
+        route_id=route_id,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/conversations", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        conversation = payload["conversations"][0]
+        assert conversation["preview"] == "И приложите договор пожалуйста", (
+            f"placeholder leaked into preview: {conversation['preview']!r}"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversations_are_sorted_by_latest_message_not_conversation_updated_at(tmp_path) -> None:
+    """An older conversation that just received a fresh message must rank above
+    a conversation that was merely re-tagged without new activity."""
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    fresh, _ = service.receive(
+        InboxMessage("telegram", "fresh", "x", "свежее сообщение", 1000.0), route_id="tg-reply",
+    )
+    stale, _ = service.receive(
+        InboxMessage("telegram", "stale", "y", "старое сообщение", 100.0), route_id="tg-reply",
+    )
+    # Add a draft on the older conversation so its updated_at jumps ahead of
+    # the newer conversation in the legacy sort; the new contract must still
+    # rank by last_at and keep `fresh` first.
+    from universal_userio.contracts import ReplyDraft
+    service._store.add_draft(
+        ReplyDraft(id="draft-touch", conversation_id=stale, body="touch", status="proposed"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/conversations", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert [c["id"] for c in payload["conversations"]] == [fresh, stale], payload
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_email_messages_share_one_case_insensitive_conversation(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     first = InboxMessage("email", "1", "Anna@Example.com", "first", 1.0)
