@@ -339,13 +339,55 @@ class MailChannelAdapter(StoredChannelAdapter):
 class TelegramChannelAdapter(StoredChannelAdapter):
     channel = "telegram"
 
+    def __init__(self, store: SQLiteUserIOStore, service: UserIOService, user_id: str, *, bridge_url: str | None = None, runner: Any = urllib.request.urlopen) -> None:
+        super().__init__(store, service, user_id)
+        self._bridge_url = (bridge_url or os.environ.get("USERIO_TELEGRAM_QR_URL", "")).rstrip("/")
+        self._runner = runner
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        return _download_via_bridge(
+            channel="telegram",
+            message=self._store.message(file_ref, user_id=self._user_id),
+            file_ref=file_ref,
+            bridge_url=self._bridge_url,
+            token_env="USERIO_API_TOKEN",
+            chat_field="chat",
+            chat_id_field="chat_id",
+            message_field="message_id",
+            runner=self._runner,
+        )
+
 
 class WhatsAppChannelAdapter(StoredChannelAdapter):
     channel = "whatsapp"
 
+    def __init__(self, store: SQLiteUserIOStore, service: UserIOService, user_id: str, *, bridge_url: str | None = None, runner: Any = urllib.request.urlopen) -> None:
+        super().__init__(store, service, user_id)
+        self._bridge_url = (bridge_url or os.environ.get("USERIO_WHATSAPP_BRIDGE_URL", "")).rstrip("/")
+        self._runner = runner
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        return _download_via_bridge(
+            channel="whatsapp",
+            message=self._store.message(file_ref, user_id=self._user_id),
+            file_ref=file_ref,
+            bridge_url=self._bridge_url,
+            token_env="USERIO_API_TOKEN",
+            chat_field="chat",
+            chat_id_field="chat_id",
+            message_field="message_id",
+            runner=self._runner,
+        )
+
 
 class VKChannelAdapter(StoredChannelAdapter):
     channel = "vk"
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        raise AdapterNotSupported(
+            "VK media flows through the browser extension; UserIO does not hold a VK API token. "
+            "Open the attachment in the VK Inbox extension or wire a VK API token into UserIO first.",
+        )
 
 
 class AndroidSmsChannelAdapter(StoredChannelAdapter):
@@ -361,6 +403,81 @@ class AndroidSmsChannelAdapter(StoredChannelAdapter):
     def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
         self._sync()
         return super().list(limit=limit)
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        raise AdapterNotSupported(
+            "Android SMS adapter does not deliver attachments. The gateway only relays SMS bodies; "
+            "if the message body is `[MMS]` it surfaces as text only and there are no bytes to fetch.",
+        )
+
+
+def _download_via_bridge(
+    *, channel: str, message: dict[str, object] | None, file_ref: str,
+    bridge_url: str, token_env: str,
+    chat_field: str, chat_id_field: str, message_field: str,
+    runner: Any = urllib.request.urlopen, timeout: float = 60.0,
+) -> ChannelFile:
+    """Single-shot HTTP round-trip to a media bridge.
+
+    Both Telegram (USERIO_TELEGRAM_QR_URL) and WhatsApp (USERIO_WHATSAPP_BRIDGE_URL)
+    expose `POST /download` with the same JSON contract. We POST `{chat, chat_id,
+    message_id}` and expect the bridge to either return raw bytes with
+    `Content-Disposition: attachment` or a JSON `{error: ...}`.
+    """
+    if message is None:
+        raise AdapterNotSupported(
+            f"{channel} message {file_ref!r} not found in the local store; "
+            f"the bridge has nothing to download.",
+        )
+    if not bridge_url:
+        raise AdapterNotSupported(
+            f"{channel} bridge URL is not configured; set USERIO_TELEGRAM_QR_URL or "
+            f"USERIO_WHATSAPP_BRIDGE_URL before downloading attachments.",
+        )
+    token = os.environ.get(token_env, "")
+    sender = str(message.get("sender") or "").strip()
+    if not sender:
+        raise AdapterNotSupported(f"{channel} message {file_ref!r} has no peer")
+    payload = json.dumps({
+        chat_field: sender,
+        chat_id_field: sender,
+        message_field: str(file_ref),
+    }).encode()
+    request = urllib.request.Request(
+        f"{bridge_url}/download",
+        data=payload, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+        },
+    )
+    try:
+        with runner(request, timeout=timeout) as response:
+            content_type = response.headers.get("Content-Type", "") or ""
+            data = response.read()
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode(errors="replace")[:200]
+        raise AdapterNotSupported(
+            f"{channel} bridge refused download: HTTP {error.code} {detail or error.reason}",
+        ) from error
+    except (OSError, urllib.error.URLError) as error:
+        raise AdapterNotSupported(f"{channel} bridge is unreachable: {error}") from error
+    if "application/json" in content_type.lower():
+        try:
+            payload_obj = json.loads(data.decode() or "{}")
+        except json.JSONDecodeError:
+            payload_obj = {}
+        if isinstance(payload_obj, dict) and payload_obj.get("error"):
+            raise AdapterNotSupported(f"{channel} bridge returned error: {payload_obj['error']}")
+    filename = (
+        data[:0].decode()
+        or f"{channel}-{file_ref}"
+    )
+    return ChannelFile(
+        filename=filename,
+        content_type=content_type.split(";", 1)[0] or "application/octet-stream",
+        data=bytes(data),
+    )
 
     def read(self, *, chat_id: str | None = None, message_id: str | None = None) -> dict[str, Any]:
         self._sync()
