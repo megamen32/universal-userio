@@ -2,7 +2,8 @@
 // UserIO stores each user's BYOK settings and calls POST /chat here; the
 // package enforces HTTPS-only, public-DNS and private-IP blocking for us.
 import { runByokModel } from '@bezrabotnyi/byok'
-import { fetchByokCatalogResponse, previewByokPresets } from '@bezrabotnyi/byok/catalog'
+import { buildByokPresetsFromModelsDev, fetchByokCatalogResponse, previewByokPresets, type ByokPreset } from '@bezrabotnyi/byok/catalog'
+import { buildShowcasePresets } from '@bezrabotnyi/byok/showcase'
 
 const port = Number(process.env.PORT || 30110)
 const token = process.env.BYOK_BRIDGE_TOKEN || ''
@@ -30,13 +31,23 @@ Bun.serve({
     const url = new URL(request.url)
     if (url.pathname === '/health') return json({ ok: true })
     if (url.pathname === '/presets') {
-      // Preset preview cards (compareai-style): cached models.dev catalog
-      // with the bundled fallback, so the dashboard never waits on it.
-      const catalog = await fetchByokCatalogResponse()
+      // Default: the compareai model showcase (chart top, live prices from
+      // models.dev when reachable). ?legacy=1 returns the provider-level
+      // fallback list instead.
+      if (url.searchParams.get('legacy') === '1') {
+        const catalog = await fetchByokCatalogResponse()
+        return json({ source: catalog.source, fetchedAt: catalog.fetchedAt, presets: previewByokPresets(catalog.presets) })
+      }
+      const catalog = await fetchByokCatalogResponse().catch(() => null)
+      let showcase: ByokPreset[] = buildShowcasePresets()
+      if (catalog && catalog.source === 'models.dev') {
+        const byModel = new Map(catalog.presets.map((preset) => [preset.modelId, preset]))
+        showcase = showcase.map((preset) => ({ ...preset, ...(byModel.get(preset.modelId) ?? {}) , id: preset.id, label: preset.label, modelId: preset.modelId }))
+      }
       return json({
-        source: catalog.source,
-        fetchedAt: catalog.fetchedAt,
-        presets: previewByokPresets(catalog.presets),
+        source: 'compareai-showcase',
+        fetchedAt: new Date().toISOString(),
+        presets: previewByokPresets(showcase),
       })
     }
     if (url.pathname !== '/chat') return json({ error: 'not_found' }, 404)
