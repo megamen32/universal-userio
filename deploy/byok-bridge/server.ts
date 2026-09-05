@@ -1,9 +1,17 @@
 // Thin local bridge over @bezrabotnyi/byok: one endpoint, loopback-only.
 // UserIO stores each user's BYOK settings and calls POST /chat here; the
 // package enforces HTTPS-only, public-DNS and private-IP blocking for us.
-import { runByokModel } from '@bezrabotnyi/byok'
+import { runByokModelTracked } from '@bezrabotnyi/byok/ledger'
+import { ByokLedger } from '@bezrabotnyi/byok/ledger'
 import { buildByokPresetsFromModelsDev, fetchByokCatalogResponse, previewByokPresets, type ByokPreset } from '@bezrabotnyi/byok/catalog'
 import { buildShowcasePresets } from '@bezrabotnyi/byok/showcase'
+
+// Cost ledger: every /chat is priced and recorded with the caller's
+// user/task context; BYOK_LEDGER_PERSIST=0 disables remembering.
+const ledger = new ByokLedger({
+  persist: process.env.BYOK_LEDGER_PERSIST !== '0',
+  file: process.env.BYOK_LEDGER_FILE || '/var/lib/universal-userio/byok-ledger.jsonl',
+})
 
 const port = Number(process.env.PORT || 30110)
 const token = process.env.BYOK_BRIDGE_TOKEN || ''
@@ -30,6 +38,15 @@ Bun.serve({
   async fetch(request) {
     const url = new URL(request.url)
     if (url.pathname === '/health') return json({ ok: true })
+    if (url.pathname === '/runs') {
+      const filter = {
+        userId: url.searchParams.get('user_id') || undefined,
+        taskId: url.searchParams.get('task_id') || undefined,
+        sessionId: url.searchParams.get('session_id') || undefined,
+        limit: Number(url.searchParams.get('limit')) > 0 ? Number(url.searchParams.get('limit')) : 100,
+      }
+      return json({ runs: ledger.entries(filter), totals: ledger.totals(filter) })
+    }
     if (url.pathname === '/presets') {
       // Default: the compareai model showcase (chart top, live prices from
       // models.dev when reachable). ?legacy=1 returns the provider-level
@@ -64,7 +81,7 @@ Bun.serve({
       return json({ error: 'base_url, api_key, model_id and prompt are required' }, 400)
     }
     try {
-      const text = await runByokModel({
+      const result = await runByokModelTracked({
         apiFormat: apiFormatFor(baseUrl),
         baseUrl,
         apiKey,
@@ -74,8 +91,13 @@ Bun.serve({
       }, {
         system: String(body?.system || 'Do not claim to send messages. Produce drafts only.'),
         prompt,
+      }, {
+        userId: String(body?.user_id || ''),
+        taskId: String(body?.task_id || ''),
+        sessionId: String(body?.session_id || ''),
+        ledger,
       })
-      return json({ text })
+      return json({ text: result.text, usage: result.usage, costUsd: result.costUsd })
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : 'byok call failed' }, 502)
     }
