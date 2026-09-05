@@ -1,14 +1,15 @@
 // Tiny IndexedDB wrapper for the extension. Schema:
-//   chats:     { peer_id (key), name, last_message_at, unread, last_preview, last_msg_id, updated_at }
-//   messages:  auto-key, indexes on [peer_id+ts], [body_lc] for substring search
-//   drafts:    auto-key, { peer_id, body, created_at, status: 'pending'|'sent'|'failed' }
+//   chats:       { peer_id (key), name, last_message_at, unread, last_preview, last_msg_id, updated_at }
+//   messages:    auto-key, indexes on [peer_id+ts], [body_lc] for substring search
+//   drafts:      auto-key, { peer_id, body, created_at, status: 'pending'|'sent'|'failed' }
+//   attachments: auto-key, indexes on [peer_id+msg_id], bytes per attachment
 //
 // Used by the service worker. Content scripts ask the SW to read/write via
 // chrome.runtime messages.
 
 (function (root) {
   const DB_NAME = "userio_vk";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
 
   let _dbPromise = null;
   function openDB() {
@@ -29,6 +30,12 @@
         }
         if (!db.objectStoreNames.contains("drafts")) {
           db.createObjectStore("drafts", { keyPath: "id", autoIncrement: true });
+        }
+        // Bump DB_VERSION when adding this store. Indexed per (peer_id, msg_id, idx)
+        // so a single message can carry several attachments (image + doc + voice).
+        if (!db.objectStoreNames.contains("attachments")) {
+          const s = db.createObjectStore("attachments", { keyPath: "id", autoIncrement: true });
+          s.createIndex("msg", ["peer_id", "msg_id"], { unique: false });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -138,6 +145,53 @@
     await req(t.objectStore("messages").clear());
     await req(t.objectStore("drafts").clear());
     return true;
+  };
+
+  // ---- attachments --------------------------------------------------------
+  // One row per downloaded media blob (image/video/audio/document). Indexed by
+  // (peer_id, msg_id) so background can list every blob for a captured message
+  // and UserIO can pull bytes by attachment_id.
+
+  lib.saveAttachment = async (att) => {
+    if (!att || !att.peer_id || !att.msg_id) {
+      throw new Error("saveAttachment: peer_id and msg_id are required");
+    }
+    const t = await tx(["attachments"], "readwrite");
+    const store = t.objectStore("attachments");
+    const row = {
+      peer_id: String(att.peer_id),
+      msg_id: String(att.msg_id),
+      idx: Number.isFinite(att.idx) ? att.idx : 0,
+      content_type: att.content_type || "application/octet-stream",
+      filename: att.filename || "attachment",
+      size: Number.isFinite(att.size) ? att.size : (att.bytes ? att.bytes.byteLength || att.bytes.length : 0),
+      bytes: att.bytes || null,
+      src: att.src || "",
+      fetched_at: att.fetched_at || Date.now(),
+      status: att.status || "ok",
+      error: att.error || "",
+    };
+    const id = await req(store.add(row));
+    return { ...row, id };
+  };
+
+  lib.listAttachmentsForMessage = async (peer_id, msg_id) => {
+    const t = await tx(["attachments"]);
+    const idx = t.objectStore("attachments").index("msg");
+    const range = IDBKeyRange.only([String(peer_id), String(msg_id)]);
+    const rows = await req(idx.getAll(range));
+    return rows.sort((a, b) => (a.idx || 0) - (b.idx || 0));
+  };
+
+  lib.getAttachment = async (id) => {
+    const t = await tx(["attachments"]);
+    return req(t.objectStore("attachments").get(Number(id)));
+  };
+
+  lib.listAttachments = async () => {
+    const t = await tx(["attachments"]);
+    const all = await req(t.objectStore("attachments").getAll());
+    return all.sort((a, b) => (b.fetched_at || 0) - (a.fetched_at || 0));
   };
 
   root.UserIODB = lib;
