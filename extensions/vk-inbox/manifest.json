@@ -1,14 +1,17 @@
 {
-  "manifest_version": 2,
-  "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDDSggpxOezuPi7dEeCZB3s2B2HxB7F7XnLRkXA5JQ+QDZyga+z6XQse1bP6nkNqRAZmRmkf0UZU4rXZGoo/J0mrfKevcEEHgo4P3ksIIn27MY3Mp+72V0oUImI/Nvi8tmYL/Ru1rvueKlFV6xFGiXlhh0HBztraH9bLnS8YEqBwIDAQAB",
+  "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp8wuFGy/+2Me1uNY5ECfy9W57mmLPRdXh0BFp66g7E0VDIFbR/9UzvAlFs6th1UA5VPTfEtMSgJ6vyO90+8WvcWMNpJoExPZXOvBKeDTuqecNzdjsYdBNgI7DtQuC2G0hPX4u55ECRfpP2iT2f+WIijMkI+GaQR7MGwrNw5cKkeIzvRbeIUUnDF+juW0k+nhW6VwixvPLRGpgY/rWBs1DdMIdEBZoUfWmllkA83A6NfOkQl103kBOAcueZmqzy0mcJC8B6f9qVoOhMBnx5S9GZVbo7rFdJmt4deEWnkiIMfxRPQcOY1VtfB1Mdu7OdomdKvSQHr2Yl9Z8UT4BrA8aQIDAQAB",
   "name": "Universal UserIO Agent",
-  "version": "0.3.0",
-  "description": "VK Web inbox capture plus universal site data collection. MV2 background until lib/* is ported to ES modules.",
+  "version": "0.4.0",
+  "description": "VK Web inbox capture plus a long-poll command channel that lets the operator drive the real logged-in browser. MV3 service worker.",
   "permissions": [
     "storage",
-    "activeTab",
-    "scripting",
+    "tabs",
     "alarms",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
     "https://vk.com/*",
     "https://vk.ru/*",
     "https://userapi.com/*",
@@ -19,10 +22,9 @@
     "http://127.0.0.1/*"
   ],
   "background": {
-    "scripts": ["lib/db.js", "lib/userio.js", "lib/collect.js", "background.js"],
-    "persistent": true
+    "service_worker": "background.js"
   },
-  "browser_action": {
+  "action": {
     "default_popup": "popup.html",
     "default_title": "Universal UserIO Agent"
   },
