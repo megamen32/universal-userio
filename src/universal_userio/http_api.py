@@ -475,6 +475,28 @@ def handler(
             except RuntimeError as error:
                 self._reply(502, {"error": str(error)})
 
+        def do_PATCH(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            principal = self._principal(allow_proxy=True)
+            if principal is None:
+                self._reply(401, {"error": "unauthorized"})
+                return
+            try:
+                if path.startswith("/v1/drafts/"):
+                    draft_id = path.removeprefix("/v1/drafts/").strip("/")
+                    payload = self._json()
+                    body = str(payload.get("body") or "")
+                    if not draft_id or not body.strip():
+                        raise ValueError("draft id and body are required")
+                    draft = service._store.update_draft(draft_id, body=body, user_id=principal.user_id)
+                    self._reply(200, {"id": draft.id, "status": draft.status, "body": draft.body})
+                    return
+                self._reply(404, {"error": "not found"})
+            except KeyError as error:
+                self._reply(404, {"error": str(error)})
+            except ValueError as error:
+                self._reply(400, {"error": str(error)})
+
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)
             requested_path = urlparse(self.path).path
@@ -713,6 +735,15 @@ def handler(
                 self._reply(200, {
                     "deleted": service._store.delete_account(account_id, user_id=principal.user_id)
                 })
+                return
+            if path.startswith("/v1/drafts/"):
+                draft_id = path.removeprefix("/v1/drafts/").strip("/")
+                try:
+                    deleted = service._store.delete_draft(draft_id, user_id=principal.user_id)
+                except ValueError as error:
+                    self._reply(409, {"error": str(error)})
+                    return
+                self._reply(200, {"deleted": deleted})
                 return
             self._reply(404, {"error": "not found"})
 

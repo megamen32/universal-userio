@@ -201,6 +201,8 @@ export function App() {
   const [toast, setToast] = useState("")
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [newChatPhone, setNewChatPhone] = useState("")
+  const [editDraftId, setEditDraftId] = useState("")
+  const [editDraftBody, setEditDraftBody] = useState("")
   const toastTimer = useRef<number | undefined>(undefined)
   const notify = (message: string) => {
     setToast(message)
@@ -319,6 +321,26 @@ export function App() {
       notify(`Не удалось переключить аккаунт: ${(error as Error).message}`)
     }
   }
+  const saveDraftEdit = async (id: string) => {
+    if (!editDraftBody.trim()) return
+    try {
+      await api(`/v1/drafts/${id}`, { method: "PATCH", body: JSON.stringify({ body: editDraftBody }) })
+      setEditDraftId(""); setEditDraftBody("")
+      if (conversation) await loadConversation(conversation.id)
+      notify("Черновик обновлён")
+    } catch (error) {
+      notify(`Не удалось изменить черновик: ${(error as Error).message}`)
+    }
+  }
+  const deleteDraft = async (id: string) => {
+    try {
+      await api(`/v1/drafts/${id}`, { method: "DELETE" })
+      if (conversation) await loadConversation(conversation.id)
+      notify("Черновик удалён")
+    } catch (error) {
+      notify(`Не удалось удалить черновик: ${(error as Error).message}`)
+    }
+  }
   const askAi = async () => {
     if (!conversation || !canReply) return
     try {
@@ -421,10 +443,17 @@ export function App() {
               <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[85%] overflow-hidden rounded-2xl px-4 py-3 text-sm shadow-sm md:max-w-[78%] ${outgoing ? "ml-auto rounded-tr-sm bg-primary text-primary-foreground" : "rounded-tl-sm bg-card"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <MessageBody message={message} onAttachmentClick={openAttachment} />}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{timeHM(message.received_at)}</p></div>
             </Fragment>
           })}
-          {conversation.drafts.map((item) => <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-primary/90 px-4 py-3 text-sm text-primary-foreground shadow-sm md:max-w-[78%]"><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? "Черновик" : item.status === "approved" ? "Отправлено" : item.status === "rejected" ? "Отклонено" : item.status}</span>{item.status === "proposed" && <Button size="sm" variant="secondary" disabled={!canReply} title={canReply ? undefined : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button>}</div></div>)}
+          {conversation.drafts.map((item) => {
+            const editing = editDraftId === item.id
+            return <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-primary/90 px-4 py-3 text-sm text-primary-foreground shadow-sm md:max-w-[78%]">
+              {editing
+                ? <div className="space-y-2"><textarea className="min-h-16 w-full rounded-lg bg-primary-foreground/10 p-2 text-foreground" value={editDraftBody} onChange={(event) => setEditDraftBody(event.target.value)} rows={3} /><div className="flex justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditDraftId(""); setEditDraftBody("") }}>Отмена</Button><Button size="sm" onClick={() => void saveDraftEdit(item.id)}>Сохранить</Button></div></div>
+                : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? "Черновик" : item.status === "approved" ? "Отправлено" : item.status === "rejected" ? "Отклонено" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}
+            </div>
+          })}
           <div ref={bottomRef} />
         </div></ScrollArea>
-        <footer className="border-t bg-card p-3 md:p-4"><div className="flex gap-2"><Input value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Написать ответ…" : "Ответы недоступны: аккаунт только для чтения"} /><Button disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик (Enter)"><Send /></Button><Button disabled={!canReply} variant="outline" onClick={() => void askAi()} title="ИИ-варианты ответа"><Sparkles /></Button></div><p className="mt-2 text-xs text-muted-foreground">{canReply ? "Сначала черновик, затем явная отправка." : "Отправка не настроена для этого аккаунта."}</p></footer>
+        <footer className="border-t bg-card p-3 md:p-4"><div className="flex gap-2"><Input value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Написать ответ…" : "Ответы недоступны: аккаунт только для чтения"} /><Button disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик (Enter)"><Send /></Button><Button disabled={!canReply} variant="outline" size="sm" className="h-9 shrink-0 gap-1.5 px-3" onClick={() => void askAi()} title="ИИ прочитает переписку и предложит варианты ответа — появится черновиком ниже"><Sparkles className="size-4" /> ИИ</Button></div><p className="mt-2 text-xs text-muted-foreground">{canReply ? "Сначала черновик, затем явная отправка." : "Отправка не настроена для этого аккаунта."}</p></footer>
       </> : <div className="hidden flex-1 place-items-center text-center md:grid"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Скрыть список" : "Показать список"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Выберите чат</h2><p className="mt-1 text-sm text-muted-foreground">Аккаунты, платформы и переписки остаются раздельными.</p></div></div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новый SMS-чат</h2><p className="mt-1 text-xs text-muted-foreground">Отправка пойдёт с подключённого телефона-агента после вашего approve.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder="+79XXXXXXXXX" autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
