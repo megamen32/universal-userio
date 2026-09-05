@@ -162,7 +162,8 @@ class UserIOService:
             messages = list(conversation["messages"])
             chat_id = str(messages[-1]["message_id"]).partition(":")[0] if messages else ""
             receipt = self.telegram_outbox.send_reply(
-                chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id
+                chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
+                account_ref=str(conversation.get("account_ref") or ""),
             )
         else:
             receipt = self._outbox.send_reply(
