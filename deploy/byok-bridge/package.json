@@ -6,6 +6,6 @@
     "start": "bun server.ts"
   },
   "dependencies": {
-    "@bezrabotnyi/byok": "github:megamen32/byok#v1.7.0"
+    "@bezrabotnyi/byok": "github:megamen32/byok#v1.8.1"
   }
 }
