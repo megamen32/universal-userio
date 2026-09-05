@@ -331,6 +331,17 @@ def handler(
                     )
                     self._reply(201, {"accepted": True})
                     return
+                if path == "/v1/conversations":
+                    payload = self._json()
+                    source = str(payload.get("source") or "").strip().lower()
+                    sender = str(payload.get("sender") or "").strip()
+                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail"} and not source.startswith("gmail:"):
+                        raise ValueError("unsupported conversation source")
+                    if not sender:
+                        raise ValueError("sender is required")
+                    record = service._store.create_conversation(source, sender, user_id=user_id)
+                    self._reply(201, {"conversation": record})
+                    return
                 if path == "/v1/messages":
                     payload = self._json()
                     route_id = str(payload.get("route_id") or "")
@@ -589,8 +600,18 @@ def handler(
                     self._reply(404, {"error": "message not found"})
                     return
                 adapter = _adapter_for_message(service, message, user_id)
+                # VK adapter needs attachment_id; everything else keys on message_id.
+                file_ref = message_id
+                if str(message.get("source") or "") == "vk":
+                    attachments = service._store.attachments_for_message(
+                        source=str(message.get("source") or ""),
+                        message_id=str(message.get("message_id") or ""),
+                        user_id=user_id,
+                    )
+                    if attachments:
+                        file_ref = str(attachments[0].get("attachment_id") or message_id)
                 try:
-                    file = adapter.download(file_ref=message_id)
+                    file = adapter.download(file_ref=file_ref)
                 except KeyError:
                     self._reply(404, {"error": "message not found"})
                     return
@@ -615,6 +636,13 @@ def handler(
                     self._reply(404, {"error": "message not found"})
                     return
                 placeholder = _PLACEHOLDER_RE.match(str(message.get("body") or "").strip())
+                # VK stores its media in the extension's IndexedDB; expose the
+                # attachment rows so the chat bubble can show filenames even
+                # before any byte has been pulled.
+                attachments = service._store.attachments_for_message(
+                    source=source_hint, message_id=str(message.get("message_id") or ""),
+                    user_id=user_id,
+                )
                 payload = {
                     "conversation_id": real_id,
                     "message_id": str(message.get("message_id") or ""),
@@ -623,10 +651,27 @@ def handler(
                     "kind": placeholder.group(1).lower() if placeholder else None,
                     "available": False,
                     "reason": "media download is not connected for this account yet",
+                    "attachments": [
+                        {
+                            "idx": a.get("idx"),
+                            "kind": a.get("kind"),
+                            "content_type": a.get("content_type"),
+                            "filename": a.get("filename"),
+                            "size": a.get("size"),
+                            "attachment_id": a.get("attachment_id"),
+                        }
+                        for a in attachments
+                    ],
                 }
                 adapter = _adapter_for_message(service, message, user_id)
+                # VK adapter needs the FIRST attachment_id, not message_id;
+                # every other channel still keys on message_id which we
+                # already pass through.
+                file_ref = message_id
+                if str(message.get("source") or "") == "vk" and attachments:
+                    file_ref = str(attachments[0].get("attachment_id") or message_id)
                 try:
-                    file = adapter.download(file_ref=message_id)
+                    file = adapter.download(file_ref=file_ref)
                 except (AdapterNotSupported, KeyError, ValueError) as error:
                     payload["reason"] = str(error)
                 else:

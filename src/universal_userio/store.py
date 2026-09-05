@@ -233,6 +233,15 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,source TEXT NOT NULL,route_id TEXT NOT NULL,
                 PRIMARY KEY(user_id,source,route_id)
             );
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,kind TEXT NOT NULL,content_type TEXT NOT NULL,
+                filename TEXT NOT NULL,size INTEGER,src TEXT,
+                attachment_id TEXT,provider_ref TEXT,
+                PRIMARY KEY(user_id,source,message_id,idx)
+            );
+            CREATE INDEX IF NOT EXISTS message_attachments_msg_idx
+                ON message_attachments(user_id,source,message_id);
         """
         for statement in script.split(";"):
             if statement.strip():
@@ -746,12 +755,113 @@ class SQLiteUserIOStore:
                     """,
                     (user_id, message.source, message.sender, message.sender_name, now),
                 )
+            for att in (message.attachments or ()):
+                self.upsert_attachment(
+                    source=message.source, message_id=message.message_id, attachment=att,
+                    user_id=user_id,
+                )
             if inserted:
                 self._connection.execute(
                     "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
                     (now, user_id, conversation_id),
                 )
         return inserted
+
+    def create_conversation(
+        self, source: str, sender: str, *, user_id: str | None = None
+    ) -> dict[str, object]:
+        """Create (or return the existing) empty conversation for source+sender.
+
+        Lets the dashboard start a chat — e.g. a new SMS thread — before any
+        inbound message exists.
+        """
+        user_id = self._user(user_id)
+        source, sender = source.strip(), sender.strip()
+        if not source or not sender:
+            raise ValueError("source and sender are required")
+        message_key = "email:" + sender.casefold() if source in {"mail", "email", "gmail"} or source.startswith("gmail:") else f"{source}:{sender}"
+        conversation_id = self.conversation_id_for_key(message_key, user_id=user_id)
+        if conversation_id is None:
+            conversation_id = "conv_" + hashlib.sha256(f"{user_id}\0{message_key}".encode()).hexdigest()[:24]
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO conversations
+                (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at)
+                VALUES (?,?,?,?,?,?,NULL,'approve',?)
+                """,
+                (user_id, conversation_id, message_key, source, source, sender, time.time()),
+            )
+        record = self.conversation(conversation_id, user_id=user_id)
+        assert record is not None
+        return record
+
+    # ---- attachments ---------------------------------------------------------
+    # Stored separately from messages: a message may carry multiple attachments
+    # and we need to fetch them by (source, message_id, idx) for the VK extension
+    # bridge and by attachment_id when relaying the file back to the client.
+
+    def upsert_attachment(
+        self, *, source: str, message_id: str, attachment: dict[str, object],
+        user_id: str | None = None,
+    ) -> None:
+        user_id = self._user(user_id)
+        idx = int(attachment.get("idx") or 0)
+        kind = str(attachment.get("kind") or "doc")
+        content_type = str(attachment.get("content_type") or "application/octet-stream")
+        filename = str(attachment.get("filename") or f"attachment-{idx}")
+        size = attachment.get("size")
+        try:
+            size_int = int(size) if size is not None else None
+        except (TypeError, ValueError):
+            size_int = None
+        src = attachment.get("src")
+        attachment_id = attachment.get("attachment_id")
+        provider_ref = attachment.get("provider_ref")
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR REPLACE INTO message_attachments
+                (user_id,source,message_id,idx,kind,content_type,filename,size,src,attachment_id,provider_ref)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    user_id, source, message_id, idx, kind, content_type, filename,
+                    size_int, str(src) if src else None,
+                    str(attachment_id) if attachment_id else None,
+                    str(provider_ref) if provider_ref else None,
+                ),
+            )
+
+    def attachments_for_message(
+        self, *, source: str, message_id: str, user_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT idx,kind,content_type,filename,size,src,attachment_id,provider_ref
+                FROM message_attachments
+                WHERE user_id=? AND source=? AND message_id=?
+                ORDER BY idx
+                """,
+                (self._user(user_id), source, message_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def attachment_by_id(
+        self, attachment_id: str, *, user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT source,message_id,idx,kind,content_type,filename,size,src,
+                       attachment_id,provider_ref
+                FROM message_attachments
+                WHERE user_id=? AND attachment_id=? LIMIT 1
+                """,
+                (self._user(user_id), attachment_id),
+            ).fetchone()
+        return None if row is None else dict(row)
 
     def add_draft(self, draft: ReplyDraft, *, user_id: str | None = None) -> None:
         with self._lock, self._connection:
