@@ -2,6 +2,7 @@
 // UserIO stores each user's BYOK settings and calls POST /chat here; the
 // package enforces HTTPS-only, public-DNS and private-IP blocking for us.
 import { runByokModel } from '@bezrabotnyi/byok'
+import { fetchByokCatalogResponse, previewByokPresets } from '@bezrabotnyi/byok/catalog'
 
 const port = Number(process.env.PORT || 30110)
 const token = process.env.BYOK_BRIDGE_TOKEN || ''
@@ -28,6 +29,16 @@ Bun.serve({
   async fetch(request) {
     const url = new URL(request.url)
     if (url.pathname === '/health') return json({ ok: true })
+    if (url.pathname === '/presets') {
+      // Preset preview cards (compareai-style): cached models.dev catalog
+      // with the bundled fallback, so the dashboard never waits on it.
+      const catalog = await fetchByokCatalogResponse()
+      return json({
+        source: catalog.source,
+        fetchedAt: catalog.fetchedAt,
+        presets: previewByokPresets(catalog.presets),
+      })
+    }
     if (url.pathname !== '/chat') return json({ error: 'not_found' }, 404)
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
     if (!token || request.headers.get('authorization') !== `Bearer ${token}`) {

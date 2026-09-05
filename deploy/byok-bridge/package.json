@@ -2,8 +2,10 @@
   "name": "byok-bridge",
   "private": true,
   "type": "module",
-  "scripts": { "start": "bun server.ts" },
+  "scripts": {
+    "start": "bun server.ts"
+  },
   "dependencies": {
-    "@bezrabotnyi/byok": "github:megamen32/byok#v1.0.0"
+    "@bezrabotnyi/byok": "github:megamen32/byok#v1.0.2"
   }
 }
