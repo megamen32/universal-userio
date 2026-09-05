@@ -13,6 +13,8 @@ type Conversation = { id: string; source: string; sender: string; identity_id?: 
 type Message = { source: string; message_id: string; sender: string; body: string; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
 
+import { defineByokPresetPicker } from "./vendor/byok-ui"
+
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } })
   if (!response.ok) {
@@ -207,6 +209,7 @@ export function App() {
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
   const [byokPresets, setByokPresets] = useState<{ id: string; label: string; description: string; apiFormat: string; baseUrl: string; modelId: string; priceLabel: string }[]>([])
+  const byokPickerRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const notify = (message: string) => {
     setToast(message)
@@ -353,6 +356,23 @@ export function App() {
       setByokForm({ endpoint: data.endpoint, model: data.model, token: "" })
     } catch { /* server default is fine */ }
   }
+  useEffect(() => {
+    const host = byokPickerRef.current
+    if (!byokOpen || !host || byokPresets.length === 0) return
+    defineByokPresetPicker()
+    host.innerHTML = ""
+    const picker = document.createElement("byok-preset-picker")
+    picker.setAttribute("presets", JSON.stringify(byokPresets))
+    picker.style.setProperty("--byok-border", "hsl(217 33% 28%)")
+    picker.style.setProperty("--byok-accent", "hsl(232 82% 74%)")
+    picker.style.setProperty("--byok-selected-bg", "hsl(232 82% 74% / .15)")
+    picker.addEventListener("byok-select", ((event: Event) => {
+      const preset = (event as CustomEvent).detail as { baseUrl: string; modelId: string }
+      setByokForm((current) => ({ ...current, endpoint: preset.baseUrl, model: preset.modelId }))
+    }) as EventListener)
+    host.appendChild(picker)
+  }, [byokOpen, byokPresets])
+
   const loadPresets = async () => {
     try {
       const data = await api<{ presets: typeof byokPresets }>("/v1/ai-presets", { method: "POST", body: "{}" })
@@ -497,15 +517,7 @@ export function App() {
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
           <h2 className="font-semibold">Свой ИИ (BYOK)</h2>
-          {byokPresets.length > 0 && <div className="mt-3 grid max-h-44 grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
-              {byokPresets.map((preset) => (
-                <button key={preset.id} className="rounded-lg border bg-background/60 p-2 text-left text-xs hover:border-primary" title={preset.description} onClick={() => setByokForm({ ...byokForm, endpoint: preset.baseUrl, model: preset.modelId })}>
-                  <b>{preset.label}</b>
-                  <span className="block truncate text-[11px] text-muted-foreground">{preset.modelId || preset.description}</span>
-                  <span className="block text-[10px] text-muted-foreground">{preset.priceLabel}</span>
-                </button>
-              ))}
-            </div>}
+          <div ref={byokPickerRef} className="mt-3 max-h-44 overflow-y-auto" />
             <p className="mt-1 text-xs text-muted-foreground">Кнопка «ИИ» будет работать через ваш ключ. Подойдёт любой OpenAI-совместимый API (MiniMax, OpenAI, routerai…). Ключ хранится на сервере и не показывается обратно.</p>
           <div className="mt-3 space-y-2">
             <Input value={byokForm.endpoint} onChange={(event) => setByokForm({ ...byokForm, endpoint: event.target.value })} placeholder="https://api.minimax.io/v1" />
