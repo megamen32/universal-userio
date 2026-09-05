@@ -353,6 +353,31 @@ def handler(
                     )
                     self._reply(200 if updated else 404, {"updated": updated})
                     return
+                if path == "/v1/ai-settings":
+                    payload = self._json()
+                    settings = service._store.ai_settings(user_id=user_id)
+                    self._reply(200, {
+                        "endpoint": settings["endpoint"] if settings else "",
+                        "model": settings["model"] if settings else "",
+                        "has_key": settings is not None,
+                    })
+                    return
+                if path == "/v1/ai-settings/save":
+                    payload = self._json()
+                    service._store.set_ai_settings(
+                        endpoint=str(payload.get("endpoint") or ""),
+                        model=str(payload.get("model") or ""),
+                        token=str(payload.get("token") or ""),
+                        user_id=user_id,
+                    )
+                    service._user_generators.pop(user_id, None)
+                    self._reply(200, {"ok": True})
+                    return
+                if path == "/v1/ai-settings/reset":
+                    cleared = service._store.clear_ai_settings(user_id=user_id)
+                    service._user_generators.pop(user_id, None)
+                    self._reply(200, {"cleared": cleared})
+                    return
                 if path == "/v1/messages":
                     payload = self._json()
                     route_id = str(payload.get("route_id") or "")

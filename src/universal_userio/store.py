@@ -242,6 +242,13 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS message_attachments_msg_idx
                 ON message_attachments(user_id,source,message_id);
+            CREATE TABLE IF NOT EXISTS user_ai_settings (
+                user_id TEXT PRIMARY KEY,
+                endpoint TEXT NOT NULL,
+                model TEXT NOT NULL,
+                token TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
         """
         for statement in script.split(";"):
             if statement.strip():
@@ -1024,6 +1031,36 @@ class SQLiteUserIOStore:
             return self._connection.execute(
                 "UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?",
                 (account_ref.strip(), user_id, conversation_id),
+            ).rowcount == 1
+
+    # --- per-user AI (BYOK) ----------------------------------------------------
+
+    def ai_settings(self, *, user_id: str | None = None) -> dict[str, str] | None:
+        """Return the user's own AI endpoint/model/token, or None for server default."""
+        row = self._connection.execute(
+            "SELECT endpoint,model,token FROM user_ai_settings WHERE user_id=?",
+            (self._user(user_id),),
+        ).fetchone()
+        return None if row is None else {
+            "endpoint": str(row["endpoint"]), "model": str(row["model"]), "token": str(row["token"]),
+        }
+
+    def set_ai_settings(
+        self, *, endpoint: str, model: str, token: str, user_id: str | None = None
+    ) -> None:
+        endpoint, model, token = endpoint.strip(), model.strip(), token.strip()
+        if not endpoint.startswith(("http://", "https://")) or not model or not token:
+            raise ValueError("AI settings require an http(s) endpoint, model and token")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO user_ai_settings (user_id,endpoint,model,token,updated_at) VALUES (?,?,?,?,?)",
+                (self._user(user_id), endpoint, model, token, time.time()),
+            )
+
+    def clear_ai_settings(self, *, user_id: str | None = None) -> bool:
+        with self._lock, self._connection:
+            return self._connection.execute(
+                "DELETE FROM user_ai_settings WHERE user_id=?", (self._user(user_id),)
             ).rowcount == 1
 
     def message(
