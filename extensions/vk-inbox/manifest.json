@@ -1,22 +1,26 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 2,
+  "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDDSggpxOezuPi7dEeCZB3s2B2HxB7F7XnLRkXA5JQ+QDZyga+z6XQse1bP6nkNqRAZmRmkf0UZU4rXZGoo/J0mrfKevcEEHgo4P3ksIIn27MY3Mp+72V0oUImI/Nvi8tmYL/Ru1rvueKlFV6xFGiXlhh0HBztraH9bLnS8YEqBwIDAQAB",
   "name": "Universal UserIO Agent",
   "version": "0.3.0",
-  "description": "VK Web inbox capture plus universal site data collection: fetch tasks from your UserIO server, executed with the browser's own sessions.",
+  "description": "VK Web inbox capture plus universal site data collection. MV2 background until lib/* is ported to ES modules.",
   "permissions": [
     "storage",
     "activeTab",
     "scripting",
-    "alarms"
-  ],
-  "host_permissions": [
-    "http://*/*",
-    "https://*/*"
+    "alarms",
+    "https://vk.com/*",
+    "https://vk.ru/*",
+    "https://userapi.com/*",
+    "https://sun1.userapi.com/*",
+    "https://sun9.userapi.com/*",
+    "https://pp.userapi.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "scripts": ["lib/db.js", "lib/userio.js", "lib/collect.js", "background.js"],
+    "persistent": true
   },
-  "action": {
+  "browser_action": {
     "default_popup": "popup.html",
     "default_title": "Universal UserIO Agent"
   },
@@ -28,5 +32,6 @@
       "all_frames": false
     }
   ],
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "web_accessible_resources": []
 }

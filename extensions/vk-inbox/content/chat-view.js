@@ -12,6 +12,62 @@
     return SEL.activePeerId();
   }
 
+  // Extract any VK-side media (photos, videos, documents, voice) embedded
+  // inside a message node. Returns a list of {kind, src, content_type} that
+  // the background service worker will download to bytes.
+  function localAttachments(node) {
+    if (!node) return [];
+    const out = [];
+    const imgs = node.querySelectorAll("img");
+    for (const img of imgs) {
+      const src = img.currentSrc || img.src;
+      if (!src || src.startsWith("data:")) continue;
+      // VK wraps user-uploaded photos in img with class "im_msg_image" or
+      // a "photo" hint; everything else (stickers, emoji) is ignored.
+      const cls = (img.className || "") + " " + (img.getAttribute("alt") || "");
+      if (!/photo|attach|media|doc/i.test(cls)) continue;
+      out.push({ kind: "image", src, content_type: /\.(png|jpe?g|webp|gif)(\?|$)/i.test(src) ? guessImageType(src) : "image/jpeg", filename: deriveFilename(src, "photo") });
+    }
+    const videos = node.querySelectorAll("video");
+    for (const v of videos) {
+      const src = v.currentSrc || v.src;
+      if (!src || src.startsWith("data:")) continue;
+      out.push({ kind: "video", src, content_type: "video/mp4", filename: deriveFilename(src, "video") });
+    }
+    const audios = node.querySelectorAll("audio");
+    for (const a of audios) {
+      const src = a.currentSrc || a.src;
+      if (!src || src.startsWith("data:")) continue;
+      out.push({ kind: "audio", src, content_type: "audio/mpeg", filename: deriveFilename(src, "voice") });
+    }
+    const docs = node.querySelectorAll('a[href*=".doc"], a[href*=".pdf"], a[href*=".zip"], a[href*=".xls"]');
+    for (const a of docs) {
+      const src = a.href;
+      if (!src || src.startsWith("data:")) continue;
+      out.push({ kind: "document", src, content_type: "application/octet-stream", filename: deriveFilename(src, "document") });
+    }
+    return out;
+  }
+
+  function deriveFilename(src, fallback) {
+    try {
+      const u = new URL(src, location.href);
+      const last = u.pathname.split("/").filter(Boolean).pop() || fallback;
+      return last;
+    } catch { return fallback; }
+  }
+
+  function guessImageType(src) {
+    const m = /\.([a-z0-9]+)(?:\?|$)/i.exec(src);
+    if (!m) return "image/jpeg";
+    switch (m[1].toLowerCase()) {
+      case "png": return "image/png";
+      case "gif": return "image/gif";
+      case "webp": return "image/webp";
+      default: return "image/jpeg";
+    }
+  }
+
   function pushMessage(node) {
     if (!node) return;
     const peerId = activePeerId();
@@ -22,6 +78,7 @@
     if (SEEN_MSGS.has(msgId)) return;
     SEEN_MSGS.add(msgId);
 
+    const attachments = localAttachments(node);
     chrome.runtime.sendMessage({
       kind: "capture",
       payload: {
@@ -31,6 +88,7 @@
         body: body.slice(0, 8000),
         ts: SEL.messageTs(node) || Date.now(),
         direction: SEL.messageDirection(node) || "in",
+        attachments,
       },
     });
   }

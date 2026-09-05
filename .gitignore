@@ -9,3 +9,4 @@ __pycache__/
 .tmp/
 build/
 *.egg-info/
+node_modules/
