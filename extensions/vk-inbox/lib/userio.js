@@ -4,11 +4,16 @@
 (function (root) {
   const lib = {};
 
+  // Baked build config (lib/config.js) provides the global-host defaults;
+  // anything saved in chrome.storage.local wins over them.
+  const CFG = root.USERIO_CONFIG || {};
+
   const DEFAULTS = {
-    endpoint: "http://127.0.0.1:18093",
-    token: "",
+    endpoint: CFG.endpoint || "http://127.0.0.1:18093",
+    token: CFG.token || "",
     source: "vk",
-    routeId: "vk-browser",
+    routeId: CFG.routeId || "vk-browser",
+    agentId: CFG.agentId || "vk-browser",
   };
 
   lib.settings = async () => {

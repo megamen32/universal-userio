@@ -1,13 +1,16 @@
-// Background page. Mediates between content scripts and the popup.
-// Holds the IndexedDB cache (lib/db.js), forwards captures to UserIO
-// (lib/userio.js), and exposes search/send RPCs.
+// Background service worker (MV3). Mediates between content scripts and the
+// popup, holds the IndexedDB cache (lib/db.js), forwards captures to UserIO
+// (lib/userio.js), and runs the long-poll command channel (lib/agent.js).
 //
-// lib/*.js are loaded first via manifest.background.scripts (MV2) and
-// attach themselves to `self.UserIODB` / `self.UserIO` / `self.Collect`.
+// lib/*.js attach themselves to `self.UserIODB` / `self.UserIO` /
+// `self.Collect` / `self.Agent`; importScripts loads them in order.
+
+importScripts("lib/config.js", "lib/db.js", "lib/userio.js", "lib/collect.js", "lib/agent.js");
 
 const DB = self.UserIODB;
 const USERIO = self.UserIO;
 const COLLECT = self.Collect;
+const AGENT = self.Agent;
 
 const SEEN = new Set(); // dedupe msg ids in-memory; persistent dedupe lives in IDB
 const FORWARD_QUEUE = [];
@@ -333,3 +336,4 @@ chrome.alarms.onAlarm.addListener((a) => {
 });
 
 COLLECT.start();
+AGENT.start();
