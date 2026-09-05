@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import urllib.error
 import urllib.request
 
-from . import collect
+from . import agent_channel, collect
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -364,6 +364,21 @@ def handler(
                         "has_key": settings is not None,
                     })
                     return
+                if path == "/v1/ai-runs":
+                    bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
+                    bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "")
+                    if not bridge:
+                        self._reply(200, {"runs": [], "totals": None})
+                        return
+                    proxy_request = urllib.request.Request(  # noqa: S310
+                        bridge + "/runs?user_id=owner", headers={"Authorization": f"Bearer {bridge_token}"},
+                    )
+                    try:
+                        with urllib.request.urlopen(proxy_request, timeout=10) as bridge_response:
+                            self._reply(200, json.loads(bridge_response.read()))
+                    except (OSError, urllib.error.URLError):
+                        self._reply(200, {"runs": [], "totals": None})
+                    return
                 if path == "/v1/ai-presets":
                     bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
                     bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "")
@@ -504,6 +519,13 @@ def handler(
                     collect.append_result(self._json(), user=principal.username)
                     self._reply(202, {"accepted": True})
                     return
+                if path == "/v1/agent/commands":
+                    self._reply(202, agent_channel.enqueue(self._json(), user=principal.username))
+                    return
+                if path == "/v1/agent/results":
+                    agent_channel.push_result(self._json(), user=principal.username)
+                    self._reply(202, {"accepted": True})
+                    return
                 if path.startswith("/v1/drafts/") and path.endswith("/approve"):
                     draft_id = path.removeprefix("/v1/drafts/").removesuffix("/approve").strip("/")
                     draft = service.approve(draft_id, user_id=user_id)
@@ -588,6 +610,7 @@ def handler(
                 self._html(200, _download_page().encode())
                 return
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
+                                  "/vk-userio-extension.crx", "/vk-userio-updates.xml",
                                   "/chatgpt-cdp-setup.zip"} and self._static(requested_path):
                 return
             if requested_path in {"/vk/connect/new", "/vk/callback"}:
@@ -653,6 +676,29 @@ def handler(
                     ))
                 except ValueError as error:
                     self._reply(400, {"error": str(error)})
+                return
+            if path == "/v1/agent/poll":
+                try:
+                    self._reply(200, agent_channel.poll(
+                        query.get("agent_id", [""])[0],
+                        query.get("wait", ["20"])[0],
+                        user=principal.username,
+                    ))
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
+                return
+            if path == "/v1/agent/results":
+                try:
+                    self._reply(200, agent_channel.read_results(
+                        user=principal.username,
+                        agent_id=query.get("agent_id", [""])[0].strip(),
+                        limit=query.get("limit", ["20"])[0],
+                    ))
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
+                return
+            if path == "/v1/agent/status":
+                self._reply(200, agent_channel.status(user=principal.username))
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
