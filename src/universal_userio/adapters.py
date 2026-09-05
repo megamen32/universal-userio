@@ -143,10 +143,10 @@ class TelegramQrHttpOutbox:
     def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen, timeout: int = 20) -> None:
         self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
 
-    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "") -> str:
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "") -> str:
         if not chat or not body:
             raise ValueError("Telegram delivery requires chat and body")
-        payload = json.dumps({"chat": chat, "chat_id": chat_id, "body": body}).encode()
+        payload = json.dumps({"chat": chat, "chat_id": chat_id, "account_id": account_ref, "body": body}).encode()
         request = urllib.request.Request(  # noqa: S310
             f"{self._base_url}/send", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},

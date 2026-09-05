@@ -9,7 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 
 type Account = { id: string; provider: string; display_name: string; capabilities: string[]; last_synced_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number }
-type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; messages: Message[]; drafts: Draft[] }
+type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
 type Message = { source: string; message_id: string; sender: string; body: string; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
 
@@ -309,6 +309,16 @@ export function App() {
       notify(`Не удалось создать чат: ${(error as Error).message}`)
     }
   }
+  const setSenderAccount = async (accountId: string) => {
+    if (!conversation) return
+    try {
+      await api("/v1/conversations/set-account", { method: "POST", body: JSON.stringify({ conversation_id: conversation.id, account_id: accountId }) })
+      await loadConversation(conversation.id)
+      notify(accountId ? "Аккаунт отправки переключён" : "Отправка: авто")
+    } catch (error) {
+      notify(`Не удалось переключить аккаунт: ${(error as Error).message}`)
+    }
+  }
   const askAi = async () => {
     if (!conversation || !canReply) return
     try {
@@ -399,7 +409,7 @@ export function App() {
     {/* Conversation: fullscreen pane on mobile */}
     <section className={`min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))] md:flex ${mobilePane === "chat" ? "flex" : "hidden"}`}>
       {conversation ? <>
-        <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Скрыть список" : "Показать список"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="truncate text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p></div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></header>
+        <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Скрыть список" : "Показать список"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="truncate text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p>{(() => { const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === providerForSource(conversation.source)); const senderAccount = platformAccounts.find((item) => item.id === conversation.account_ref); if (platformAccounts.length === 0) return null; return <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">отправка от:{platformAccounts.length > 1 ? <select className="max-w-[180px] rounded border bg-transparent px-1 py-0.5 text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={(event) => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select> : <span className="truncate text-foreground/80">{senderAccount ? senderAccount.display_name : platformAccounts[0].display_name}</span>}</p> })()}</div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></header>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-4 md:p-6">
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)

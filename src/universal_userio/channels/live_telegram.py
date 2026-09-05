@@ -22,7 +22,7 @@ class LiveTelegramOutbox:
         self._adapter = adapter
         self._runner = runner or SyncChannelRunner()
 
-    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "") -> str:
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "") -> str:
         peer: int | str = int(chat) if chat.lstrip("-").isdigit() else chat
         message = self._runner.run(lambda: self._adapter.send_message(peer, body))
         return f"telegram:{getattr(message, 'id', 'sent')}:{draft_id}"

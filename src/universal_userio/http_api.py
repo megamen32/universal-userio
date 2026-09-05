@@ -342,6 +342,17 @@ def handler(
                     record = service._store.create_conversation(source, sender, user_id=user_id)
                     self._reply(201, {"conversation": record})
                     return
+                if path == "/v1/conversations/set-account":
+                    payload = self._json()
+                    conversation_id = str(payload.get("conversation_id") or "").strip()
+                    account_ref = str(payload.get("account_id") or "").strip()
+                    if not conversation_id:
+                        raise ValueError("conversation_id is required")
+                    updated = service._store.set_conversation_account(
+                        conversation_id, account_ref, user_id=user_id
+                    )
+                    self._reply(200 if updated else 404, {"updated": updated})
+                    return
                 if path == "/v1/messages":
                     payload = self._json()
                     route_id = str(payload.get("route_id") or "")
@@ -356,6 +367,11 @@ def handler(
                     conversation_id, accepted = service.receive(
                         message, route_id=route_id, user_id=target_user_id
                     )
+                    account_ref = str(payload.get("account_id") or "").strip()
+                    if account_ref:
+                        service._store.set_conversation_account(
+                            conversation_id, account_ref, user_id=target_user_id
+                        )
                     draft = None
                     conversation = service._store.conversation(
                         conversation_id, user_id=target_user_id

@@ -25,11 +25,11 @@ captured: dict = {}
 
 def test_send_reply_posts_chat_and_body_and_returns_receipt():
     outbox = TelegramQrHttpOutbox("http://127.0.0.1:18095/", "token-1", runner=_ok_run)
-    receipt = outbox.send_reply(chat="Секретарь Никиты Р", body="канарейка", draft_id="draft_1", chat_id="8810909089")
+    receipt = outbox.send_reply(chat="Секретарь Никиты Р", body="канарейка", draft_id="draft_1", chat_id="8810909089", account_ref="telegram:540308572")
     request = captured["request"]
     assert request.full_url == "http://127.0.0.1:18095/send"
     assert request.get_header("Authorization") == "Bearer token-1"
-    assert json.loads(request.data.decode()) == {"chat": "Секретарь Никиты Р", "chat_id": "8810909089", "body": "канарейка"}
+    assert json.loads(request.data.decode()) == {"chat": "Секретарь Никиты Р", "chat_id": "8810909089", "account_id": "telegram:540308572", "body": "канарейка"}
     assert receipt == "telegram-qr:account-7:55:draft_1"
 
 

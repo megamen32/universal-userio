@@ -246,6 +246,12 @@ class SQLiteUserIOStore:
         for statement in script.split(";"):
             if statement.strip():
                 self._connection.execute(statement)
+        # Lightweight migration: conversations learn which connected account
+        # owns them so replies always leave from the identity the user picked.
+        try:
+            self._connection.execute("ALTER TABLE conversations ADD COLUMN account_ref TEXT NOT NULL DEFAULT ''")
+        except Exception:  # column already exists
+            pass
 
     @staticmethod
     def _digest(password: str, salt: bytes | None = None, iterations: int = _ITERATIONS) -> tuple[bytes, bytes]:
@@ -1004,9 +1010,21 @@ class SQLiteUserIOStore:
         return {
             "id": row["id"], "route_id": row["route_id"], "response_mode": row["response_mode"],
             "identity_id": row["identity_id"], "source": row["source"], "sender": row["sender"],
+            "account_ref": str(row["account_ref"] or ""),
             "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
         }
+
+    def set_conversation_account(
+        self, conversation_id: str, account_ref: str, *, user_id: str | None = None
+    ) -> bool:
+        """Pin (or clear) which connected account owns and replies in this chat."""
+        user_id = self._user(user_id)
+        with self._lock, self._connection:
+            return self._connection.execute(
+                "UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?",
+                (account_ref.strip(), user_id, conversation_id),
+            ).rowcount == 1
 
     def message(
         self, message_id: str, *, source: str | None = None, user_id: str | None = None,
@@ -1070,7 +1088,7 @@ class SQLiteUserIOStore:
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,
+                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,c.account_ref,
                        (SELECT body FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
                         ORDER BY received_at DESC LIMIT 1) AS preview,
                        (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
