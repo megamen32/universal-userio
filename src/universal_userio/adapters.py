@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .channels.core import AdapterNotSupported
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 from .contracts import ChannelFile, InboxMessage, ReplyDraft
 
 if TYPE_CHECKING:
@@ -130,6 +132,59 @@ class NoticePlaceOutboxClient:
         if not isinstance(message_ref, str) or not message_ref:
             raise RuntimeError("chatgpt-cdp-mcp returned no sent-message receipt")
         return message_ref
+
+
+class ByokBridgeGenerator:
+    """Draft generator that runs a user's own endpoint through the byok-bridge.
+
+    The bridge wraps @bezrabotnyi/byok (SSRF-safe: HTTPS-only, public IPs),
+    so UserIO never calls arbitrary user URLs itself.
+    """
+
+    def __init__(self, *, bridge_url: str, bridge_token: str, endpoint: str, model: str, api_key: str,
+                 runner: Any = urllib.request.urlopen, timeout: int = 90) -> None:
+        self._bridge_url, self._bridge_token = bridge_url.rstrip("/"), bridge_token
+        self._endpoint, self._model, self._api_key = endpoint, model, api_key
+        self._runner, self._timeout = runner, timeout
+
+    def suggest_with_context(self, *, conversation_id: str, latest_message: InboxMessage,
+                             history: Sequence[dict[str, object]], limit: int) -> list[str]:
+        transcript = "\n".join(f"{entry.get('sender', 'contact')}: {entry.get('body', '')}" for entry in history[-20:])
+        prompt = (
+            "You write concise reply drafts for a human operator. Return only the proposed reply text. "
+            f"Conversation {conversation_id}; source={latest_message.source}.\nHistory:\n{transcript}"
+        )
+        drafts: list[str] = []
+        for _ in range(max(1, limit)):
+            text = self._chat(prompt)
+            if text and text not in drafts:
+                drafts.append(text)
+            if len(drafts) >= limit:
+                break
+        return drafts
+
+    def _chat(self, prompt: str) -> str:
+        payload = {
+            "base_url": self._endpoint, "api_key": self._api_key, "model_id": self._model,
+            "prompt": prompt, "max_output_tokens": 2000,
+        }
+        request = urllib.request.Request(  # noqa: S310
+            self._bridge_url + "/chat",
+            data=json.dumps(payload, ensure_ascii=False).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._bridge_token}"},
+            method="POST",
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                if int(response.status) != 200:
+                    raise RuntimeError(f"BYOK bridge returned HTTP {response.status}")
+                data = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:200]
+            raise RuntimeError(f"BYOK bridge returned HTTP {error.code}: {detail}") from error
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError("BYOK bridge is unreachable") from error
+        return _THINK_BLOCK.sub("", str(data.get("text", ""))).strip()
 
 
 class TelegramQrHttpOutbox:

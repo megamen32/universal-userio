@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from collections.abc import Sequence
 
@@ -24,6 +25,7 @@ class UserIOService:
         self._store = store
         self._generator = generator
         self._outbox = outbox
+        self._user_generators: dict[str, object] = {}
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
         self.gmail_outbox = gmail_outbox
         self.telegram_outbox = telegram_outbox
@@ -94,6 +96,28 @@ class UserIOService:
         self._store.add_draft(draft, user_id=user_id)
         return draft
 
+    def _generator_for(self, user_id: str | None) -> object:
+        """BYOK: a user's own endpoint/model/key wins over the server default."""
+        resolved = self._store.default_user_id if user_id is None else user_id
+        cached = self._user_generators.get(resolved)
+        if cached is not None:
+            return cached
+        settings = self._store.ai_settings(user_id=resolved)
+        if settings is None:
+            return self._generator
+        bridge_url = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").strip()
+        bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "").strip()
+        if not bridge_url or not bridge_token:
+            return self._generator
+        from .adapters import ByokBridgeGenerator
+
+        generator = ByokBridgeGenerator(
+            bridge_url=bridge_url, bridge_token=bridge_token,
+            endpoint=settings["endpoint"], model=settings["model"], api_key=settings["token"],
+        )
+        self._user_generators[resolved] = generator
+        return generator
+
     def propose_variants(
         self, conversation_id: str, message: InboxMessage, *, limit: int = 3,
         user_id: str | None = None,
@@ -102,8 +126,9 @@ class UserIOService:
             raise ValueError("draft limit must be positive")
         if self._store.conversation(conversation_id, user_id=user_id) is None:
             raise KeyError("conversation not found")
-        suggest_variants = getattr(self._generator, "suggest_variants", None)
-        suggest_with_context = getattr(self._generator, "suggest_with_context", None)
+        generator = self._generator_for(user_id)
+        suggest_variants = getattr(generator, "suggest_variants", None)
+        suggest_with_context = getattr(generator, "suggest_with_context", None)
         generated: Sequence[str]
         record = self._store.conversation(conversation_id, user_id=user_id)
         history = [] if record is None else list(record["messages"])
@@ -112,7 +137,7 @@ class UserIOService:
         elif callable(suggest_variants):
             generated = suggest_variants(conversation_id=conversation_id, latest_message=message, limit=limit)
         else:
-            generated = [self._generator.suggest(conversation_id=conversation_id, latest_message=message)]
+            generated = [generator.suggest(conversation_id=conversation_id, latest_message=message)]
         bodies = [str(body).strip() for body in generated if str(body).strip()][:limit]
         if not bodies:
             raise ValueError("AI produced no reply variants")

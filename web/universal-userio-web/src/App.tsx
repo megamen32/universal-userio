@@ -203,6 +203,9 @@ export function App() {
   const [newChatPhone, setNewChatPhone] = useState("")
   const [editDraftId, setEditDraftId] = useState("")
   const [editDraftBody, setEditDraftBody] = useState("")
+  const [byokOpen, setByokOpen] = useState(false)
+  const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
+  const [byokMine, setByokMine] = useState(false)
   const toastTimer = useRef<number | undefined>(undefined)
   const notify = (message: string) => {
     setToast(message)
@@ -238,6 +241,7 @@ export function App() {
   }, [conversation?.id, conversation?.messages.length, conversation?.drafts.length])
 
   useEffect(() => { void api<{ accounts: Account[] }>("/v1/accounts").then((data) => setAccounts(data.accounts)) }, [])
+  useEffect(() => { void loadByok() }, [])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void refreshChats() }, [refreshChats])
@@ -341,6 +345,33 @@ export function App() {
       notify(`Не удалось удалить черновик: ${(error as Error).message}`)
     }
   }
+  const loadByok = async () => {
+    try {
+      const data = await api<{ endpoint: string; model: string; has_key: boolean }>("/v1/ai-settings", { method: "POST", body: "{}" })
+      setByokMine(data.has_key)
+      setByokForm({ endpoint: data.endpoint, model: data.model, token: "" })
+    } catch { /* server default is fine */ }
+  }
+  const saveByok = async () => {
+    try {
+      await api("/v1/ai-settings/save", { method: "POST", body: JSON.stringify(byokForm) })
+      setByokOpen(false)
+      await loadByok()
+      notify("Свой ИИ сохранён — кнопка «ИИ» работает через ваш ключ")
+    } catch (error) {
+      notify(`Не удалось сохранить: ${(error as Error).message}`)
+    }
+  }
+  const resetByok = async () => {
+    try {
+      await api("/v1/ai-settings/reset", { method: "POST", body: "{}" })
+      setByokOpen(false)
+      await loadByok()
+      notify("Вернулись к серверному ИИ")
+    } catch (error) {
+      notify(`Не удалось сбросить: ${(error as Error).message}`)
+    }
+  }
   const askAi = async () => {
     if (!conversation || !canReply) return
     try {
@@ -400,6 +431,7 @@ export function App() {
       <Button className="mb-2 w-full justify-start" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><Inbox /> Все чаты</Button>
       {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)}{unreadByPlatform[platform] > 0 && <Badge className="rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">{unreadByPlatform[platform]}</Badge>} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }}>Все: {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => { const visible = !hiddenAccounts.includes(item.id); const last = chats.filter((chat) => chat.source === sourceForAccount(item)).reduce((acc, chat) => Math.max(acc, chat.account_last_at ?? 0), 0); const health = accountHealth(item, last || item.last_synced_at); return <div key={item.id} className="mt-1 flex items-center gap-1"><Button className="min-w-0 flex-1 justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}><span className={`mr-1.5 inline-block size-2 shrink-0 rounded-full ${HEALTH_CLASS[health]}`} title={HEALTH_TITLE[health]} aria-label={HEALTH_TITLE[health]} /><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar><span className="truncate">{item.display_name}</span>{item.capabilities.length === 0 && <span className="ml-auto text-[10px] text-muted-foreground">только чтение</span>}</Button><input aria-label={`Показать ${item.display_name}`} type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} /><Button aria-label={`Удалить ${item.display_name}`} title="Удалить аккаунт" variant="ghost" size="icon" onClick={() => void removeAccount(item.id)}><X className="size-3" /></Button></div> })}{platform === "gmail" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/gmail/connect/new")}><Plus /> Добавить Gmail</Button>}{platform === "telegram" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/telegram-qr/new")}><Plus /> Добавить Telegram</Button>}{platform === "vk" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/vk/connect/new")}><Plus /> Добавить VK</Button>}{platform === "whatsapp" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus /> Добавить WhatsApp</Button>}</div></details>)}
     </ScrollArea>
+    <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadByok(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
     <div className="flex items-center gap-2 border-t p-3 text-xs text-muted-foreground"><form method="post" action="/auth/logout"><Button type="submit" variant="ghost" size="sm"><LogOut /> Выйти</Button></form><span>ИИ предлагает только по запросу.</span></div>
   </>
 
@@ -456,6 +488,19 @@ export function App() {
         <footer className="border-t bg-card p-3 md:p-4"><div className="flex gap-2"><Input value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Написать ответ…" : "Ответы недоступны: аккаунт только для чтения"} /><Button disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик (Enter)"><Send /></Button><Button disabled={!canReply} variant="outline" size="sm" className="h-9 shrink-0 gap-1.5 px-3" onClick={() => void askAi()} title="ИИ прочитает переписку и предложит варианты ответа — появится черновиком ниже"><Sparkles className="size-4" /> ИИ</Button></div><p className="mt-2 text-xs text-muted-foreground">{canReply ? "Сначала черновик, затем явная отправка." : "Отправка не настроена для этого аккаунта."}</p></footer>
       </> : <div className="hidden flex-1 place-items-center text-center md:grid"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Скрыть список" : "Показать список"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Выберите чат</h2><p className="mt-1 text-sm text-muted-foreground">Аккаунты, платформы и переписки остаются раздельными.</p></div></div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
+      {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+          <h2 className="font-semibold">Свой ИИ (BYOK)</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Кнопка «ИИ» будет работать через ваш ключ. Подойдёт любой OpenAI-совместимый API (MiniMax, OpenAI, routerai…). Ключ хранится на сервере и не показывается обратно.</p>
+          <div className="mt-3 space-y-2">
+            <Input value={byokForm.endpoint} onChange={(event) => setByokForm({ ...byokForm, endpoint: event.target.value })} placeholder="https://api.minimax.io/v1" />
+            <Input value={byokForm.model} onChange={(event) => setByokForm({ ...byokForm, model: event.target.value })} placeholder="MiniMax-M2.7" />
+            <Input type="password" value={byokForm.token} onChange={(event) => setByokForm({ ...byokForm, token: event.target.value })} placeholder="API-ключ" />
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <Button variant="outline" size="sm" onClick={() => void resetByok()}>Сбросить к серверному</Button>
+            <span className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setByokOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void saveByok()}>Сохранить</Button></span>
+          </div>
+        </div></div>}
       {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новый SMS-чат</h2><p className="mt-1 text-xs text-muted-foreground">Отправка пойдёт с подключённого телефона-агента после вашего approve.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder="+79XXXXXXXXX" autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Закрыть</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Письмо" /></div>}
       {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">Сообщение {attachmentPreview.message.message_id}{attachmentPreview.meta?.size ? ` · ${humanSize(attachmentPreview.meta.size)}` : ""}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : attachmentPreview.meta.content_type === "application/pdf" ? <iframe title="PDF preview" src={attachmentPreview.meta.download_url} className="h-72 w-full rounded-lg border bg-white" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.content_type || "Файл"} · {humanSize(attachmentPreview.meta.size ?? 0)} — превью недоступно, скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
