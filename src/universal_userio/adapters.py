@@ -35,10 +35,30 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     body = str(payload.get("body") or "").strip()
     if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail"} and not source.startswith("gmail:"):
         raise ValueError("unsupported message source")
-    if not message_id or not sender or not body:
-        raise ValueError("inbox message requires message_id, sender and body")
+    if not message_id or not sender:
+        raise ValueError("inbox message requires message_id and sender")
     sender_name = str(payload.get("sender_name") or "").strip()
-    return InboxMessage(source, message_id, sender, body, received_at, sender_name=sender_name)
+    raw_attachments = payload.get("attachments")
+    parsed_attachments: list[dict[str, Any]] = []
+    if isinstance(raw_attachments, list):
+        for idx, item in enumerate(raw_attachments):
+            if not isinstance(item, Mapping):
+                continue
+            att = {"idx": idx}
+            for key in ("kind", "content_type", "filename", "src", "attachment_id", "provider_ref"):
+                if key in item and item[key] is not None:
+                    att[key] = item[key]
+            if "size" in item and item["size"] is not None:
+                try:
+                    att["size"] = int(item["size"])
+                except (TypeError, ValueError):
+                    pass
+            parsed_attachments.append(att)
+    return InboxMessage(
+        source, message_id, sender, body, received_at,
+        sender_name=sender_name,
+        attachments=tuple(parsed_attachments),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +222,7 @@ class AndroidSmsGatewayClient:
         receipt = result.get("id")
         if not isinstance(receipt, str) or not receipt:
             raise RuntimeError("Android SMS Gateway returned no accepted-message receipt")
-        if result.get("status") != "accepted_by_android":
+        if result.get("status") not in {"accepted_by_android", "queued_for_device"}:
             raise RuntimeError("Android SMS Gateway did not accept the message")
         return receipt
 
@@ -383,10 +403,103 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
 class VKChannelAdapter(StoredChannelAdapter):
     channel = "vk"
 
+    def __init__(
+        self,
+        store: SQLiteUserIOStore,
+        service: UserIOService,
+        user_id: str,
+        *,
+        gateway_url: str | None = None,
+        runner: Any = urllib.request.urlopen,
+    ) -> None:
+        super().__init__(store, service, user_id)
+        self._gateway_url = (gateway_url or os.environ.get("USERIO_VK_EXTENSION_GATEWAY_URL", "")).rstrip("/")
+        self._runner = runner
+
+    def list_attachments(self, *, message_id: str) -> list[dict[str, Any]]:
+        return self._store.attachments_for_message(
+            source="vk", message_id=message_id, user_id=self._user_id,
+        )
+
     def download(self, *, file_ref: str) -> ChannelFile:
-        raise AdapterNotSupported(
-            "VK media flows through the browser extension; UserIO does not hold a VK API token. "
-            "Open the attachment in the VK Inbox extension or wire a VK API token into UserIO first.",
+        # The bytes always live in the VK browser extension's IndexedDB. A
+        # gateway URL bridges UserIO into that storage; without one there is
+        # honestly nothing we can fetch. Surface that truth first so callers
+        # don't see a misleading attachment-not-found when production simply
+        # hasn't been pointed at the extension yet.
+        if not self._gateway_url:
+            raise AdapterNotSupported(
+                "VK media flows through the browser extension; UserIO does not hold a VK API token. "
+                "Set USERIO_VK_EXTENSION_GATEWAY_URL or open the attachment in the VK Inbox extension.",
+            )
+        record = self._store.attachment_by_id(file_ref, user_id=self._user_id)
+        message_id = ""
+        if record is None:
+            # Fall back: caller may have passed "{message_id}:{idx}" if attachment_id
+            # round-trip is broken.
+            message_id, sep, idx = file_ref.partition(":")
+            attachments = self._store.attachments_for_message(
+                source="vk", message_id=message_id, user_id=self._user_id,
+            )
+            record = next(
+                (a for a in attachments if str(a.get("idx")) == idx),
+                None,
+            )
+            if record is None:
+                raise AdapterNotSupported(f"vk attachment {file_ref!r} not found")
+        else:
+            message_id = str(record.get("message_id") or "")
+        # Resolve peer_id from the stored message; the gateway keys blobs on it.
+        message_row = (
+            self._store.message(message_id, source="vk", user_id=self._user_id)
+            if message_id else None
+        )
+        peer_id = ""
+        if message_row is not None:
+            # VK stores the actual peer (chat/user id) in `sender`; display_name
+            # already lives in conversations.name.
+            peer_id = str(message_row.get("sender") or "")
+        payload = json.dumps({
+            "peer_id": peer_id,
+            "msg_id": str(record.get("message_id") or ""),
+            "idx": int(record.get("idx") or 0),
+            "attachment_id": record.get("attachment_id") or file_ref,
+        }).encode()
+        request = urllib.request.Request(
+            f"{self._gateway_url}/vk/attachment",
+            data=payload, method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {os.environ.get('USERIO_API_TOKEN', '')}",
+            },
+        )
+        try:
+            with self._runner(request, timeout=60) as response:
+                content_type = response.headers.get("Content-Type", "") or ""
+                data = response.read()
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:200]
+            raise AdapterNotSupported(
+                f"vk extension gateway refused download: HTTP {error.code} {detail or error.reason}",
+            ) from error
+        except (OSError, urllib.error.URLError) as error:
+            raise AdapterNotSupported(f"vk extension gateway is unreachable: {error}") from error
+        if "application/json" in content_type.lower():
+            try:
+                payload_obj = json.loads(data.decode() or "{}")
+            except json.JSONDecodeError:
+                payload_obj = {}
+            if isinstance(payload_obj, dict) and payload_obj.get("error"):
+                raise AdapterNotSupported(
+                    f"vk extension gateway returned error: {payload_obj['error']}"
+                )
+        return ChannelFile(
+            filename=str(record.get("filename") or f"vk-{record.get('attachment_id') or file_ref}"),
+            content_type=str(
+                record.get("content_type") or content_type.split(";", 1)[0]
+                or "application/octet-stream"
+            ),
+            data=bytes(data),
         )
 
 
