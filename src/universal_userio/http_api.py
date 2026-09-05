@@ -18,6 +18,8 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Type
 from urllib.parse import parse_qs, unquote, urlparse
+import urllib.error
+import urllib.request
 
 from . import collect
 from .adapters import inbox_message_from_envelope
@@ -361,6 +363,21 @@ def handler(
                         "model": settings["model"] if settings else "",
                         "has_key": settings is not None,
                     })
+                    return
+                if path == "/v1/ai-presets":
+                    bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
+                    bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "")
+                    if not bridge:
+                        self._reply(200, {"presets": [], "source": "disabled"})
+                        return
+                    proxy_request = urllib.request.Request(  # noqa: S310
+                        bridge + "/presets", headers={"Authorization": f"Bearer {bridge_token}"},
+                    )
+                    try:
+                        with urllib.request.urlopen(proxy_request, timeout=10) as bridge_response:
+                            self._reply(200, json.loads(bridge_response.read()))
+                    except (OSError, urllib.error.URLError):
+                        self._reply(200, {"presets": [], "source": "unavailable"})
                     return
                 if path == "/v1/ai-settings/save":
                     payload = self._json()

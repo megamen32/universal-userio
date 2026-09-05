@@ -5,7 +5,7 @@
     "": {
       "name": "byok-bridge",
       "dependencies": {
-        "@bezrabotnyi/byok": "github:megamen32/byok#v1.0.0",
+        "@bezrabotnyi/byok": "github:megamen32/byok#v1.0.1",
       },
     },
   },
@@ -22,7 +22,7 @@
 
     "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.35", "", { "dependencies": { "@ai-sdk/provider": "4.0.10", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8", "undici": "^7.28.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-Ukfa9aFLwCqfGaBESrcivbedkEvHfULqrzWdxjNlcZMhPs9XcrPs4YXia94jDqbppIIlscarSm4/OhQflP/Fug=="],
 
-    "@bezrabotnyi/byok": ["@bezrabotnyi/byok@github:megamen32/byok#d1744cb", { "dependencies": { "@ai-sdk/anthropic": "4.0.47", "@ai-sdk/open-responses": "2.0.37", "@ai-sdk/openai-compatible": "3.0.42", "ai": "7.0.89", "ipaddr.js": "2.5.0", "undici": "7.29.0", "zod": "^4.0.2" } }, "megamen32-byok-d1744cb", "sha512-e+EicTEYvLQKATFcxmgudBd6j/kYEA2b4f0lhdT85Sap2rzyFB/lNgOReg7MEFKqB9Yvxj/hayt+0y5vR9Xqjg=="],
+    "@bezrabotnyi/byok": ["@bezrabotnyi/byok@github:megamen32/byok#8b58fda", { "dependencies": { "@ai-sdk/anthropic": "4.0.47", "@ai-sdk/open-responses": "2.0.37", "@ai-sdk/openai-compatible": "3.0.42", "ai": "7.0.89", "ipaddr.js": "2.5.0", "undici": "7.29.0", "zod": "^4.0.2" } }, "megamen32-byok-8b58fda", "sha512-RbKkeajA5cv++d0V7c4fswRZ69XkY24wLlKIrubZIljpT1Av8DLJCd+RY4du+fi/swFNnFuyZ2mWFaONSlpzkg=="],
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 

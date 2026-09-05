@@ -206,6 +206,7 @@ export function App() {
   const [byokOpen, setByokOpen] = useState(false)
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
+  const [byokPresets, setByokPresets] = useState<{ id: string; label: string; description: string; apiFormat: string; baseUrl: string; modelId: string; priceLabel: string }[]>([])
   const toastTimer = useRef<number | undefined>(undefined)
   const notify = (message: string) => {
     setToast(message)
@@ -352,6 +353,12 @@ export function App() {
       setByokForm({ endpoint: data.endpoint, model: data.model, token: "" })
     } catch { /* server default is fine */ }
   }
+  const loadPresets = async () => {
+    try {
+      const data = await api<{ presets: typeof byokPresets }>("/v1/ai-presets", { method: "POST", body: "{}" })
+      setByokPresets(data.presets || [])
+    } catch { /* presets are optional */ }
+  }
   const saveByok = async () => {
     try {
       await api("/v1/ai-settings/save", { method: "POST", body: JSON.stringify(byokForm) })
@@ -431,7 +438,7 @@ export function App() {
       <Button className="mb-2 w-full justify-start" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><Inbox /> Все чаты</Button>
       {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)}{unreadByPlatform[platform] > 0 && <Badge className="rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">{unreadByPlatform[platform]}</Badge>} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }}>Все: {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => { const visible = !hiddenAccounts.includes(item.id); const last = chats.filter((chat) => chat.source === sourceForAccount(item)).reduce((acc, chat) => Math.max(acc, chat.account_last_at ?? 0), 0); const health = accountHealth(item, last || item.last_synced_at); return <div key={item.id} className="mt-1 flex items-center gap-1"><Button className="min-w-0 flex-1 justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}><span className={`mr-1.5 inline-block size-2 shrink-0 rounded-full ${HEALTH_CLASS[health]}`} title={HEALTH_TITLE[health]} aria-label={HEALTH_TITLE[health]} /><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar><span className="truncate">{item.display_name}</span>{item.capabilities.length === 0 && <span className="ml-auto text-[10px] text-muted-foreground">только чтение</span>}</Button><input aria-label={`Показать ${item.display_name}`} type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} /><Button aria-label={`Удалить ${item.display_name}`} title="Удалить аккаунт" variant="ghost" size="icon" onClick={() => void removeAccount(item.id)}><X className="size-3" /></Button></div> })}{platform === "gmail" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/gmail/connect/new")}><Plus /> Добавить Gmail</Button>}{platform === "telegram" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/telegram-qr/new")}><Plus /> Добавить Telegram</Button>}{platform === "vk" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/vk/connect/new")}><Plus /> Добавить VK</Button>}{platform === "whatsapp" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus /> Добавить WhatsApp</Button>}</div></details>)}
     </ScrollArea>
-    <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadByok(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
+    <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
     <div className="flex items-center gap-2 border-t p-3 text-xs text-muted-foreground"><form method="post" action="/auth/logout"><Button type="submit" variant="ghost" size="sm"><LogOut /> Выйти</Button></form><span>ИИ предлагает только по запросу.</span></div>
   </>
 
@@ -490,7 +497,16 @@ export function App() {
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
           <h2 className="font-semibold">Свой ИИ (BYOK)</h2>
-          <p className="mt-1 text-xs text-muted-foreground">Кнопка «ИИ» будет работать через ваш ключ. Подойдёт любой OpenAI-совместимый API (MiniMax, OpenAI, routerai…). Ключ хранится на сервере и не показывается обратно.</p>
+          {byokPresets.length > 0 && <div className="mt-3 grid max-h-44 grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
+              {byokPresets.map((preset) => (
+                <button key={preset.id} className="rounded-lg border bg-background/60 p-2 text-left text-xs hover:border-primary" title={preset.description} onClick={() => setByokForm({ ...byokForm, endpoint: preset.baseUrl, model: preset.modelId })}>
+                  <b>{preset.label}</b>
+                  <span className="block truncate text-[11px] text-muted-foreground">{preset.modelId || preset.description}</span>
+                  <span className="block text-[10px] text-muted-foreground">{preset.priceLabel}</span>
+                </button>
+              ))}
+            </div>}
+            <p className="mt-1 text-xs text-muted-foreground">Кнопка «ИИ» будет работать через ваш ключ. Подойдёт любой OpenAI-совместимый API (MiniMax, OpenAI, routerai…). Ключ хранится на сервере и не показывается обратно.</p>
           <div className="mt-3 space-y-2">
             <Input value={byokForm.endpoint} onChange={(event) => setByokForm({ ...byokForm, endpoint: event.target.value })} placeholder="https://api.minimax.io/v1" />
             <Input value={byokForm.model} onChange={(event) => setByokForm({ ...byokForm, model: event.target.value })} placeholder="MiniMax-M2.7" />
