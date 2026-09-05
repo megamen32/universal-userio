@@ -9,8 +9,9 @@ import { buildShowcasePresets } from '@bezrabotnyi/byok/showcase'
 // Cost ledger: every /chat is priced and recorded with the caller's
 // user/task context; BYOK_LEDGER_PERSIST=0 disables remembering.
 const ledger = new ByokLedger({
-  persist: process.env.BYOK_LEDGER_PERSIST !== '0',
+  persist: true,
   file: process.env.BYOK_LEDGER_FILE || '/var/lib/universal-userio/byok-ledger.jsonl',
+  fxFile: process.env.BYOK_FX_FILE || '/var/lib/universal-userio/byok-fx.json',
 })
 
 const port = Number(process.env.PORT || 30110)

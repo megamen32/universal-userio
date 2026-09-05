@@ -14,7 +14,9 @@
     "https://userapi.com/*",
     "https://sun1.userapi.com/*",
     "https://sun9.userapi.com/*",
-    "https://pp.userapi.com/*"
+    "https://pp.userapi.com/*",
+    "http://192.168.2.100/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "scripts": ["lib/db.js", "lib/userio.js", "lib/collect.js", "background.js"],
