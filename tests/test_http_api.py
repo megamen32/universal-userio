@@ -192,6 +192,38 @@ def test_conversation_media_endpoint_describes_attachment_placeholder(tmp_path) 
         server.server_close()
 
 
+
+def test_transcribed_audio_media_keeps_voice_kind_after_body_promotion(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage(
+            "telegram", "voice-1", "client", "Распознанный текст", 1.0,
+            attachments=({
+                "kind": "voice", "content_type": "audio/ogg", "filename": "voice-1.ogg",
+                "transcript": "Распознанный текст", "transcription_status": "completed",
+                "transcription_model": "whisper-1",
+            },),
+        ),
+        route_id="tg-reply",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/conversations/{cid}/media/voice-1",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert payload["kind"] == "voice"
+        assert payload["attachments"][0]["transcription_status"] == "completed"
+        assert payload["attachments"][0]["transcription_model"] == "whisper-1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_conversation_media_endpoint_rejects_unknown_message(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     cid, _ = service.receive(
