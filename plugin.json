@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "universal-userio",
+  "version": "0.1.0",
+  "description": "Read, search, subscribe to, and optionally act on the owner's unified communications through Universal UserIO.",
+  "author": {"name": "megamen32", "url": "https://github.com/megamen32"},
+  "repository": "https://github.com/megamen32/universal-userio",
+  "license": "MIT",
+  "keywords": ["userio", "inbox", "gmail", "telegram", "whatsapp", "sms", "matrix", "mcp"]
+}

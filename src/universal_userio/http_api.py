@@ -34,7 +34,7 @@ from .service import DeliveryUnavailableError, UserIOService
 _STATIC_ROOT = Path(__file__).with_name("static")
 _HIMALAYA_CONFIG = Path("/home/roomhacker/.config/himalaya/config.toml")
 _GMAIL_SECRET_ROOT = Path("/home/roomhacker/.hermes/secrets/universal-userio-gmail")
-_GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-inbox/gmail-accounts.txt")
+_GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-userio/gmail-accounts.txt")
 _GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
 _DASHBOARD_SESSION_LIFETIME = 12 * 60 * 60
 

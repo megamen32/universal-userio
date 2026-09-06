@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "UserIO": {
+      "type": "streamable-http",
+      "url": "https://msg.bezrabotnyi.com/mcp"
+    }
+  }
+}

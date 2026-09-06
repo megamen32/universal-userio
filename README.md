@@ -5,6 +5,17 @@ NoticePlace. It owns conversations, user identities, AI reply drafts and
 approval. It does **not** poll providers, hold browser sessions, or select
 delivery URLs.
 
+## Agent Plugin 1.0
+
+Universal UserIO is also a portable [Agent Plugins 1.0](https://agent-plugins.org/specification/) package. Point a compatible client at:
+
+```text
+https://github.com/megamen32/universal-userio
+```
+
+The package declares the remote MCP endpoint `https://msg.bezrabotnyi.com/mcp`. Authentication is client-managed; keep the bearer token in the client's secret/config store, not in the plugin repository.
+
+
 ## MCP first
 
 Run `python -m universal_userio` to expose a stdio MCP server. Its primary
