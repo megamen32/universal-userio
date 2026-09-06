@@ -111,14 +111,34 @@ function postInbox(accountId, envelope) {
   });
 }
 
+function telegramProxy() {
+  const ip = String(process.env.TELEGRAM_PROXY_IP || "").trim();
+  const port = Number(process.env.TELEGRAM_PROXY_PORT || 0);
+  if (!ip || !Number.isSafeInteger(port) || port <= 0) return null;
+  const secret = String(process.env.TELEGRAM_PROXY_SECRET || "").trim();
+  if (secret) return { ip, port, secret, MTProxy: true };
+  const proxy = { ip, port, socksType: Number(process.env.TELEGRAM_PROXY_SOCKS_TYPE || 5) };
+  if (process.env.TELEGRAM_PROXY_USERNAME) proxy.username = process.env.TELEGRAM_PROXY_USERNAME;
+  if (process.env.TELEGRAM_PROXY_PASSWORD) proxy.password = process.env.TELEGRAM_PROXY_PASSWORD;
+  return proxy;
+}
+
+function telegramClientOptions(connectionRetries, retryDelay) {
+  const options = { connectionRetries };
+  if (retryDelay) options.retryDelay = retryDelay;
+  const proxy = telegramProxy();
+  if (proxy) options.proxy = proxy;
+  return options;
+}
+
 function newClient() {
   const { apiId, apiHash } = credentials();
-  return new TelegramClient(new StringSession(""), apiId, apiHash, { connectionRetries: 3 });
+  return new TelegramClient(new StringSession(""), apiId, apiHash, telegramClientOptions(3, 0));
 }
 
 function newSyncClient(sessionString) {
   const { apiId, apiHash } = credentials();
-  return new TelegramClient(new StringSession(sessionString), apiId, apiHash, { connectionRetries: 5, retryDelay: 2000 });
+  return new TelegramClient(new StringSession(sessionString), apiId, apiHash, telegramClientOptions(5, 2000));
 }
 
 // Shared 2FA password prompt: env password (non-interactive) or the page form.
