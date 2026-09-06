@@ -1,9 +1,10 @@
 # Universal UserIO
 
-Universal UserIO is the business/control plane above Universal Inbox and
-NoticePlace. It owns conversations, user identities, AI reply drafts and
-approval. It does **not** poll providers, hold browser sessions, or select
-delivery URLs.
+Universal UserIO is the canonical messaging runtime for human communications.
+It owns users, accounts, conversations, messages, attachments, source cursors,
+deduplication, per-user policy, AI drafts, approval and MCP 2.0 subscriptions.
+Provider libraries/sidecars own provider sessions and transport details.
+NoticePlace is intentionally separate and is reserved for system/agent alerts.
 
 ## Agent Plugin 1.0
 
@@ -34,8 +35,8 @@ legacy `USERIO_API_TOKEN` remains a service-account token mapped to the seeded
 owner, so existing exmanager configuration keeps working.
 
 ```text
-providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
-                           read       send only after approval
+provider adapters / sidecars -> Universal UserIO -> provider adapters / sidecars
+              ingress + subscribe        send only after per-user policy + approval
 ```
 
 ## MVP contract
@@ -43,7 +44,7 @@ providers -> Universal Inbox -> UserIO -> NoticePlace -> provider adapters
 1. `universal.inbox.message.v1` becomes one durable conversation message.
 2. An AI provider produces a draft, never a delivery.
 3. A human approves or rejects the draft.
-4. Only approval emits `userio.reply.v1` to a scoped NoticePlace route.
+4. Only approval may call the conversation provider's direct outbox.
 
 The business control plane adds identity mapping (`channel external ID → person`)
 and a per-person/channel reply rule. Modes are `suggest` (draft only),
@@ -134,21 +135,16 @@ routes or code):
 | sms | `USERIO_SMS_GATEWAY_URL`, `USERIO_SMS_GATEWAY_TOKEN` |
 | vk | injected `reader`/`sender` callables (extension-owned delivery) |
 
-Service integration: `USERIO_LIVE_TELEGRAM=1` makes the UserIO service
-deliver approved `telegram` drafts in-process through
-`LiveTelegramOutbox`/`SyncChannelRunner` instead of a NoticePlace route;
-without the flag the store-view + NoticePlace flow is unchanged.
+Service integration uses provider-owned transports directly. Telegram can use
+the QR sidecar or `LiveTelegramOutbox`; Gmail uses Himalaya; SMS uses the Android
+gateway. Providers without a configured `reply` capability fail closed.
 
 ## Boundaries
 
-- Universal Inbox owns source cursors, deduplication and canonical ingress.
-- UserIO owns business identity, conversation state, drafts and approval.
-- NoticePlace owns durable delivery, destination credentials, retries and
-  provider receipts.
-
-`route_id` is a UserIO control-plane reference. The deployment maps it to a
-scoped NoticePlace consumer token; neither the AI nor a client submits a
-provider credential or URL.
+- UserIO owns canonical ingress, cursors, deduplication, identity, conversations, drafts and per-user policy.
+- `userio_adapter_sdk` is the stable provider-neutral dependency boundary.
+- Provider libraries/sidecars own provider credentials, sessions and direct delivery.
+- NoticePlace owns system/agent notifications and escalation only; ordinary human replies never route through it.
 
 ## Minimal API
 
@@ -168,8 +164,8 @@ and a configured `route_id`. It returns a proposed draft; it never sends a
 reply.
 
 `POST /v1/drafts/{draft_id}/approve` is the single send authority. The
-`route_id` resolves to a server-side `NoticePlaceRoute`, so a caller cannot
-supply an arbitrary destination, token, or provider URL.
+conversation's registered provider/account selects a deployment-owned direct
+outbox; a caller cannot supply an arbitrary destination, credential or URL.
 
 `GET /v1/conversations/{conversation_id}` returns durable history and draft
 state. All endpoints require a UserIO bearer token.
@@ -328,25 +324,18 @@ to UserIO — only the fetched response payloads. See
 
 ## Run
 
-Copy `.env.example` into deployment-owned secret configuration, set the UserIO
-API token, AI token/model, and the token variables referenced by the route
-registry. Then run `universal-userio`. The service binds to `127.0.0.1:18093`
-by default; publish it only through an authenticated internal ingress.
+Copy `.env.example` into deployment-owned secret configuration and set the
+UserIO API token plus AI/provider credentials used by the adapters you enable.
+Then run `universal-userio`. The service binds to `127.0.0.1:18093` by default;
+publish it only through an authenticated internal ingress.
 
 `deploy/universal-userio.service` and `deploy/INSTALL.md` provide the
 loopback-only systemd deployment contract.
 
-## Universal Inbox connection
+## Provider ingress
 
-Configure Universal Inbox with `UNIVERSAL_USERIO_INGRESS_URL`, a UserIO API
-token, and a `source → route_id` map. Inbox forwards each canonical durable
-message to `POST /v1/messages`; UserIO acknowledges the message before Inbox
-advances its source cursor. A shared trusted watcher should include its
-`account_id`; Gmail sources in the form `gmail:<alias>` are also resolved
-against the owning account automatically. The map is business routing metadata
-only, and non-owner routes must first be assigned with `/v1/channel-routes`.
-
-UserIO's `USERIO_ROUTES_JSON` is the reverse safe boundary: each `route_id`
-resolves to one NoticePlace endpoint and the name of a deployment-owned scoped
-token variable. Thus the model, HTTP caller, and Inbox cannot choose an
-arbitrary recipient or send provider credentials.
+Gmail, Matrix and SMS ingress workers normalize provider events and send them
+directly to `POST /v1/messages`. Telegram and WhatsApp QR sidecars do the same
+while retaining ownership of their provider sessions. UserIO acknowledges and
+deduplicates the canonical message before the provider cursor advances.
+`route_id` is policy metadata inside UserIO; it no longer maps to NoticePlace.

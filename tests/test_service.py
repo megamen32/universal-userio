@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from universal_userio.contracts import InboxMessage
-from universal_userio.adapters import NoticePlaceOutboxClient, NoticePlaceRoute, inbox_message_from_envelope
+from universal_userio.adapters import inbox_message_from_envelope
 from universal_userio.service import DeliveryUnavailableError, UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
@@ -86,40 +86,14 @@ def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     assert outbox.calls == []
 
 
-def test_canonical_inbox_envelope_and_policy_bound_outbox_contract() -> None:
+
+def test_canonical_inbox_envelope_contract() -> None:
     message = inbox_message_from_envelope(
         {"schema": "universal.inbox.message.v1", "source": "vk", "message_id": "m-1", "sender": "customer", "body": "hello"},
         received_at=1.0,
     )
-    requests = []
-
-    class Response:
-        status = 202
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        @staticmethod
-        def read() -> bytes:
-            return b'{"event_id":"evt_1"}'
-
-    def runner(request, *, timeout):
-        requests.append((request, timeout))
-        return Response()
-
-    outbox = NoticePlaceOutboxClient({"vk-reply": NoticePlaceRoute("http://127.0.0.1:8091", "scoped-token", "userio")}, runner=runner)
-    receipt = outbox.send_reply(route_id="vk-reply", conversation_id="conv_1", draft_id="draft_1", body="answer")
-
     assert message.conversation_key == "vk:customer"
-    assert receipt == "evt_1"
-    payload = __import__("json").loads(requests[0][0].data)
-    assert payload["event_type"] == "userio.reply.v1"
-    assert "target" not in payload
-    assert requests[0][0].get_header("Authorization") == "Bearer scoped-token"
-
+    assert message.message_id == "m-1"
 
 def test_identity_rule_enables_autosend_and_new_message_feed(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
