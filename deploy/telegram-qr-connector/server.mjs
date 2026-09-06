@@ -5,7 +5,7 @@ import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage } from "telegram/events/index.js";
 import QRCode from "qrcode";
-import { bodyAndAttachments, loadWhisperApiKey, transcribeTelegramAudio } from "./transcription.mjs";
+import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -401,6 +401,91 @@ function readBody(req) {
   });
 }
 
+function safeFilename(value, fallback = "telegram-media") {
+  const name = String(value || "").trim().replace(/[\\/\r\n\0"]/g, "_");
+  return name || fallback;
+}
+
+function mediaDownloadDescriptor(message) {
+  const audio = telegramAudioDescriptor(message);
+  if (audio) return { contentType: audio.contentType, filename: audio.filename };
+  const document = message?.media?.document;
+  if (document) {
+    const attributes = Array.isArray(document.attributes) ? document.attributes : [];
+    const filenameAttribute = attributes.find((attr) =>
+      String(attr?.className || attr?.constructor?.name || "").includes("DocumentAttributeFilename")
+    );
+    return {
+      contentType: String(document.mimeType || document.mime_type || "application/octet-stream"),
+      filename: safeFilename(filenameAttribute?.fileName || filenameAttribute?.file_name, `telegram-${message?.id || "document"}`),
+    };
+  }
+  if (message?.media?.photo) {
+    return { contentType: "image/jpeg", filename: `telegram-${message?.id || "photo"}.jpg` };
+  }
+  return { contentType: "application/octet-stream", filename: `telegram-${message?.id || "media"}` };
+}
+
+function readJsonBody(req, maxBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > maxBytes) req.destroy(new Error("request body too large"));
+    });
+    req.once("error", reject);
+    req.on("end", () => {
+      try { resolve(JSON.parse(raw || "{}")); }
+      catch (error) { reject(error); }
+    });
+  });
+}
+
+function telegramMessageLocator(payload) {
+  const ref = String(payload?.message_id || "").trim();
+  let chatKey = "";
+  let messageId = 0;
+  const split = ref.lastIndexOf(":");
+  if (split > 0) {
+    chatKey = ref.slice(0, split);
+    messageId = Number(ref.slice(split + 1));
+  } else {
+    messageId = Number(ref);
+  }
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new Error("valid message_id is required");
+  return {
+    chatKey,
+    messageId,
+    chat: String(payload?.chat || "").trim(),
+    chatId: String(payload?.chat_id || "").trim(),
+    accountId: String(payload?.account_id || "").trim(),
+  };
+}
+
+async function downloadTelegramMedia(payload) {
+  const locator = telegramMessageLocator(payload);
+  const candidates = [...liveSlots].filter(([, item]) =>
+    !locator.accountId || item.accountId === locator.accountId
+  );
+  for (const [slot, item] of candidates) {
+    if (!item.client) continue;
+    const peers = item.labelPeers;
+    const peer = (locator.chatKey && peers.idPeers.get(locator.chatKey))
+      || (locator.chatId && peers.idPeers.get(locator.chatId))
+      || (locator.chat && peers.labelPeers.get(locator.chat))
+      || null;
+    if (!peer) continue;
+    const messages = await item.client.getMessages(peer, { ids: [locator.messageId] });
+    const message = messages?.[0];
+    if (!message) continue;
+    if (!message.media) throw new Error(`message ${locator.messageId} has no media`);
+    const bytes = await item.client.downloadMedia(message);
+    if (!bytes?.length) throw new Error(`message ${locator.messageId} media download returned empty data`);
+    return { slot, bytes: Buffer.from(bytes), ...mediaDownloadDescriptor(message) };
+  }
+  throw new Error(`no connected Telegram account can resolve message ${locator.messageId}`);
+}
+
 function publicState() {
   return [...slots.entries()].map(([id, item]) => {
     const sync = syncs.get(id) || {};
@@ -475,6 +560,30 @@ http.createServer(async (req, res) => {
     void startQr(created);
     res.writeHead(302, { Location: `${publicPrefix}/?slot=${created}` });
     return res.end();
+  }
+  if (url.pathname === "/download" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const media = await downloadTelegramMedia(payload);
+      const filename = safeFilename(media.filename);
+      res.writeHead(200, {
+        "content-type": media.contentType || "application/octet-stream",
+        "content-length": String(media.bytes.length),
+        "content-disposition": `attachment; filename="${filename}"`,
+        "x-filename": filename,
+        "x-telegram-slot": media.slot,
+      });
+      return res.end(media.bytes);
+    } catch (error) {
+      console.error("download error:", (error && error.message) || error);
+      res.writeHead(404, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: (error && error.message) || "download failed" }));
+    }
   }
   if (url.pathname === "/send" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;

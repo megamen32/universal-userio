@@ -850,6 +850,9 @@ def handler(
                             "filename": a.get("filename"),
                             "size": a.get("size"),
                             "attachment_id": a.get("attachment_id"),
+                            "transcript": a.get("transcript"),
+                            "transcription_status": a.get("transcription_status"),
+                            "transcription_model": a.get("transcription_model"),
                         }
                         for a in attachments
                     ],

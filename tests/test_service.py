@@ -179,3 +179,84 @@ def test_send_policy_blocks_approval_but_keeps_drafts(tmp_path) -> None:
     import pytest
     with pytest.raises(DeliveryUnavailableError):
         service.approve(draft.id)
+
+
+def test_audio_transcript_is_promoted_to_canonical_body_and_persisted(tmp_path) -> None:
+    payload = {
+        "schema": "universal.inbox.message.v1",
+        "source": "telegram",
+        "message_id": "chat:77",
+        "sender": "chat",
+        "body": "[Telegram voice]",
+        "attachments": [{
+            "kind": "voice",
+            "content_type": "audio/ogg",
+            "filename": "voice-77.ogg",
+            "provider_ref": "77",
+            "transcript": "Это автоматическая транскрипция.",
+            "transcription_status": "completed",
+            "transcription_model": "whisper-1",
+        }],
+    }
+    message = inbox_message_from_envelope(payload, received_at=2.0)
+    assert message.body == "Это автоматическая транскрипция."
+    assert message.attachments[0]["transcript"] == "Это автоматическая транскрипция."
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, accepted = service.receive(message, route_id="telegram")
+    assert accepted is True
+    record = store.conversation(conversation_id)
+    assert record["messages"][0]["body"] == "Это автоматическая транскрипция."
+    attachment = record["messages"][0]["attachments"][0]
+    assert attachment["transcript"] == "Это автоматическая транскрипция."
+    assert attachment["transcription_status"] == "completed"
+    assert attachment["transcription_model"] == "whisper-1"
+
+
+def test_replayed_audio_enriches_old_placeholder_without_duplicate(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    placeholder = InboxMessage("telegram", "chat:88", "chat", "[Telegram voice]", 1.0)
+    conversation_id, accepted = service.receive(placeholder, route_id="telegram")
+    assert accepted is True
+
+    enriched = inbox_message_from_envelope({
+        "schema": "universal.inbox.message.v1",
+        "source": "telegram",
+        "message_id": "chat:88",
+        "sender": "chat",
+        "body": "[Telegram voice]",
+        "attachments": [{
+            "kind": "voice", "content_type": "audio/ogg", "filename": "voice-88.ogg",
+            "transcript": "Старое голосовое теперь распознано.",
+            "transcription_status": "completed", "transcription_model": "whisper-1",
+        }],
+    }, received_at=1.0)
+    same_id, duplicate = service.receive(enriched, route_id="telegram")
+    assert same_id == conversation_id
+    assert duplicate is False
+    record = store.conversation(conversation_id)
+    assert len(record["messages"]) == 1
+    assert record["messages"][0]["body"] == "Старое голосовое теперь распознано."
+    assert record["messages"][0]["attachments"][0]["transcript"] == "Старое голосовое теперь распознано."
+
+
+def test_long_audio_transcript_does_not_duplicate_ingress_prefix() -> None:
+    transcript = "слово " * 3000
+    prefix = transcript[:8000]
+    message = inbox_message_from_envelope({
+        "schema": "universal.inbox.message.v1",
+        "source": "telegram",
+        "message_id": "chat:long",
+        "sender": "chat",
+        "body": prefix,
+        "attachments": [{
+            "kind": "voice", "content_type": "audio/ogg", "filename": "long.ogg",
+            "transcript": transcript, "transcription_status": "completed",
+            "transcription_model": "whisper-1",
+        }],
+    }, received_at=3.0)
+    assert message.body == transcript.strip()[:65_536]
+    assert message.body.count(prefix[:100]) >= 1
+    assert "[Транскрипция]" not in message.body

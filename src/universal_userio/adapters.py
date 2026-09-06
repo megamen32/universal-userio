@@ -45,7 +45,10 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
             if not isinstance(item, Mapping):
                 continue
             att = {"idx": idx}
-            for key in ("kind", "content_type", "filename", "src", "attachment_id", "provider_ref"):
+            for key in (
+                "kind", "content_type", "filename", "src", "attachment_id", "provider_ref",
+                "transcript", "transcription_status", "transcription_model",
+            ):
                 if key in item and item[key] is not None:
                     att[key] = item[key]
             if "size" in item and item["size"] is not None:
@@ -54,6 +57,36 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
                 except (TypeError, ValueError):
                     pass
             parsed_attachments.append(att)
+
+    # Audio transcription is an ingress enrichment, not an agent tool.  The
+    # provider adapter preserves the original media attachment and puts the STT
+    # result beside it.  Promote that text into the canonical message body so
+    # every consumer (UI, MCP, agents, search) sees speech as normal text.
+    transcripts = [
+        str(att.get("transcript") or "").strip()
+        for att in parsed_attachments
+        if str(att.get("kind") or "").lower() in {"audio", "voice"}
+        and str(att.get("transcript") or "").strip()
+    ]
+    if transcripts:
+        transcript = "\n\n".join(dict.fromkeys(transcripts))
+        placeholder = bool(re.fullmatch(
+            r"\[\s*(?:(?:Telegram|WhatsApp)\s+)?(?:audio|voice|аудио|голосовое)\s*\]",
+            body, flags=re.IGNORECASE,
+        ))
+        if not body or placeholder:
+            body = transcript[:65_536]
+        elif transcript.startswith(body):
+            # Telegram ingress historically caps the visible body at 8k. If it
+            # already contains the beginning of a long transcript, replace the
+            # prefix with the canonical transcript instead of duplicating it.
+            body = transcript[:65_536]
+        elif "\n\n" in body and transcript.startswith(body.split("\n\n", 1)[1]):
+            caption = body.split("\n\n", 1)[0]
+            body = (caption + "\n\n[Транскрипция]\n" + transcript)[:65_536]
+        elif transcript not in body:
+            body = (body + "\n\n[Транскрипция]\n" + transcript)[:65_536]
+
     return InboxMessage(
         source, message_id, sender, body, received_at,
         sender_name=sender_name,
@@ -518,6 +551,8 @@ def _download_via_bridge(
     try:
         with runner(request, timeout=timeout) as response:
             content_type = response.headers.get("Content-Type", "") or ""
+            filename_header = response.headers.get("X-Filename", "") or ""
+            disposition = response.headers.get("Content-Disposition", "") or ""
             data = response.read()
     except urllib.error.HTTPError as error:
         detail = error.read().decode(errors="replace")[:200]
@@ -533,10 +568,13 @@ def _download_via_bridge(
             payload_obj = {}
         if isinstance(payload_obj, dict) and payload_obj.get("error"):
             raise AdapterNotSupported(f"{channel} bridge returned error: {payload_obj['error']}")
-    filename = (
-        data[:0].decode()
-        or f"{channel}-{file_ref}"
-    )
+    filename = str(filename_header).strip()
+    if not filename and disposition:
+        match = re.search(r'filename="?([^";]+)', disposition, flags=re.IGNORECASE)
+        if match:
+            filename = match.group(1).strip()
+    if not filename:
+        filename = f"{channel}-{file_ref}"
     return ChannelFile(
         filename=filename,
         content_type=content_type.split(";", 1)[0] or "application/octet-stream",
