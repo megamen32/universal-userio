@@ -18,7 +18,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any
 
-from universal_userio.channels.core import (
+from userio_adapter_sdk import (
     AdapterNotSupported,
     ChatMessage,
     ChatRef,

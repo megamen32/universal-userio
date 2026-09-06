@@ -20,7 +20,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from universal_userio.channels.core import (
+from userio_adapter_sdk import (
     AdapterNotSupported,
     ChatMessage,
     ChatRef,

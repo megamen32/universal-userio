@@ -19,7 +19,7 @@ node bridge.js --port 30101 --session /var/lib/userio/whatsapp/session --mode bo
 - `--session` is a private directory holding the Baileys credentials
   (`creds.json`); never commit or copy it.
 - Pair a new number by QR: reuse the existing local service
-  `/opt/universal-inbox-whatsapp-qr`, or watch the bridge console QR on first
+  `/opt/userio-whatsapp-qr`, or watch the bridge console QR on first
   start.
 - Use a dedicated test number for canaries; ToS risk of bans is real.
 
