@@ -5,6 +5,7 @@ import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage } from "telegram/events/index.js";
 import QRCode from "qrcode";
+import { bodyAndAttachments, loadWhisperApiKey, transcribeTelegramAudio } from "./transcription.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -30,6 +31,8 @@ const syncs = new Map();
 const liveSlots = new Map();
 let nextSlot = 1;
 let promptSeq = 0;
+const whisperApiKey = loadWhisperApiKey();
+if (!whisperApiKey) console.warn("Telegram auto-transcription disabled: Whisper secret unavailable");
 
 mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
 for (const file of readdirSync(sessionsDir)) {
@@ -269,13 +272,20 @@ function entityLabel(entity) {
   );
 }
 
-function envelope(chatKey, label, message) {
+async function envelope(chatKey, label, message, client) {
+  const audio = await transcribeTelegramAudio(client, message, { apiKey: whisperApiKey });
+  const normalized = bodyAndAttachments(
+    { ...message, message: messageBody(message) },
+    audio,
+  );
+  if (audio && audio.error) console.warn(`telegram audio ${chatKey}:${message.id}: ${audio.error}`);
   return {
     schema: "universal.inbox.message.v1",
     source: "telegram",
     message_id: `${chatKey}:${message.id}`,
     sender: label,
-    body: messageBody(message).slice(0, 8000),
+    body: normalized.body.slice(0, 8000),
+    ...(normalized.attachments.length ? { attachments: normalized.attachments } : {}),
   };
 }
 
@@ -295,7 +305,7 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
       let posted = 0;
       for (const message of messages) {
         if (!message || message.out) continue;
-        const envelopeMessage = envelope(chatKey, label, message);
+        const envelopeMessage = await envelope(chatKey, label, message, client);
         if (!envelopeMessage.body) continue;
         await postInbox(accountId, envelopeMessage);
         posted += 1;
@@ -326,7 +336,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, event) {
     live.labelPeers.labelPeers.set(label, message.chat);
     live.labelPeers.idPeers.set(chatKey, message.chat);
   }
-  const inboxMessage = envelope(chatKey, label, message);
+  const inboxMessage = await envelope(chatKey, label, message, client);
   if (!inboxMessage.body) return;
   await postInbox(accountId, inboxMessage);
   setSync(slot, { lastSyncAt: Date.now() });
