@@ -40,7 +40,7 @@ export function loadWhisperApiKey(options) {
   options = options || {};
   const env = options.env || process.env;
   const spawn = options.spawn || spawnSync;
-  const explicit = String(env.USERIO_STT_API_KEY || env.USERIO_WHISPER_API_KEY || "").trim();
+  const explicit = String(env.USERIO_STT_API_KEY || env.USERIO_WHISPER_API_KEY || env.GREPMESH_STT_API_KEY || "").trim();
   if (explicit) return explicit;
   const result = spawn(options.secretNode || DEFAULT_SECRET_NODE, [options.getter || DEFAULT_SECRET_GETTER, "KANBAN_WHISPER_API_KEY"], {
     encoding: "utf8",
