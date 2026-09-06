@@ -1,9 +1,11 @@
 """Read-only Gmail ingress owned by Universal UserIO."""
 from __future__ import annotations
-import argparse, json, os, signal, threading, time, urllib.request
+import argparse, json, logging, os, signal, threading, time, urllib.request
 from pathlib import Path
 from typing import Any, Mapping
 from .channels.gmail import GmailMessage, HimalayaReader, _source
+
+log = logging.getLogger("userio.gmail_ingress")
 
 class UserIOIngressClient:
     def __init__(self, base_url: str, token: str) -> None:
@@ -89,18 +91,29 @@ def main(argv: list[str] | None = None) -> int:
     limit = int(os.environ.get("USERIO_GMAIL_POLL_LIMIT", "100"))
     readers = {account: HimalayaReader(binary, account) for account in accounts_from_file(accounts_file)}
     sink = UserIOIngressClient(os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"), token)
+    logging.basicConfig(level=os.environ.get("USERIO_LOG_LEVEL", "INFO"))
     stop = threading.Event()
     if not args.once:
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda *_: stop.set())
-    try:
-        while not stop.is_set():
-            poll_once(sink, readers, limit=limit)
+    failures = 0
+    max_backoff = float(os.environ.get("USERIO_GMAIL_MAX_BACKOFF_SECONDS", "60"))
+    while not stop.is_set():
+        try:
+            delivered = poll_once(sink, readers, limit=limit)
+            if delivered:
+                log.info("gmail ingress delivered %d message(s)", delivered)
+            failures = 0
             if args.once:
                 break
             stop.wait(interval)
-    finally:
-        pass
+        except Exception as error:
+            if args.once:
+                raise
+            failures += 1
+            delay = min(max_backoff, max(2.0, 2 ** min(failures, 6)))
+            log.warning("gmail poll failed; retrying in %.1fs: %s", delay, error)
+            stop.wait(delay)
     return 0
 
 
