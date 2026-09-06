@@ -103,7 +103,7 @@ class HimalayaReader:
         return GmailMessage(message_id, fetch_id, sender or message_id, body or str(env.get("subject") or ""))
 
 
-class UserIOSink:
+class UserIOIngressClient:
     def __init__(self, base_url: str, token: str) -> None:
         self.base_url, self.token = base_url.rstrip("/"), token
 
@@ -130,12 +130,11 @@ class UserIOSink:
         )
         self._json(req)
 
-    def send(self, account: str, message: GmailMessage) -> None:
-        source = _source(account)
+    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str) -> None:
         payload = {
-            "route_id": "gmail-read-only",
-            "account_id": account,
-            "message": {"schema": "universal.inbox.message.v1", "source": source, "message_id": message.message_id, "sender": message.sender, "body": message.body},
+            "route_id": route_id,
+            "account_id": account_id,
+            "message": {"schema": "universal.inbox.message.v1", "source": source, "message_id": message_id, "sender": sender, "body": body},
         }
         req = urllib.request.Request(
             self.base_url + "/v1/messages", data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
@@ -143,12 +142,15 @@ class UserIOSink:
         )
         self._json(req)
 
+    def send(self, account: str, message: GmailMessage) -> None:
+        self.send_message(source=_source(account), account_id=account, route_id="gmail-read-only", message_id=message.message_id, sender=message.sender, body=message.body)
+
 
 def accounts_from_file(path: str | Path) -> tuple[str, ...]:
     return tuple(line.strip() for line in Path(path).read_text().splitlines() if line.strip() and not line.lstrip().startswith("#"))
 
 
-def poll_once(sink: UserIOSink, readers: Mapping[str, HimalayaReader], *, limit: int) -> int:
+def poll_once(sink: UserIOIngressClient, readers: Mapping[str, HimalayaReader], *, limit: int) -> int:
     delivered = 0
     for account, reader in readers.items():
         source = _source(account)
@@ -172,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     interval = float(os.environ.get("USERIO_GMAIL_POLL_INTERVAL_SECONDS", "60"))
     limit = int(os.environ.get("USERIO_GMAIL_POLL_LIMIT", "100"))
     readers = {account: HimalayaReader(binary, account) for account in accounts_from_file(accounts_file)}
-    sink = UserIOSink(os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"), token)
+    sink = UserIOIngressClient(os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"), token)
     stop = threading.Event()
     if not args.once:
         for signum in (signal.SIGINT, signal.SIGTERM):
