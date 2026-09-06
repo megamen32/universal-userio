@@ -237,7 +237,8 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 idx INTEGER NOT NULL,kind TEXT NOT NULL,content_type TEXT NOT NULL,
                 filename TEXT NOT NULL,size INTEGER,src TEXT,
-                attachment_id TEXT,provider_ref TEXT,
+                attachment_id TEXT,provider_ref TEXT,transcript TEXT,
+                transcription_status TEXT,transcription_model TEXT,
                 PRIMARY KEY(user_id,source,message_id,idx)
             );
             CREATE INDEX IF NOT EXISTS message_attachments_msg_idx
@@ -266,6 +267,13 @@ class SQLiteUserIOStore:
             self._connection.execute("ALTER TABLE conversations ADD COLUMN account_ref TEXT NOT NULL DEFAULT ''")
         except Exception:  # column already exists
             pass
+        # Attachment transcript metadata was added after the original media
+        # table. Keep upgrades in-place; old databases must not need a rebuild.
+        for column in ("transcript TEXT", "transcription_status TEXT", "transcription_model TEXT"):
+            try:
+                self._connection.execute(f"ALTER TABLE message_attachments ADD COLUMN {column}")
+            except sqlite3.OperationalError:  # column already exists
+                pass
 
     @staticmethod
     def _digest(password: str, salt: bytes | None = None, iterations: int = _ITERATIONS) -> tuple[bytes, bytes]:
@@ -785,6 +793,26 @@ class SQLiteUserIOStore:
                     "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
                     (now, user_id, conversation_id),
                 )
+            else:
+                existing = self._connection.execute(
+                    "SELECT body FROM messages WHERE user_id=? AND source=? AND message_id=?",
+                    (user_id, message.source, message.message_id),
+                ).fetchone()
+                old_body = str(existing["body"] or "") if existing else ""
+                new_body = str(message.body or "").strip()
+                old_placeholder = (not old_body.strip()) or (
+                    old_body.strip().startswith("[") and old_body.strip().endswith("]")
+                )
+                new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
+                if old_placeholder and new_is_text:
+                    self._connection.execute(
+                        "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
+                        (new_body, user_id, message.source, message.message_id),
+                    )
+                    self._connection.execute(
+                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                        (now, user_id, conversation_id),
+                    )
         return inserted
 
     def create_conversation(
@@ -838,18 +866,25 @@ class SQLiteUserIOStore:
         src = attachment.get("src")
         attachment_id = attachment.get("attachment_id")
         provider_ref = attachment.get("provider_ref")
+        transcript = attachment.get("transcript")
+        transcription_status = attachment.get("transcription_status")
+        transcription_model = attachment.get("transcription_model")
         with self._lock, self._connection:
             self._connection.execute(
                 """
                 INSERT OR REPLACE INTO message_attachments
-                (user_id,source,message_id,idx,kind,content_type,filename,size,src,attachment_id,provider_ref)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                (user_id,source,message_id,idx,kind,content_type,filename,size,src,attachment_id,provider_ref,
+                 transcript,transcription_status,transcription_model)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, source, message_id, idx, kind, content_type, filename,
                     size_int, str(src) if src else None,
                     str(attachment_id) if attachment_id else None,
                     str(provider_ref) if provider_ref else None,
+                    str(transcript) if transcript is not None else None,
+                    str(transcription_status) if transcription_status is not None else None,
+                    str(transcription_model) if transcription_model is not None else None,
                 ),
             )
 
@@ -859,7 +894,8 @@ class SQLiteUserIOStore:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT idx,kind,content_type,filename,size,src,attachment_id,provider_ref
+                SELECT idx,kind,content_type,filename,size,src,attachment_id,provider_ref,
+                       transcript,transcription_status,transcription_model
                 FROM message_attachments
                 WHERE user_id=? AND source=? AND message_id=?
                 ORDER BY idx
@@ -875,7 +911,7 @@ class SQLiteUserIOStore:
             row = self._connection.execute(
                 """
                 SELECT source,message_id,idx,kind,content_type,filename,size,src,
-                       attachment_id,provider_ref
+                       attachment_id,provider_ref,transcript,transcription_status,transcription_model
                 FROM message_attachments
                 WHERE user_id=? AND attachment_id=? LIMIT 1
                 """,
@@ -1018,6 +1054,12 @@ class SQLiteUserIOStore:
                 (user_id, row["source"], row["sender"]),
             ).fetchone()
         message_records = [dict(item) for item in messages]
+        for item in message_records:
+            attachments = self.attachments_for_message(
+                source=str(item["source"]), message_id=str(item["message_id"]), user_id=user_id
+            )
+            if attachments:
+                item["attachments"] = attachments
         if text_limit is not None:
             for item in message_records:
                 item["body"] = str(item["body"])[:text_limit]
@@ -1134,6 +1176,11 @@ class SQLiteUserIOStore:
             return None
         result = dict(rows[0])
         result["body"] = str(result["body"])[:text_limit]
+        attachments = self.attachments_for_message(
+            source=str(result["source"]), message_id=str(result["message_id"]), user_id=user_id
+        )
+        if attachments:
+            result["attachments"] = attachments
         return result
 
     def new_messages(self, *, limit: int = 50, user_id: str | None = None) -> list[dict[str, object]]:

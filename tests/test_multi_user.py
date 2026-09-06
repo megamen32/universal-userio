@@ -205,6 +205,7 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
     assert captured["body"] == {"chat": "@alice", "chat_id": "@alice", "message_id": "42"}
     assert captured["headers"]["Authorization"] == "Bearer test-token"
     assert file.content_type == "image/jpeg"
+    assert file.filename == "from-tg.jpg"
     assert file.data == b"telegram-bytes"
 
 
