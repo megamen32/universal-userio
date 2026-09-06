@@ -409,21 +409,21 @@ function safeFilename(value, fallback = "telegram-media") {
 function mediaDownloadDescriptor(message) {
   const audio = telegramAudioDescriptor(message);
   if (audio) return { contentType: audio.contentType, filename: audio.filename };
-  const document = message?.media?.document;
+  const document = message && message.media ? message.media.document : null;
   if (document) {
     const attributes = Array.isArray(document.attributes) ? document.attributes : [];
     const filenameAttribute = attributes.find((attr) =>
-      String(attr?.className || attr?.constructor?.name || "").includes("DocumentAttributeFilename")
+      String((attr && attr.className) || (attr && attr.constructor && attr.constructor.name) || "").includes("DocumentAttributeFilename")
     );
     return {
       contentType: String(document.mimeType || document.mime_type || "application/octet-stream"),
-      filename: safeFilename(filenameAttribute?.fileName || filenameAttribute?.file_name, `telegram-${message?.id || "document"}`),
+      filename: safeFilename((filenameAttribute && (filenameAttribute.fileName || filenameAttribute.file_name)) || "", `telegram-${(message && message.id) || "document"}`),
     };
   }
-  if (message?.media?.photo) {
-    return { contentType: "image/jpeg", filename: `telegram-${message?.id || "photo"}.jpg` };
+  if (message && message.media && message.media.photo) {
+    return { contentType: "image/jpeg", filename: `telegram-${(message && message.id) || "photo"}.jpg` };
   }
-  return { contentType: "application/octet-stream", filename: `telegram-${message?.id || "media"}` };
+  return { contentType: "application/octet-stream", filename: `telegram-${(message && message.id) || "media"}` };
 }
 
 function readJsonBody(req, maxBytes = 64 * 1024) {
@@ -442,7 +442,7 @@ function readJsonBody(req, maxBytes = 64 * 1024) {
 }
 
 function telegramMessageLocator(payload) {
-  const ref = String(payload?.message_id || "").trim();
+  const ref = String((payload && payload.message_id) || "").trim();
   let chatKey = "";
   let messageId = 0;
   const split = ref.lastIndexOf(":");
@@ -456,9 +456,9 @@ function telegramMessageLocator(payload) {
   return {
     chatKey,
     messageId,
-    chat: String(payload?.chat || "").trim(),
-    chatId: String(payload?.chat_id || "").trim(),
-    accountId: String(payload?.account_id || "").trim(),
+    chat: String((payload && payload.chat) || "").trim(),
+    chatId: String((payload && payload.chat_id) || "").trim(),
+    accountId: String((payload && payload.account_id) || "").trim(),
   };
 }
 
@@ -476,11 +476,11 @@ async function downloadTelegramMedia(payload) {
       || null;
     if (!peer) continue;
     const messages = await item.client.getMessages(peer, { ids: [locator.messageId] });
-    const message = messages?.[0];
+    const message = messages && messages[0];
     if (!message) continue;
     if (!message.media) throw new Error(`message ${locator.messageId} has no media`);
     const bytes = await item.client.downloadMedia(message);
-    if (!bytes?.length) throw new Error(`message ${locator.messageId} media download returned empty data`);
+    if (!bytes || !bytes.length) throw new Error(`message ${locator.messageId} media download returned empty data`);
     return { slot, bytes: Buffer.from(bytes), ...mediaDownloadDescriptor(message) };
   }
   throw new Error(`no connected Telegram account can resolve message ${locator.messageId}`);
