@@ -6,7 +6,7 @@
    `.env.owner-seed` with `USERIO_SEED_USERNAME` and
    `USERIO_SEED_PASSWORD`, or point `USERIO_OWNER_SEED_FILE` at it.
 3. Install `deploy/universal-userio.service`, run `systemctl daemon-reload`, then `systemctl enable --now universal-userio`.
-4. Configure Universal Inbox with the three `UNIVERSAL_USERIO_*` variables from its `deploy/universal-inbox.env.example` and restart only the Inbox watcher after validating UserIO's loopback API.
+4. Enable the native UserIO ingress units required for this host (`userio-gmail-ingress`, `userio-matrix-ingress`, `userio-sms-ingress`, or provider sidecars). Universal Inbox is retired and is not a runtime dependency.
 
 The service is loopback-only by default. Publish the dashboard only through an
 HTTPS reverse proxy; UserIO itself redirects anonymous browsers to `/login`

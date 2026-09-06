@@ -423,10 +423,21 @@ def handler(
                     service._store.set_user_preference(f"source_cursor:{source}", cursor, user_id=user_id)
                     self._reply(200, {"source": source, "cursor": cursor})
                     return
+                if path == "/v1/preferences/capabilities":
+                    payload = self._json()
+                    updates = payload.get("capabilities", payload)
+                    if not isinstance(updates, dict):
+                        raise ValueError("capabilities must be an object")
+                    for name, enabled in updates.items():
+                        if name not in service._store.USER_CAPABILITIES:
+                            raise ValueError(f"unknown user capability: {name}")
+                        service._store.set_user_capability(name, bool(enabled), user_id=user_id)
+                    self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})
+                    return
                 if path == "/v1/preferences/send":
                     payload = self._json()
                     enabled = bool(payload.get("enabled"))
-                    service._store.set_user_preference("send_enabled", "1" if enabled else "0", user_id=user_id)
+                    service._store.set_user_capability("send", enabled, user_id=user_id)
                     self._reply(200, {"send_enabled": enabled})
                     return
                 if path == "/v1/messages":
@@ -664,6 +675,8 @@ def handler(
             path = urlparse(self.path).path
             user_id = principal.user_id
             if path == "/v1/inbox":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
                 self._reply(200, {"messages": service._store.new_messages(user_id=user_id)})
                 return
             if path.startswith("/v1/source-cursors/"):
@@ -674,17 +687,29 @@ def handler(
                 cursor = service._store.user_preference(f"source_cursor:{source}", user_id=user_id)
                 self._reply(200, {"source": source, "cursor": cursor})
                 return
+            if path == "/v1/preferences/capabilities":
+                self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})
+                return
             if path == "/v1/preferences/send":
                 self._reply(200, {"send_enabled": service._store.send_enabled(user_id=user_id)})
                 return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)
-                if not service._store.send_enabled(user_id=user_id):
-                    for account in accounts:
-                        account["capabilities"] = [cap for cap in account.get("capabilities", []) if cap != "reply"]
+                caps = service._store.user_capabilities(user_id=user_id)
+                for account in accounts:
+                    visible = list(account.get("capabilities", []))
+                    if not caps["read"]:
+                        visible = [cap for cap in visible if cap != "read"]
+                    if not caps["send"]:
+                        visible = [cap for cap in visible if cap != "reply"]
+                    if not caps["download"]:
+                        visible = [cap for cap in visible if cap not in {"download", "media"}]
+                    account["capabilities"] = visible
                 self._reply(200, {"accounts": accounts})
                 return
             if path == "/v1/conversations":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
                 source = query.get("source", [""])[0].strip().lower() or None
                 conversations = service._store.conversations(source=source, user_id=user_id)
                 # If the latest message in a conversation is an attachment

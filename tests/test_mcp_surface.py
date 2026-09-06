@@ -138,3 +138,50 @@ def test_mcp2_resource_unsubscribe_stops_updates(tmp_path) -> None:
         assert response["result"] == {}
     hub.publish(store.default_user_id, "userio://inbox/unread")
     assert hub.wait(store.default_user_id, timeout=0.01) is None
+
+
+def test_mcp_user_capabilities_filter_tools_resources_and_subscribe(tmp_path) -> None:
+    from universal_userio.mcp_transport import ResourceSubscriptionHub, json_rpc_response
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    user, _ = store.create_user("limited_user", "limited-password")
+    surface = UserIOMcpSurface(store, service)
+    hub = ResourceSubscriptionHub()
+
+    store.set_user_capability("download", False, user_id=user.user_id)
+    store.set_user_capability("send", False, user_id=user.user_id)
+    tools = {item["name"] for item in surface.dispatch("tools/list", {}, principal=user)["tools"]}
+    assert "userio.channels.read" in tools
+    assert "userio.channels.download" not in tools
+    assert "userio.draft.approve_send" not in tools
+    assert "userio.draft.create" not in tools
+
+    store.set_user_capability("subscribe", False, user_id=user.user_id)
+    init = json_rpc_response(surface, {
+        "jsonrpc":"2.0", "id":1, "method":"initialize",
+        "params":{"protocolVersion":"2026-07-28"},
+    }, principal=user, subscription_hub=hub)
+    assert init["result"]["capabilities"]["resources"]["subscribe"] is False
+    denied = json_rpc_response(surface, {
+        "jsonrpc":"2.0", "id":2, "method":"resources/subscribe",
+        "params":{"uri":"userio://inbox/unread"},
+    }, principal=user, subscription_hub=hub)
+    assert denied["error"]["message"] == "subscribe capability disabled"
+
+    store.set_user_capability("read", False, user_id=user.user_id)
+    assert surface.resource_manifest(principal=user)["resources"] == []
+    tools = {item["name"] for item in surface.dispatch("tools/list", {}, principal=user)["tools"]}
+    assert "userio.channels.read" not in tools
+    assert "userio.accounts.list" not in tools
+
+
+def test_matrix_is_a_first_class_userio_channel(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(InboxMessage("matrix", "mx-1", "@anna:example.org", "matrix hello", 1.0), route_id="matrix")
+    surface = UserIOMcpSurface(store, service)
+    listed = surface.dispatch("userio.channels.list", {"channel":"matrix"})
+    assert listed["ok"] is True
+    assert listed["chats"][0]["id"] == conversation_id
+    read = surface.dispatch("userio.channels.read", {"channel":"matrix", "chat_id":conversation_id})
+    assert read["chat"]["messages"][0]["body"] == "matrix hello"

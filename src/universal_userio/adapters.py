@@ -345,6 +345,12 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
         )
 
 
+class MatrixChannelAdapter(StoredChannelAdapter):
+    """Canonical Matrix conversations. Ingress is handled by MatrixReader; writes are draft-only here."""
+
+    channel = "matrix"
+
+
 class VKChannelAdapter(StoredChannelAdapter):
     channel = "vk"
 
@@ -886,6 +892,7 @@ class UnifiedChannels(StoredChannelAdapter):
         "email": MailChannelAdapter,
         "telegram": TelegramChannelAdapter,
         "whatsapp": WhatsAppChannelAdapter,
+        "matrix": MatrixChannelAdapter,
         "vk": VKChannelAdapter,
         "sms": AndroidSmsChannelAdapter,
         "chatgpt": ChatGPTCDPChannelAdapter,

@@ -12,6 +12,7 @@ type Chat = { id: string; source: string; sender: string; identity_id?: string; 
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
 type Message = { source: string; message_id: string; sender: string; body: string; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
+type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
 
 import { defineByokPresetPicker } from "./vendor/byok-ui"
 import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type ByokLedgerTotals } from "./vendor/byok-runs-ui"
@@ -209,7 +210,7 @@ export function App() {
   const [byokOpen, setByokOpen] = useState(false)
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
-  const [sendEnabled, setSendEnabled] = useState(true)
+  const [userCapabilities, setUserCapabilities] = useState<UserCapabilities>({ read: true, subscribe: true, download: true, send: true })
   const [runsOpen, setRunsOpen] = useState(false)
   const [aiRuns, setAiRuns] = useState<ByokLedgerRecord[]>([])
   const [aiTotals, setAiTotals] = useState<ByokLedgerTotals | null>(null)
@@ -234,7 +235,9 @@ export function App() {
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const conversationAccount = conversation && accounts.find((item) => item.id === (item.provider === "gmail" && conversation.source.startsWith("gmail:") ? conversation.source.replace(/^gmail:/, "gmail-") : conversation.source))
-  const canReply = !conversationAccount || conversationAccount.capabilities.includes("reply")
+  const sendEnabled = userCapabilities.send
+  const canReply = sendEnabled && (!conversationAccount || conversationAccount.capabilities.includes("reply"))
+  const canDownload = userCapabilities.download
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
@@ -256,30 +259,36 @@ export function App() {
     const data = await api<{ accounts: Account[] }>("/v1/accounts")
     setAccounts(data.accounts)
   }, [])
-  const loadSendPreference = useCallback(async () => {
-    const data = await api<{ send_enabled: boolean }>("/v1/preferences/send")
-    setSendEnabled(data.send_enabled)
+  const loadCapabilities = useCallback(async () => {
+    const data = await api<{ capabilities: UserCapabilities }>("/v1/preferences/capabilities")
+    setUserCapabilities(data.capabilities)
+    return data.capabilities
   }, [])
-  const setSendPreference = async (enabled: boolean) => {
+  const setCapability = async (name: keyof UserCapabilities, enabled: boolean) => {
     try {
-      const data = await api<{ send_enabled: boolean }>("/v1/preferences/send", { method: "POST", body: JSON.stringify({ enabled }) })
-      setSendEnabled(data.send_enabled)
+      const data = await api<{ capabilities: UserCapabilities }>("/v1/preferences/capabilities", {
+        method: "POST", body: JSON.stringify({ capabilities: { [name]: enabled } }),
+      })
+      setUserCapabilities(data.capabilities)
       await reloadAccounts()
-      if (conversation?.id) await loadConversation(conversation.id)
-      notify(data.send_enabled ? "Отправка сообщений разрешена" : "Отправка сообщений выключена для вашего пользователя")
+      if (name === "read" && !enabled) { setChats([]); setConversation(null); setSelectedChat("") }
+      if (name === "read" && enabled) await refreshChats()
+      if (conversation?.id && data.capabilities.read) await loadConversation(conversation.id)
+      const labels: Record<keyof UserCapabilities, string> = { read: "Чтение", subscribe: "Push-подписки", download: "Скачивание", send: "Отправка" }
+      notify(`${labels[name]}: ${enabled ? "разрешено" : "выключено"}`)
     } catch (error) {
-      notify(`Не удалось изменить настройку отправки: ${(error as Error).message}`)
+      notify(`Не удалось изменить capability: ${(error as Error).message}`)
     }
   }
   useEffect(() => { void reloadAccounts() }, [reloadAccounts])
-  useEffect(() => { void loadSendPreference() }, [loadSendPreference])
+  useEffect(() => { void loadCapabilities() }, [loadCapabilities])
   useEffect(() => { void loadByok() }, [])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void refreshChats() }, [refreshChats])
+  useEffect(() => { if (userCapabilities.read) void refreshChats(); else { setChats([]); setSelectedChat(""); setConversation(null) } }, [refreshChats, userCapabilities.read])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { if (selectedChat) void loadConversation(selectedChat) }, [loadConversation, selectedChat])
+  useEffect(() => { if (selectedChat && userCapabilities.read) void loadConversation(selectedChat) }, [loadConversation, selectedChat, userCapabilities.read])
   useEffect(() => {
     const host = runsHost.current
     if (!runsOpen || !host) return
@@ -308,6 +317,7 @@ export function App() {
 
   const openAttachment = async (message: Message) => {
     if (!conversation) return
+    if (!canDownload) { notify("Скачивание отключено в настройках пользователя"); return }
     setAttachmentPreview({ message, meta: null, loading: true })
     try {
       const data = await api<{ kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number }>(
@@ -518,10 +528,21 @@ export function App() {
     </ScrollArea>
     <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон/Кошелёк</Button>
     <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
-    <label className="mb-2 flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs">
-      <input type="checkbox" checked={sendEnabled} onChange={(event) => void setSendPreference(event.target.checked)} />
-      <span className="min-w-0"><b className="block text-foreground">Разрешить отправку сообщений</b><span className="text-muted-foreground">Настройка только для вашего пользователя</span></span>
-    </label>
+    <div className="mb-2 rounded-lg border p-2 text-xs">
+      <p className="mb-1 px-1 font-medium text-foreground">Права этого пользователя</p>
+      {([
+        ["read", "Читать сообщения"],
+        ["subscribe", "Получать push-события"],
+        ["download", "Скачивать вложения"],
+        ["send", "Отправлять сообщения"],
+      ] as [keyof UserCapabilities, string][]).map(([name, label]) =>
+        <label key={name} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1.5 hover:bg-muted/50">
+          <input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} />
+          <span>{label}</span>
+        </label>
+      )}
+      <p className="mt-1 px-1 text-[10px] text-muted-foreground">Per-user policy; MCP показывает только разрешённые операции.</p>
+    </div>
     <div className="flex items-center gap-2 border-t p-3 text-xs text-muted-foreground"><form method="post" action="/auth/logout"><Button type="submit" variant="ghost" size="sm"><LogOut /> Выйти</Button></form><span>ИИ предлагает только по запросу.</span></div>
   </>
 
