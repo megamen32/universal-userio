@@ -249,6 +249,13 @@ class SQLiteUserIOStore:
                 token TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,key)
+            );
         """
         for statement in script.split(";"):
             if statement.strip():
@@ -1034,6 +1041,24 @@ class SQLiteUserIOStore:
             ).rowcount == 1
 
     # --- per-user AI (BYOK) ----------------------------------------------------
+
+    def user_preference(self, key: str, *, user_id: str | None = None, default: str | None = None) -> str | None:
+        row = self._connection.execute(
+            "SELECT value FROM user_preferences WHERE user_id=? AND key=?",
+            (self._user(user_id), key),
+        ).fetchone()
+        return default if row is None else str(row["value"])
+
+    def set_user_preference(self, key: str, value: str, *, user_id: str | None = None) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO user_preferences(user_id,key,value,updated_at) VALUES (?,?,?,?)",
+                (self._user(user_id), key, str(value), time.time()),
+            )
+
+    def send_enabled(self, *, user_id: str | None = None) -> bool:
+        value = self.user_preference("send_enabled", user_id=user_id, default="1")
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
 
     def ai_settings(self, *, user_id: str | None = None) -> dict[str, str] | None:
         """Return the user's own AI endpoint/model/token, or None for server default."""

@@ -192,3 +192,16 @@ def test_account_registry_exposes_capabilities_not_browser_session(tmp_path) -> 
         "id": "vk-sales", "provider": "vk", "display_name": "Sales VK", "capabilities": ["read", "reply"],
         "credential_ref": "secret://userio/vk-sales", "enabled": True,
     }]
+
+
+def test_send_policy_blocks_approval_but_keeps_drafts(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    store.set_user_preference("send_enabled", "0")
+    message = InboxMessage("telegram", "m-policy", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.create_manual_draft(conversation_id, body="reply")
+    assert draft.status == "proposed"
+    import pytest
+    with pytest.raises(DeliveryUnavailableError):
+        service.approve(draft.id)

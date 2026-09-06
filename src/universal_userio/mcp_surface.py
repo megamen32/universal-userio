@@ -89,8 +89,57 @@ class UserIOMcpSurface:
         self._store, self._service = store, service
         self._principal = store.owner() if principal is None else principal
 
-    def tool_manifest(self) -> dict[str, Any]:
-        return {"tools": [spec.as_dict() for spec in TOOL_SPECS]}
+    def tool_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
+        specs = TOOL_SPECS
+        if principal is not None and not self._store.send_enabled(user_id=principal.user_id):
+            specs = tuple(spec for spec in specs if spec.name != "userio.draft.approve_send")
+        return {"tools": [spec.as_dict() for spec in specs]}
+
+    def resource_manifest(self) -> dict[str, Any]:
+        return {"resources": [
+            {"uri": "userio://accounts", "name": "Connected accounts", "mimeType": "application/json"},
+            {"uri": "userio://conversations", "name": "Recent conversations", "mimeType": "application/json"},
+            {"uri": "userio://inbox/unread", "name": "Unread inbox", "mimeType": "application/json"},
+        ]}
+
+    def resource_template_manifest(self) -> dict[str, Any]:
+        return {"resourceTemplates": [
+            {
+                "uriTemplate": "userio://conversations/{conversationId}",
+                "name": "Conversation by id",
+                "mimeType": "application/json",
+            },
+        ]}
+
+    def read_resource(
+        self, uri: str, *, principal: UserPrincipal | None = None
+    ) -> dict[str, Any]:
+        principal = self._principal if principal is None else principal
+        user_id = principal.user_id
+        if uri == "userio://accounts":
+            payload = {"accounts": self._store.accounts(user_id=user_id)}
+        elif uri == "userio://conversations":
+            payload = {"conversations": self._store.conversations(limit=100, user_id=user_id)}
+        elif uri == "userio://inbox/unread":
+            payload = {"messages": self._store.new_messages(limit=100, user_id=user_id)}
+        elif uri.startswith("userio://conversations/"):
+            conversation_id = uri.removeprefix("userio://conversations/").strip()
+            if not conversation_id or "/" in conversation_id:
+                raise ValueError("invalid conversation resource uri")
+            conversation = self._store.conversation(conversation_id, user_id=user_id)
+            if conversation is None:
+                raise KeyError("conversation not found")
+            payload = {"conversation": conversation}
+        else:
+            raise KeyError("resource not found")
+        import json
+        return {
+            "contents": [{
+                "uri": uri,
+                "mimeType": "application/json",
+                "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            }]
+        }
 
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
@@ -100,7 +149,7 @@ class UserIOMcpSurface:
         channels = UnifiedChannels(self._store, self._service, user_id)
         try:
             if name == "tools/list":
-                return self.tool_manifest()
+                return self.tool_manifest(principal=principal)
             if name == "tools/call":
                 return self.dispatch(
                     str(arguments.get("name")), arguments.get("arguments", {}), principal=principal
@@ -173,6 +222,8 @@ class UserIOMcpSurface:
                     self._required(arguments, "draft_id"), user_id=user_id
                 )}
             if name == "userio.draft.approve_send":
+                if not self._store.send_enabled(user_id=principal.user_id):
+                    return {"ok": False, "error": "outbound_delivery_disabled"}
                 return self._approve(arguments, principal)
             if name == "userio.conversation.delete_local":
                 return self._delete_conversation(arguments, principal)

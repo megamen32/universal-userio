@@ -26,7 +26,7 @@ from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
-from .mcp_transport import json_rpc_response, sse_message
+from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
 from .service import DeliveryUnavailableError, UserIOService
 
@@ -54,6 +54,8 @@ def handler(
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
     oauth = OAuthProvider(service._store)
+    subscriptions = ResourceSubscriptionHub()
+    service.add_inbound_listener(lambda user_id, _conversation_id, _message: subscriptions.publish(user_id, "userio://inbox/unread"))
 
     class UserIOHandler(BaseHTTPRequestHandler):
         def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
@@ -295,7 +297,7 @@ def handler(
             try:
                 if path == "/mcp":
                     request = self._json()
-                    response = json_rpc_response(surface, request, principal=principal)
+                    response = json_rpc_response(surface, request, principal=principal, subscription_hub=subscriptions)
                     if response is None:
                         self.send_response(202)
                         self.send_header("Content-Length", "0")
@@ -409,6 +411,23 @@ def handler(
                     cleared = service._store.clear_ai_settings(user_id=user_id)
                     service._user_generators.pop(user_id, None)
                     self._reply(200, {"cleared": cleared})
+                    return
+                if path.startswith("/v1/source-cursors/"):
+                    source = unquote(path.removeprefix("/v1/source-cursors/")).strip()
+                    if not source:
+                        raise ValueError("source is required")
+                    payload = self._json()
+                    cursor = str(payload.get("cursor") or "").strip()
+                    if not cursor:
+                        raise ValueError("cursor is required")
+                    service._store.set_user_preference(f"source_cursor:{source}", cursor, user_id=user_id)
+                    self._reply(200, {"source": source, "cursor": cursor})
+                    return
+                if path == "/v1/preferences/send":
+                    payload = self._json()
+                    enabled = bool(payload.get("enabled"))
+                    service._store.set_user_preference("send_enabled", "1" if enabled else "0", user_id=user_id)
+                    self._reply(200, {"send_enabled": enabled})
                     return
                 if path == "/v1/messages":
                     payload = self._json()
@@ -587,10 +606,16 @@ def handler(
                 if "text/event-stream" not in self.headers.get("Accept", ""):
                     self._reply(405, {"error": "Accept: text/event-stream required"})
                     return
-                self._sse({
-                    "jsonrpc": "2.0", "method": "userio/ready",
-                    "params": {"endpoint": "/mcp", "username": principal.username},
-                })
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                ready = {"jsonrpc": "2.0", "method": "userio/ready", "params": {"endpoint": "/mcp", "username": principal.username}}
+                self.wfile.write(sse_message(ready)); self.wfile.flush()
+                event = subscriptions.wait(principal.user_id, timeout=30.0)
+                if event is not None:
+                    self.wfile.write(sse_message(event)); self.wfile.flush()
                 return
             if requested_path == "/login":
                 if self._cookie_principal("userio_web_session") is not None:
@@ -641,8 +666,20 @@ def handler(
             if path == "/v1/inbox":
                 self._reply(200, {"messages": service._store.new_messages(user_id=user_id)})
                 return
+            if path.startswith("/v1/source-cursors/"):
+                source = unquote(path.removeprefix("/v1/source-cursors/")).strip()
+                if not source:
+                    self._reply(400, {"error": "source is required"})
+                    return
+                cursor = service._store.user_preference(f"source_cursor:{source}", user_id=user_id)
+                self._reply(200, {"source": source, "cursor": cursor})
+                return
             if path == "/v1/accounts":
-                self._reply(200, {"accounts": service._store.accounts(user_id=user_id)})
+                accounts = service._store.accounts(user_id=user_id)
+                if not service._store.send_enabled(user_id=user_id):
+                    for account in accounts:
+                        account["capabilities"] = [cap for cap in account.get("capabilities", []) if cap != "reply"]
+                self._reply(200, {"accounts": accounts})
                 return
             if path == "/v1/conversations":
                 source = query.get("source", [""])[0].strip().lower() or None

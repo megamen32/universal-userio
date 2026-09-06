@@ -65,3 +65,62 @@ def test_mcp_tool_call_uses_standard_content_result(tmp_path) -> None:
     result = __import__("json").loads(output_stream.getvalue())["result"]
     assert result["content"][0]["type"] == "text"
     assert result["structuredContent"] == {"ok": True, "chats": []}
+
+
+def test_mcp2_negotiates_modern_protocol_and_exposes_resources(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(
+        InboxMessage("telegram", "mcp2-1", "anna", "modern hello", 1.0), route_id="telegram"
+    )
+    surface = UserIOMcpSurface(store, service)
+
+    from universal_userio.mcp_transport import json_rpc_response
+    initialized = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2026-07-28", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
+    })
+    assert initialized["result"]["protocolVersion"] == "2026-07-28"
+    assert "resources" in initialized["result"]["capabilities"]
+
+    resources = json_rpc_response(surface, {"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
+    assert "userio://inbox/unread" in [item["uri"] for item in resources["result"]["resources"]]
+    templates = json_rpc_response(surface, {"jsonrpc": "2.0", "id": 3, "method": "resources/templates/list", "params": {}})
+    assert templates["result"]["resourceTemplates"][0]["uriTemplate"] == "userio://conversations/{conversationId}"
+
+    read = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 4, "method": "resources/read",
+        "params": {"uri": f"userio://conversations/{conversation_id}"},
+    })
+    payload = __import__("json").loads(read["result"]["contents"][0]["text"] )
+    assert payload["conversation"]["messages"][0]["body"] == "modern hello"
+
+
+def test_mcp2_resource_subscription_receives_update(tmp_path) -> None:
+    from universal_userio.mcp_transport import ResourceSubscriptionHub, json_rpc_response
+    from universal_userio.contracts import UserPrincipal
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    surface = UserIOMcpSurface(store, service)
+    hub = ResourceSubscriptionHub()
+    principal = UserPrincipal(store.default_user_id, "owner", "owner")
+    subscribed = json_rpc_response(surface, {"jsonrpc":"2.0","id":1,"method":"resources/subscribe","params":{"uri":"userio://inbox/unread"}}, principal=principal, subscription_hub=hub)
+    assert subscribed["result"] == {}
+    service.add_inbound_listener(lambda user_id, _cid, _msg: hub.publish(user_id, "userio://inbox/unread"))
+    service.receive(InboxMessage("telegram","sub-1","anna","wake me",1.0), route_id="telegram")
+    event = hub.wait(store.default_user_id, timeout=0.1)
+    assert event["method"] == "notifications/resources/updated"
+    assert event["params"]["uri"] == "userio://inbox/unread"
+
+
+def test_send_tool_visibility_is_per_user(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    surface = UserIOMcpSurface(store, service)
+    user, _ = store.create_user("reader_user", "reader-password")
+    store.set_user_preference("send_enabled", "0", user_id=user.user_id)
+    owner = store.owner()
+    owner_tools = {t["name"] for t in surface.dispatch("tools/list", {}, principal=owner)["tools"]}
+    reader_tools = {t["name"] for t in surface.dispatch("tools/list", {}, principal=user)["tools"]}
+    assert "userio.draft.approve_send" in owner_tools
+    assert "userio.draft.approve_send" not in reader_tools
