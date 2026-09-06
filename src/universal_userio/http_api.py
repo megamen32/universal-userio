@@ -839,7 +839,10 @@ def handler(
                     "message_id": str(message.get("message_id") or ""),
                     "source": str(message.get("source") or ""),
                     "received_at": message.get("received_at"),
-                    "kind": placeholder.group(1).lower() if placeholder else None,
+                    "kind": (
+                        placeholder.group(1).lower() if placeholder
+                        else (str(attachments[0].get("kind") or "").lower() if attachments else None)
+                    ),
                     "available": False,
                     "reason": "media download is not connected for this account yet",
                     "attachments": [
