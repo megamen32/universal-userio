@@ -6,7 +6,7 @@ import os
 import signal
 import threading
 
-from .adapters import AndroidSmsGatewayClient
+from .channels.sms_gateway import AndroidSmsGatewayClient
 from .gmail_ingress import UserIOIngressClient
 
 

@@ -27,7 +27,7 @@ from telethon.tl.functions.messages import ImportChatInviteRequest
 from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import InputPeerUser
 
-from universal_userio.channels.core import (
+from userio_adapter_sdk import (
     ChatInvalidPeerError,
     ChatMessage,
     ChatPermissionError,

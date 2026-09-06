@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from universal_userio.channels.core import ChatMessage, ChatRef, MessageRef
+from userio_adapter_sdk import ChatMessage, ChatRef, MessageRef
 
 
 def _normalize_username(value: str | None) -> str:

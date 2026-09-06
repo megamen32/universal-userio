@@ -8,8 +8,8 @@ import QRCode from "qrcode";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
-const stateDir = "/var/lib/universal-inbox/telegram-qr";
-const keyPath = "/var/lib/universal-inbox/secret-agent/telegram-qr.agekey";
+const stateDir = "/var/lib/universal-userio/telegram-qr";
+const keyPath = "/var/lib/universal-userio/secrets/telegram-qr.agekey";
 const sessionsDir = `${stateDir}/sessions`;
 const userIoUrl = process.env.UNIVERSAL_USERIO_URL || "http://127.0.0.1:18093";
 // Optional non-interactive 2FA password (overpod-style): answered locally via

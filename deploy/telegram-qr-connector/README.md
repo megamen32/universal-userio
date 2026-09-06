@@ -1,16 +1,16 @@
-# Telegram QR connector (`universal-inbox-telegram-qr.service`)
+# Telegram QR connector (`userio-telegram-qr.service`)
 
 Single Node service with two legs:
 
 1. **Login leg** — QR / phone login pages that mint GramJS sessions into
-   `/var/lib/universal-inbox/telegram-qr/sessions/account-N.session` and
+   `/var/lib/universal-userio/telegram-qr/sessions/account-N.session` and
    register the account with UserIO (`POST /v1/accounts`).
 2. **Ingest leg** — one connected client per saved session: backfills the
    recent top dialogs and pushes incoming messages into the UserIO inbox
    (`POST /v1/messages`, schema `universal.inbox.message.v1`), plus live
    `NewMessage` events and a 5-minute reconciliation backfill.
 
-Deployed copy: `/opt/universal-inbox-telegram-qr/server.mjs` (this file is
+Deployed copy: `/opt/userio-telegram-qr/server.mjs` (this file is
 the source of truth; copy with `install -m 644`).
 
 ## Constraints worth remembering
@@ -25,8 +25,8 @@ the source of truth; copy with `install -m 644`).
   polling precisely because of this. Never keep a second long-lived client on
   the same session.
 - API credentials come from `age`-encrypted files under
-  `/var/lib/universal-inbox/telegram-qr/credentials/` (key:
-  `/var/lib/universal-inbox/secret-agent/telegram-qr.agekey`); env comes from
+  `/var/lib/universal-userio/telegram-qr/credentials/` (key:
+  `/var/lib/universal-userio/secrets/telegram-qr.agekey`); env comes from
   `/etc/universal-userio.env` (`USERIO_API_TOKEN`, `USERIO_TELEGRAM_2FA_PASSWORD`).
 
 Webpage-preview text handling mirrors

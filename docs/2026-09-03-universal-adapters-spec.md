@@ -23,7 +23,7 @@ WhatsApp, VK, почта, SMS — и переиспользовать их во 
 - **WhatsApp — через Node-мост WhatsApp Web (Baileys), как у Гермеса.**
   Живой образец: `scripts/whatsapp-bridge/bridge.js` из thirdparty/hermes-agent
   (`--port 30100 --session ~/.hermes/platforms/whatsapp/session --mode bot`),
-  QR-паринг через `/opt/universal-inbox-whatsapp-qr`. Официальный Cloud API —
+  QR-паринг через `/opt/userio-whatsapp-qr`. Официальный Cloud API —
   запасная ветка, не сейчас.
 
 ## 2. Минимальный путь
@@ -135,7 +135,7 @@ media-вложения; edit/delete не поддерживаются — capabi
 Транспорт: HTTP-клиент к Node-мосту Baileys (паттерн Гермеса): `GET /messages`
 (long-poll входящих), `POST /send`, `POST /send-media`, `GET /health`.
 Мост — sidecar на аккаунт: `node bridge.js --port <p> --session <dir>
---mode bot`, QR-паринг через существующий `/opt/universal-inbox-whatsapp-qr`.
+--mode bot`, QR-паринг через существующий `/opt/userio-whatsapp-qr`.
 Копия моста закрепляется в `deploy/` userio, чтобы не зависеть от worktree
 thirdparty. Канарей: сообщение тестовому контакту через мост + входящее
 в `/messages`. Риск: ToS/бан номера — тестовый номер отдельный от личного.

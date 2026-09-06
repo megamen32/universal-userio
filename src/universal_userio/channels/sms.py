@@ -1,6 +1,6 @@
 """SMS channel adapter over the Android SMS Gateway (spec Phase 5).
 
-Wraps the existing :class:`~universal_userio.adapters.AndroidSmsGatewayClient`
+Wraps the low-level :class:`~universal_userio.channels.sms_gateway.AndroidSmsGatewayClient`
 (inbound ``GET /v1/inbound``, send ``POST /v1/messages``) in the universal
 Channel shape.  The gateway reports command acceptance by Android, not carrier
 delivery.
@@ -12,7 +12,7 @@ import asyncio
 import os
 from collections.abc import Mapping
 
-from universal_userio.channels.core import (
+from userio_adapter_sdk import (
     AdapterNotSupported,
     ChatMessage,
     ChatRef,
@@ -41,7 +41,7 @@ class AndroidSmsChannel:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "AndroidSmsChannel":
-        from universal_userio.adapters import AndroidSmsGatewayClient
+        from universal_userio.channels.sms_gateway import AndroidSmsGatewayClient
 
         source = os.environ if env is None else env
         url = str(source.get("USERIO_SMS_GATEWAY_URL") or "").strip()

@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
-from universal_userio.channels.core import (
+from userio_adapter_sdk import (
     AdapterNotSupported,
     ChatMessage,
     ChatRef,

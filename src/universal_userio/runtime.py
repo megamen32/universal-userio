@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from .adapters import AndroidSmsGatewayClient, HimalayaGmailOutbox, NoticePlaceOutboxClient, NoticePlaceRoute
+from .adapters import DirectProviderOutbox, HimalayaGmailOutbox, NoticePlaceRoute
+from .channels.sms_gateway import AndroidSmsGatewayClient
 from .ai import OpenAICompatibleDraftGenerator
 from .channels.live_telegram import live_telegram_outbox_from_env
 from .http_api import handler
@@ -89,7 +90,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     gateway = AndroidSmsGatewayClient(sms_url, sms_token) if sms_url else None
     sms_user_id = environment.get("USERIO_SMS_USER_ID", store.default_user_id).strip()
     return UserIOService(
-        store, generator, NoticePlaceOutboxClient(routes_from_environment(environment)), sms_gateway=gateway,
+        store, generator, DirectProviderOutbox(), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
         gmail_outbox=HimalayaGmailOutbox(),
         telegram_outbox=telegram_outbox_from_env(environment),

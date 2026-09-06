@@ -15,7 +15,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from email.utils import parseaddr
-from datetime import datetime
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -72,6 +71,25 @@ class NoticePlaceRoute:
     severity: str = "notice"
 
 
+class DirectProviderOutbox:
+    """Production fallback: only provider-owned transports may deliver human replies.
+
+    ChatGPT is a direct provider sidecar; unsupported providers fail closed instead
+    of routing ordinary conversation traffic through NoticePlace.
+    """
+    def send_reply(self, *, route_id: str, conversation_id: str, draft_id: str, body: str) -> str:
+        raise RuntimeError(f"no direct provider outbox for route {route_id!r}")
+
+    def send_chatgpt_reply(self, *, chat_ref: str, draft_id: str, body: str) -> str:
+        result = _configured_chatgpt_cdp_client().call("send_message", {
+            "chatRef": chat_ref, "text": body, "confirmation": "SEND_MESSAGE", "idempotencyKey": draft_id,
+        })
+        message_ref = result.get("messageRef")
+        if not isinstance(message_ref, str) or not message_ref:
+            raise RuntimeError("chatgpt-cdp-mcp returned no sent-message receipt")
+        return message_ref
+
+
 class NoticePlaceOutboxClient:
     """Emit a policy-bound reply intent; the route owns every destination detail."""
 
@@ -120,18 +138,6 @@ class NoticePlaceOutboxClient:
             raise RuntimeError("NoticePlace returned invalid acceptance receipt")
         return event_id
 
-    def send_chatgpt_reply(self, *, chat_ref: str, draft_id: str, body: str) -> str:
-        """Deliver an approved UserIO draft through the configured CDP MCP sidecar."""
-        result = _configured_chatgpt_cdp_client().call("send_message", {
-            "chatRef": chat_ref,
-            "text": body,
-            "confirmation": "SEND_MESSAGE",
-            "idempotencyKey": draft_id,
-        })
-        message_ref = result.get("messageRef")
-        if not isinstance(message_ref, str) or not message_ref:
-            raise RuntimeError("chatgpt-cdp-mcp returned no sent-message receipt")
-        return message_ref
 
 
 class ByokBridgeGenerator:
@@ -244,62 +250,6 @@ class HimalayaGmailOutbox:
             detail = completed.stderr.strip().splitlines()[-1] if completed.stderr else "unknown Himalaya error"
             raise RuntimeError(f"Himalaya Gmail delivery failed: {detail[:240]}")
         return f"himalaya:{account}:{draft_id}"
-
-
-class AndroidSmsGatewayClient:
-    """Bounded authenticated client for one Android SMS Gateway instance."""
-
-    def __init__(self, url: str, token: str, *, runner: Any = urllib.request.urlopen) -> None:
-        self._url, self._token, self._runner = url.rstrip("/"), token, runner
-
-    def inbound(self) -> list[InboxMessage]:
-        result = self._request("GET", "/v1/inbound")
-        messages = result.get("messages")
-        if not isinstance(messages, list):
-            raise RuntimeError("Android SMS Gateway returned invalid inbound messages")
-        converted: list[InboxMessage] = []
-        for item in messages:
-            if not isinstance(item, Mapping):
-                continue
-            message_id, sender, body = item.get("id"), item.get("from"), item.get("body")
-            received_at = item.get("receivedAt")
-            if not all(isinstance(value, str) and value.strip() for value in (message_id, sender, body, received_at)):
-                continue
-            try:
-                timestamp = datetime.fromisoformat(received_at.replace("Z", "+00:00")).timestamp()
-            except ValueError:
-                continue
-            converted.append(InboxMessage("sms", message_id, sender, body, timestamp))
-        return converted
-
-    def send(self, *, to: str, body: str) -> str:
-        result = self._request("POST", "/v1/messages", {"to": to, "body": body})
-        receipt = result.get("id")
-        if not isinstance(receipt, str) or not receipt:
-            raise RuntimeError("Android SMS Gateway returned no accepted-message receipt")
-        if result.get("status") not in {"accepted_by_android", "queued_for_device"}:
-            raise RuntimeError("Android SMS Gateway did not accept the message")
-        return receipt
-
-    def _request(self, method: str, path: str, payload: Mapping[str, str] | None = None) -> dict[str, Any]:
-        request = urllib.request.Request(
-            self._url + path,
-            data=None if payload is None else json.dumps(payload, ensure_ascii=False).encode(),
-            headers={"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}, method=method,
-        )
-        try:
-            with self._runner(request, timeout=8) as response:
-                status, raw = int(response.status), response.read()
-        except urllib.error.HTTPError as error:
-            raise RuntimeError(f"Android SMS Gateway returned HTTP {error.code}") from error
-        except urllib.error.URLError as error:
-            raise AdapterNotSupported(f"Android SMS Gateway is unavailable: {error.reason}") from error
-        if status not in {200, 202}:
-            raise RuntimeError(f"Android SMS Gateway returned HTTP {status}")
-        result = json.loads(raw)
-        if not isinstance(result, dict):
-            raise RuntimeError("Android SMS Gateway returned invalid JSON")
-        return result
 
 
 class StoredChannelAdapter:
