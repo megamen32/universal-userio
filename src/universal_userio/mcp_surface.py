@@ -31,11 +31,11 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 TOOL_SPECS = (
     ToolSpec("userio.channels.list", "List this user's chats across connected channels.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "vk", "sms", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
     })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "vk", "sms", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
     })),
     ToolSpec("userio.channels.download", "Download a file when its adapter supports it.", _schema({
@@ -81,6 +81,24 @@ TOOL_SPECS = (
 )
 
 
+
+TOOL_CAPABILITIES = {
+    "userio.channels.list": "read",
+    "userio.channels.read": "read",
+    "userio.channels.download": "download",
+    "userio.channels.send_draft": "send",
+    "userio.inbox.list_new": "read",
+    "userio.conversation.get": "read",
+    "userio.message.mark_seen": "read",
+    "userio.draft.create": "send",
+    "userio.draft.update": "send",
+    "userio.draft.delete": "send",
+    "userio.draft.approve_send": "send",
+    "userio.conversation.delete_local": "read",
+    "userio.accounts.list": "read",
+    "userio.ai.propose": "send",
+}
+
 class UserIOMcpSurface:
     def __init__(
         self, store: SQLiteUserIOStore, service: UserIOService,
@@ -90,19 +108,28 @@ class UserIOMcpSurface:
         self._principal = store.owner() if principal is None else principal
 
     def tool_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
-        specs = TOOL_SPECS
-        if principal is not None and not self._store.send_enabled(user_id=principal.user_id):
-            specs = tuple(spec for spec in specs if spec.name != "userio.draft.approve_send")
+        principal = self._principal if principal is None else principal
+        specs = tuple(
+            spec for spec in TOOL_SPECS
+            if (required := TOOL_CAPABILITIES.get(spec.name)) is None
+            or self._store.capability_enabled(required, user_id=principal.user_id)
+        )
         return {"tools": [spec.as_dict() for spec in specs]}
 
-    def resource_manifest(self) -> dict[str, Any]:
+    def resource_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
+        principal = self._principal if principal is None else principal
+        if not self._store.capability_enabled("read", user_id=principal.user_id):
+            return {"resources": []}
         return {"resources": [
             {"uri": "userio://accounts", "name": "Connected accounts", "mimeType": "application/json"},
             {"uri": "userio://conversations", "name": "Recent conversations", "mimeType": "application/json"},
             {"uri": "userio://inbox/unread", "name": "Unread inbox", "mimeType": "application/json"},
         ]}
 
-    def resource_template_manifest(self) -> dict[str, Any]:
+    def resource_template_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
+        principal = self._principal if principal is None else principal
+        if not self._store.capability_enabled("read", user_id=principal.user_id):
+            return {"resourceTemplates": []}
         return {"resourceTemplates": [
             {
                 "uriTemplate": "userio://conversations/{conversationId}",
@@ -116,6 +143,8 @@ class UserIOMcpSurface:
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
         user_id = principal.user_id
+        if not self._store.capability_enabled("read", user_id=user_id):
+            raise PermissionError("read capability disabled")
         if uri == "userio://accounts":
             payload = {"accounts": self._store.accounts(user_id=user_id)}
         elif uri == "userio://conversations":
@@ -154,6 +183,9 @@ class UserIOMcpSurface:
                 return self.dispatch(
                     str(arguments.get("name")), arguments.get("arguments", {}), principal=principal
                 )
+            required_capability = TOOL_CAPABILITIES.get(name)
+            if required_capability and not self._store.capability_enabled(required_capability, user_id=user_id):
+                return {"ok": False, "error": f"{required_capability}_capability_disabled"}
             if name == "userio.channels.list":
                 adapter = channels.adapter(self._optional(arguments, "channel"))
                 return {"ok": True, "chats": adapter.list(limit=int(arguments.get("limit", 100)))}
@@ -231,6 +263,8 @@ class UserIOMcpSurface:
                 return {"ok": True, "accounts": self._store.accounts(user_id=user_id)}
             if name == "userio.ai.propose":
                 return self._propose(arguments, principal)
+        except PermissionError as error:
+            return {"ok": False, "error": str(error)}
         except AdapterNotSupported as error:
             return {"ok": False, "error": str(error)}
         except RuntimeError as error:

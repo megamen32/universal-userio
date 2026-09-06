@@ -32,6 +32,18 @@ class UserIOIngressClient:
         )
         self._json(req)
 
+    def register_account(self, *, account_id: str, provider: str, display_name: str, can_read: bool = True, can_reply: bool = False, credential_ref: str = "") -> None:
+        payload = {
+            "id": account_id, "provider": provider, "display_name": display_name,
+            "can_read": bool(can_read), "can_reply": bool(can_reply),
+            "credential_ref": credential_ref, "enabled": True,
+        }
+        req = urllib.request.Request(
+            self.base_url + "/v1/accounts", data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+        )
+        self._json(req)
+
     def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str) -> None:
         payload = {
             "route_id": route_id,

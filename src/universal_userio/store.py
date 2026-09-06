@@ -1056,9 +1056,31 @@ class SQLiteUserIOStore:
                 (self._user(user_id), key, str(value), time.time()),
             )
 
-    def send_enabled(self, *, user_id: str | None = None) -> bool:
-        value = self.user_preference("send_enabled", user_id=user_id, default="1")
+    USER_CAPABILITIES = ("read", "subscribe", "download", "send")
+
+    def capability_enabled(self, capability: str, *, user_id: str | None = None) -> bool:
+        capability = str(capability).strip().lower()
+        if capability not in self.USER_CAPABILITIES:
+            raise ValueError(f"unknown user capability: {capability}")
+        key = f"capability:{capability}"
+        # Backward compatibility for the first per-user policy rollout.
+        default = self.user_preference("send_enabled", user_id=user_id, default="1") if capability == "send" else "1"
+        value = self.user_preference(key, user_id=user_id, default=default)
         return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+    def user_capabilities(self, *, user_id: str | None = None) -> dict[str, bool]:
+        return {name: self.capability_enabled(name, user_id=user_id) for name in self.USER_CAPABILITIES}
+
+    def set_user_capability(self, capability: str, enabled: bool, *, user_id: str | None = None) -> None:
+        capability = str(capability).strip().lower()
+        if capability not in self.USER_CAPABILITIES:
+            raise ValueError(f"unknown user capability: {capability}")
+        self.set_user_preference(f"capability:{capability}", "1" if enabled else "0", user_id=user_id)
+        if capability == "send":
+            self.set_user_preference("send_enabled", "1" if enabled else "0", user_id=user_id)
+
+    def send_enabled(self, *, user_id: str | None = None) -> bool:
+        return self.capability_enabled("send", user_id=user_id)
 
     def ai_settings(self, *, user_id: str | None = None) -> dict[str, str] | None:
         """Return the user's own AI endpoint/model/token, or None for server default."""

@@ -58,12 +58,14 @@ def json_rpc_response(
         if method == "initialize":
             requested = str(params.get("protocolVersion") or "")
             protocol = "2026-07-28" if requested == "2026-07-28" else "2024-11-05"
+            can_read = principal is None or surface._store.capability_enabled("read", user_id=principal.user_id)
+            can_subscribe = principal is None or (can_read and surface._store.capability_enabled("subscribe", user_id=principal.user_id))
             result = {
                 "protocolVersion": protocol,
                 "serverInfo": {"name": "universal-userio", "version": "0.2.0"},
                 "capabilities": {
                     "tools": {"listChanged": False},
-                    "resources": {"subscribe": True, "listChanged": False},
+                    "resources": {"subscribe": can_subscribe, "listChanged": False},
                 },
             }
         elif method in {"tools/list", "tools/call"}:
@@ -78,9 +80,9 @@ def json_rpc_response(
                     "isError": result.get("ok") is False,
                 }
         elif method == "resources/list":
-            result = surface.resource_manifest()
+            result = surface.resource_manifest(principal=principal)
         elif method == "resources/templates/list":
-            result = surface.resource_template_manifest()
+            result = surface.resource_template_manifest(principal=principal)
         elif method == "resources/read":
             uri = params.get("uri")
             if not isinstance(uri, str) or not uri:
@@ -94,6 +96,10 @@ def json_rpc_response(
                 return _error(request_id, -32602, "resource is not subscribable")
             if principal is None or subscription_hub is None:
                 return _error(request_id, -32603, "subscriptions unavailable")
+            if not surface._store.capability_enabled("read", user_id=principal.user_id):
+                return _error(request_id, -32003, "read capability disabled")
+            if not surface._store.capability_enabled("subscribe", user_id=principal.user_id):
+                return _error(request_id, -32003, "subscribe capability disabled")
             if method == "resources/subscribe":
                 subscription_hub.subscribe(principal.user_id, uri)
             else:
@@ -103,6 +109,8 @@ def json_rpc_response(
             result = {}
         else:
             return _error(request_id, -32601, "Method not found")
+    except PermissionError as error:
+        return _error(request_id, -32003, str(error))
     except KeyError as error:
         return _error(request_id, -32002, str(error).strip("'") or "resource not found")
     except (TypeError, ValueError) as error:

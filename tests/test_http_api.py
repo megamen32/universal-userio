@@ -441,3 +441,31 @@ def test_send_preference_is_per_authenticated_user(tmp_path) -> None:
             assert json.loads(response.read())["send_enabled"] is False
     finally:
         server.shutdown(); server.server_close()
+
+
+def test_capability_preferences_are_per_user_and_enforced_for_reads(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    headers = {"Authorization":"Bearer test-token", "Content-Type":"application/json"}
+    try:
+        with urlopen(Request(base+"/v1/preferences/capabilities", headers=headers)) as response:
+            caps = json.loads(response.read())["capabilities"]
+        assert caps == {"read": True, "subscribe": True, "download": True, "send": True}
+        payload = b'{"capabilities":{"read":false,"download":false}}'
+        with urlopen(Request(base+"/v1/preferences/capabilities", data=payload, method="POST", headers=headers)) as response:
+            caps = json.loads(response.read())["capabilities"]
+        assert caps["read"] is False and caps["download"] is False and caps["send"] is True
+        try:
+            urlopen(Request(base+"/v1/conversations", headers=headers))
+        except HTTPError as error:
+            assert error.code == 403
+            assert json.loads(error.read())["error"] == "read_capability_disabled"
+        else:
+            raise AssertionError("read-disabled user could read conversations")
+        with urlopen(Request(base+"/v1/preferences/capabilities", headers=headers)) as response:
+            assert json.loads(response.read())["capabilities"]["read"] is False
+    finally:
+        server.shutdown(); server.server_close()
