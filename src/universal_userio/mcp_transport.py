@@ -94,7 +94,7 @@ def json_rpc_response(
                 return _error(request_id, -32602, "resource is not subscribable")
             if principal is None or subscription_hub is None:
                 return _error(request_id, -32603, "subscriptions unavailable")
-            if method.endswith("subscribe"):
+            if method == "resources/subscribe":
                 subscription_hub.subscribe(principal.user_id, uri)
             else:
                 subscription_hub.unsubscribe(principal.user_id, uri)

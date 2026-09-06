@@ -423,3 +423,21 @@ def test_accounts_can_be_removed_without_deleting_provider_data(tmp_path) -> Non
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_send_preference_is_per_authenticated_user(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    headers = {"Authorization":"Bearer test-token", "Content-Type":"application/json"}
+    try:
+        with urlopen(Request(base+"/v1/preferences/send", headers=headers)) as response:
+            assert json.loads(response.read())["send_enabled"] is True
+        with urlopen(Request(base+"/v1/preferences/send", data=b'{"enabled":false}', method="POST", headers=headers)) as response:
+            assert json.loads(response.read())["send_enabled"] is False
+        with urlopen(Request(base+"/v1/preferences/send", headers=headers)) as response:
+            assert json.loads(response.read())["send_enabled"] is False
+    finally:
+        server.shutdown(); server.server_close()

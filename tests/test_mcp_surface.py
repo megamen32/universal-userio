@@ -124,3 +124,17 @@ def test_send_tool_visibility_is_per_user(tmp_path) -> None:
     reader_tools = {t["name"] for t in surface.dispatch("tools/list", {}, principal=user)["tools"]}
     assert "userio.draft.approve_send" in owner_tools
     assert "userio.draft.approve_send" not in reader_tools
+
+
+def test_mcp2_resource_unsubscribe_stops_updates(tmp_path) -> None:
+    from universal_userio.mcp_transport import ResourceSubscriptionHub, json_rpc_response
+    from universal_userio.contracts import UserPrincipal
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+    hub = ResourceSubscriptionHub()
+    principal = UserPrincipal(store.default_user_id, "owner", "owner")
+    for method in ("resources/subscribe", "resources/unsubscribe"):
+        response = json_rpc_response(surface, {"jsonrpc":"2.0","id":1,"method":method,"params":{"uri":"userio://inbox/unread"}}, principal=principal, subscription_hub=hub)
+        assert response["result"] == {}
+    hub.publish(store.default_user_id, "userio://inbox/unread")
+    assert hub.wait(store.default_user_id, timeout=0.01) is None
