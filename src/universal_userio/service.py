@@ -29,6 +29,7 @@ class UserIOService:
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
         self.gmail_outbox = gmail_outbox
         self.telegram_outbox = telegram_outbox
+        self._inbound_listeners: list[object] = []
 
     @staticmethod
     def conversation_id(message: InboxMessage, *, user_id: str = "") -> str:
@@ -45,9 +46,16 @@ class UserIOService:
             user_id=user_id, source=message.source, route_id=policy.route_id
         ):
             raise ValueError("route is not assigned to user")
-        return conversation_id, self._store.ingest(
+        accepted = self._store.ingest(
             message, conversation_id=conversation_id, policy=policy, user_id=user_id
         )
+        if accepted:
+            for listener in tuple(self._inbound_listeners):
+                listener(user_id, conversation_id, message)
+        return conversation_id, accepted
+
+    def add_inbound_listener(self, listener: object) -> None:
+        self._inbound_listeners.append(listener)
 
     def receive_and_plan(
         self, message: InboxMessage, *, route_id: str, user_id: str | None = None
@@ -147,7 +155,10 @@ class UserIOService:
         return drafts
 
     def approve(self, draft_id: str, *, user_id: str | None = None) -> ReplyDraft:
-        draft = self._store.draft(draft_id, user_id=user_id)
+        resolved_user_id = self._store._user(user_id)
+        if not self._store.send_enabled(user_id=resolved_user_id):
+            raise DeliveryUnavailableError("outbound delivery is disabled by user policy")
+        draft = self._store.draft(draft_id, user_id=resolved_user_id)
         if draft.status == "approved":
             return draft
         if draft.status != "proposed":
