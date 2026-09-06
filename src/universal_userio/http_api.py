@@ -674,6 +674,9 @@ def handler(
                 cursor = service._store.user_preference(f"source_cursor:{source}", user_id=user_id)
                 self._reply(200, {"source": source, "cursor": cursor})
                 return
+            if path == "/v1/preferences/send":
+                self._reply(200, {"send_enabled": service._store.send_enabled(user_id=user_id)})
+                return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)
                 if not service._store.send_enabled(user_id=user_id):
@@ -1098,7 +1101,7 @@ def _connect_gmail_account(email: str, app_password: str) -> tuple[str, str]:
         pass
     _append_himalaya_account(alias, email)
     _append_gmail_account(alias)
-    subprocess.run(["systemctl", "restart", "universal-inbox-gmail.service"], check=True, timeout=30)
+    subprocess.run(["systemctl", "restart", "userio-gmail-ingress.service"], check=True, timeout=30)
     return f"gmail-{alias}", email
 
 

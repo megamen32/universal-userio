@@ -209,6 +209,7 @@ export function App() {
   const [byokOpen, setByokOpen] = useState(false)
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
+  const [sendEnabled, setSendEnabled] = useState(true)
   const [runsOpen, setRunsOpen] = useState(false)
   const [aiRuns, setAiRuns] = useState<ByokLedgerRecord[]>([])
   const [aiTotals, setAiTotals] = useState<ByokLedgerTotals | null>(null)
@@ -251,7 +252,27 @@ export function App() {
     bottomRef.current?.scrollIntoView({ block: "end" })
   }, [conversation?.id, conversation?.messages.length, conversation?.drafts.length])
 
-  useEffect(() => { void api<{ accounts: Account[] }>("/v1/accounts").then((data) => setAccounts(data.accounts)) }, [])
+  const reloadAccounts = useCallback(async () => {
+    const data = await api<{ accounts: Account[] }>("/v1/accounts")
+    setAccounts(data.accounts)
+  }, [])
+  const loadSendPreference = useCallback(async () => {
+    const data = await api<{ send_enabled: boolean }>("/v1/preferences/send")
+    setSendEnabled(data.send_enabled)
+  }, [])
+  const setSendPreference = async (enabled: boolean) => {
+    try {
+      const data = await api<{ send_enabled: boolean }>("/v1/preferences/send", { method: "POST", body: JSON.stringify({ enabled }) })
+      setSendEnabled(data.send_enabled)
+      await reloadAccounts()
+      if (conversation?.id) await loadConversation(conversation.id)
+      notify(data.send_enabled ? "Отправка сообщений разрешена" : "Отправка сообщений выключена для вашего пользователя")
+    } catch (error) {
+      notify(`Не удалось изменить настройку отправки: ${(error as Error).message}`)
+    }
+  }
+  useEffect(() => { void reloadAccounts() }, [reloadAccounts])
+  useEffect(() => { void loadSendPreference() }, [loadSendPreference])
   useEffect(() => { void loadByok() }, [])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -497,6 +518,10 @@ export function App() {
     </ScrollArea>
     <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон/Кошелёк</Button>
     <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
+    <label className="mb-2 flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+      <input type="checkbox" checked={sendEnabled} onChange={(event) => void setSendPreference(event.target.checked)} />
+      <span className="min-w-0"><b className="block text-foreground">Разрешить отправку сообщений</b><span className="text-muted-foreground">Настройка только для вашего пользователя</span></span>
+    </label>
     <div className="flex items-center gap-2 border-t p-3 text-xs text-muted-foreground"><form method="post" action="/auth/logout"><Button type="submit" variant="ghost" size="sm"><LogOut /> Выйти</Button></form><span>ИИ предлагает только по запросу.</span></div>
   </>
 
