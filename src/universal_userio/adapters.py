@@ -373,10 +373,14 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
         self._runner = runner
 
     def download(self, *, file_ref: str) -> ChannelFile:
+        # Store ids are "{slot}:{baileys_id}" but the bridge (and Baileys'
+        # store) know the bare id, so strip the slot prefix. The chat jid the
+        # bridge needs is the message's sender.
+        bare_ref = re.sub(r"^account-\d+:", "", file_ref)
         return _download_via_bridge(
             channel="whatsapp",
             message=self._store.message(file_ref, user_id=self._user_id),
-            file_ref=file_ref,
+            file_ref=bare_ref,
             bridge_url=self._bridge_url,
             token_env="USERIO_API_TOKEN",
             chat_field="chat",
