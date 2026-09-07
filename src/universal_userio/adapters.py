@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -394,18 +395,8 @@ class MatrixChannelAdapter(StoredChannelAdapter):
 class VKChannelAdapter(StoredChannelAdapter):
     channel = "vk"
 
-    def __init__(
-        self,
-        store: SQLiteUserIOStore,
-        service: UserIOService,
-        user_id: str,
-        *,
-        gateway_url: str | None = None,
-        runner: Any = urllib.request.urlopen,
-    ) -> None:
+    def __init__(self, store: SQLiteUserIOStore, service: UserIOService, user_id: str) -> None:
         super().__init__(store, service, user_id)
-        self._gateway_url = (gateway_url or os.environ.get("USERIO_VK_EXTENSION_GATEWAY_URL", "")).rstrip("/")
-        self._runner = runner
 
     def list_attachments(self, *, message_id: str) -> list[dict[str, Any]]:
         return self._store.attachments_for_message(
@@ -413,16 +404,9 @@ class VKChannelAdapter(StoredChannelAdapter):
         )
 
     def download(self, *, file_ref: str) -> ChannelFile:
-        # The bytes always live in the VK browser extension's IndexedDB. A
-        # gateway URL bridges UserIO into that storage; without one there is
-        # honestly nothing we can fetch. Surface that truth first so callers
-        # don't see a misleading attachment-not-found when production simply
-        # hasn't been pointed at the extension yet.
-        if not self._gateway_url:
-            raise AdapterNotSupported(
-                "VK media flows through the browser extension; UserIO does not hold a VK API token. "
-                "Set USERIO_VK_EXTENSION_GATEWAY_URL or open the attachment in the VK Inbox extension.",
-            )
+        # The bytes always live in the VK browser extension's IndexedDB. The
+        # command channel asks every live extension agent for the blob (the
+        # profile that captured the message has it) and streams the winner back.
         record = self._store.attachment_by_id(file_ref, user_id=self._user_id)
         message_id = ""
         if record is None:
@@ -437,7 +421,11 @@ class VKChannelAdapter(StoredChannelAdapter):
                 None,
             )
             if record is None:
-                raise AdapterNotSupported(f"vk attachment {file_ref!r} not found")
+                raise AdapterNotSupported(
+                    f"vk attachment {file_ref!r} not found in the local store; "
+                    "VK bytes live in the browser extension's IndexedDB, and this "
+                    "message was never captured",
+                )
         else:
             message_id = str(record.get("message_id") or "")
         # Resolve peer_id from the stored message; the gateway keys blobs on it.
@@ -450,47 +438,57 @@ class VKChannelAdapter(StoredChannelAdapter):
             # VK stores the actual peer (chat/user id) in `sender`; display_name
             # already lives in conversations.name.
             peer_id = str(message_row.get("sender") or "")
-        payload = json.dumps({
+        locator = {
             "peer_id": peer_id,
             "msg_id": str(record.get("message_id") or ""),
             "idx": int(record.get("idx") or 0),
-            "attachment_id": record.get("attachment_id") or file_ref,
-        }).encode()
-        request = urllib.request.Request(
-            f"{self._gateway_url}/vk/attachment",
-            data=payload, method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.environ.get('USERIO_API_TOKEN', '')}",
-            },
-        )
-        try:
-            with self._runner(request, timeout=60) as response:
-                content_type = response.headers.get("Content-Type", "") or ""
-                data = response.read()
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode(errors="replace")[:200]
+        }
+        result = self._fetch_via_agents(locator)
+        data = base64.b64decode(result.get("bytes_base64") or "")
+        if not data:
             raise AdapterNotSupported(
-                f"vk extension gateway refused download: HTTP {error.code} {detail or error.reason}",
-            ) from error
-        except (OSError, urllib.error.URLError) as error:
-            raise AdapterNotSupported(f"vk extension gateway is unreachable: {error}") from error
-        if "application/json" in content_type.lower():
-            try:
-                payload_obj = json.loads(data.decode() or "{}")
-            except json.JSONDecodeError:
-                payload_obj = {}
-            if isinstance(payload_obj, dict) and payload_obj.get("error"):
-                raise AdapterNotSupported(
-                    f"vk extension gateway returned error: {payload_obj['error']}"
-                )
+                f"vk agent {result.get('agent')!r} returned empty bytes for {file_ref!r}",
+            )
         return ChannelFile(
-            filename=str(record.get("filename") or f"vk-{record.get('attachment_id') or file_ref}"),
-            content_type=str(
-                record.get("content_type") or content_type.split(";", 1)[0]
-                or "application/octet-stream"
+            filename=str(
+                record.get("filename") or result.get("filename")
+                or f"vk-{record.get('attachment_id') or file_ref}",
             ),
-            data=bytes(data),
+            content_type=str(
+                record.get("content_type") or result.get("content_type")
+                or "application/octet-stream",
+            ),
+            data=data,
+        )
+
+    def _fetch_via_agents(self, locator: dict[str, Any]) -> dict[str, Any]:
+        """Ask every live extension agent for the blob; the capturing profile wins."""
+        from . import agent_channel
+
+        username = self._service._store.owner().username
+        try:
+            live = [a["agent_id"] for a in agent_channel.status(user=username).get("agents", [])]
+        except Exception as error:
+            raise AdapterNotSupported(f"vk agent channel unavailable: {error}") from error
+        if not live:
+            raise AdapterNotSupported(
+                "no VK extension agent is online; open the browser whose extension "
+                "captured this message and try again",
+            )
+        errors: list[str] = []
+        for agent_id in live:
+            try:
+                result = agent_channel.call(
+                    agent_id, "vk_attachment_bytes", locator, user=username, timeout_sec=45.0,
+                )
+            except RuntimeError as error:
+                errors.append(f"{agent_id}: {error}")
+                continue
+            result["agent"] = agent_id
+            return result
+        raise AdapterNotSupported(
+            f"no online VK agent holds attachment {locator['peer_id']}:{locator['msg_id']}"
+            f"#{locator['idx']}; tried: {'; '.join(errors)}",
         )
 
 
