@@ -861,6 +861,10 @@ def handler(
                 source_hint = str(conv.get("source") or "")
                 message = service._store.message(message_id, source=source_hint, user_id=user_id)
                 if message is None or str(message.get("conversation_id") or "") != real_id:
+                    # Gmail threads can carry a different source than the message
+                    # (self-mails land in the other account's conversation).
+                    message = service._store.message(message_id, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return
                 adapter = _adapter_for_message(service, message, user_id)
@@ -897,6 +901,10 @@ def handler(
                     return
                 source_hint = str(conv.get("source") or "")
                 message = service._store.message(message_id, source=source_hint, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    # Gmail threads can carry a different source than the message
+                    # (self-mails land in the other account's conversation).
+                    message = service._store.message(message_id, user_id=user_id)
                 if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return

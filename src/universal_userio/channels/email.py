@@ -10,6 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[no-redef]
+from pathlib import Path as _Path
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -228,6 +235,20 @@ class SmtpImapTransport:
         finally:
             client.logout()
 
+    def search_uid_by_message_id(self, message_id: str, mailbox: str = "INBOX") -> int | None:
+        """Resolve an RFC822 Message-ID to the IMAP UID that holds it."""
+
+        client = self._imap()
+        try:
+            client.select(_quote_mailbox(mailbox))
+            status, data = client.uid("search", None, f'(HEADER Message-ID "{message_id}")')
+            if status != "OK":
+                return None
+            uids = (data[0] or b"").split()
+            return int(uids[-1]) if uids else None
+        finally:
+            client.logout()
+
     def fetch_raw(self, *, uid: int, mailbox: str = "INBOX") -> dict[str, Any] | None:
         """Fetch and parse one message by IMAP UID."""
 
@@ -264,6 +285,63 @@ class EmailChannel:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "EmailChannel":
         return cls(SmtpImapTransport(email_env_config(env)))
+
+    @classmethod
+    def from_himalaya(cls, alias: str | None = None, *, config_path: str | None = None) -> "EmailChannel":
+        """Build the channel from a himalaya config.toml account.
+
+        ``alias`` selects ``accounts.<alias>``; ``None`` picks the account
+        marked ``default = true``. Passwords never sit in the config — they
+        come from the account's ``password.command``, so secrets stay in the
+        operator's secret store.
+        """
+        default_config = "/home/roomhacker/.config/himalaya/config.toml"
+        path = _Path(config_path or os.environ.get("USERIO_HIMALAYA_CONFIG") or default_config)
+        if not path.exists():
+            path = _Path("~/.config/himalaya/config.toml").expanduser()
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        accounts = config.get("accounts") or {}
+        name = alias or next(
+            (n for n, a in accounts.items() if a.get("default")), next(iter(accounts), None),
+        )
+        if not name or name not in accounts:
+            raise ValueError(f"himalaya account {name!r} not found in {path}")
+        account = accounts[name]
+
+        def uri(key: str, fallback_host: str, fallback_port: int) -> tuple[str, int, bool]:
+            value = str(account.get(key) or "")
+            if not value:
+                return fallback_host, fallback_port, False
+            scheme, _, rest = value.partition("://")
+            host, _, port = rest.partition(":")
+            ssl = scheme.lower() in {"imaps", "smtps", "ssl"}
+            return host, int(port or fallback_port), ssl
+
+        def password(kind: str) -> str:
+            command = (account.get(kind) or {}).get("sasl", {}).get("plain", {}).get("password", {}).get("command")
+            if not command:
+                raise ValueError(f"himalaya account {name!r} has no {kind} password.command")
+            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                raise ValueError(f"{kind} password command failed: {result.stderr.strip()[:200]}")
+            return result.stdout.strip()
+
+        imap_host, imap_port, imap_ssl = uri("imap.server", "imap.gmail.com", 993)
+        smtp_host, smtp_port, smtp_ssl = uri("smtp.server", "smtp.gmail.com", 465)
+        user = str(account.get("smtp", {}).get("sasl", {}).get("plain", {}).get("username")
+                   or account.get("imap", {}).get("sasl", {}).get("plain", {}).get("username") or "")
+        if not user:
+            raise ValueError(f"himalaya account {name!r} has no username")
+        cfg = EmailEnvConfig(
+            smtp_host=smtp_host, smtp_port=smtp_port, smtp_user=user,
+            smtp_password=password("smtp"), imap_host=imap_host, imap_port=imap_port,
+            imap_user=user, imap_password=password("imap"), sender=user,
+        )
+        if imap_ssl != cfg.imap_ssl or smtp_ssl != cfg.smtp_ssl:
+            # the dataclass derives ssl from the port; keep the parsed values honest
+            object.__setattr__(cfg, "imap_host", imap_host)
+            object.__setattr__(cfg, "imap_port", imap_port)
+        return cls(SmtpImapTransport(cfg))
 
     def _to_message(self, row: dict[str, Any]) -> ChatMessage:
         attachments = row.get("attachments") or []
