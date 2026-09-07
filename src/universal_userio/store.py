@@ -621,8 +621,11 @@ class SQLiteUserIOStore:
     def ingress_user(self, *, source: str, account_id: str = "") -> str | None:
         clauses, values = ["enabled=1"], []
         if account_id:
-            clauses.append("id=?")
-            values.append(account_id)
+            clauses.append("(id=? OR credential_ref=?)")
+            # Himalaya ingress sends the himalaya account name ("gmail",
+            # "careviolan"); registered gmail accounts carry it as
+            # credential_ref ("himalaya:<name>"), not in the id.
+            values.extend([account_id, "himalaya:" + account_id])
         elif source.startswith("gmail:"):
             clauses.append("credential_ref=?")
             values.append("himalaya:" + source.partition(":")[2])

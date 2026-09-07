@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import threading
 import time
+from types import SimpleNamespace
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -308,6 +309,7 @@ class MailChannelAdapter(StoredChannelAdapter):
     def __init__(self, store: SQLiteUserIOStore, service: UserIOService, user_id: str, *, channel_factory=None) -> None:
         super().__init__(store, service, user_id)
         self._channel_factory = channel_factory
+        self._himalaya_channels: dict[str, Any] = {}
 
     def _build_channel(self) -> Any:
         if self._channel_factory is not None:
@@ -315,7 +317,60 @@ class MailChannelAdapter(StoredChannelAdapter):
         from .channels.email import EmailChannel
         return EmailChannel.from_env()
 
+    def _himalaya_channel(self, alias: str | None) -> Any:
+        """EmailChannel for one himalaya account, cached per alias."""
+        key = alias or ""
+        if key not in self._himalaya_channels:
+            from .channels.email import EmailChannel
+            self._himalaya_channels[key] = EmailChannel.from_himalaya(alias)
+        return self._himalaya_channels[key]
+
     def download(self, *, file_ref: str) -> ChannelFile:
+        # Injected channels (tests, embedders) keep the legacy integer-uid flow.
+        if self._channel_factory is not None:
+            return self._download_uid(file_ref)
+        # Production: store ids are RFC822 Message-IDs. Trade one for an IMAP
+        # UID on the account the conversation belongs to, then stream whatever
+        # attachment that message carries (or the named one).
+        message_ref, _, wanted = str(file_ref).partition(":")
+        message = self._store.message(message_ref, user_id=self._user_id)
+        if message is None:
+            raise AdapterNotSupported(
+                f"email message {message_ref!r} not found in the local store",
+            )
+        source = str(message.get("source") or "")
+        if source not in {"mail", "email", "gmail"} and not source.startswith("gmail:"):
+            raise AdapterNotSupported(f"message {message_ref!r} is not an email message")
+        alias = source.partition(":")[2] or None
+        peer = str(message.get("sender") or "").strip()
+        try:
+            channel = self._himalaya_channel(alias)
+        except Exception as exc:
+            raise AdapterNotSupported(f"email channel for {source!r} not configured: {exc}") from exc
+        transport = getattr(channel, "_transport", None)
+        message_id_header = str(message.get("message_id") or message_ref)
+        try:
+            uid = transport.search_uid_by_message_id(message_id_header)
+            if uid is None:
+                raise AdapterNotSupported(
+                    f"email message {message_ref!r} is not in the account's INBOX "
+                    f"anymore (archived or deleted on the server)",
+                )
+            media = asyncio.run(channel.download_media(
+                chat=peer,
+                message=SimpleNamespace(id=uid, filename=wanted or None),
+            ))
+        except AdapterNotSupported:
+            raise
+        except Exception as exc:
+            raise AdapterNotSupported(f"email download failed for {message_ref!r}: {exc}") from exc
+        return ChannelFile(
+            filename=str(media.filename or f"attachment-{uid}"),
+            content_type=str(media.mime_type or "application/octet-stream"),
+            data=bytes(media.data or b""),
+        )
+
+    def _download_uid(self, file_ref: str) -> ChannelFile:
         try:
             uid = int(file_ref)
         except (TypeError, ValueError) as exc:
