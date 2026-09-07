@@ -65,9 +65,9 @@ def make_adapter(tmp_path, monkeypatch, routes):
     session_path = session_file(tmp_path)
     monkeypatch.setenv(ChatGPTWebChannelAdapter.SESSION_ENV, session_path)
     client = FakeClient(routes)
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     adapter = ChatGPTWebChannelAdapter(
-        SQLiteUserIOStore(tmp_path / "userio.sqlite3"), DummyService(), "user-1",
-        client_factory=client,
+        store, DummyService(), store.default_user_id, client_factory=client,
     )
     return adapter, client
 
@@ -110,14 +110,16 @@ def test_read_maps_conversation_tree(tmp_path, monkeypatch) -> None:
 
 def test_unconfigured_channel_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv(ChatGPTWebChannelAdapter.SESSION_ENV, raising=False)
-    adapter = ChatGPTWebChannelAdapter(SQLiteUserIOStore(tmp_path / "s.db"), DummyService(), "user-1")
+    store = SQLiteUserIOStore(tmp_path / "s.db")
+    adapter = ChatGPTWebChannelAdapter(store, DummyService(), store.default_user_id)
     with pytest.raises(AdapterNotSupported, match="not configured"):
         adapter.list()
 
 
 def test_missing_session_file_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(ChatGPTWebChannelAdapter.SESSION_ENV, str(tmp_path / "absent.json"))
-    adapter = ChatGPTWebChannelAdapter(SQLiteUserIOStore(tmp_path / "s.db"), DummyService(), "user-1")
+    store = SQLiteUserIOStore(tmp_path / "s.db")
+    adapter = ChatGPTWebChannelAdapter(store, DummyService(), store.default_user_id)
     with pytest.raises(AdapterNotSupported, match="missing"):
         adapter.list()
 
@@ -152,7 +154,7 @@ def test_send_anchors_draft_in_store(tmp_path, monkeypatch) -> None:
         def create_manual_draft(self, conversation_id: str, *, body: str, user_id: str):
             return type("D", (), {"id": "d2", "conversation_id": conversation_id, "body": body, "status": "proposed"})()
 
-    adapter = ChatGPTWebChannelAdapter(store, Service(), "user-1", client_factory=client)
+    adapter = ChatGPTWebChannelAdapter(store, Service(), store.default_user_id, client_factory=client)
     draft = adapter.send(chat_id="chat-1", text="draft answer")
     assert draft.status == "proposed"
     assert Service.received[0]["body"].startswith("SFU")

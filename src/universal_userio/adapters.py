@@ -13,10 +13,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from email.utils import parseaddr
+from pathlib import Path
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
+from . import chatgpt_sessions
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 from .contracts import ChannelFile, InboxMessage, ReplyDraft
@@ -33,7 +36,11 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     message_id = str(payload.get("message_id") or "").strip()
     sender = str(payload.get("sender") or "").strip()
     body = str(payload.get("body") or "").strip()
-    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail"} and not source.startswith("gmail:"):
+    if (
+        source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail", "chatgpt"}
+        and not source.startswith("gmail:")
+        and not source.startswith("chatgpt:")
+    ):
         raise ValueError("unsupported message source")
     if not message_id or not sender:
         raise ValueError("inbox message requires message_id and sender")
@@ -745,14 +752,91 @@ class ChatGPTCDPChannelAdapter:
         }
 
 
-class ChatGPTWebChannelAdapter:
-    """Read ChatGPT chats headlessly from a stored session cookie.
+class ChatGPTWebOutbox:
+    """Deliver approved replies into ChatGPT via backend-api (server-side).
 
-    The ``__Secure-next-auth.session-token`` cookie (lives for months, renewed
-    whenever the user is active in a browser) is exchanged for a ~10-day
-    ``accessToken`` at ``/api/auth/session``, and that token drives the
-    ``backend-api`` chat endpoints. Requires ``curl_cffi`` for the Chrome TLS
-    fingerprint: Cloudflare rejects plain urllib clients.
+    Uses the same per-account session store as the web adapter: the session
+    cookie is exchanged for an access token, then POST /backend-api/conversation
+    streams the assistant response. Works without the user's browser being
+    online; Cloudflare is satisfied by the Chrome TLS impersonation.
+    """
+
+    def send_reply(self, *, chat_ref: str, draft_id: str, body: str, account_ref: str = "",
+                   user: str, agent_fallback: Any | None = None) -> str:
+        try:
+            return self._send_web(chat_ref=chat_ref, draft_id=draft_id, body=body, account_ref=account_ref, user=user)
+        except RuntimeError as error:
+            if agent_fallback is None or "403" not in str(error):
+                raise
+            accounts = _chatgpt_accounts(user)
+            slug = account_ref if account_ref in accounts else next(
+                (s for s in accounts if (_chatgpt_records.get((user, s)) or {}).get("agent_id")),
+                next(iter(accounts)),
+            )
+            record = _chatgpt_records.get((user, slug)) or {}
+            agent_id = str(record.get("agent_id") or "")
+            if not agent_id:
+                raise RuntimeError(f"account {slug!r} has no browser agent registered for delivery") from error
+            result = agent_fallback(agent_id=agent_id, text=body, chat_ref=chat_ref)
+            return str(result.get("assistant_id") or f"chatgpt-agent-sent:{draft_id}")
+
+    def _send_web(self, *, chat_ref: str, draft_id: str, body: str, account_ref: str = "", user: str) -> str:
+        _chatgpt_require_configured(user)
+        accounts = _chatgpt_accounts(user)
+        if account_ref in accounts:
+            slug = account_ref
+        else:
+            # Unknown chat refs (fresh UserIO conversations) ride the first
+            # real account; _send tolerates the stale ref and starts anew.
+            slug = next(iter(accounts))
+        parent = str(uuid.uuid4())
+        conversation_payload: dict[str, Any] = {
+            "action": "next",
+            "messages": [{
+                "id": str(uuid.uuid4()),
+                "author": {"role": "user"},
+                "content": {"content_type": "text", "parts": [body]},
+            }],
+            "model": "auto",
+            "parent_message_id": parent,
+        }
+        if chat_ref:
+            try:
+                chat = _chatgpt_conversation(user, slug, chat_ref)
+                last = _chatgpt_last_message(chat.get("mapping") or {})
+                if last:
+                    conversation_payload["parent_message_id"] = str(last.get("node_id") or parent)
+                conversation_payload["conversation_id"] = chat_ref
+            except (RuntimeError, KeyError):
+                pass  # unknown/stale chat ref: start a fresh conversation
+        stream = _chatgpt_raw(user, slug, "https://chatgpt.com/backend-api/conversation", bearer_needed=True, json_body=conversation_payload)
+        assistant_id = ""
+        for line in stream.splitlines():
+            line = line.strip()
+            if not line.startswith("data: ") or line == "data: [DONE]":
+                continue
+            try:
+                event = json.loads(line[len("data: "):])
+            except json.JSONDecodeError:
+                continue
+            message = event.get("message") if isinstance(event, dict) else None
+            if not isinstance(message, Mapping):
+                continue
+            if (message.get("author") or {}).get("role") == "assistant":
+                assistant_id = str(message.get("id") or assistant_id)
+        return assistant_id or f"chatgpt-sent:{draft_id}"
+
+
+class ChatGPTWebChannelAdapter:
+    """Read ChatGPT chats headlessly for every registered account.
+
+    Account sessions (``__Secure-next-auth.session-token`` cookies exported by
+    the browser extension) live in the chatgpt_sessions store; the env var
+    USERIO_CHATGPT_SESSION_FILE keeps working as a legacy single account. The
+    session cookie is exchanged for a ~10-day ``accessToken`` at
+    ``/api/auth/session``; that token drives ``backend-api``. Requires
+    ``curl_cffi`` for the Chrome TLS fingerprint: Cloudflare rejects plain
+    urllib clients.
     """
 
     channel = "chatgpt"
@@ -763,129 +847,51 @@ class ChatGPTWebChannelAdapter:
         *, session_file: str | None = None, client_factory: Any | None = None,
     ) -> None:
         self._store, self._service, self._user_id = store, service, user_id
+        principal = store.user(user_id)
+        if principal is None:
+            raise ValueError(f"unknown UserIO user: {user_id}")
+        self._username = principal.username
         self._session_file = session_file or os.environ.get(self.SESSION_ENV, "")
         self._client_factory = client_factory
-        self._access_token: str | None = None
-        self._expires: float = 0.0
+        if client_factory is not None:
+            _chatgpt_client_factories[self._username] = client_factory
+            for key in [key for key in _chatgpt_clients if key[0] == self._username]:
+                _chatgpt_clients.pop(key, None)
+                _chatgpt_client_fingerprints.pop(key, None)
+                _chatgpt_tokens.pop(key, None)
 
     @classmethod
     def configured(cls) -> bool:
-        return bool(os.environ.get(cls.SESSION_ENV, "").strip())
-
-    def _client(self) -> Any:
-        path = self._session_file.strip()
-        if not path:
-            raise AdapterNotSupported(
-                f"ChatGPT web adapter is not configured; set {self.SESSION_ENV}"
-            )
-        try:
-            state = json.loads(open(path, encoding="utf-8").read())
-        except FileNotFoundError as error:
-            raise AdapterNotSupported(f"ChatGPT session file is missing: {path}") from error
-        except json.JSONDecodeError as error:
-            raise AdapterNotSupported(f"ChatGPT session file is not valid JSON: {path}") from error
-        session_token = str(state.get("session_token") or state.get("sessionToken") or "").strip()
-        if not session_token:
-            raise AdapterNotSupported(f"ChatGPT session file has no session_token: {path}")
-        try:
-            from curl_cffi import requests as cffi_requests
-        except ImportError as error:
-            raise AdapterNotSupported(
-                "curl-cffi is required for the ChatGPT web adapter; "
-                "install with: pip install 'universal-userio[chatgpt]'"
-            ) from error
-        client = cffi_requests.Session(impersonate="chrome", timeout=30)
-        client.cookies.set("__Secure-next-auth.session-token", session_token, domain=".chatgpt.com")
-        return client
-
-    def _request(self, url: str) -> dict[str, Any]:
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-            ),
-            "Accept": "application/json",
-            **({"Authorization": f"Bearer {self._access_token}"} if self._access_token else {}),
-        }
-        response = None
-        last_error: Exception | None = None
-        for _ in range(3):  # chatgpt.com occasionally closes connections mid-transfer
-            client = self._client_factory() if self._client_factory else self._client()
-            try:
-                response = client.get(url, headers=headers)
-                break
-            except Exception as error:  # curl_cffi raises its own hierarchy
-                last_error = error
-                time.sleep(1)
-        if response is None:
-            raise RuntimeError(f"ChatGPT transport failed: {last_error}")
-        if response.status_code in (401, 403) and self._access_token:
-            raise RuntimeError("ChatGPT rejected the access token; refresh the session cookie")
-        if response.status_code != 200:
-            raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {url.split('?')[0]}")
-        return json.loads(response.text)
-
-    def _renew(self) -> None:
-        session = self._request("https://chatgpt.com/api/auth/session")
-        token = str(session.get("accessToken") or "")
-        if not token:
-            raise RuntimeError("ChatGPT session cookie was rejected: no accessToken in /api/auth/session")
-        self._access_token, self._expires = token, time.time() + 600
-
-    def _bearer(self) -> str:
-        if not self._access_token or time.time() >= self._expires:
-            self._renew()
-        return self._access_token  # type: ignore[return-value]
+        return bool(os.environ.get(cls.SESSION_ENV, "").strip()) or any(chatgpt_sessions.SESSION_DIR.glob("*/*.json"))
 
     def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        self._bearer()
-        query = urllib.parse.urlencode({
-            "offset": 0, "limit": max(1, min(limit, 100)), "order": "updated", "is_archived": "false",
-        })
-        result = self._request(f"https://chatgpt.com/backend-api/conversations?{query}")
-        items = result.get("items")
-        if not isinstance(items, list):
-            raise RuntimeError("ChatGPT returned conversations in an invalid format")
-        return [self._chat_summary(chat) for chat in items if isinstance(chat, Mapping)]
+        _chatgpt_require_configured(self._username)
+        limit = max(1, min(limit, 100))
+        chats: list[dict[str, Any]] = []
+        for slug in _chatgpt_accounts(self._username):
+            query = urllib.parse.urlencode({
+                "offset": 0, "limit": limit, "order": "updated", "is_archived": "false",
+            })
+            result = _chatgpt_request(self._username, slug, f"https://chatgpt.com/backend-api/conversations?{query}")
+            items = result.get("items")
+            if not isinstance(items, list):
+                raise RuntimeError("ChatGPT returned conversations in an invalid format")
+            for chat in items:
+                if isinstance(chat, Mapping):
+                    summary = self._chat_summary(chat)
+                    summary["account"] = slug
+                    _chatgpt_chat_accounts[(self._username, summary["id"])] = slug
+                    chats.append(summary)
+        return chats[:limit]
 
     def read(self, *, chat_id: str | None = None, message_id: str | None = None) -> dict[str, Any]:
         if bool(chat_id) == bool(message_id):
             raise ValueError("provide exactly one of chat_id or message_id")
         if message_id:
             raise AdapterNotSupported("ChatGPT web adapter reads chats, not individual messages")
-        self._bearer()
-        chat = self._request(f"https://chatgpt.com/backend-api/conversation/{urllib.parse.quote(chat_id)}")
-        if not isinstance(chat, dict):
-            raise RuntimeError("ChatGPT returned an invalid conversation export")
-        return {"chat": self._conversation(chat_id or "", chat)}
-
-    @classmethod
-    def _conversation(cls, chat_id: str, chat: Mapping[str, Any]) -> dict[str, Any]:
-        mapping = chat.get("mapping")
-        messages: list[dict[str, Any]] = []
-        if isinstance(mapping, dict):
-            for node in mapping.values():
-                if not isinstance(node, Mapping):
-                    continue
-                message = node.get("message")
-                if not isinstance(message, Mapping):
-                    continue
-                role = str((message.get("author") or {}).get("role") or "")
-                if role == "system":
-                    continue
-                created = float(message.get("create_time") or 0)
-                parts = (message.get("content") or {}).get("parts") or []
-                text = " ".join(
-                    part if isinstance(part, str) else f"[{part.get('content_type')}]" for part in parts
-                ).strip()
-                if text:
-                    messages.append({"role": role, "text": text[:8000], "created_at": created})
-        messages.sort(key=lambda m: m["created_at"])
-        return {
-            "id": chat_id or str(chat.get("conversation_id") or ""),
-            "title": str(chat.get("title") or "ChatGPT"),
-            "messages": messages,
-        }
+        _chatgpt_require_configured(self._username)
+        slug = _chatgpt_resolve_account(self._username, chat_id or "")
+        return {"chat": _chatgpt_conversation(self._username, slug, chat_id or ""), "account": slug}
 
     def download(self, *, file_ref: str) -> ChannelFile:
         del file_ref
@@ -894,7 +900,8 @@ class ChatGPTWebChannelAdapter:
     def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
         if attachments:
             raise AdapterNotSupported("attachments are not supported by adapter")
-        chat = self.read(chat_id=chat_id)["chat"]
+        slug = _chatgpt_resolve_account(self._username, chat_id)
+        chat = _chatgpt_conversation(self._username, slug, chat_id)
         messages = chat.get("messages") or []
         if not messages:
             raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
@@ -904,6 +911,7 @@ class ChatGPTWebChannelAdapter:
             InboxMessage("chatgpt", message_ref, chat_id, str(latest.get("text", ""))[:8000], time.time()),
             route_id="chatgpt", user_id=self._user_id,
         )
+        self._store.set_conversation_account(conversation_id, slug, user_id=self._user_id)
         return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
 
     @classmethod
@@ -916,6 +924,222 @@ class ChatGPTWebChannelAdapter:
             "unread": 0,
         }
 
+
+# --- shared multi-account plumbing (adapter + outbox) ------------------------
+
+def _chatgpt_require_configured(user: str, soft: bool = False) -> bool:
+    if _chatgpt_accounts(user):
+        return True
+    if soft:
+        return False
+    raise AdapterNotSupported(
+        "ChatGPT web adapter is not configured: no account sessions. "
+        "Register one via the browser extension (gpt_register) or set "
+        f"{ChatGPTWebChannelAdapter.SESSION_ENV}"
+    )
+
+
+def _chatgpt_user_agent(user: str, slug: str) -> str:
+    """Exported browser UA when available: cf_clearance is UA-bound."""
+    record = _chatgpt_records.get((user, slug))
+    return str(record.get("user_agent") or "") if record else ""
+
+
+def _chatgpt_accounts(user: str) -> dict[str, list[dict]]:
+    """slug -> ordered session cookie chunks; env legacy account first."""
+    accounts: dict[str, list[dict]] = {}
+    legacy = os.environ.get(ChatGPTWebChannelAdapter.SESSION_ENV, "").strip()
+    if legacy:
+        try:
+            state = json.loads(Path(legacy).read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise AdapterNotSupported(f"ChatGPT session file is missing: {legacy}") from error
+        except json.JSONDecodeError as error:
+            raise AdapterNotSupported(f"ChatGPT session file is not valid JSON: {legacy}") from error
+        except OSError as error:
+            raise AdapterNotSupported(f"ChatGPT session file cannot be read: {legacy}") from error
+        token = str(state.get("session_token") or state.get("sessionToken") or "").strip()
+        if token:
+            accounts["default"] = [
+                {"name": "__Secure-next-auth.session-token", "value": token},
+            ]
+    for record in chatgpt_sessions.list_sessions(user=user):
+        try:
+            full = chatgpt_sessions.load_session(record["slug"], user=user)
+            _chatgpt_records[(user, record["slug"])] = full
+            accounts[record["slug"]] = full["cookie_chunks"]
+        except (KeyError, RuntimeError):
+            continue
+    return accounts
+
+
+def _chatgpt_client(user: str, slug: str) -> Any:
+    key = (user, slug)
+    chunks = _chatgpt_accounts(user)[slug]
+    fingerprint = tuple((str(c.get("name") or ""), str(c.get("value") or "")) for c in chunks)
+    client = _chatgpt_clients.get(key)
+    if client is not None and _chatgpt_client_fingerprints.get(key) == fingerprint:
+        return client
+    if client is not None:
+        _chatgpt_clients.pop(key, None)
+        _chatgpt_tokens.pop(key, None)
+    factory = _chatgpt_client_factories.get(user)
+    if factory is not None:
+        client = factory() if callable(factory) else factory
+    else:
+        try:
+            from curl_cffi import requests as cffi_requests
+        except ImportError as error:
+            raise AdapterNotSupported(
+                "curl-cffi is required for the ChatGPT web adapter; "
+                "install with: pip install 'universal-userio[chatgpt]'"
+            ) from error
+        client = cffi_requests.Session(impersonate="chrome", timeout=60)
+    for chunk in chunks:
+        client.cookies.set(chunk["name"], chunk["value"], domain=".chatgpt.com")
+    _chatgpt_clients[key] = client
+    _chatgpt_client_fingerprints[key] = fingerprint
+    return client
+
+
+def _chatgpt_bearer(user: str, slug: str) -> str:
+    key = (user, slug)
+    token, expires = _chatgpt_tokens.get(key, ("", 0.0))
+    if token and time.time() < expires:
+        return token
+    session = _chatgpt_request(user, slug, "https://chatgpt.com/api/auth/session", bearer_needed=False)
+    token = str(session.get("accessToken") or "")
+    if not token:
+        raise RuntimeError(
+            f"ChatGPT session cookie rejected for account {slug!r}: no accessToken; re-register the session"
+        )
+    _chatgpt_tokens[key] = (token, time.time() + 600)
+    return token
+
+
+def _chatgpt_request(
+    user: str, slug: str, url: str, *, bearer_needed: bool = True, json_body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    text = _chatgpt_raw(user, slug, url, bearer_needed=bearer_needed, json_body=json_body)
+    return json.loads(text)
+
+
+def _chatgpt_raw(
+    user: str, slug: str, url: str, *, bearer_needed: bool = True, json_body: dict[str, Any] | None = None,
+) -> str:
+    ua = _chatgpt_user_agent(user, slug) or (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    )
+    headers = {"User-Agent": ua, "Accept": "application/json", "OAI-Language": "en-US"}
+    for chunk in _chatgpt_accounts(user).get(slug, []):
+        if chunk["name"] == "oai-did":
+            headers["OAI-Device-Id"] = chunk["value"]
+    if bearer_needed:
+        headers["Authorization"] = f"Bearer {_chatgpt_bearer(user, slug)}"
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+        headers["Accept"] = "text/event-stream"
+    response = None
+    last_error: Exception | None = None
+    for _ in range(3):  # chatgpt.com occasionally closes connections mid-transfer
+        client = _chatgpt_client(user, slug)
+        try:
+            response = client.post(url, headers=headers, json=json_body) if json_body is not None \
+                else client.get(url, headers=headers)
+            break
+        except Exception as error:  # curl_cffi raises its own hierarchy
+            last_error = error
+            time.sleep(1)
+    if response is None:
+        raise RuntimeError(f"ChatGPT transport failed: {last_error}")
+    if response.status_code in (401, 403):
+        _chatgpt_tokens.pop((user, slug), None)
+        raise RuntimeError(
+            f"ChatGPT rejected the request for account {slug!r} "
+            f"(HTTP {response.status_code}); the session cookie likely expired"
+        )
+    if response.status_code != 200:
+        raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {url.split('?')[0]}")
+    return response.text
+
+
+def _chatgpt_conversation(user: str, slug: str, chat_id: str) -> dict[str, Any]:
+    raw = _chatgpt_request(user, slug, f"https://chatgpt.com/backend-api/conversation/{urllib.parse.quote(chat_id)}")
+    if not isinstance(raw, dict):
+        raise RuntimeError("ChatGPT returned an invalid conversation export")
+    mapping = raw.get("mapping")
+    messages: list[dict[str, Any]] = []
+    if isinstance(mapping, dict):
+        for node_id, node in mapping.items():
+            if not isinstance(node, Mapping):
+                continue
+            message = node.get("message")
+            if not isinstance(message, Mapping):
+                continue
+            role = str((message.get("author") or {}).get("role") or "")
+            if role == "system":
+                continue
+            created = float(message.get("create_time") or 0)
+            parts = (message.get("content") or {}).get("parts") or []
+            text = " ".join(
+                part if isinstance(part, str) else f"[{part.get('content_type')}]" for part in parts
+            ).strip()
+            if text:
+                messages.append({
+                    "role": role, "text": text[:8000], "created_at": created, "node_id": str(node_id),
+                })
+    messages.sort(key=lambda m: m["created_at"])
+    return {
+        "id": chat_id or str(raw.get("conversation_id") or ""),
+        "title": str(raw.get("title") or "ChatGPT"),
+        "messages": messages,
+        "mapping": mapping if isinstance(mapping, dict) else {},
+    }
+
+
+def _chatgpt_last_message(mapping: Mapping[str, Any]) -> dict[str, Any]:
+    """Latest non-system node with a node id, for parent_message_id anchoring."""
+    best: dict[str, Any] = {}
+    best_created = -1.0
+    for node_id, node in mapping.items():
+        if not isinstance(node, Mapping):
+            continue
+        message = node.get("message")
+        if not isinstance(message, Mapping):
+            continue
+        role = str((message.get("author") or {}).get("role") or "")
+        if role == "system":
+            continue
+        created = float(message.get("create_time") or 0)
+        if created >= best_created:
+            best_created = created
+            best = {"node_id": str(node_id), "role": role, "created_at": created}
+    return best
+
+
+def _chatgpt_resolve_account(user: str, chat_id: str) -> str:
+    """Pick the account holding a chat: cache first, then probe each account."""
+    cached = _chatgpt_chat_accounts.get((user, chat_id))
+    if cached and cached in _chatgpt_accounts(user):
+        return cached
+    errors: list[str] = []
+    for slug in _chatgpt_accounts(user):
+        try:
+            _chatgpt_request(user, slug, f"https://chatgpt.com/backend-api/conversation/{urllib.parse.quote(chat_id)}")
+            _chatgpt_chat_accounts[(user, chat_id)] = slug
+            return slug
+        except RuntimeError as error:
+            errors.append(f"{slug}: {error}")
+    raise KeyError(f"no ChatGPT account holds chat {chat_id!r}; tried: {'; '.join(errors)}")
+
+
+_chatgpt_clients: dict[tuple[str, str], Any] = {}
+_chatgpt_client_fingerprints: dict[tuple[str, str], tuple[tuple[str, str], ...]] = {}
+_chatgpt_client_factories: dict[str, Any] = {}
+_chatgpt_records: dict[tuple[str, str], dict] = {}
+_chatgpt_tokens: dict[tuple[str, str], tuple[str, float]] = {}
+_chatgpt_chat_accounts: dict[tuple[str, str], str] = {}
 
 # Provider-facing compatibility names; all expose the same four-method contract.
 GmailChannelAdapter = MailChannelAdapter

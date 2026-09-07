@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import urllib.error
 import urllib.request
 
-from . import agent_channel, collect
+from . import agent_channel, chatgpt_sessions, collect, vault
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -550,12 +550,34 @@ def handler(
                     collect.append_result(self._json(), user=principal.username)
                     self._reply(202, {"accepted": True})
                     return
+                if path == "/v1/chatgpt/sessions":
+                    payload = self._json()
+                    record = chatgpt_sessions.save_session(payload, user=principal.username)
+                    slug = record["slug"]
+                    service._store.register_account(
+                        account_id=f"chatgpt:{slug}", provider="chatgpt",
+                        display_name=str(payload.get("email") or payload.get("name") or f"ChatGPT {slug}"),
+                        can_read=True, can_reply=True,
+                        credential_ref=f"chatgpt-session:{slug}", enabled=True,
+                        user_id=user_id,
+                    )
+                    self._reply(202, {"accepted": True, "account_id": f"chatgpt:{slug}", "slug": slug})
+                    return
                 if path == "/v1/agent/commands":
                     self._reply(202, agent_channel.enqueue(self._json(), user=principal.username))
                     return
                 if path == "/v1/agent/results":
                     agent_channel.push_result(self._json(), user=principal.username)
                     self._reply(202, {"accepted": True})
+                    return
+                if path.startswith("/v1/vault/sessions/"):
+                    name = unquote(path.removeprefix("/v1/vault/sessions/")).strip("/")
+                    try:
+                        vault.save_session(name, self._json(), user=principal.username)
+                    except ValueError as error:
+                        self._reply(400, {"error": str(error)})
+                        return
+                    self._reply(202, {"accepted": True, "name": name})
                     return
                 if path.startswith("/v1/drafts/") and path.endswith("/approve"):
                     draft_id = path.removeprefix("/v1/drafts/").removesuffix("/approve").strip("/")
@@ -779,6 +801,21 @@ def handler(
             if path == "/v1/agent/status":
                 self._reply(200, agent_channel.status(user=principal.username))
                 return
+            if path == "/v1/chatgpt/sessions":
+                self._reply(200, {"accounts": chatgpt_sessions.list_sessions(user=principal.username)})
+                return
+            if path == "/v1/vault/sessions":
+                self._reply(200, {"sessions": vault.list_sessions(user=principal.username)})
+                return
+            if path.startswith("/v1/vault/sessions/"):
+                name = unquote(path.removeprefix("/v1/vault/sessions/")).strip("/")
+                try:
+                    record = vault.load_session(name, user=principal.username)
+                except KeyError as error:
+                    self._reply(404, {"error": str(error.args[0])})
+                    return
+                self._reply(200, record)
+                return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})
@@ -917,6 +954,13 @@ def handler(
                     self._reply(409, {"error": str(error)})
                     return
                 self._reply(200, {"deleted": deleted})
+                return
+            if path.startswith("/v1/vault/sessions/"):
+                name = unquote(path.removeprefix("/v1/vault/sessions/")).strip("/")
+                try:
+                    self._reply(200, vault.delete_session(name, user=principal.username))
+                except KeyError as error:
+                    self._reply(404, {"error": str(error.args[0])})
                 return
             self._reply(404, {"error": "not found"})
 

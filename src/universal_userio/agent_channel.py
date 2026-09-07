@@ -31,6 +31,9 @@ _PENDING: dict[tuple[str, str], deque] = {}
 _COND = threading.Condition(_LOCK)
 _LAST_POLL: dict[tuple[str, str], float] = {}
 _SEQ = itertools.count(1)
+# command id -> result object, kept so internal callers can block on one.
+_RESULTS: dict[str, dict] = {}
+_WAITING: set[str] = set()
 
 
 def _now() -> float:
@@ -115,9 +118,39 @@ def push_result(payload: dict, *, user: str) -> dict:
         raise ValueError("result exceeds MAX_RESULT_BYTES")
     RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
+        if command_id in _WAITING:
+            _RESULTS[command_id] = record
         with RESULTS_FILE.open("a", encoding="utf-8") as handle:
             handle.write(encoded + "\n")
+        _COND.notify_all()
     return {"accepted": True, "id": command_id}
+
+
+def call(agent_id: str, action: str, args: dict | None = None, *, user: str,
+         timeout_sec: float = 60.0) -> dict:
+    """Enqueue a command and block until the extension posts its result.
+
+    Server-side transport for flows that must run inside the real browser
+    (for example ChatGPT delivery when Cloudflare rejects datacenter POSTs).
+    """
+    queued = enqueue({"agent_id": agent_id, "action": action, "args": args or {}}, user=user)
+    command_id = queued["id"]
+    deadline = _now() + max(1.0, min(timeout_sec, 120.0))
+    with _COND:
+        _WAITING.add(command_id)
+        try:
+            while command_id not in _RESULTS:
+                remaining = deadline - _now()
+                if remaining <= 0:
+                    raise RuntimeError(f"agent {agent_id!r} did not answer {action!r} in time")
+                _COND.wait(timeout=remaining)
+            result = _RESULTS.pop(command_id)["result"]
+        finally:
+            _WAITING.discard(command_id)
+            _RESULTS.pop(command_id, None)
+    if not result.get("ok"):
+        raise RuntimeError(f"{action} via {agent_id}: {result.get('error') or 'failed'}")
+    return result
 
 
 def read_results(*, user: str, agent_id: str = "", limit: str = "20") -> dict:

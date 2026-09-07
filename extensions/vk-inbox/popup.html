@@ -10,6 +10,7 @@
   <button data-tab="chats" class="active">Чаты</button>
   <button data-tab="search">Поиск</button>
   <button data-tab="compose">Отправить</button>
+  <button data-tab="vault">Облако</button>
 </nav>
 <section id="tab-chats" class="active">
   <div class="list" id="chatList"><div class="empty">Нет данных. Откройте VK Web.</div></div>
@@ -27,6 +28,20 @@
   </label>
   <button id="composeSend" class="primary">Отправить через VK Web</button>
   <div id="composeStatus" class="status"></div>
+</section>
+<section id="tab-vault">
+  <label>Имя сессии
+    <input id="vaultName" placeholder="vk-m1-main">
+  </label>
+  <label>Пароль (необязательно, шифрует бэкап)
+    <input id="vaultPass" type="password" placeholder="пусто = без шифрования">
+  </label>
+  <div class="row gap">
+    <button id="vaultSaveBtn" class="primary">Сохранить в облако</button>
+    <button id="vaultRestoreBtn">Восстановить</button>
+  </div>
+  <div id="vaultStatus" class="status"></div>
+  <div class="list" id="vaultList"><div class="empty">Загрузка…</div></div>
 </section>
 <footer>
   <span id="stats">…</span>

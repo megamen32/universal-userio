@@ -181,6 +181,230 @@
     };
   }
 
+  // Deliver a ChatGPT message through the REAL composer UI. The app's own
+  // pipeline (sentinel tokens, proof-of-work, Cloudflare) runs as usual —
+  // we only type into #prompt-textarea and press Send, like a human.
+  async function cmdGptSend(args) {
+    const text = String(args.text || "");
+    if (!text) return { ok: false, error: "text required" };
+    const mode = String(args.mode || "auto");
+    let tab = await findTab("https://chatgpt.com");
+    if (!tab) {
+      tab = await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
+      await waitForComplete(tab.id, 30000);
+      await sleep(3000);
+    }
+    if (mode === "ui") return cmdGptSendUi(tab, text, args.chat_ref);
+    // "api" or "auto": try the in-page API first (sentinel requirements
+    // token), fall back to the real composer unless mode forces api.
+    const [api] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: async (body, chatRef) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        try {
+          const session = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json());
+          const token = String(session.accessToken || "");
+          if (!token) return { ok: false, error: "no accessToken (logged out?)", status: 401 };
+          const did = (document.cookie.match(/oai-did=([^;]+)/) || [])[1];
+          const baseHeaders = {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+            "OAI-Language": "en-US",
+            ...(did ? { "OAI-Device-Id": did } : {}),
+          };
+          const req = await fetch("/backend-api/sentinel/chat-requirements", {
+            method: "POST", credentials: "include", headers: baseHeaders,
+          }).then((r) => r.json()).catch(() => null);
+          const payload = {
+            action: "next",
+            messages: [{
+              id: crypto.randomUUID(),
+              author: { role: "user" },
+              content: { content_type: "text", parts: [body] },
+            }],
+            model: "auto",
+            parent_message_id: crypto.randomUUID(),
+          };
+          if (chatRef) {
+            payload.conversation_id = chatRef;
+            const prev = await fetch(`/backend-api/conversation/${chatRef}`, {
+              credentials: "include", headers: { Authorization: "Bearer " + token },
+            }).then((r) => r.json()).catch(() => null);
+            let created = -1, parent = null;
+            for (const [nodeId, node] of Object.entries((prev && prev.mapping) || {})) {
+              const m = node && node.message;
+              if (!m || !m.author || m.author.role === "system") continue;
+              const ts = Number(m.create_time || 0);
+              if (ts >= created) { created = ts; parent = nodeId; }
+            }
+            if (parent) payload.parent_message_id = parent;
+          }
+          const headers = { ...baseHeaders };
+          if (req && req.token) headers["OpenAI-Sentinel-Chat-Requirements"] = req.token;
+          const res = await fetch("/backend-api/conversation", {
+            method: "POST", credentials: "include", headers, body: JSON.stringify(payload),
+          });
+          if (!res.ok) return { ok: false, error: `conversation POST HTTP ${res.status}`, status: res.status };
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "", assistantId = "", reply = "", finished = false;
+          const deadline = Date.now() + 60000;
+          while (!finished && Date.now() < deadline) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            for (const line of buffer.split("\n")) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data: ") || trimmed === "data: [DONE]") continue;
+              try {
+                const event = JSON.parse(trimmed.slice(6));
+                if (event.message && event.message.author && event.message.author.role === "assistant") {
+                  assistantId = event.message.id || assistantId;
+                  const parts = (event.message.content && event.message.content.parts) || [];
+                  const text2 = parts.filter((p) => typeof p === "string").join("");
+                  if (text2) reply = text2;
+                  if (event.message.status === "finished_successfully") finished = true;
+                }
+              } catch (_) {}
+            }
+            buffer = buffer.slice(buffer.lastIndexOf("\n") + 1);
+          }
+          return { ok: true, transport: "api", assistant_id: assistantId, reply: reply.slice(0, 4000), chat_ref: chatRef || null };
+        } catch (e) {
+          return { ok: false, error: String(e && e.message || e) };
+        }
+      },
+      args: [text, args.chat_ref ? String(args.chat_ref) : ""],
+    });
+    const apiResult = (api && api.result) || { ok: false };
+    if (apiResult.ok || mode === "api") return apiResult;
+    // auto: API was rejected (Cloudflare/sentinel) — native composer.
+    const ui = await cmdGptSendUi(tab, text, args.chat_ref);
+    return { ...ui, transport: "ui", api_error: apiResult.error || null };
+  }
+
+  async function cmdGptSendUi(tab, text, chatRef) {
+    const url = chatRef
+      ? `https://chatgpt.com/c/${encodeURIComponent(String(chatRef))}`
+      : "https://chatgpt.com/";
+    if (!tab.url.startsWith(url.split("?")[0])) {
+      await chrome.tabs.update(tab.id, { url });
+    }
+    await waitForComplete(tab.id, 30000);
+    await sleep(3000);
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: async (body) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        try {
+          let composer = null;
+          for (let i = 0; i < 40; i += 1) {
+            composer = document.querySelector("#prompt-textarea");
+            if (composer) break;
+            await sleep(500);
+          }
+          if (!composer) return { ok: false, error: "composer not found (logged out?)" };
+          composer.focus();
+          document.execCommand("insertText", false, body);
+          await sleep(500);
+          const before = document.querySelectorAll('[data-message-author-role="assistant"]').length;
+          let send = document.querySelector('[data-testid="send-button"]');
+          if (!send) {
+            composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+          } else {
+            send.click();
+          }
+          let lastText = "";
+          let stable = 0;
+          for (let i = 0; i < 120; i += 1) {
+            await sleep(1000);
+            const replies = document.querySelectorAll('[data-message-author-role="assistant"]');
+            if (replies.length <= before) continue;  // only the NEW reply counts
+            const last = replies[replies.length - 1];
+            const t = last ? (last.textContent || "").trim() : "";
+            if (t && t === lastText) {
+              stable += 1;
+              if (stable >= 3) break;
+            } else {
+              stable = 0;
+              lastText = t;
+            }
+          }
+          if (!lastText) return { ok: false, error: "no assistant reply detected" };
+          return { ok: true, reply: lastText.slice(0, 4000), chat_url: location.href };
+        } catch (e) {
+          return { ok: false, error: String(e && e.message || e) };
+        }
+      },
+      args: [text],
+    });
+    return (injection && injection.result) || { ok: false, error: "no injection result" };
+  }
+
+  async function cmdGptSendLegacyUnused(args) {
+    const text = String(args.text || "");
+    if (!text) return { ok: false, error: "text required" };
+    const url = args.chat_ref
+      ? `https://chatgpt.com/c/${encodeURIComponent(String(args.chat_ref))}`
+      : "https://chatgpt.com/";
+    let tab = await findTab("https://chatgpt.com");
+    if (!tab) {
+      tab = await chrome.tabs.create({ url, active: false });
+    } else if (!tab.url.startsWith(url.split("?")[0])) {
+      await chrome.tabs.update(tab.id, { url });
+    }
+    await waitForComplete(tab.id, 30000);
+    await sleep(3000);
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: async (body) => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        try {
+          let composer = null;
+          for (let i = 0; i < 40; i += 1) {
+            composer = document.querySelector("#prompt-textarea");
+            if (composer) break;
+            await sleep(500);
+          }
+          if (!composer) return { ok: false, error: "composer not found (logged out?)" };
+          composer.focus();
+          document.execCommand("insertText", false, body);
+          await sleep(500);
+          let send = document.querySelector('[data-testid="send-button"]');
+          if (!send) {
+            composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+          } else {
+            send.click();
+          }
+          let lastText = "";
+          let stable = 0;
+          for (let i = 0; i < 120; i += 1) {
+            await sleep(1000);
+            const replies = document.querySelectorAll('[data-message-author-role="assistant"]');
+            const last = replies[replies.length - 1];
+            const t = last ? (last.textContent || "").trim() : "";
+            if (t && t === lastText) {
+              stable += 1;
+              if (stable >= 3) break;
+            } else {
+              stable = 0;
+              lastText = t;
+            }
+          }
+          if (!lastText) return { ok: false, error: "no assistant reply detected" };
+          return { ok: true, reply: lastText.slice(0, 4000), chat_url: location.href };
+        } catch (e) {
+          return { ok: false, error: String(e && e.message || e) };
+        }
+      },
+      args: [text],
+    });
+    return (injection && injection.result) || { ok: false, error: "no injection result" };
+  }
+
   async function execute(command) {
     const args = command.args || {};
     switch (command.action) {
@@ -225,6 +449,52 @@
         return cmdSend(args);
       case "collect_run":
         return root.Collect.runDue();
+      case "vault_save": {
+        if (!root.Vault) return { ok: false, error: "vault module missing" };
+        return root.Vault.save({
+          name: String(args.name || ""),
+          passphrase: args.passphrase ? String(args.passphrase) : "",
+          machine: args.machine ? String(args.machine) : "",
+          domains: Array.isArray(args.domains) ? args.domains : null,
+          origins: Array.isArray(args.origins) ? args.origins : [],
+        });
+      }
+      case "vault_restore": {
+        if (!root.Vault) return { ok: false, error: "vault module missing" };
+        const restored = await root.Vault.restore({
+          name: String(args.name || ""),
+          passphrase: args.passphrase ? String(args.passphrase) : "",
+          include_storage: args.include_storage !== false,
+        });
+        if (args.open) {
+          const tab = await ensureTab(String(args.open));
+          restored.opened = { tab_id: tab.id, url: tab.url, title: tab.title || "" };
+        }
+        return restored;
+      }
+      case "vault_list": {
+        if (!root.Vault) return { ok: false, error: "vault module missing" };
+        return { ok: true, sessions: await root.Vault.list() };
+      }
+      case "vault_delete": {
+        if (!root.Vault) return { ok: false, error: "vault module missing" };
+        return root.Vault.del(String(args.name || ""));
+      }
+      case "gpt_identity": {
+        if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
+        return root.ChatGPT.identity();
+      }
+      case "gpt_register": {
+        if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
+        return root.ChatGPT.register();
+      }
+      case "gpt_send": {
+        return cmdGptSend(args);
+      }
+      case "gpt_sync": {
+        if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
+        return root.ChatGPT.sync();
+      }
       case "sleep":
         await sleep(Math.min(Number(args.ms) || 1000, 60000));
         return { ok: true };

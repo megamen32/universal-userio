@@ -20,6 +20,7 @@ class UserIOService:
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
         *, sms_gateway: object | None = None, sms_user_id: str = "", sms_route_id: str = "sms",
         gmail_outbox: object | None = None,
+        chatgpt_outbox: object | None = None,
         telegram_outbox: object | None = None,
     ) -> None:
         self._store = store
@@ -28,6 +29,7 @@ class UserIOService:
         self._user_generators: dict[str, object] = {}
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
         self.gmail_outbox = gmail_outbox
+        self.chatgpt_outbox = chatgpt_outbox
         self.telegram_outbox = telegram_outbox
         self._inbound_listeners: list[object] = []
 
@@ -53,6 +55,15 @@ class UserIOService:
             for listener in tuple(self._inbound_listeners):
                 listener(user_id, conversation_id, message)
         return conversation_id, accepted
+
+    def _chatgpt_agent_fallback(self, *, agent_id: str, text: str, chat_ref: str) -> dict:
+        """Deliver through the user's real browser when the server POST is blocked."""
+        from . import agent_channel
+        username = self._store.owner().username
+        return agent_channel.call(
+            agent_id, "gpt_send", {"text": text, "chat_ref": chat_ref},
+            user=username, timeout_sec=115.0,
+        )
 
     def add_inbound_listener(self, listener: object) -> None:
         self._inbound_listeners.append(listener)
@@ -183,13 +194,25 @@ class UserIOService:
                 account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),
                 message_id=str(latest["message_id"]), body=draft.body, draft_id=draft.id,
             )
-        elif conversation["source"] == "chatgpt":
-            send_chatgpt_reply = getattr(self._outbox, "send_chatgpt_reply", None)
-            if not callable(send_chatgpt_reply):
-                raise ValueError("configured outbox does not support ChatGPT delivery")
-            receipt = send_chatgpt_reply(
-                chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body
-            )
+        elif str(conversation["source"]).startswith("chatgpt"):
+            # chatgpt:<slug> sources carry the account; account_ref is the fallback.
+            account_ref = str(conversation["source"]).partition(":")[2] or str(conversation.get("account_ref") or "")
+            if self.chatgpt_outbox is not None:
+                principal = self._store.user(user_id)
+                if principal is None:
+                    raise ValueError(f"unknown UserIO user: {user_id}")
+                receipt = self.chatgpt_outbox.send_reply(
+                    chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body,
+                    account_ref=account_ref, user=principal.username,
+                    agent_fallback=self._chatgpt_agent_fallback,
+                )
+            else:
+                send_chatgpt_reply = getattr(self._outbox, "send_chatgpt_reply", None)
+                if not callable(send_chatgpt_reply):
+                    raise ValueError("configured outbox does not support ChatGPT delivery")
+                receipt = send_chatgpt_reply(
+                    chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body
+                )
         elif conversation["source"] == "sms":
             if self.sms_gateway is None or user_id != self.sms_user_id:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")

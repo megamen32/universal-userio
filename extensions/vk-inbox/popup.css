@@ -30,3 +30,5 @@ footer { display: flex; justify-content: space-between; align-items: center; pad
 .status { color: #aaa; margin-top: 8px; font-size: 12px; min-height: 1.2em; }
 .status.ok { color: #6dcc6d; }
 .status.err { color: #ff7676; }
+.row.gap { display: flex; gap: 6px; margin-bottom: 4px; }
+.row.gap button { flex: 1; padding: 8px; }

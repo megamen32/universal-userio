@@ -26,11 +26,17 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source
+const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source.startsWith("chatgpt") ? "chatgpt" : source
 const sourceForAccount = (account: Account) => {
-  if (account.provider !== "gmail") return account.provider
-  const alias = account.id.match(/^gmail-(.+)$/i)?.[1]
-  return alias ? `gmail:${alias}` : account.provider
+  if (account.provider === "gmail") {
+    const alias = account.id.match(/^gmail-(.+)$/i)?.[1]
+    return alias ? `gmail:${alias}` : account.provider
+  }
+  if (account.provider === "chatgpt") {
+    const slug = account.id.match(/^chatgpt:(.+)$/)?.[1]
+    return slug ? `chatgpt:${slug}` : account.provider
+  }
+  return account.provider
 }
 const channelIcon = (source: string) => {
   const provider = providerForSource(source)
@@ -182,6 +188,7 @@ export function App() {
   const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
   const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; meta: { kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number } | null; loading: boolean } | null>(null)
   const [hiddenAccounts, setHiddenAccounts] = useState<string[]>(() => JSON.parse(localStorage.getItem("userio-hidden-accounts") || "[]"))
+  const [hiddenPlatforms, setHiddenPlatforms] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem("userio-hidden-platforms") || "[]") } catch { return [] } })
   const [toast, setToast] = useState("")
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [newChatPhone, setNewChatPhone] = useState("")
@@ -491,7 +498,25 @@ export function App() {
     if (!visible && selectedAccount === id) setSelectedAccount("all")
   }
 
+  // View-only platform switch: unchecking a platform (e.g. ChatGPT) hides all
+  // its chats from the unified feed. Explicit channel/account views win.
+  const togglePlatformVisible = (platform: string, visible: boolean) => {
+    const next = visible ? hiddenPlatforms.filter((item) => item !== platform) : Array.from(new Set([...hiddenPlatforms, platform]))
+    setHiddenPlatforms(next)
+    localStorage.setItem("userio-hidden-platforms", JSON.stringify(next))
+    if (!visible) {
+      if (selectedChannel === platform) setSelectedChannel("all")
+      const selected = accounts.find((item) => item.id === selectedAccount)
+      if (selected && providerForSource(selected.provider) === platform) setSelectedAccount("all")
+    }
+  }
+  const unifiedFeed = selectedAccount === "all" && selectedChannel === "all"
+  const platformVisibleInFeed = (source: string) => !unifiedFeed || !hiddenPlatforms.includes(providerForSource(source))
+  // Remount the list (with staggered row animation) whenever the view changes.
+  const viewKey = `${selectedAccount}|${selectedChannel}|${hiddenPlatforms.join(",")}|${hiddenAccounts.join(",")}|${search.trim() ? "search" : "list"}`
+
   const visibleChats = (search.trim() ? searchResults : chats)
+    .filter((chat) => platformVisibleInFeed(chat.source))
     .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
     .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
@@ -514,8 +539,7 @@ export function App() {
         const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === platform)
         const platformUnread = unreadByPlatform[platform] || 0
         return <div key={platform} className="mb-4">
-          <div className="mb-1 flex items-center gap-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><span className="text-foreground/70">{channelIcon(platform)}</span>{displayChannel(platform)}{platformUnread > 0 && <Badge className="ml-auto rounded-full bg-[#2f80ed] px-1.5 text-[10px] text-white">{platformUnread}</Badge>}</div>
-          <Button className="mb-1 h-9 w-full justify-start rounded-lg px-2" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }}><span className="text-xs">Все {displayChannel(platform)}</span></Button>
+          <div role="button" tabIndex={0} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) } }} title={`Показать все: ${displayChannel(platform)}`} className={`group mb-1 flex h-9 cursor-pointer select-none items-center gap-2 rounded-lg px-2 text-sm font-medium ${selectedChannel === platform && selectedAccount === "all" ? "bg-secondary text-secondary-foreground" : "text-foreground/80 hover:bg-muted/70"} ${hiddenPlatforms.includes(platform) ? "opacity-50" : ""}`}><span className="text-foreground/70">{channelIcon(platform)}</span>{displayChannel(platform)}{platformUnread > 0 && <Badge className="ml-auto rounded-full bg-[#2f80ed] px-1.5 text-[10px] text-white">{platformUnread}</Badge>}<input className="size-3.5 shrink-0 opacity-40 hover:opacity-100 group-hover:opacity-90" aria-label={`Показывать ${displayChannel(platform)} в общей ленте`} title="Показывать платформу в общей ленте" type="checkbox" checked={!hiddenPlatforms.includes(platform)} onClick={(event) => event.stopPropagation()} onChange={(event) => togglePlatformVisible(platform, event.target.checked)} /></div>
           {platformAccounts.map((item) => {
             const visible = !hiddenAccounts.includes(item.id)
             const last = chats.filter((chat) => chat.source === sourceForAccount(item)).reduce((acc, chat) => Math.max(acc, chat.account_last_at ?? 0), 0)
@@ -552,12 +576,14 @@ export function App() {
     <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card md:w-[340px] md:flex-none ${chatsOpen ? "md:flex" : "md:hidden"} ${mobilePane === "chats" ? "flex" : "hidden"}`}>
       <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ЧАТЫ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setNewChatOpen(true)} title="Новый SMS-чат"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
-        {visibleChats.map((chat) => {
+        <div key={viewKey}>
+        {visibleChats.map((chat, chatIndex) => {
           const unread = chat.unread_count > 0
-          return <button key={chat.id} onClick={() => openChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
+          return <button key={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${Math.min(chatIndex * 18, 360)}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
           <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
         </button>
         })}
+        </div>
         {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
           {search.trim()
             ? <>Ничего не найдено по запросу <span className="font-medium text-foreground">«{search.trim()}»</span></>
