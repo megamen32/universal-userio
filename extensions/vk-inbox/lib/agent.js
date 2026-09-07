@@ -163,6 +163,35 @@
     return root.sendViaVK(String(args.peer_id || ""), String(args.body || ""));
   }
 
+  // Serve one VK attachment's bytes by locator (peer, msg, idx) straight from
+  // the extension's IndexedDB — the server-side VK adapter calls this through
+  // the command channel when a user downloads media.
+  async function cmdVkAttachmentBytes(args) {
+    if (!root.UserIODB || !root.UserIODB.getAttachmentByIndex) {
+      return { ok: false, error: "db getter unavailable" };
+    }
+    const row = await root.UserIODB.getAttachmentByIndex(
+      String(args.peer_id || ""), String(args.msg_id || ""), Number(args.idx || 0),
+    );
+    if (!row) return { ok: false, error: "attachment not found in this profile" };
+    if (row.status !== "ok" || !row.bytes) {
+      return { ok: false, error: row.error || "attachment bytes missing", status: row.status };
+    }
+    const bytes = new Uint8Array(row.bytes);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return {
+      ok: true,
+      content_type: row.content_type || "application/octet-stream",
+      filename: row.filename || "",
+      size: row.size || bytes.length,
+      bytes_base64: btoa(binary),
+    };
+  }
+
   async function cmdGetAttachment(args) {
     const row = await root.UserIODB.getAttachment(Number(args.id));
     if (!row) return { ok: false, error: "attachment not found" };
@@ -445,6 +474,8 @@
         return { ok: true, messages: await root.UserIODB.listMessages(String(args.peer_id || "")) };
       case "db_get_attachment":
         return cmdGetAttachment(args);
+      case "vk_attachment_bytes":
+        return cmdVkAttachmentBytes(args);
       case "vk_send":
         return cmdSend(args);
       case "collect_run":

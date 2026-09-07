@@ -188,6 +188,15 @@
     return req(t.objectStore("attachments").get(Number(id)));
   };
 
+  lib.getAttachmentByIndex = async (peer_id, msg_id, idx) => {
+    const t = await tx(["attachments"]);
+    const rows = await req(t.objectStore("attachments").index("msg").getAll(
+      IDBKeyRange.only([String(peer_id), String(msg_id)]),
+    ));
+    const wanted = Number(idx) || 0;
+    return rows.find((r) => (r.idx || 0) === wanted) || rows[0] || null;
+  };
+
   lib.listAttachments = async () => {
     const t = await tx(["attachments"]);
     const all = await req(t.objectStore("attachments").getAll());
