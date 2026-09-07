@@ -52,7 +52,7 @@ export async function telegramGroupRoutingAttachment(options) {
     try { sender = await options.resolveSender(); } catch (_error) { sender = {}; }
   }
   const authorId = String(sender.id || idString(message.senderId) || idString(message.fromId) || "");
-  const authorName = String(sender.name || "telegram");
+  const authorName = String(sender.name || message.postAuthor || options.groupName || "telegram");
   const replyTo = replyMessageId(message);
   let replyToOwn = false;
   if (replyTo && typeof options.resolveReply === "function") {
