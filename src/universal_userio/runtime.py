@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from .adapters import DirectProviderOutbox, HimalayaGmailOutbox
+from .adapters import ChatGPTWebOutbox, DirectProviderOutbox, HimalayaGmailOutbox
 from .channels.sms_gateway import AndroidSmsGatewayClient
 from .ai import OpenAICompatibleDraftGenerator
 from .channels.live_telegram import live_telegram_outbox_from_env
@@ -72,6 +72,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
         store, generator, DirectProviderOutbox(), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
         gmail_outbox=HimalayaGmailOutbox(),
+        chatgpt_outbox=ChatGPTWebOutbox(),
         telegram_outbox=telegram_outbox_from_env(environment),
     )
 

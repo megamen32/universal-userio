@@ -140,3 +140,13 @@ def test_enqueue_validation(tmp_path, monkeypatch) -> None:
             assert error.code == 400
         else:
             raise AssertionError(f"invalid payload accepted: {payload}")
+
+
+def test_push_result_does_not_retain_unawaited_result(tmp_path, monkeypatch):
+    from universal_userio import agent_channel
+    monkeypatch.setattr(agent_channel, "RESULTS_FILE", tmp_path / "results.jsonl")
+    agent_channel._RESULTS.clear()
+    agent_channel._WAITING.clear()
+    agent_channel.push_result({"id": "orphan", "result": {"ok": True}}, user="owner")
+    assert "orphan" not in agent_channel._RESULTS
+    assert (tmp_path / "results.jsonl").exists()

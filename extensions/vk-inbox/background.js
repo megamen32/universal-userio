@@ -5,12 +5,14 @@
 // lib/*.js attach themselves to `self.UserIODB` / `self.UserIO` /
 // `self.Collect` / `self.Agent`; importScripts loads them in order.
 
-importScripts("lib/config.js", "lib/db.js", "lib/userio.js", "lib/collect.js", "lib/agent.js");
+importScripts("lib/config.js", "lib/db.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/agent.js");
 
 const DB = self.UserIODB;
 const USERIO = self.UserIO;
 const COLLECT = self.Collect;
+const VAULT = self.Vault;
 const AGENT = self.Agent;
+const GPT = self.ChatGPT;
 
 const SEEN = new Set(); // dedupe msg ids in-memory; persistent dedupe lives in IDB
 const FORWARD_QUEUE = [];
@@ -311,6 +313,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "collectRun":
           sendResponse(await COLLECT.runDue());
           break;
+        case "vaultSave":
+          sendResponse(await VAULT.save(msg.options || {}));
+          break;
+        case "vaultRestore":
+          sendResponse(await VAULT.restore(msg.options || {}));
+          break;
+        case "vaultList":
+          sendResponse({ ok: true, sessions: await VAULT.list() });
+          break;
+        case "vaultDelete":
+          sendResponse(await VAULT.del(msg.name));
+          break;
+        case "vaultStatus":
+          sendResponse({ ok: true, state: await VAULT.state() });
+          break;
+        case "gptIdentity":
+          sendResponse(await GPT.identity());
+          break;
+        case "gptRegister":
+          sendResponse(await GPT.register());
+          break;
         case "purge":
           await DB.purgeAll();
           SEEN.clear();
@@ -336,4 +359,5 @@ chrome.alarms.onAlarm.addListener((a) => {
 });
 
 COLLECT.start();
+GPT.start();
 AGENT.start();

@@ -2,24 +2,19 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp8wuFGy/+2Me1uNY5ECfy9W57mmLPRdXh0BFp66g7E0VDIFbR/9UzvAlFs6th1UA5VPTfEtMSgJ6vyO90+8WvcWMNpJoExPZXOvBKeDTuqecNzdjsYdBNgI7DtQuC2G0hPX4u55ECRfpP2iT2f+WIijMkI+GaQR7MGwrNw5cKkeIzvRbeIUUnDF+juW0k+nhW6VwixvPLRGpgY/rWBs1DdMIdEBZoUfWmllkA83A6NfOkQl103kBOAcueZmqzy0mcJC8B6f9qVoOhMBnx5S9GZVbo7rFdJmt4deEWnkiIMfxRPQcOY1VtfB1Mdu7OdomdKvSQHr2Yl9Z8UT4BrA8aQIDAQAB",
   "name": "Universal UserIO Agent",
-  "version": "0.4.0",
-  "description": "VK Web inbox capture plus a long-poll command channel that lets the operator drive the real logged-in browser. MV3 service worker.",
+  "version": "0.7.0",
+  "description": "VK Web inbox capture, long-poll command channel, and a session vault: back up cookies/localStorage to the cloud (UserIO server or Yandex Disk) and restore them on another machine. MV3 service worker.",
   "permissions": [
     "storage",
     "tabs",
     "alarms",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "cookies"
   ],
   "host_permissions": [
-    "https://vk.com/*",
-    "https://vk.ru/*",
-    "https://userapi.com/*",
-    "https://sun1.userapi.com/*",
-    "https://sun9.userapi.com/*",
-    "https://pp.userapi.com/*",
-    "http://192.168.2.100/*",
-    "http://127.0.0.1/*"
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js"

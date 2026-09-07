@@ -6,6 +6,7 @@ import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage } from "telegram/events/index.js";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
+import { telegramGroupRoutingAttachment } from "./group-routing.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -292,12 +293,30 @@ function entityLabel(entity) {
   );
 }
 
-async function envelope(chatKey, label, message, client) {
+async function envelope(chatKey, label, message, client, self) {
   const audio = await transcribeTelegramAudio(client, message, { apiKey: whisperApiKey });
   const normalized = bodyAndAttachments(
     { ...message, message: messageBody(message) },
     audio,
   );
+  const routing = await telegramGroupRoutingAttachment({
+    chatKey, groupName: label, message,
+    selfId: self && self.id, selfUsername: self && self.username,
+    resolveSender: async () => {
+      let entity = message.sender || null;
+      if (!entity && typeof message.getSender === "function") entity = await message.getSender();
+      let id = "";
+      try { id = String(await client.getPeerId(entity || message.fromId, true)); } catch (_error) {}
+      return { id, name: entityLabel(entity) };
+    },
+    resolveReply: async (replyTo) => {
+      const values = await client.getMessages(message.peerId, { ids: [Number(replyTo)] });
+      const parent = Array.isArray(values) ? values[0] : values;
+      return { out: !!(parent && parent.out) };
+    },
+  });
+  const attachments = normalized.attachments.slice();
+  if (routing) attachments.push(routing);
   if (audio && audio.error) console.warn(`telegram audio ${chatKey}:${message.id}: ${audio.error}`);
   return {
     schema: "universal.inbox.message.v1",
@@ -305,11 +324,11 @@ async function envelope(chatKey, label, message, client) {
     message_id: `${chatKey}:${message.id}`,
     sender: label,
     body: normalized.body.slice(0, 8000),
-    ...(normalized.attachments.length ? { attachments: normalized.attachments } : {}),
+    ...(attachments.length ? { attachments } : {}),
   };
 }
 
-async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, limit) {
+async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, self, limit) {
   const dialogs = await client.getDialogs({ limit: limit || syncDialogs });
   let chats = 0;
   for (const dialog of dialogs) {
@@ -325,7 +344,7 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
       let posted = 0;
       for (const message of messages) {
         if (!message || message.out) continue;
-        const envelopeMessage = await envelope(chatKey, label, message, client);
+        const envelopeMessage = await envelope(chatKey, label, message, client, self);
         if (!envelopeMessage.body) continue;
         await postInbox(accountId, envelopeMessage);
         posted += 1;
@@ -341,7 +360,7 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
   return chats;
 }
 
-async function ingestLive(slot, client, accountId, dialogLabels, event) {
+async function ingestLive(slot, client, accountId, dialogLabels, self, event) {
   const message = event.message;
   if (!message || message.out) return;
   let chatKey = "";
@@ -356,7 +375,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, event) {
     live.labelPeers.labelPeers.set(label, message.chat);
     live.labelPeers.idPeers.set(chatKey, message.chat);
   }
-  const inboxMessage = await envelope(chatKey, label, message, client);
+  const inboxMessage = await envelope(chatKey, label, message, client, self);
   if (!inboxMessage.body) return;
   await postInbox(accountId, inboxMessage);
   setSync(slot, { lastSyncAt: Date.now() });
@@ -380,9 +399,9 @@ async function syncAccount(slot) {
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
       liveSlots.set(slot, { client, labelPeers, accountId });
-      const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers);
+      const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
       client.addEventHandler(
-        (event) => { ingestLive(slot, client, accountId, dialogLabels, event).catch((error) => console.error(`sync ${slot} live error:`, (error && error.message) || error)); },
+        (event) => { ingestLive(slot, client, accountId, dialogLabels, me, event).catch((error) => console.error(`sync ${slot} live error:`, (error && error.message) || error)); },
         new NewMessage({}),
       );
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
@@ -396,7 +415,7 @@ async function syncAccount(slot) {
         await new Promise((resolve) => setTimeout(resolve, 60000));
         await client.getMe();
         if (beat % 5 === 0) {
-          await backfillDialogs(slot, client, accountId, dialogLabels, liveSlots.get(slot) || null, 20);
+          await backfillDialogs(slot, client, accountId, dialogLabels, (liveSlots.get(slot) || {}).labelPeers || null, me, 20);
         }
         setSync(slot, { lastSyncAt: Date.now() });
       }
