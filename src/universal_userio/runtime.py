@@ -11,6 +11,7 @@ from .adapters import ChatGPTWebOutbox, DirectProviderOutbox, HimalayaGmailOutbo
 from .channels.sms_gateway import AndroidSmsGatewayClient
 from .ai import OpenAICompatibleDraftGenerator
 from .channels.live_telegram import live_telegram_outbox_from_env
+from .draft_notifications import TelegramDraftApprovalNotifier
 from .http_api import handler
 from .service import UserIOService
 from .store import SQLiteUserIOStore
@@ -68,12 +69,31 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
         raise ValueError("USERIO_SMS_GATEWAY_URL and USERIO_SMS_GATEWAY_TOKEN must be set together")
     gateway = AndroidSmsGatewayClient(sms_url, sms_token) if sms_url else None
     sms_user_id = environment.get("USERIO_SMS_USER_ID", store.default_user_id).strip()
+    telegram_outbox = telegram_outbox_from_env(environment)
+    notify_chat = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT", "").strip()
+    notify_chat_id = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT_ID", "").strip()
+    notify_account_ref = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_ACCOUNT_REF", "").strip()
+    notify_values = (notify_chat, notify_chat_id, notify_account_ref)
+    if any(notify_values) and not all(notify_values):
+        raise ValueError(
+            "USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT, USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT_ID and "
+            "USERIO_DRAFT_NOTIFY_TELEGRAM_ACCOUNT_REF must be set together"
+        )
+    draft_notifier = None
+    if all(notify_values):
+        draft_notifier = TelegramDraftApprovalNotifier(
+            telegram_outbox, owner_user_id=store.owner().user_id,
+            chat=notify_chat, chat_id=notify_chat_id, account_ref=notify_account_ref,
+        )
     return UserIOService(
         store, generator, DirectProviderOutbox(), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
         gmail_outbox=HimalayaGmailOutbox(),
         chatgpt_outbox=ChatGPTWebOutbox(),
-        telegram_outbox=telegram_outbox_from_env(environment),
+        telegram_outbox=telegram_outbox, draft_notifier=draft_notifier,
+        draft_notification_delay_seconds=float(
+            environment.get("USERIO_DRAFT_NOTIFY_DELAY_SECONDS", "5") or "5"
+        ),
     )
 
 

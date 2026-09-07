@@ -296,7 +296,7 @@ class UserIOMcpSurface:
             self._required(arguments, "source"), self._required(arguments, "message_id"),
             self._required(arguments, "sender"), self._required(arguments, "body"), 0.0,
         )
-        drafts = self._service.propose_variants(
+        drafts = self._service.propose_for_approval(
             self._required(arguments, "conversation_id"), message,
             limit=int(arguments.get("limit", 3)), user_id=principal.user_id,
         )
