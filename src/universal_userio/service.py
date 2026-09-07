@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import threading
 import uuid
 from collections.abc import Sequence
 
 from .contracts import DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class DeliveryUnavailableError(ValueError):
@@ -22,6 +27,8 @@ class UserIOService:
         gmail_outbox: object | None = None,
         chatgpt_outbox: object | None = None,
         telegram_outbox: object | None = None,
+        draft_notifier: object | None = None,
+        draft_notification_delay_seconds: float = 5.0,
     ) -> None:
         self._store = store
         self._generator = generator
@@ -31,6 +38,8 @@ class UserIOService:
         self.gmail_outbox = gmail_outbox
         self.chatgpt_outbox = chatgpt_outbox
         self.telegram_outbox = telegram_outbox
+        self.draft_notifier = draft_notifier
+        self.draft_notification_delay_seconds = max(0.0, float(draft_notification_delay_seconds))
         self._inbound_listeners: list[object] = []
 
     @staticmethod
@@ -68,6 +77,51 @@ class UserIOService:
     def add_inbound_listener(self, listener: object) -> None:
         self._inbound_listeners.append(listener)
 
+    def _notify_drafts_if_still_proposed(
+        self, draft_ids: Sequence[str], *, user_id: str | None = None,
+    ) -> None:
+        notifier = self.draft_notifier
+        if notifier is None:
+            return
+        resolved_user_id = self._store._user(user_id)
+        proposed: list[ReplyDraft] = []
+        for draft_id in draft_ids:
+            try:
+                draft = self._store.draft(str(draft_id), user_id=resolved_user_id)
+            except KeyError:
+                continue
+            if draft.status == "proposed":
+                proposed.append(draft)
+        if not proposed:
+            return
+        conversation = self._store.conversation(proposed[0].conversation_id, user_id=resolved_user_id)
+        if conversation is None:
+            return
+        notify = getattr(notifier, "notify", None)
+        if not callable(notify):
+            return
+        try:
+            notify(user_id=resolved_user_id, conversation=conversation, drafts=proposed)
+        except Exception as error:  # Notification failure must never lose the draft itself.
+            _LOG.warning("draft approval notification failed for %s: %s", proposed[0].id, error)
+
+    def _notify_drafts_for_approval(
+        self, drafts: Sequence[ReplyDraft], *, user_id: str | None = None,
+    ) -> None:
+        draft_ids = [draft.id for draft in drafts if draft.status == "proposed"]
+        if self.draft_notifier is None or not draft_ids:
+            return
+        if self.draft_notification_delay_seconds <= 0:
+            self._notify_drafts_if_still_proposed(draft_ids, user_id=user_id)
+            return
+        timer = threading.Timer(
+            self.draft_notification_delay_seconds,
+            self._notify_drafts_if_still_proposed,
+            args=(draft_ids,), kwargs={"user_id": user_id},
+        )
+        timer.daemon = True
+        timer.start()
+
     def receive_and_plan(
         self, message: InboxMessage, *, route_id: str, user_id: str | None = None
     ) -> tuple[str, bool, ReplyDraft | None]:
@@ -79,6 +133,8 @@ class UserIOService:
         conversation = self._store.conversation(conversation_id, user_id=user_id)
         if conversation and conversation["response_mode"] == "auto_send":
             draft = self.approve(draft.id, user_id=user_id)
+        else:
+            self._notify_drafts_for_approval([draft], user_id=user_id)
         return conversation_id, True, draft
 
     def propose(
@@ -101,7 +157,19 @@ class UserIOService:
             source=str(latest["source"]), message_id=str(latest["message_id"]), sender=str(latest["sender"]),
             body=str(latest["body"]), received_at=float(latest["received_at"]),
         )
-        return self.propose_variants(conversation_id, message, limit=limit, user_id=user_id)
+        return self.propose_for_approval(
+            conversation_id, message, limit=limit, user_id=user_id
+        )
+
+    def propose_for_approval(
+        self, conversation_id: str, message: InboxMessage, *, limit: int = 3,
+        user_id: str | None = None,
+    ) -> list[ReplyDraft]:
+        drafts = self.propose_variants(
+            conversation_id, message, limit=limit, user_id=user_id
+        )
+        self._notify_drafts_for_approval(drafts, user_id=user_id)
+        return drafts
 
     def create_manual_draft(
         self, conversation_id: str, *, body: str, user_id: str | None = None
@@ -113,6 +181,7 @@ class UserIOService:
             raise ValueError("draft body is required")
         draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, text, "proposed")
         self._store.add_draft(draft, user_id=user_id)
+        self._notify_drafts_for_approval([draft], user_id=user_id)
         return draft
 
     def _generator_for(self, user_id: str | None) -> object:

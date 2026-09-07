@@ -260,3 +260,92 @@ def test_long_audio_transcript_does_not_duplicate_ingress_prefix() -> None:
     assert message.body == transcript.strip()[:65_536]
     assert message.body.count(prefix[:100]) >= 1
     assert "[Транскрипция]" not in message.body
+
+
+class _DraftNotifier:
+    def __init__(self):
+        self.calls = []
+
+    def notify(self, **kwargs):
+        self.calls.append(kwargs)
+        return "notice-receipt"
+
+
+def test_manual_draft_notifies_when_approval_is_required(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(
+        store, Generator(), Outbox(), draft_notifier=notifier, draft_notification_delay_seconds=0
+    )
+    message = InboxMessage("telegram", "m-notify", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+
+    draft = service.create_manual_draft(conversation_id, body="reply")
+
+    assert draft.status == "proposed"
+    assert len(notifier.calls) == 1
+    assert notifier.calls[0]["drafts"][0].id == draft.id
+
+
+def test_receive_and_plan_does_not_notify_before_auto_send(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_identity(source="vk", external_id="42", identity_id="person_auto", display_name="Auto")
+    store.set_rule(identity_id="person_auto", source="vk", route_id="vip-vk", mode="auto_send")
+    notifier = _DraftNotifier()
+    service = UserIOService(
+        store, Generator(), Outbox(), draft_notifier=notifier, draft_notification_delay_seconds=0
+    )
+
+    _, accepted, draft = service.receive_and_plan(
+        InboxMessage("vk", "auto-1", "42", "urgent", 1.0), route_id="ordinary-vk"
+    )
+
+    assert accepted is True
+    assert draft is not None and draft.status == "approved"
+    assert notifier.calls == []
+
+def test_explicit_ai_variants_notify_once_as_one_approval_event(tmp_path) -> None:
+    class VariantGenerator:
+        def suggest(self, **_kwargs): return "fallback"
+        def suggest_variants(self, **_kwargs): return ["one", "two"]
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(
+        store, VariantGenerator(), Outbox(), draft_notifier=notifier,
+        draft_notification_delay_seconds=0,
+    )
+    message = InboxMessage("telegram", "m-variants", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+
+    drafts = service.propose_for_approval(conversation_id, message, limit=3)
+
+    assert [d.body for d in drafts] == ["one", "two"]
+    assert len(notifier.calls) == 1
+    assert [d.id for d in notifier.calls[0]["drafts"]] == [d.id for d in drafts]
+
+
+def test_delayed_notification_skips_draft_already_approved(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(store, Generator(), Outbox(), draft_notifier=notifier)
+    message = InboxMessage("telegram", "m-fast-approve", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.propose(conversation_id, message)
+    service.approve(draft.id)
+
+    service._notify_drafts_if_still_proposed([draft.id])
+
+    assert notifier.calls == []
+
+def test_delayed_notification_skips_deleted_draft(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(store, Generator(), Outbox(), draft_notifier=notifier)
+    message = InboxMessage("telegram", "m-fast-delete", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.propose(conversation_id, message)
+    store.delete_draft(draft.id)
+
+    service._notify_drafts_if_still_proposed([draft.id])
+
+    assert notifier.calls == []
