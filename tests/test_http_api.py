@@ -501,3 +501,30 @@ def test_capability_preferences_are_per_user_and_enforced_for_reads(tmp_path) ->
             assert json.loads(response.read())["capabilities"]["read"] is False
     finally:
         server.shutdown(); server.server_close()
+
+
+def test_pending_drafts_endpoint_lists_only_proposed_with_chat_context(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(InboxMessage("telegram", "1", "alice", "hello", 1.0), route_id="telegram")
+    pending = service.create_manual_draft(cid, body="needs approval")
+    sent = service.create_manual_draft(cid, body="already sent")
+    service._store.approve(sent.id, "receipt-1")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/drafts/pending",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert [item["id"] for item in payload["drafts"]] == [pending.id]
+        assert payload["drafts"][0]["conversation_id"] == cid
+        assert payload["drafts"][0]["source"] == "telegram"
+        assert payload["drafts"][0]["sender"] == "alice"
+        assert payload["drafts"][0]["body"] == "needs approval"
+    finally:
+        server.shutdown()
+        server.server_close()

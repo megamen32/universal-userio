@@ -743,6 +743,15 @@ def handler(
                     service._store, text, source=source, limit=limit, user_id=user_id,
                 )})
                 return
+            if path == "/v1/drafts/pending":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
+                try:
+                    limit = max(1, min(int(query.get("limit", ["100"])[0]), 200))
+                except ValueError:
+                    limit = 100
+                self._reply(200, {"drafts": service._store.pending_drafts(limit=limit, user_id=user_id)})
+                return
             if path == "/v1/conversations":
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"}); return

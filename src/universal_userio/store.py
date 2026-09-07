@@ -1023,6 +1023,28 @@ class SQLiteUserIOStore:
                 return ReplyDraft(row["id"], row["conversation_id"], row["body"], "rejected")
         return ReplyDraft(row["id"], row["conversation_id"], row["body"], row["status"])
 
+    def pending_drafts(
+        self, *, limit: int = 100, user_id: str | None = None
+    ) -> list[dict[str, object]]:
+        """List proposed drafts with just enough conversation context for operator notifications."""
+        user_id = self._user(user_id)
+        limit = max(1, min(int(limit), 200))
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT d.id,d.conversation_id,d.body,d.status,d.created_at,
+                       c.source,c.sender,c.identity_id,
+                       COALESCE((SELECT name FROM contact_names n
+                                 WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=c.sender), '') AS display_name
+                FROM drafts d JOIN conversations c
+                  ON c.user_id=d.user_id AND c.id=d.conversation_id
+                WHERE d.user_id=? AND d.status='proposed'
+                ORDER BY d.created_at DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def conversation(
         self, conversation_id: str, *, user_id: str | None = None, text_limit: int | None = None
     ) -> dict[str, object] | None:
