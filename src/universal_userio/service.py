@@ -90,7 +90,9 @@ class UserIOService:
                 draft = self._store.draft(str(draft_id), user_id=resolved_user_id)
             except KeyError:
                 continue
-            if draft.status == "proposed":
+            if draft.status == "proposed" and not self._store.draft_browser_notified(
+                draft.id, user_id=resolved_user_id
+            ):
                 proposed.append(draft)
         if not proposed:
             return

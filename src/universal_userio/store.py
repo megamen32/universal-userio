@@ -209,7 +209,7 @@ class SQLiteUserIOStore:
             CREATE TABLE IF NOT EXISTS drafts (
                 user_id TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 body TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,
-                approved_at REAL,outbox_receipt TEXT,PRIMARY KEY(user_id,id)
+                approved_at REAL,outbox_receipt TEXT,browser_notified_at REAL,PRIMARY KEY(user_id,id)
             );
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
@@ -274,6 +274,10 @@ class SQLiteUserIOStore:
                 self._connection.execute(f"ALTER TABLE message_attachments ADD COLUMN {column}")
             except sqlite3.OperationalError:  # column already exists
                 pass
+        try:
+            self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
+        except sqlite3.OperationalError:  # column already exists
+            pass
 
     @staticmethod
     def _digest(password: str, salt: bytes | None = None, iterations: int = _ITERATIONS) -> tuple[bytes, bytes]:
@@ -1022,6 +1026,34 @@ class SQLiteUserIOStore:
                 )
                 return ReplyDraft(row["id"], row["conversation_id"], row["body"], "rejected")
         return ReplyDraft(row["id"], row["conversation_id"], row["body"], row["status"])
+
+    def mark_drafts_browser_notified(
+        self, draft_ids: list[str], *, user_id: str | None = None
+    ) -> int:
+        """Record that the browser actually displayed these proposed drafts."""
+        ids = list(dict.fromkeys(str(x).strip() for x in draft_ids if str(x).strip()))
+        if not ids:
+            return 0
+        user_id = self._user(user_id)
+        now = time.time()
+        changed = 0
+        with self._lock, self._connection:
+            for draft_id in ids[:200]:
+                changed += self._connection.execute(
+                    """UPDATE drafts SET browser_notified_at=?
+                       WHERE user_id=? AND id=? AND status='proposed'
+                         AND browser_notified_at IS NULL""",
+                    (now, user_id, draft_id),
+                ).rowcount
+        return changed
+
+    def draft_browser_notified(self, draft_id: str, *, user_id: str | None = None) -> bool:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT browser_notified_at FROM drafts WHERE user_id=? AND id=?",
+                (self._user(user_id), str(draft_id)),
+            ).fetchone()
+        return bool(row is not None and row["browser_notified_at"] is not None)
 
     def pending_drafts(
         self, *, limit: int = 100, user_id: str | None = None
