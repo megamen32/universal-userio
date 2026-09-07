@@ -349,3 +349,17 @@ def test_delayed_notification_skips_deleted_draft(tmp_path) -> None:
     service._notify_drafts_if_still_proposed([draft.id])
 
     assert notifier.calls == []
+
+
+def test_telegram_fallback_skips_draft_already_shown_by_browser(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(store, Generator(), Outbox(), draft_notifier=notifier)
+    message = InboxMessage("telegram", "browser-ack", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.propose(conversation_id, message)
+    assert store.mark_drafts_browser_notified([draft.id]) == 1
+
+    service._notify_drafts_if_still_proposed([draft.id])
+
+    assert notifier.calls == []

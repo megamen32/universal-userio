@@ -11,10 +11,13 @@ type PendingDraft = {
 
 type Capabilities = { subscribe: boolean }
 
-const POLL_MS = 5000
+const POLL_MS = 2500
 const SEEN_KEY = "userio-browser-draft-notified-v1"
 const INITIALIZED_KEY = "userio-browser-draft-notifications-initialized-v1"
 const PROMPT_ID = "userio-browser-notification-prompt"
+const LEASE_KEY = "userio-browser-draft-notifier-lease-v1"
+const TAB_ID = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+const LEASE_MS = 8000
 
 const readSeen = () => {
   try { return new Set<string>(JSON.parse(localStorage.getItem(SEEN_KEY) || "[]")) }
@@ -28,10 +31,28 @@ const writeSeen = (ids: Iterable<string>) => {
 const label = (draft: PendingDraft) => draft.display_name?.trim() || draft.identity_id || draft.sender || draft.source
 const preview = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 180)
 
-async function json<T>(path: string): Promise<T> {
-  const response = await fetch(path, { credentials: "same-origin" })
+async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(path, { credentials: "same-origin", ...init, headers: { "Content-Type": "application/json", ...init?.headers } })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return response.json() as Promise<T>
+}
+
+function ownsNotifierLease() {
+  const now = Date.now()
+  try {
+    const current = JSON.parse(localStorage.getItem(LEASE_KEY) || "{}") as { id?: string; until?: number }
+    if (current.id && current.id !== TAB_ID && Number(current.until || 0) > now) return false
+    localStorage.setItem(LEASE_KEY, JSON.stringify({ id: TAB_ID, until: now + LEASE_MS }))
+    const confirmed = JSON.parse(localStorage.getItem(LEASE_KEY) || "{}") as { id?: string }
+    return confirmed.id === TAB_ID
+  } catch { return true }
+}
+
+async function acknowledgeBrowserNotification(ids: string[]) {
+  if (!ids.length) return
+  await json<{ ok: boolean; marked: number }>("/v1/drafts/browser-notified", {
+    method: "POST", body: JSON.stringify({ draft_ids: ids }),
+  })
 }
 
 function showNotification(title: string, body: string, tag: string) {
@@ -57,6 +78,7 @@ async function processPending() {
         `${label(newest)} · ${preview(newest.body)}`,
         "userio-draft-backlog",
       )
+      await acknowledgeBrowserNotification(drafts.map((draft) => draft.id))
     }
     return
   }
@@ -73,6 +95,7 @@ async function processPending() {
     const newest = fresh[fresh.length - 1]
     showNotification(`Новые черновики ждут подтверждения: ${fresh.length}`, `${label(newest)} · ${preview(newest.body)}`, `userio-drafts-${newest.id}`)
   }
+  await acknowledgeBrowserNotification(fresh.map((draft) => draft.id))
 }
 
 function installPermissionPrompt(onGranted: () => void) {
@@ -101,6 +124,7 @@ export function startDraftBrowserNotifications() {
   const tick = async () => {
     if (stopped) return
     try {
+      if (!ownsNotifierLease()) return
       const { capabilities } = await json<{ capabilities: Capabilities }>("/v1/preferences/capabilities")
       if (!capabilities?.subscribe) return
       if (Notification.permission === "default") {

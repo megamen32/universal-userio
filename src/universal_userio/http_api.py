@@ -424,6 +424,16 @@ def handler(
                     service._store.set_user_preference(f"source_cursor:{source}", cursor, user_id=user_id)
                     self._reply(200, {"source": source, "cursor": cursor})
                     return
+                if path == "/v1/drafts/browser-notified":
+                    payload = self._json()
+                    draft_ids = payload.get("draft_ids") or []
+                    if not isinstance(draft_ids, list):
+                        raise ValueError("draft_ids must be an array")
+                    changed = service._store.mark_drafts_browser_notified(
+                        [str(item) for item in draft_ids], user_id=user_id
+                    )
+                    self._reply(200, {"ok": True, "marked": changed})
+                    return
                 if path == "/v1/preferences/capabilities":
                     payload = self._json()
                     updates = payload.get("capabilities", payload)

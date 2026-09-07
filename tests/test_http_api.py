@@ -528,3 +528,26 @@ def test_pending_drafts_endpoint_lists_only_proposed_with_chat_context(tmp_path)
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_browser_notification_ack_marks_only_proposed_draft(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(InboxMessage("telegram", "browser-1", "alice", "hello", 1.0), route_id="telegram")
+    pending = service.create_manual_draft(cid, body="needs approval")
+    sent = service.create_manual_draft(cid, body="sent")
+    service._store.approve(sent.id, "receipt")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/drafts/browser-notified",
+            data=json.dumps({"draft_ids": [pending.id, sent.id]}).encode(), method="POST",
+            headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"},
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+        assert result == {"ok": True, "marked": 1}
+        assert service._store.draft_browser_notified(pending.id) is True
+        assert service._store.draft_browser_notified(sent.id) is False
+    finally:
+        server.shutdown(); server.server_close()
