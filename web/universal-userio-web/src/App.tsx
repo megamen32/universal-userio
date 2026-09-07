@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, ChartLine, Check, ChevronDown, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Phone, Plus, Send, Sparkles, Video, X } from "lucide-react"
+import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Phone, Plus, Send, Sparkles, Video, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
 type Account = { id: string; provider: string; display_name: string; capabilities: string[]; last_synced_at?: number }
-type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number }
+type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
 type Message = { source: string; message_id: string; sender: string; body: string; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
@@ -101,28 +101,6 @@ const HEALTH_TITLE: Record<string, string> = {
   emerald: "Аккаунт активен", amber: "Аккаунт молчит >5 мин", rose: "Аккаунт недоступен",
 }
 
-// Tiny Russian-aware query normalisation for the chat search box.
-// Strips the most common Russian inflectional suffixes so "договор" finds
-// "договору", "договором", "договора". ASCII queries pass through unchanged.
-const RUSSIAN_SUFFIXES = ["ами", "ями", "ах", "ях", "ов", "ев", "ой", "ый", "ий", "ая", "ое", "ее", "ую", "юю", "ам", "ям", "а", "я", "у", "ю", "е", "и", "о", "ы", "ть"]
-const stripRussianSuffix = (token: string) => {
-  if (token.length <= 4 || !/[а-яё]/i.test(token)) return token
-  for (const suffix of RUSSIAN_SUFFIXES) {
-    if (token.length - suffix.length >= 3 && token.toLowerCase().endsWith(suffix)) return token.slice(0, -suffix.length)
-  }
-  return token
-}
-const searchStems = (query: string) =>
-  query
-    .toLowerCase()
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2)
-    .flatMap((token) => {
-      const stem = stripRussianSuffix(token)
-      return stem === token ? [token] : [token, stem]
-    })
-
 // Telegram-style timestamps: HH:MM in bubbles, "вчера"/"12 сент" in the chat list,
 // «Сегодня»/«Вчера»/«12 августа» day separators in the feed.
 const timeHM = (unix: number) => new Date(unix * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
@@ -195,6 +173,8 @@ export function App() {
   const [selectedChat, setSelectedChat] = useState<string>("")
   const [draft, setDraft] = useState("")
   const [search, setSearch] = useState("")
+  const [searchResults, setSearchResults] = useState<Chat[]>([])
+  const [searching, setSearching] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [chatsOpen, setChatsOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -248,6 +228,22 @@ export function App() {
     setChats(data.conversations)
     setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : data.conversations[0]?.id ?? "")
   }, [account, activeChannel])
+
+  useEffect(() => {
+    const text = search.trim()
+    if (!text || !userCapabilities.read) { setSearchResults([]); setSearching(false); return }
+    const sourceFilter = account ? sourceForAccount(account) : activeChannel
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ q: text, limit: "100" })
+      if (sourceFilter) params.set("source", sourceFilter)
+      setSearching(true)
+      void api<{ results: Chat[] }>(`/v1/search?${params.toString()}`)
+        .then((data) => setSearchResults(data.results))
+        .catch((error) => { setSearchResults([]); notify(`Поиск не удался: ${(error as Error).message}`) })
+        .finally(() => setSearching(false))
+    }, 220)
+    return () => window.clearTimeout(timer)
+  }, [search, account, activeChannel, userCapabilities.read])
 
   const loadConversation = useCallback(async (id: string) => setConversation(await api<Conversation>(`/v1/conversations/${id}`)), [])
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -494,19 +490,9 @@ export function App() {
     localStorage.setItem("userio-hidden-accounts", JSON.stringify(next))
     if (!visible && selectedAccount === id) setSelectedAccount("all")
   }
-  const removeAccount = async (id: string) => {
-    if (!window.confirm("Удалить аккаунт из UserIO? Данные у провайдера не удаляются.")) return
-    await api(`/v1/accounts/${encodeURIComponent(id)}`, { method: "DELETE" })
-    setAccounts((current) => current.filter((item) => item.id !== id))
-    if (selectedAccount === id) setSelectedAccount("all")
-  }
-  const visibleChats = chats
+
+  const visibleChats = (search.trim() ? searchResults : chats)
     .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
-    .filter((chat) => {
-      if (!search.trim()) return true
-      const haystack = `${titleOf(chat)} ${chat.preview ?? ""}`.toLowerCase()
-      return searchStems(search).every((stem) => haystack.includes(stem))
-    })
     .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
   // Clearing on selectedChat guarantees we never leak text into the next reply.
@@ -521,29 +507,40 @@ export function App() {
   }, [chats])
 
   const sidebar = <>
-    <header className="flex items-center gap-3 p-4"><div className="grid size-9 place-items-center rounded-xl bg-primary text-primary-foreground"><Inbox className="size-5" /></div><div><p className="text-xs font-medium text-muted-foreground">ПЛАТФОРМЫ</p><h1 className="text-lg font-semibold">Universal UserIO</h1></div><Button className="ml-auto md:hidden" variant="ghost" size="icon" onClick={() => setDrawerOpen(false)} title="Закрыть"><X /></Button></header>
+    <header className="flex items-center gap-3 px-4 pb-3 pt-4"><div className="grid size-9 place-items-center rounded-xl bg-[#2f80ed] text-white"><Inbox className="size-5" /></div><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">UNIVERSAL USERIO</p><h1 className="truncate text-base font-semibold">Все сообщения</h1></div><Button className="ml-auto md:hidden" variant="ghost" size="icon" onClick={() => setDrawerOpen(false)} title="Закрыть"><X /></Button></header>
     <ScrollArea className="min-h-0 flex-1 px-2">
-      <Button className="mb-2 w-full justify-start" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><Inbox /> Все чаты</Button>
-      {platforms.map((platform) => <details key={platform} className="mb-2 rounded-lg border bg-muted/20" open={activeChannel === platform}><summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold [&::-webkit-details-marker]:hidden">{channelIcon(platform)} {displayChannel(platform)}{unreadByPlatform[platform] > 0 && <Badge className="rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">{unreadByPlatform[platform]}</Badge>} <ChevronDown className="ml-auto size-4" /></summary><div className="border-t p-1"><Button className="w-full justify-start" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }}>Все: {displayChannel(platform)}</Button>{accounts.filter((item) => providerForSource(item.provider) === platform).map((item) => { const visible = !hiddenAccounts.includes(item.id); const last = chats.filter((chat) => chat.source === sourceForAccount(item)).reduce((acc, chat) => Math.max(acc, chat.account_last_at ?? 0), 0); const health = accountHealth(item, last || item.last_synced_at); return <div key={item.id} className="mt-1 flex items-center gap-1"><Button className="min-w-0 flex-1 justify-start" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}><span className={`mr-1.5 inline-block size-2 shrink-0 rounded-full ${HEALTH_CLASS[health]}`} title={HEALTH_TITLE[health]} aria-label={HEALTH_TITLE[health]} /><Avatar className="size-6"><AvatarFallback>{initials(item.display_name)}</AvatarFallback></Avatar><span className="truncate">{item.display_name}</span>{item.capabilities.length === 0 && <span className="ml-auto text-[10px] text-muted-foreground">только чтение</span>}</Button><input aria-label={`Показать ${item.display_name}`} type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} /><Button aria-label={`Удалить ${item.display_name}`} title="Удалить аккаунт" variant="ghost" size="icon" onClick={() => void removeAccount(item.id)}><X className="size-3" /></Button></div> })}{platform === "gmail" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/gmail/connect/new")}><Plus /> Добавить Gmail</Button>}{platform === "telegram" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/telegram-qr/new")}><Plus /> Добавить Telegram</Button>}{platform === "vk" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/vk/connect/new")}><Plus /> Добавить VK</Button>}{platform === "whatsapp" && <Button className="mt-1 w-full justify-start" variant="outline" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus /> Добавить WhatsApp</Button>}</div></details>)}
+      <Button className="mb-3 h-11 w-full justify-start rounded-xl" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><span className="grid size-7 place-items-center rounded-lg bg-[#2f80ed]/10 text-[#2f80ed]"><Inbox className="size-4" /></span><span className="ml-2 text-left"><span className="block text-sm font-medium">Все аккаунты</span><span className="block text-[10px] text-muted-foreground">единая лента и поиск</span></span></Button>
+      {platforms.map((platform) => {
+        const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === platform)
+        const platformUnread = unreadByPlatform[platform] || 0
+        return <div key={platform} className="mb-4">
+          <div className="mb-1 flex items-center gap-2 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"><span className="text-foreground/70">{channelIcon(platform)}</span>{displayChannel(platform)}{platformUnread > 0 && <Badge className="ml-auto rounded-full bg-[#2f80ed] px-1.5 text-[10px] text-white">{platformUnread}</Badge>}</div>
+          <Button className="mb-1 h-9 w-full justify-start rounded-lg px-2" variant={selectedChannel === platform && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }}><span className="text-xs">Все {displayChannel(platform)}</span></Button>
+          {platformAccounts.map((item) => {
+            const visible = !hiddenAccounts.includes(item.id)
+            const last = chats.filter((chat) => chat.source === sourceForAccount(item)).reduce((acc, chat) => Math.max(acc, chat.account_last_at ?? 0), 0)
+            const health = accountHealth(item, last || item.last_synced_at)
+            return <div key={item.id} className="group mb-1 flex items-center gap-1">
+              <Button className="min-w-0 flex-1 justify-start rounded-lg px-2" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}>
+                <Avatar className="size-7"><AvatarFallback className="text-[10px]">{initials(item.display_name)}</AvatarFallback></Avatar>
+                <span className="ml-2 min-w-0 flex-1 text-left"><span className="block truncate text-sm">{item.display_name}</span><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className={`inline-block size-1.5 rounded-full ${HEALTH_CLASS[health]}`} />{HEALTH_TITLE[health]}</span></span>
+              </Button>
+              <input className="size-3.5 opacity-50 group-hover:opacity-100" aria-label={`Показать ${item.display_name}`} title="Показывать в общей ленте" type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} />
+            </div>
+          })}
+          {platform === "gmail" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/gmail/connect/new")}><Plus className="size-3.5" /> Добавить Gmail</Button>}
+          {platform === "telegram" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/telegram-qr/new")}><Plus className="size-3.5" /> Добавить Telegram</Button>}
+          {platform === "vk" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/vk/connect/new")}><Plus className="size-3.5" /> Добавить VK</Button>}
+          {platform === "whatsapp" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus className="size-3.5" /> Добавить WhatsApp</Button>}
+        </div>
+      })}
     </ScrollArea>
-    <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон/Кошелёк</Button>
-    <Button className="mb-1 w-full justify-start" variant="outline" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
-    <div className="mb-2 rounded-lg border p-2 text-xs">
-      <p className="mb-1 px-1 font-medium text-foreground">Права этого пользователя</p>
-      {([
-        ["read", "Читать сообщения"],
-        ["subscribe", "Получать push-события"],
-        ["download", "Скачивать вложения"],
-        ["send", "Отправлять сообщения"],
-      ] as [keyof UserCapabilities, string][]).map(([name, label]) =>
-        <label key={name} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1.5 hover:bg-muted/50">
-          <input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} />
-          <span>{label}</span>
-        </label>
-      )}
-      <p className="mt-1 px-1 text-[10px] text-muted-foreground">Per-user policy; MCP показывает только разрешённые операции.</p>
+    <div className="space-y-1 border-t p-2">
+      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон / кошелёк</Button>
+      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
+      <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
+      <form method="post" action="/auth/logout"><Button type="submit" className="w-full justify-start" variant="ghost" size="sm"><LogOut /> Выйти</Button></form>
     </div>
-    <div className="flex items-center gap-2 border-t p-3 text-xs text-muted-foreground"><form method="post" action="/auth/logout"><Button type="submit" variant="ghost" size="sm"><LogOut /> Выйти</Button></form><span>ИИ предлагает только по запросу.</span></div>
   </>
 
   return <main className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
@@ -553,12 +550,12 @@ export function App() {
 
     {/* Chat list: default pane on mobile */}
     <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card md:w-[340px] md:flex-none ${chatsOpen ? "md:flex" : "md:hidden"} ${mobilePane === "chats" ? "flex" : "hidden"}`}>
-      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div><p className="text-xs font-medium text-muted-foreground">ЧАТЫ</p><p className="text-sm text-muted-foreground">{activeChannel ? displayChannel(activeChannel) : "Все чаты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setNewChatOpen(true)} title="Новый SMS-чат"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder="Поиск" />{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
+      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ЧАТЫ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setNewChatOpen(true)} title="Новый SMS-чат"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         {visibleChats.map((chat) => {
           const unread = chat.unread_count > 0
-          return <button key={chat.id} onClick={() => openChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-lg p-3 text-left transition-colors ${selectedChat === chat.id ? "bg-accent" : "hover:bg-muted"}`}>
-          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className={`mt-1 block truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span></span>
+          return <button key={chat.id} onClick={() => openChat(chat.id)} className={`mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
+          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
         </button>
         })}
         {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
@@ -572,10 +569,10 @@ export function App() {
     </section>
 
     {/* Conversation: fullscreen pane on mobile */}
-    <section className={`min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(135deg,hsl(var(--background)),hsl(var(--muted)/.35))] md:flex ${mobilePane === "chat" ? "flex" : "hidden"}`}>
+    <section className={`min-h-0 min-w-0 flex-1 flex-col bg-[#eef2f6] dark:bg-[#0e1621] md:flex ${mobilePane === "chat" ? "flex" : "hidden"}`}>
       {conversation ? <>
-        <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Скрыть список" : "Показать список"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="truncate text-xs text-muted-foreground">{displayChannel(conversation.source)} · {conversation.sender}</p>{(() => { const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === providerForSource(conversation.source)); const senderAccount = platformAccounts.find((item) => item.id === conversation.account_ref); if (platformAccounts.length === 0) return null; return <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">отправка от:{platformAccounts.length > 1 ? <select className="max-w-[180px] rounded border bg-transparent px-1 py-0.5 text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={(event) => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select> : <span className="truncate text-foreground/80">{senderAccount ? senderAccount.display_name : platformAccounts[0].display_name}</span>}</p> })()}</div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></header>
-        <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex max-w-3xl flex-col gap-3 p-4 md:p-6">
+        <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Скрыть список" : "Показать список"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground"><span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">{channelIcon(conversation.source)} {displayChannel(conversation.source)}</span><span className="truncate">{prettySender(conversation.sender)}</span></p>{(() => { const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === providerForSource(conversation.source)); const senderAccount = platformAccounts.find((item) => item.id === conversation.account_ref); if (platformAccounts.length === 0) return null; return <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">отправка от:{platformAccounts.length > 1 ? <select className="max-w-[180px] rounded border bg-transparent px-1 py-0.5 text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={(event) => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select> : <span className="truncate text-foreground/80">{senderAccount ? senderAccount.display_name : platformAccounts[0].display_name}</span>}</p> })()}</div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></header>
+        <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
             const outgoing = message.sender !== conversation.sender
@@ -583,7 +580,7 @@ export function App() {
             const showDay = !previous || !sameDay(previous.received_at, message.received_at)
             return <Fragment key={`${message.source}:${message.message_id}`}>
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
-              <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[85%] overflow-hidden rounded-2xl px-4 py-3 text-sm shadow-sm md:max-w-[78%] ${outgoing ? "ml-auto rounded-tr-sm bg-primary text-primary-foreground" : "rounded-tl-sm bg-card"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <MessageBody message={message} onAttachmentClick={openAttachment} />}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{timeHM(message.received_at)}</p></div>
+              <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <MessageBody message={message} onAttachmentClick={openAttachment} />}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}</p></div>
             </Fragment>
           })}
           {conversation.drafts.map((item) => {
@@ -596,7 +593,7 @@ export function App() {
           })}
           <div ref={bottomRef} />
         </div></ScrollArea>
-        <footer className="border-t bg-card p-3 md:p-4"><div className="flex gap-2"><Input value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Написать ответ…" : "Ответы недоступны: аккаунт только для чтения"} /><Button disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик (Enter)"><Send /></Button><Button disabled={!canReply} variant="outline" size="sm" className="h-9 shrink-0 gap-1.5 px-3" onClick={() => void askAi()} title="ИИ прочитает переписку и предложит варианты ответа — появится черновиком ниже"><Sparkles className="size-4" /> ИИ</Button></div><p className="mt-2 text-xs text-muted-foreground">{canReply ? "Сначала черновик, затем явная отправка." : "Отправка не настроена для этого аккаунта."}</p></footer>
+        <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]"><div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5"><Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} /><Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button><Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик"><Send /></Button></div><p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? "Отправка только после явного подтверждения черновика." : "Только чтение."}</p></div></footer>
       </> : <div className="hidden flex-1 place-items-center text-center md:grid"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Скрыть список" : "Показать список"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Выберите чат</h2><p className="mt-1 text-sm text-muted-foreground">Аккаунты, платформы и переписки остаются раздельными.</p></div></div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>

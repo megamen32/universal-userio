@@ -28,6 +28,7 @@ from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
+from .search import search_conversations
 from .service import DeliveryUnavailableError, UserIOService
 
 
@@ -706,6 +707,19 @@ def handler(
                         visible = [cap for cap in visible if cap not in {"download", "media"}]
                     account["capabilities"] = visible
                 self._reply(200, {"accounts": accounts})
+                return
+            if path == "/v1/search":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
+                text = query.get("q", [""])[0].strip()
+                source = query.get("source", [""])[0].strip().lower() or None
+                try:
+                    limit = max(1, min(int(query.get("limit", ["100"])[0]), 500))
+                except ValueError:
+                    limit = 100
+                self._reply(200, {"results": search_conversations(
+                    service._store, text, source=source, limit=limit, user_id=user_id,
+                )})
                 return
             if path == "/v1/conversations":
                 if not service._store.capability_enabled("read", user_id=user_id):
