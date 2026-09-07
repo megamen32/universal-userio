@@ -848,6 +848,9 @@ def handler(
             # honest answer for any platform is `available: false`.
             if conversation_id.endswith("/raw"):
                 real_id, _, message_id = conversation_id.removesuffix("/raw").rpartition("/media/")
+                # Message ids contain ':' (e.g. "540308572:1322"); callers pass
+                # them percent-encoded in the path segment.
+                real_id, message_id = unquote(real_id), unquote(message_id)
                 if not real_id or not message_id:
                     self._reply(404, {"error": "raw path requires /v1/conversations/{id}/media/{message_id}/raw"})
                     return
@@ -884,6 +887,7 @@ def handler(
                 return
             if "/media/" in conversation_id:
                 real_id, _, message_id = conversation_id.rpartition("/media/")
+                real_id, message_id = unquote(real_id), unquote(message_id)
                 if not real_id or not message_id or message_id == conversation_id:
                     self._reply(404, {"error": "media path requires /v1/conversations/{id}/media/{message_id}"})
                     return

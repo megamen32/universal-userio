@@ -48,6 +48,22 @@ const channelIcon = (source: string) => {
 }
 const displayChannel = (source: string) => providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 
+// A message is "mine" (right bubble) when it was authored by the sending
+// account chosen for the conversation ("отправка от"; auto = first platform
+// account). Switching the account therefore re-renders the whole chat from
+// that person's perspective — e.g. a Telegram self-chat between two accounts.
+const messageIsOutgoing = (conversation: Conversation, message: Message, allAccounts: Account[]) => {
+  const provider = providerForSource(conversation.source)
+  const platformAccounts = allAccounts.filter((item) => providerForSource(item.provider) === provider)
+  if (!platformAccounts.length) return message.sender !== conversation.sender
+  const me = platformAccounts.find((item) => item.id === conversation.account_ref) || platformAccounts[0]
+  if (message.sender === "self") return true
+  const localId = me.id.slice(provider.length + 1)
+  if (message.sender === me.id || message.sender === localId || message.sender === me.display_name) return true
+  if (me.display_name && message.sender.trim().toLowerCase() === me.display_name.trim().toLowerCase()) return true
+  return false
+}
+
 // Human-readable chat titles instead of raw provider JIDs.
 const prettySender = (sender: string) => {
   if (sender.endsWith("@s.whatsapp.net")) return "+" + sender.replace("@s.whatsapp.net", "")
@@ -601,7 +617,7 @@ export function App() {
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
-            const outgoing = message.sender !== conversation.sender
+            const outgoing = messageIsOutgoing(conversation, message, accounts)
             const previous = conversation.messages[index - 1]
             const showDay = !previous || !sameDay(previous.received_at, message.received_at)
             return <Fragment key={`${message.source}:${message.message_id}`}>
