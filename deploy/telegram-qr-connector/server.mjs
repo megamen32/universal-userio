@@ -307,7 +307,7 @@ async function envelope(chatKey, label, message, client, self) {
       if (!entity && typeof message.getSender === "function") entity = await message.getSender();
       let id = "";
       try { id = String(await client.getPeerId(entity || message.fromId, true)); } catch (_error) {}
-      return { id, name: entityLabel(entity) };
+      return { id, name: entity ? entityLabel(entity) : String(message.postAuthor || "") };
     },
     resolveReply: async (replyTo) => {
       const values = await client.getMessages(message.peerId, { ids: [Number(replyTo)] });

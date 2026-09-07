@@ -43,3 +43,13 @@ test("ordinary group noise is explicitly not addressed", async () => {
   assert.equal(meta.mention_self, false);
   assert.equal(meta.reply_to_own, false);
 });
+
+test("channel-style messages fall back to the group name for deterministic author text", async () => {
+  const att = await telegramGroupRoutingAttachment({
+    chatKey: "-1004", groupName: "Channel Chat", selfId: "8810909089", selfUsername: "deus_excode",
+    message: { message: "@deus_excode ping" },
+    resolveSender: async () => ({ id: "", name: "" }),
+  });
+  const meta = JSON.parse(att.provider_ref);
+  assert.equal(meta.author_name, "Channel Chat");
+});
