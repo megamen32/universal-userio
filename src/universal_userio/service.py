@@ -24,9 +24,11 @@ class UserIOService:
     def __init__(
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
         *, sms_gateway: object | None = None, sms_user_id: str = "", sms_route_id: str = "sms",
+        sms_manual_approve: bool = False,
         gmail_outbox: object | None = None,
         chatgpt_outbox: object | None = None,
         telegram_outbox: object | None = None,
+        whatsapp_outbox: object | None = None,
         draft_notifier: object | None = None,
         draft_notification_delay_seconds: float = 5.0,
     ) -> None:
@@ -35,9 +37,11 @@ class UserIOService:
         self._outbox = outbox
         self._user_generators: dict[str, object] = {}
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
+        self.sms_manual_approve = bool(sms_manual_approve)
         self.gmail_outbox = gmail_outbox
         self.chatgpt_outbox = chatgpt_outbox
         self.telegram_outbox = telegram_outbox
+        self.whatsapp_outbox = whatsapp_outbox
         self.draft_notifier = draft_notifier
         self.draft_notification_delay_seconds = max(0.0, float(draft_notification_delay_seconds))
         self._inbound_listeners: list[object] = []
@@ -124,6 +128,15 @@ class UserIOService:
         timer.daemon = True
         timer.start()
 
+    def manual_approval_required(self, conversation: dict) -> bool:
+        """True when the manual-approve lock forces explicit approve-to-send for this conversation.
+
+        The lock is the deployment's opt-in (USERIO_SMS_MANUAL_APPROVE_ONLY): even a
+        conversation whose response_mode is auto_send stays a proposed draft until a
+        human explicitly approves it.
+        """
+        return self.sms_manual_approve and str(conversation.get("source") or "") == "sms"
+
     def receive_and_plan(
         self, message: InboxMessage, *, route_id: str, user_id: str | None = None
     ) -> tuple[str, bool, ReplyDraft | None]:
@@ -133,7 +146,10 @@ class UserIOService:
             return conversation_id, False, None
         draft = self.propose(conversation_id, message, user_id=user_id)
         conversation = self._store.conversation(conversation_id, user_id=user_id)
-        if conversation and conversation["response_mode"] == "auto_send":
+        if (
+            conversation and conversation["response_mode"] == "auto_send"
+            and not self.manual_approval_required(conversation)
+        ):
             draft = self.approve(draft.id, user_id=user_id)
         else:
             self._notify_drafts_for_approval([draft], user_id=user_id)
@@ -294,6 +310,10 @@ class UserIOService:
             receipt = self.telegram_outbox.send_reply(
                 chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
                 account_ref=str(conversation.get("account_ref") or ""),
+            )
+        elif conversation["source"] == "whatsapp" and self.whatsapp_outbox is not None:
+            receipt = self.whatsapp_outbox.send(
+                chat_id=str(conversation["sender"]), text=draft.body
             )
         else:
             receipt = self._outbox.send_reply(

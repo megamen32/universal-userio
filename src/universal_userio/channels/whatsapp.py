@@ -67,14 +67,20 @@ class WhatsAppBridgeClient:
     def __init__(
         self, base_url: str = DEFAULT_BRIDGE_URL, *, timeout: float = 30.0,
         runner: Any = urllib.request.urlopen,
+        token: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._runner = runner
+        # userio-whatsapp-qr guards its operator API with the shared UserIO
+        # bearer token; the hermes bridge ignores the extra header.
+        self._token = os.environ.get("USERIO_API_TOKEN", "") if token is None else token
 
     def _request(self, method: str, path: str, payload: Mapping[str, Any] | None = None) -> Any:
         data = None
         headers = {"Host": "127.0.0.1"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
         if payload is not None:
             data = json.dumps(payload).encode()
             headers["Content-Type"] = "application/json"
