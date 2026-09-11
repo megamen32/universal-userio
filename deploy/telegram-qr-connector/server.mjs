@@ -42,6 +42,7 @@ const agentDeliverChats = String(process.env.USERIO_AGENT_DELIVER_CHATS || agent
 const agentDeliverDebounceMs = Math.max(1_000, Number(process.env.USERIO_AGENT_DELIVER_DEBOUNCE_SECONDS || 300) * 1000);
 const agentDeliverName = String(process.env.USERIO_AGENT_DELIVER_NAME || "secretary-excode").trim();
 const agentDeliverCwd = String(process.env.USERIO_AGENT_DELIVER_CWD || "/home/roomhacker/excode").trim();
+const agentDeliverHermesSessionId = String(process.env.USERIO_AGENT_DELIVER_HERMES_SESSION_ID || "").trim();
 const agentDeliverIgnoredChats = String(process.env.USERIO_AGENT_IGNORED_CHATS || "")
   .split(",").map((value) => value.trim()).filter(Boolean);
 const agentDeliverCallbackSecret = String(process.env.USERIO_AGENT_DELIVER_CALLBACK_HMAC_SECRET || "").trim();
@@ -141,6 +142,7 @@ function postAgentDeliver(chatKey, label, envelope, messageCount = 1) {
     normalizedChatId, label, envelope, messageCount,
     quietSeconds: Math.round(agentDeliverDebounceMs / 1000),
     agentName: agentDeliverName, agentCwd: agentDeliverCwd,
+    hermesSessionId: agentDeliverHermesSessionId,
     ignoredChats: agentDeliverIgnoredChats,
   });
   const eventId = event.event_id;
