@@ -21,6 +21,7 @@ export function buildAgentDeliverEvent(options) {
   const ignoredChats = Array.from(new Set(
     (options.ignoredChats || []).map((value) => String(value).trim()).filter(Boolean),
   ));
+  const hermesSessionId = String(options.hermesSessionId || "").trim();
   const eventId = `telegram-quiet:${normalizedChatId}:${messageId}`;
 
   return {
@@ -60,7 +61,9 @@ export function buildAgentDeliverEvent(options) {
           "Кратко объясни, чего хочет собеседник, что важно и требуется ли действие.",
           "Предложи три готовых варианта ответа: короткий, нейтральный и теплый.",
           "Не отправляй ответ самостоятельно; дождись выбора пользователя.",
-          "После подготовки доставь весь разбор владельцу: запиши его во временный файл, вызови `/home/roomhacker/.hermes/hermes-agent/venv/bin/hermes send --to telegram --file <путь>`, затем удали файл. Это уведомление владельцу: не отправляй в исходный чат и не выбирай вариант за пользователя.",
+          hermesSessionId
+            ? `После подготовки запиши разбор во временный файл и выполни \`/opt/userio-telegram-qr/deliver-hermes-context.py --session-id ${hermesSessionId} --event-id ${eventId} --file <путь> --to telegram\`. Помощник сначала сохраняет разбор в контексте Hermes через append_delegation_delivery, затем вызывает hermes send --to telegram. Удали временный файл. Это уведомление владельцу: не отправляй в исходный чат и не выбирай вариант за пользователя.`
+            : "После подготовки доставь весь разбор владельцу: запиши его во временный файл, вызови `/home/roomhacker/.hermes/hermes-agent/venv/bin/hermes send --to telegram --file <путь>`, затем удали файл. Это уведомление владельцу: не отправляй в исходный чат и не выбирай вариант за пользователя.",
         ],
       },
     },

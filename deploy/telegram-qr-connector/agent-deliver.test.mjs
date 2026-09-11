@@ -15,6 +15,7 @@ const event = buildAgentDeliverEvent({
   quietSeconds: 300,
   agentName: "secretary-excode",
   agentCwd: "/home/roomhacker/excode",
+  hermesSessionId: "20260909_215913_4aef9f2e",
   ignoredChats: ["conv_hermes", "conv_hermes", ""],
 });
 
@@ -25,4 +26,6 @@ assert.deepEqual(event.payload.task.read_with.arguments.ignored_chats, ["conv_he
 assert.strictEqual(event.payload.task.kind, "triage_and_reply_suggestions");
 assert.strictEqual(event.payload.task.instructions.length, 6);
 assert.match(event.payload.task.instructions[5], /hermes send --to telegram/);
+assert.match(event.payload.task.instructions[5], /deliver-hermes-context\.py/);
+assert.match(event.payload.task.instructions[5], /--session-id 20260909_215913_4aef9f2e/);
 assert.match(event.payload.task.instructions[5], /не отправляй в исходный чат/i);
