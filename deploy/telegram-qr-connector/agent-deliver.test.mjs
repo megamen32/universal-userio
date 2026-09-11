@@ -23,4 +23,6 @@ assert.match(event.subject, /Dmitry Dubovskoy/);
 assert.deepEqual(event.payload.last_author, { id: "16558149", name: "Dmitry Dubovskoy" });
 assert.deepEqual(event.payload.task.read_with.arguments.ignored_chats, ["conv_hermes"]);
 assert.strictEqual(event.payload.task.kind, "triage_and_reply_suggestions");
-assert.strictEqual(event.payload.task.instructions.length, 5);
+assert.strictEqual(event.payload.task.instructions.length, 6);
+assert.match(event.payload.task.instructions[5], /hermes send --to telegram/);
+assert.match(event.payload.task.instructions[5], /не отправляй в исходный чат/i);
