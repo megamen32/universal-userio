@@ -370,6 +370,49 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
         server.server_close()
 
 
+def test_http_mcp_exclusions_apply_only_to_the_requesting_consumer(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    hermes_conversation_id, _ = service.receive(
+        InboxMessage("telegram", "hermes-1", "Hermes", "own agent output", 1.0),
+        route_id="telegram",
+    )
+    other_conversation_id, _ = service.receive(
+        InboxMessage("telegram", "other-1", "Anna", "ordinary chat", 2.0),
+        route_id="telegram",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def list_chat_ids(*, ignored_chats: list[str] | None = None) -> set[str]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "userio.channels.list", "arguments": {
+                "channel": "telegram", "ignored_chats": ignored_chats or [],
+            }},
+        }
+        headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/mcp",
+            data=json.dumps(payload).encode(),
+            method="POST",
+            headers=headers,
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())["result"]["structuredContent"]
+        return {str(chat["id"]) for chat in result["chats"]}
+
+    try:
+        assert list_chat_ids() == {hermes_conversation_id, other_conversation_id}
+        assert list_chat_ids(ignored_chats=[hermes_conversation_id]) == {other_conversation_id}
+        assert list_chat_ids() == {hermes_conversation_id, other_conversation_id}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_trusted_loopback_proxy_can_use_dashboard_api_but_not_mcp(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     server = ThreadingHTTPServer(
