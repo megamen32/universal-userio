@@ -405,6 +405,40 @@ class TelegramChannelAdapter(StoredChannelAdapter):
         self._bridge_url = (bridge_url or os.environ.get("USERIO_TELEGRAM_QR_URL", "")).rstrip("/")
         self._runner = runner
 
+    @staticmethod
+    def _promote_group_author(message: dict[str, Any]) -> dict[str, Any]:
+        result = dict(message)
+        for attachment in result.get("attachments", []):
+            if attachment.get("kind") != "telegram_routing":
+                continue
+            try:
+                routing = json.loads(str(attachment.get("provider_ref") or ""))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(routing, dict):
+                continue
+            author_id = str(routing.get("author_id") or "").strip()
+            author_name = str(routing.get("author_name") or "").strip()
+            if author_id or author_name:
+                result["author"] = {"id": author_id, "name": author_name}
+            result["addressed_to_owner"] = bool(routing.get("addressed"))
+            break
+        return result
+
+    def read(
+        self, *, chat_id: str | None = None, message_id: str | None = None
+    ) -> dict[str, Any]:
+        result = super().read(chat_id=chat_id, message_id=message_id)
+        if "message" in result:
+            result["message"] = self._promote_group_author(result["message"])
+        if "chat" in result:
+            result["chat"] = dict(result["chat"])
+            result["chat"]["messages"] = [
+                self._promote_group_author(message)
+                for message in result["chat"].get("messages", [])
+            ]
+        return result
+
     def download(self, *, file_ref: str) -> ChannelFile:
         return _download_via_bridge(
             channel="telegram",

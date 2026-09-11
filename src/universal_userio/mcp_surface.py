@@ -33,10 +33,12 @@ TOOL_SPECS = (
     ToolSpec("userio.channels.list", "List this user's chats across connected channels.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
+        "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.channels.download", "Download a file when its adapter supports it.", _schema({
         "file_ref": {"type": "string"},
@@ -50,9 +52,11 @@ TOOL_SPECS = (
     }, ["username", "password"])),
     ToolSpec("userio.inbox.list_new", "Compatibility alias: list this user's unread messages.", _schema({
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.conversation.get", "Compatibility alias: read a conversation.", _schema({
         "conversation_id": {"type": "string"},
+        "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     }, ["conversation_id"])),
     ToolSpec("userio.message.mark_seen", "Mark one user-owned message as seen.", _schema({
         "source": {"type": "string"}, "message_id": {"type": "string"},
@@ -187,14 +191,25 @@ class UserIOMcpSurface:
             if required_capability and not self._store.capability_enabled(required_capability, user_id=user_id):
                 return {"ok": False, "error": f"{required_capability}_capability_disabled"}
             if name == "userio.channels.list":
+                ignored_chats = self._ignored_chats(arguments)
                 adapter = channels.adapter(self._optional(arguments, "channel"))
-                return {"ok": True, "chats": adapter.list(limit=int(arguments.get("limit", 100)))}
+                chats = adapter.list(limit=int(arguments.get("limit", 100)))
+                return {"ok": True, "chats": [
+                    chat for chat in chats
+                    if str(chat["id"]) not in ignored_chats
+                ]}
             if name == "userio.channels.read":
+                ignored_chats = self._ignored_chats(arguments)
                 adapter = channels.adapter(self._optional(arguments, "channel"))
-                return {"ok": True, **adapter.read(
+                result = adapter.read(
                     chat_id=self._optional(arguments, "chat_id"),
                     message_id=self._optional(arguments, "message_id"),
-                )}
+                )
+                record = result.get("chat") or result.get("message") or {}
+                conversation_id = str(record.get("id") or record.get("conversation_id") or "")
+                if conversation_id in ignored_chats:
+                    raise KeyError("chat not found")
+                return {"ok": True, **result}
             if name == "userio.channels.download":
                 file = channels.download(file_ref=self._required(arguments, "file_ref"))
                 return {"ok": True, "file": {
@@ -225,12 +240,21 @@ class UserIOMcpSurface:
                     "token": token, "token_returned_once": True,
                 }
             if name == "userio.inbox.list_new":
-                return {"ok": True, "messages": self._store.new_messages(
+                ignored_chats = self._ignored_chats(arguments)
+                messages = self._store.new_messages(
                     limit=int(arguments.get("limit", 50)), user_id=user_id
-                )}
+                )
+                return {"ok": True, "messages": [
+                    message for message in messages
+                    if str(message["conversation_id"]) not in ignored_chats
+                ]}
             if name == "userio.conversation.get":
+                ignored_chats = self._ignored_chats(arguments)
+                conversation_id = self._required(arguments, "conversation_id")
+                if conversation_id in ignored_chats:
+                    return {"ok": True, "conversation": None}
                 return {"ok": True, "conversation": self._store.conversation(
-                    self._required(arguments, "conversation_id"), user_id=user_id
+                    conversation_id, user_id=user_id
                 )}
             if name == "userio.message.mark_seen":
                 return {"ok": True, "changed": self._store.mark_seen(
@@ -317,6 +341,15 @@ class UserIOMcpSurface:
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a string")
         return value.strip() or None
+
+    @staticmethod
+    def _ignored_chats(arguments: dict[str, Any]) -> frozenset[str]:
+        values = arguments.get("ignored_chats", [])
+        if not isinstance(values, list) or len(values) > 100:
+            raise ValueError("ignored_chats must be an array of at most 100 chat ids")
+        if any(not isinstance(value, str) or not value.strip() for value in values):
+            raise ValueError("ignored_chats must contain non-empty chat ids")
+        return frozenset(value.strip() for value in values)
 
     @staticmethod
     def _draft(draft: Any) -> dict[str, str]:

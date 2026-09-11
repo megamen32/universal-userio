@@ -1,12 +1,14 @@
 import http from "node:http";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage } from "telegram/events/index.js";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
 import { telegramGroupRoutingAttachment } from "./group-routing.mjs";
+import { buildAgentDeliverEvent } from "./agent-deliver.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -32,10 +34,27 @@ const syncs = new Map();
 const liveSlots = new Map();
 let nextSlot = 1;
 let promptSeq = 0;
+const agentDeliverUrl = String(process.env.USERIO_AGENT_DELIVER_URL || "").trim();
+const agentDeliverSecret = String(process.env.USERIO_AGENT_DELIVER_HMAC_SECRET || "").trim();
+const agentDeliverChatId = String(process.env.USERIO_AGENT_DELIVER_CHAT_ID || "").trim();
+const agentDeliverChats = String(process.env.USERIO_AGENT_DELIVER_CHATS || agentDeliverChatId || "")
+  .split(",").map((value) => value.trim()).filter(Boolean);
+const agentDeliverDebounceMs = Math.max(1_000, Number(process.env.USERIO_AGENT_DELIVER_DEBOUNCE_SECONDS || 300) * 1000);
+const agentDeliverName = String(process.env.USERIO_AGENT_DELIVER_NAME || "secretary-excode").trim();
+const agentDeliverCwd = String(process.env.USERIO_AGENT_DELIVER_CWD || "/home/roomhacker/excode").trim();
+const agentDeliverIgnoredChats = String(process.env.USERIO_AGENT_IGNORED_CHATS || "")
+  .split(",").map((value) => value.trim()).filter(Boolean);
+const agentDeliverCallbackSecret = String(process.env.USERIO_AGENT_DELIVER_CALLBACK_HMAC_SECRET || "").trim();
+const agentDeliverReceiptPath = `${stateDir}/agent-deliver-callbacks.jsonl`;
+const agentDeliverDebouncePath = `${stateDir}/agent-deliver-debounce.json`;
+const agentDeliverDebounce = new Map();
+const agentDeliverTimers = new Map();
+
 const whisperApiKey = loadWhisperApiKey();
 if (!whisperApiKey) console.warn("Telegram auto-transcription disabled: Whisper secret unavailable");
 
 mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+restoreAgentDeliverDebounce();
 for (const file of readdirSync(sessionsDir)) {
   const match = /^account-(\d+)\.session$/.exec(file);
   if (!match) continue;
@@ -86,6 +105,135 @@ function registerAccount(slot, user) {
     request.once("error", reject);
     request.end(body);
   });
+}
+
+function normalizeTelegramChatId(value) {
+  const raw = String(value || "").trim();
+  if (raw.startsWith("-100")) return raw.slice(4);
+  return raw.startsWith("-") ? raw.slice(1) : raw;
+}
+
+function normalizeChatLabel(value) {
+  return String(value || "").trim().toLocaleLowerCase("ru-RU");
+}
+
+function agentDeliverEnabledFor(chatKey, label) {
+  if (!agentDeliverUrl || !agentDeliverSecret || agentDeliverChats.length === 0) return false;
+  const id = normalizeTelegramChatId(chatKey);
+  const normalizedLabel = normalizeChatLabel(label);
+  return agentDeliverChats.some((target) => {
+    const normalizedTargetId = normalizeTelegramChatId(target);
+    return (/^-?\d+$/.test(target) && normalizedTargetId === id)
+      || normalizeChatLabel(target) === normalizedLabel;
+  });
+}
+
+function hmacV2(secret, method, path, timestamp, idempotencyKey, body) {
+  const digest = createHash("sha256").update(body).digest("hex");
+  const canonical = [method.toUpperCase(), path, timestamp, idempotencyKey, digest].join("\n");
+  return `sha256=${createHmac("sha256", secret).update(canonical).digest("hex")}`;
+}
+
+function postAgentDeliver(chatKey, label, envelope, messageCount = 1) {
+  if (!agentDeliverEnabledFor(chatKey, label)) return Promise.resolve(null);
+  const normalizedChatId = normalizeTelegramChatId(chatKey);
+  const event = buildAgentDeliverEvent({
+    normalizedChatId, label, envelope, messageCount,
+    quietSeconds: Math.round(agentDeliverDebounceMs / 1000),
+    agentName: agentDeliverName, agentCwd: agentDeliverCwd,
+    ignoredChats: agentDeliverIgnoredChats,
+  });
+  const eventId = event.event_id;
+  const body = JSON.stringify(event);
+  const target = new URL(agentDeliverUrl);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = hmacV2(agentDeliverSecret, "POST", target.pathname, timestamp, eventId, body);
+  return new Promise((resolve, reject) => {
+    const request = http.request(target, { method: "POST", headers: {
+      "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body),
+      "X-Webhook-Timestamp": timestamp, "X-Webhook-Signature": signature, "Idempotency-Key": eventId,
+    }}, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; });
+      response.on("end", () => response.statusCode === 202 ? resolve(data ? JSON.parse(data) : true) : reject(new Error(`agent-deliver HTTP ${response.statusCode}: ${data.slice(0,200)}`)));
+    });
+    request.once("error", reject); request.setTimeout(10000, () => request.destroy(new Error("agent-deliver request timeout"))); request.end(body);
+  });
+}
+
+function persistAgentDeliverDebounce() {
+  const state = Object.fromEntries(agentDeliverDebounce.entries());
+  writeFileSync(agentDeliverDebouncePath, JSON.stringify(state, null, 2) + "\n", { mode: 0o600 });
+}
+
+function scheduleAgentDeliverTimer(key) {
+  const existing = agentDeliverTimers.get(key);
+  if (existing) clearTimeout(existing);
+  const entry = agentDeliverDebounce.get(key);
+  if (!entry) return;
+  const waitMs = Math.max(0, entry.updatedAt + agentDeliverDebounceMs - Date.now());
+  const timer = setTimeout(async () => {
+    agentDeliverTimers.delete(key);
+    const current = agentDeliverDebounce.get(key);
+    if (!current) return;
+    if (Date.now() < current.updatedAt + agentDeliverDebounceMs) {
+      scheduleAgentDeliverTimer(key);
+      return;
+    }
+    try {
+      await postAgentDeliver(current.chatKey, current.label, current.envelope, current.messageCount);
+      agentDeliverDebounce.delete(key);
+      persistAgentDeliverDebounce();
+      console.log(`agent-deliver quiet ${current.label}: ${current.messageCount} message(s), last ${current.envelope.message_id}`);
+    } catch (error) {
+      console.error(`agent-deliver quiet ${current.label}:`, (error && error.message) || error);
+      current.updatedAt = Date.now();
+      persistAgentDeliverDebounce();
+      scheduleAgentDeliverTimer(key);
+    }
+  }, waitMs);
+  if (typeof timer.unref === "function") timer.unref();
+  agentDeliverTimers.set(key, timer);
+}
+
+function debounceAgentDeliver(chatKey, label, envelope) {
+  if (!agentDeliverEnabledFor(chatKey, label)) return;
+  const key = `${normalizeTelegramChatId(chatKey)}:${normalizeChatLabel(label)}`;
+  const previous = agentDeliverDebounce.get(key);
+  agentDeliverDebounce.set(key, {
+    chatKey,
+    label,
+    envelope: {
+      message_id: envelope.message_id,
+      attachments: (envelope.attachments || []).filter((item) => item.kind === "telegram_routing"),
+    },
+    messageCount: ((previous && previous.messageCount) || 0) + 1,
+    updatedAt: Date.now(),
+  });
+  persistAgentDeliverDebounce();
+  scheduleAgentDeliverTimer(key);
+}
+
+function restoreAgentDeliverDebounce() {
+  try {
+    const raw = JSON.parse(readFileSync(agentDeliverDebouncePath, "utf8"));
+    for (const [key, value] of Object.entries(raw || {})) {
+      if (!value || !value.chatKey || !value.label || !(value.envelope && value.envelope.message_id)) continue;
+      agentDeliverDebounce.set(key, value);
+      scheduleAgentDeliverTimer(key);
+    }
+  } catch (error) {
+    if (error && error.code !== "ENOENT") console.error("agent-deliver debounce restore:", error.message || error);
+  }
+}
+
+function verifyCallbackSignature(req, body) {
+  if (!agentDeliverCallbackSecret) return false;
+  const timestamp = String(req.headers["x-webhook-timestamp"] || "").trim();
+  const supplied = String(req.headers["x-webhook-signature"] || "").trim();
+  if (!timestamp || !supplied) return false;
+  const expected = `sha256=${createHmac("sha256", agentDeliverCallbackSecret).update(`${timestamp}.${body}`).digest("hex")}`;
+  const a = Buffer.from(supplied); const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function postInbox(accountId, envelope) {
@@ -378,6 +526,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event) {
   const inboxMessage = await envelope(chatKey, label, message, client, self);
   if (!inboxMessage.body) return;
   await postInbox(accountId, inboxMessage);
+  debounceAgentDeliver(chatKey, label, inboxMessage);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: live ${label} msg ${message.id}`);
 }
@@ -589,6 +738,15 @@ poll();
 http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
+  if (url.pathname === "/agent-deliver-callback" && req.method === "POST") {
+    let raw = ""; req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", () => {
+      if (!verifyCallbackSignature(req, raw)) { res.writeHead(401, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: "invalid callback signature" })); }
+      try { const payload = JSON.parse(raw || "{}"); appendFileSync(agentDeliverReceiptPath, JSON.stringify({ received_at: new Date().toISOString(), ...payload }) + "\n", { mode: 0o600 }); res.writeHead(202, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: true })); }
+      catch (error) { res.writeHead(400, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: String((error && error.message) || error) })); }
+    });
+    return;
+  }
   if (url.pathname === "/state") {
     res.setHeader("content-type", "application/json");
     return res.end(JSON.stringify(publicState()));
