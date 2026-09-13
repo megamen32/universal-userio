@@ -296,3 +296,9 @@ __all__ = [
     "Channel",
     "mapping_value",
 ]
+
+# Imported last to avoid a cycle while ``omnichannel`` types against the
+# protocol and DTOs defined above.
+from .omnichannel import ChannelBinding, Omnichannel
+
+__all__ += ["ChannelBinding", "Omnichannel"]
