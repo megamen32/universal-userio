@@ -95,6 +95,37 @@ def test_canonical_inbox_envelope_contract() -> None:
     assert message.conversation_key == "vk:customer"
     assert message.message_id == "m-1"
 
+
+def test_message_direction_is_preserved_in_conversation(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    message = inbox_message_from_envelope(
+        {
+            "schema": "universal.inbox.message.v1",
+            "source": "phone",
+            "message_id": "call-1-agent-1",
+            "sender": "call-1",
+            "body": "Здравствуйте",
+            "direction": "outgoing",
+        },
+        received_at=1.0,
+    )
+
+    conversation_id, accepted = service.receive(message, route_id="phone")
+
+    assert accepted is True
+    assert store.conversation(conversation_id)["messages"] == [
+        {
+            "source": "phone",
+            "message_id": "call-1-agent-1",
+            "sender": "call-1",
+            "body": "Здравствуйте",
+            "direction": "outgoing",
+            "received_at": 1.0,
+            "seen_at": None,
+        }
+    ]
+
 def test_identity_rule_enables_autosend_and_new_message_feed(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     store.register_identity(source="vk", external_id="42", identity_id="person_anna", display_name="Anna")

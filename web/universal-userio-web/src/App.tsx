@@ -10,7 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 type Account = { id: string; provider: string; display_name: string; capabilities: string[]; last_synced_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
-type Message = { source: string; message_id: string; sender: string; body: string; received_at: number; seen_at?: number; attachment_url?: string }
+type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
 
@@ -53,6 +53,7 @@ const displayChannel = (source: string) => providerForSource(source) === "gmail"
 // account). Switching the account therefore re-renders the whole chat from
 // that person's perspective — e.g. a Telegram self-chat between two accounts.
 const messageIsOutgoing = (conversation: Conversation, message: Message, allAccounts: Account[]) => {
+  if (message.direction) return message.direction === "outgoing"
   const provider = providerForSource(conversation.source)
   const platformAccounts = allAccounts.filter((item) => providerForSource(item.provider) === provider)
   if (!platformAccounts.length) return message.sender !== conversation.sender
@@ -617,12 +618,15 @@ export function App() {
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
+            const system = message.direction === "system"
             const outgoing = messageIsOutgoing(conversation, message, accounts)
             const previous = conversation.messages[index - 1]
             const showDay = !previous || !sameDay(previous.received_at, message.received_at)
             return <Fragment key={`${message.source}:${message.message_id}`}>
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
-              <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <MessageBody message={message} onAttachmentClick={openAttachment} />}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}</p></div>
+              {system
+                ? <div className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
+                : <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <MessageBody message={message} onAttachmentClick={openAttachment} />}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}</p></div>}
             </Fragment>
           })}
           {conversation.drafts.map((item) => {
