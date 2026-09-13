@@ -33,6 +33,14 @@ class SQLiteUserIOStore:
             if self._is_legacy() or self._table_exists("legacy_conversations"):
                 self._migrate_legacy()
             self._data_schema()
+            message_columns = {
+                str(row["name"])
+                for row in self._connection.execute("PRAGMA table_info(messages)")
+            }
+            if "direction" not in message_columns:
+                self._connection.execute(
+                    "ALTER TABLE messages ADD COLUMN direction TEXT NOT NULL DEFAULT 'incoming'"
+                )
 
     @property
     def default_user_id(self) -> str:
@@ -196,7 +204,7 @@ class SQLiteUserIOStore:
             CREATE TABLE IF NOT EXISTS messages (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,sender TEXT NOT NULL,body TEXT NOT NULL,
-                received_at REAL NOT NULL,seen_at REAL,
+                direction TEXT NOT NULL DEFAULT 'incoming',received_at REAL NOT NULL,seen_at REAL,
                 PRIMARY KEY(user_id,source,message_id)
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
@@ -774,12 +782,12 @@ class SQLiteUserIOStore:
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                (user_id,source,message_id,conversation_id,sender,body,received_at)
-                VALUES (?,?,?,?,?,?,?)
+                (user_id,source,message_id,conversation_id,sender,body,direction,received_at)
+                VALUES (?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, message.source, message.message_id, conversation_id,
-                    message.sender, message.body, message.received_at,
+                    message.sender, message.body, message.direction, message.received_at,
                 ),
             ).rowcount == 1
             if getattr(message, "sender_name", ""):
@@ -1093,7 +1101,7 @@ class SQLiteUserIOStore:
             messages = self._connection.execute(
                 """
                 SELECT * FROM (
-                    SELECT source,message_id,sender,body,received_at,seen_at FROM messages
+                    SELECT source,message_id,sender,body,direction,received_at,seen_at FROM messages
                     WHERE user_id=? AND conversation_id=? ORDER BY received_at DESC LIMIT 200
                 ) ORDER BY received_at
                 """,

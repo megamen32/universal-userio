@@ -47,6 +47,9 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     if not message_id or not sender:
         raise ValueError("inbox message requires message_id and sender")
     sender_name = str(payload.get("sender_name") or "").strip()
+    direction = str(payload.get("direction") or "incoming").strip().lower()
+    if direction not in {"incoming", "outgoing", "system"}:
+        raise ValueError("unsupported message direction")
     raw_attachments = payload.get("attachments")
     parsed_attachments: list[dict[str, Any]] = []
     if isinstance(raw_attachments, list):
@@ -100,6 +103,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         source, message_id, sender, body, received_at,
         sender_name=sender_name,
         attachments=tuple(parsed_attachments),
+        direction=direction,
     )
 
 

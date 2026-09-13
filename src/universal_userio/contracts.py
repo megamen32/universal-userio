@@ -15,6 +15,7 @@ class InboxMessage:
     received_at: float
     sender_name: str = ""
     attachments: tuple[dict[str, Any], ...] = ()
+    direction: str = "incoming"
 
     @property
     def conversation_key(self) -> str:
