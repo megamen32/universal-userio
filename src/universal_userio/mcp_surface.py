@@ -224,9 +224,22 @@ class UserIOMcpSurface:
                     chat_id=self._required(arguments, "chat_id"),
                     text=self._required(arguments, "text"), attachments=attachments,
                 )
+                conversation = self._store.conversation(draft.conversation_id, user_id=user_id) or {}
+                manual_lock = self._service.manual_approval_required(conversation)
+                hint = (
+                    "SMS manual-approve lock is ON: nothing is sent until the owner explicitly "
+                    "approves this exact draft via userio_draft_approve_send (confirm=true)."
+                    if manual_lock else
+                    "Draft only: nothing is sent until userio_draft_approve_send is called "
+                    "with confirm=true."
+                )
                 return {
                     "ok": True, "draft": self._draft(draft),
                     "sent": False, "approval_required": True,
+                    "channel": str(conversation.get("source") or ""),
+                    "response_mode": str(conversation.get("response_mode") or ""),
+                    "manual_approval_only": manual_lock,
+                    "approval_hint": hint,
                 }
             if name == "userio.users.create":
                 if principal.role != "owner":
@@ -303,7 +316,29 @@ class UserIOMcpSurface:
         draft = self._service.approve(
             self._required(arguments, "draft_id"), user_id=principal.user_id
         )
-        return {"ok": True, "draft": self._draft(draft)}
+        conversation = self._store.conversation(draft.conversation_id, user_id=principal.user_id) or {}
+        return {
+            "ok": True, "draft": self._draft(draft),
+            "sent": draft.status == "approved",
+            "receipt": draft.receipt or None,
+            "channel": str(conversation.get("source") or ""),
+            "delivery_note": self._delivery_note(conversation),
+        }
+
+    @staticmethod
+    def _delivery_note(conversation: dict[str, Any]) -> str:
+        source = str(conversation.get("source") or "")
+        if source == "sms":
+            return "Android gateway accepted the SMS; carrier delivery is not guaranteed."
+        if source.startswith("gmail:"):
+            return "Sent through the Gmail account."
+        if source.startswith("chatgpt"):
+            return "Sent through the ChatGPT web session."
+        if source == "telegram":
+            return "Sent through the Telegram account."
+        if source == "whatsapp":
+            return "Sent through the WhatsApp bridge."
+        return f"Sent through route {conversation.get('route_id') or source or 'unknown'}."
 
     def _delete_conversation(
         self, arguments: dict[str, Any], principal: UserPrincipal
@@ -353,7 +388,11 @@ class UserIOMcpSurface:
 
     @staticmethod
     def _draft(draft: Any) -> dict[str, str]:
-        return {
+        payload = {
             "id": draft.id, "conversation_id": draft.conversation_id,
             "body": draft.body, "status": draft.status,
         }
+        receipt = getattr(draft, "receipt", "")
+        if receipt:
+            payload["receipt"] = receipt
+        return payload

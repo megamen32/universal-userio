@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Phone, Plus, Send, Sparkles, Video, X } from "lucide-react"
+import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Phone, Plus, Send, Sparkles, Video, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -199,7 +199,6 @@ export function App() {
   const [searchResults, setSearchResults] = useState<Chat[]>([])
   const [searching, setSearching] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [chatsOpen, setChatsOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<"chats" | "chat">("chats")
   const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
@@ -230,12 +229,19 @@ export function App() {
     toastTimer.current = window.setTimeout(() => setToast(""), 2800)
   }
 
-  // Escape closes the mobile accounts drawer.
+  // Escape closes overlays first; otherwise it returns from an open conversation to the wide list.
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setDrawerOpen(false) }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      if (drawerOpen) { setDrawerOpen(false); return }
+      if (byokOpen || newChatOpen || runsOpen || expandedHtml || attachmentPreview) return
+      const target = event.target as HTMLElement | null
+      if (target?.matches("input, textarea, select, [contenteditable='true']")) return
+      if (selectedChat) { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
+    }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  }, [attachmentPreview, byokOpen, drawerOpen, expandedHtml, newChatOpen, runsOpen, selectedChat])
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const conversationAccount = conversation && accounts.find((item) => item.id === (item.provider === "gmail" && conversation.source.startsWith("gmail:") ? conversation.source.replace(/^gmail:/, "gmail-") : conversation.source))
@@ -250,7 +256,7 @@ export function App() {
     const suffix = sourceFilter ? `?source=${encodeURIComponent(sourceFilter)}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     setChats(data.conversations)
-    setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : data.conversations[0]?.id ?? "")
+    setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : "")
   }, [account, activeChannel])
 
   useEffect(() => {
@@ -334,6 +340,7 @@ export function App() {
   }, [runsOpen, selectedRun])
 
   const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
+  const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
 
   const openAttachment = async (message: Message) => {
     if (!conversation) return
@@ -590,8 +597,8 @@ export function App() {
     {drawerOpen && <button aria-label="Close menu" className="absolute inset-0 z-30 bg-black/50 md:hidden" onClick={() => setDrawerOpen(false)} />}
 
     {/* Chat list: default pane on mobile */}
-    <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card md:w-[340px] md:flex-none ${chatsOpen ? "md:flex" : "md:hidden"} ${mobilePane === "chats" ? "flex" : "hidden"}`}>
-      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ЧАТЫ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setNewChatOpen(true)} title="Новый SMS-чат"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
+    <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card transition-[width,flex-basis] duration-200 ease-out ${selectedChat ? "md:w-[340px] md:flex-none" : "md:flex-1"} ${mobilePane === "chats" || !selectedChat ? "flex" : "hidden"} md:flex`}>
+      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ДИАЛОГИ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setNewChatOpen(true)} title="Новый SMS-чат"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         <div key={viewKey}>
         {visibleChats.map((chat, chatIndex) => {
@@ -612,9 +619,9 @@ export function App() {
     </section>
 
     {/* Conversation: fullscreen pane on mobile */}
-    <section className={`min-h-0 min-w-0 flex-1 flex-col bg-[#eef2f6] dark:bg-[#0e1621] md:flex ${mobilePane === "chat" ? "flex" : "hidden"}`}>
-      {conversation ? <>
-        <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setChatsOpen((open) => !open)} title={chatsOpen ? "Скрыть список" : "Показать список"}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}</Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground"><span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">{channelIcon(conversation.source)} {displayChannel(conversation.source)}</span><span className="truncate">{prettySender(conversation.sender)}</span></p>{(() => { const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === providerForSource(conversation.source)); const senderAccount = platformAccounts.find((item) => item.id === conversation.account_ref); if (platformAccounts.length === 0) return null; return <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">отправка от:{platformAccounts.length > 1 ? <select className="max-w-[180px] rounded border bg-transparent px-1 py-0.5 text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={(event) => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select> : <span className="truncate text-foreground/80">{senderAccount ? senderAccount.display_name : platformAccounts[0].display_name}</span>}</p> })()}</div><Button className="ml-auto" variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></header>
+    <section className={`min-h-0 min-w-0 flex-1 flex-col bg-[#eef2f6] dark:bg-[#0e1621] ${mobilePane === "chat" ? "flex" : "hidden"} ${selectedChat ? "md:flex" : "md:hidden"}`}>
+      {conversation && conversation.id === selectedChat ? <>
+        <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground"><span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">{channelIcon(conversation.source)} {displayChannel(conversation.source)}</span><span className="truncate">{prettySender(conversation.sender)}</span></p>{(() => { const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === providerForSource(conversation.source)); const senderAccount = platformAccounts.find((item) => item.id === conversation.account_ref); if (platformAccounts.length === 0) return null; return <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">отправка от:{platformAccounts.length > 1 ? <select className="max-w-[180px] rounded border bg-transparent px-1 py-0.5 text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={(event) => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select> : <span className="truncate text-foreground/80">{senderAccount ? senderAccount.display_name : platformAccounts[0].display_name}</span>}</p> })()}</div><div className="ml-auto flex items-center gap-1"><Button className="hidden md:inline-flex" variant="ghost" size="icon" onClick={closeChat} title="Закрыть диалог"><X /></Button><Button variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></div></header>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
@@ -640,7 +647,7 @@ export function App() {
           <div ref={bottomRef} />
         </div></ScrollArea>
         <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]"><div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5"><Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} /><Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button><Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик"><Send /></Button></div><p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? "Отправка только после явного подтверждения черновика." : "Только чтение."}</p></div></footer>
-      </> : <div className="hidden flex-1 place-items-center text-center md:grid"><div><Button className="mb-4" variant="outline" size="sm" onClick={() => setChatsOpen((open) => !open)}>{chatsOpen ? <PanelRightClose /> : <PanelRightOpen />}{chatsOpen ? "Скрыть список" : "Показать список"}</Button><div className="mx-auto grid size-12 place-items-center rounded-full bg-muted"><MessageCircle /></div><h2 className="mt-3 font-semibold">Выберите чат</h2><p className="mt-1 text-sm text-muted-foreground">Аккаунты, платформы и переписки остаются раздельными.</p></div></div>}
+      </> : <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Открываю диалог…</div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
           <h2 className="font-semibold">Свой ИИ (BYOK)</h2>

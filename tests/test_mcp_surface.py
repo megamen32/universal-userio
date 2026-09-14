@@ -185,3 +185,39 @@ def test_matrix_is_a_first_class_userio_channel(tmp_path) -> None:
     assert listed["chats"][0]["id"] == conversation_id
     read = surface.dispatch("userio.channels.read", {"channel":"matrix", "chat_id":conversation_id})
     assert read["chat"]["messages"][0]["body"] == "matrix hello"
+
+
+class SmsGateway:
+    def __init__(self): self.sent = []
+    def inbound(self): return []
+    def send(self, *, to, body): self.sent.append((to, body)); return "sms-receipt-1"
+
+
+def test_mcp_send_draft_states_approval_need_and_approve_returns_receipt(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    gateway = SmsGateway()
+    service = UserIOService(
+        store, Generator(), Outbox(), sms_gateway=gateway,
+        sms_user_id=store.default_user_id, sms_route_id="sms", sms_manual_approve=True,
+    )
+    conversation_id, _ = service.receive(
+        InboxMessage("sms", "sms-1", "+15551234567", "hello", 1.0), route_id="sms"
+    )
+    surface = UserIOMcpSurface(store, service)
+
+    queued = surface.dispatch("userio.channels.send_draft", {
+        "chat_id": conversation_id, "text": "manual reply",
+    })
+    assert queued["sent"] is False
+    assert queued["approval_required"] is True
+    assert queued["manual_approval_only"] is True
+    assert queued["channel"] == "sms"
+    assert "manual-approve lock is ON" in queued["approval_hint"]
+
+    sent = surface.dispatch("userio.draft.approve_send", {
+        "draft_id": queued["draft"]["id"], "confirm": True,
+    })
+    assert sent["sent"] is True
+    assert sent["receipt"] == "sms-receipt-1"
+    assert sent["delivery_note"].startswith("Android gateway accepted")
+    assert gateway.sent == [("+15551234567", "manual reply")]
