@@ -80,7 +80,7 @@ One adapter codebase for Telegram, email (SMTP/IMAP), WhatsApp (Baileys
 bridge), SMS (Android gateway) and VK (browser worker), usable **in-process
 from any project** and wrapped by the UserIO service itself. Spec:
 `docs/2026-09-03-universal-adapters-spec.md`. The core contracts
-(`ChatPort`/`Channel`, `ChatMessage`, `ChatSummary`, `DownloadedMedia`, the
+(`ChatPort`/`Channel`, `ChatMessage`, `ChatSummary`, `DownloadedMedia`, `Contact`, the
 `Chat*Error` hierarchy, `AdapterNotSupported`) are stdlib-only and were ported
 from the battle-tested AutoSellBot contracts; install extras only for the
 platforms you use:
@@ -102,9 +102,12 @@ adapter = TelegramAPI.from_env()          # USERIO_TELEGRAM_* / TG_* credentials
 messages = await adapter.read_chat(chat)  # one async ChatPort for every platform
 ```
 
-Every adapter declares `platform` and `capabilities` (`read`, `send`, `edit`,
-`delete`, `media`, `typing`, `react`, `forward`, `ack`); an operation outside
-the declared set raises `AdapterNotSupported` instead of pretending.
+Every adapter declares `platform` and exact `capabilities` from
+`AdapterCapabilities`. Besides messaging, the stable contract includes
+`download`, `upload`, contact CRUD and add/remove-contact-from-group. An
+operation outside the declared set raises `AdapterNotSupported` before the
+provider is called. Telegram implements the complete contact/file surface;
+email also exposes attachment `download`.
 
 ### Telegram session provisioning (QR login, two proven originals)
 

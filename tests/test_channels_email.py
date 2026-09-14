@@ -114,8 +114,10 @@ def test_channel_send_and_media() -> None:
     ]
 
     media = asyncio.run(channel.download_media("lead@example.org", type("M", (), {"id": 5, "filename": "doc.pdf"})()))
+    canonical = asyncio.run(channel.download("lead@example.org", type("M", (), {"id": 5, "filename": "doc.pdf"})()))
     assert media.data == b"pdf-bytes"
     assert media.filename == "doc.pdf"
+    assert canonical == media
 
 
 def test_unsupported_operations_raise() -> None:
@@ -131,4 +133,4 @@ def test_unsupported_operations_raise() -> None:
 def test_from_env_builds_channel() -> None:
     channel = EmailChannel.from_env(FULL_ENV)
     assert channel.platform == "email"
-    assert channel.capabilities == frozenset({"read", "send", "media"})
+    assert channel.capabilities == frozenset({"read", "send", "media", "download"})

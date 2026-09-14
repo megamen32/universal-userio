@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import Channel, ChatMessage, ChatRef
+from . import (
+    AdapterCapabilities,
+    AdapterNotSupported,
+    Channel,
+    ChatMessage,
+    ChatRef,
+    Contact,
+    ContactRef,
+    DownloadedMedia,
+    MessageRef,
+)
 
 
 def _required(value: str, label: str) -> str:
@@ -66,6 +76,25 @@ class Omnichannel:
     def channel(self, platform: str, *, account_id: str | None = None) -> Channel:
         return self.binding(platform, account_id=account_id).channel
 
+    def capabilities(
+        self, platform: str, *, account_id: str | None = None
+    ) -> frozenset[str]:
+        """Return the exact operation set advertised by one binding."""
+
+        return frozenset(
+            getattr(self.channel(platform, account_id=account_id), "capabilities", ())
+        )
+
+    def _capable_channel(
+        self, platform: str, capability: str, *, account_id: str | None = None
+    ) -> Channel:
+        channel = self.channel(platform, account_id=account_id)
+        if capability not in getattr(channel, "capabilities", frozenset()):
+            raise AdapterNotSupported(
+                f"{getattr(channel, 'platform', platform)} adapter does not support {capability}"
+            )
+        return channel
+
     @property
     def bindings(self) -> tuple[ChannelBinding, ...]:
         return tuple(self._bindings[key] for key in sorted(self._bindings))
@@ -83,9 +112,95 @@ class Omnichannel:
         account_id: str | None = None,
         reply_to: int | None = None,
     ) -> ChatMessage:
-        return await self.channel(platform, account_id=account_id).send_message(
+        return await self._capable_channel(
+            platform, AdapterCapabilities.SEND, account_id=account_id
+        ).send_message(
             chat, text, reply_to=reply_to
         )
+
+    async def download(
+        self,
+        platform: str,
+        chat: ChatRef,
+        message: MessageRef,
+        *,
+        account_id: str | None = None,
+    ) -> DownloadedMedia:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.DOWNLOAD, account_id=account_id
+        ).download(chat, message)
+
+    async def upload(
+        self,
+        platform: str,
+        chat: ChatRef,
+        data: bytes,
+        *,
+        filename: str,
+        mime_type: str | None = None,
+        caption: str | None = None,
+        account_id: str | None = None,
+    ) -> ChatMessage:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.UPLOAD, account_id=account_id
+        ).upload(chat, data, filename=filename, mime_type=mime_type, caption=caption)
+
+    async def get_contact(
+        self, platform: str, contact: ContactRef, *, account_id: str | None = None
+    ) -> Contact | None:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.GET_CONTACT, account_id=account_id
+        ).get_contact(contact)
+
+    async def add_contact(
+        self, platform: str, contact: Contact, *, account_id: str | None = None
+    ) -> Contact:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.ADD_CONTACT, account_id=account_id
+        ).add_contact(contact)
+
+    async def edit_contact(
+        self,
+        platform: str,
+        contact: ContactRef,
+        *,
+        account_id: str | None = None,
+        **changes: str | None,
+    ) -> Contact:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.EDIT_CONTACT, account_id=account_id
+        ).edit_contact(contact, **changes)
+
+    async def remove_contact(
+        self, platform: str, contact: ContactRef, *, account_id: str | None = None
+    ) -> bool:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.REMOVE_CONTACT, account_id=account_id
+        ).remove_contact(contact)
+
+    async def add_contact_to_group(
+        self,
+        platform: str,
+        contact: ContactRef,
+        group: ChatRef,
+        *,
+        account_id: str | None = None,
+    ) -> bool:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.ADD_CONTACT_TO_GROUP, account_id=account_id
+        ).add_contact_to_group(contact, group)
+
+    async def remove_contact_from_group(
+        self,
+        platform: str,
+        contact: ContactRef,
+        group: ChatRef,
+        *,
+        account_id: str | None = None,
+    ) -> bool:
+        return await self._capable_channel(
+            platform, AdapterCapabilities.REMOVE_CONTACT_FROM_GROUP, account_id=account_id
+        ).remove_contact_from_group(contact, group)
 
 
 __all__ = ["ChannelBinding", "Omnichannel"]

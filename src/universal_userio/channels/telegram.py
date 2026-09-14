@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+from io import BytesIO
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -28,14 +29,20 @@ from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import InputPeerUser
 
 from userio_adapter_sdk import (
+    AdapterCapabilities,
+    AdapterNotSupported,
     ChatInvalidPeerError,
     ChatMessage,
+    ChatOperationError,
     ChatPermissionError,
     ChatPort,
     ChatRateLimitError,
     ChatRef,
     ChatSummary,
+    Contact,
+    ContactRef,
     DownloadedMedia,
+    stable_ref_id,
 )
 from universal_userio.channels.telegram_contracts import (
     MembershipResult,
@@ -70,7 +77,17 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
 
     platform = "telegram"
     capabilities = frozenset(
-        {"read", "send", "edit", "delete", "media", "typing", "react", "forward", "ack"}
+        {
+            "read", "send", "edit", "delete", "media", "typing", "react", "forward", "ack",
+            AdapterCapabilities.DOWNLOAD,
+            AdapterCapabilities.UPLOAD,
+            AdapterCapabilities.GET_CONTACT,
+            AdapterCapabilities.ADD_CONTACT,
+            AdapterCapabilities.EDIT_CONTACT,
+            AdapterCapabilities.REMOVE_CONTACT,
+            AdapterCapabilities.ADD_CONTACT_TO_GROUP,
+            AdapterCapabilities.REMOVE_CONTACT_FROM_GROUP,
+        }
     )
 
     def __init__(self, client: TelegramClient) -> None:
@@ -258,6 +275,177 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
             mime_type=mime_type,
             filename=getattr(file_info, "name", None),
         )
+
+    async def download(self, chat: ChatRef, message: Any) -> DownloadedMedia:
+        """Canonical file-download operation; ``download_media`` stays compatible."""
+
+        return await self.download_media(chat, message)
+
+    async def upload(
+        self,
+        chat: ChatRef,
+        data: bytes,
+        *,
+        filename: str,
+        mime_type: str | None = None,
+        caption: str | None = None,
+    ) -> ChatMessage:
+        """Upload bytes to a chat and return the resulting message DTO."""
+
+        target = self._chat_id(chat)
+        payload = BytesIO(bytes(data))
+        payload.name = filename
+        kwargs: dict[str, Any] = {"caption": caption or "", "force_document": True}
+        if mime_type is not None:
+            kwargs["mime_type"] = mime_type
+        try:
+            raw = await self.client.send_file(target, payload, **kwargs)
+        except ForbiddenError as exc:
+            raise ChatPermissionError(getattr(exc, "message", str(exc))) from exc
+        except PeerIdInvalidError as exc:
+            raise ChatInvalidPeerError(str(exc)) from exc
+        except PeerFloodError as exc:
+            raise ChatRateLimitError(str(exc)) from exc
+        if raw is None:
+            return ChatMessage(
+                chat_id=target, message_id=0, text=caption or "", filename=filename, out=True
+            )
+        return self._chat_message(target, raw, fallback_text=caption or "")
+
+    @staticmethod
+    def _contact_from_entity(entity: Any) -> Contact | None:
+        contact_id = getattr(entity, "id", None)
+        if contact_id is None:
+            return None
+        first_name = getattr(entity, "first_name", None)
+        last_name = getattr(entity, "last_name", None)
+        display_name = " ".join(part for part in (first_name, last_name) if part).strip()
+        if not display_name:
+            display_name = getattr(entity, "username", None) or str(contact_id)
+        return Contact(
+            id=contact_id,
+            display_name=display_name,
+            first_name=first_name,
+            last_name=last_name,
+            username=getattr(entity, "username", None),
+            phone=getattr(entity, "phone", None),
+            is_contact=getattr(entity, "contact", None),
+        )
+
+    @staticmethod
+    def _contact_names(contact: Contact) -> tuple[str, str]:
+        if contact.first_name is not None or contact.last_name is not None:
+            return contact.first_name or "", contact.last_name or ""
+        first, separator, last = contact.display_name.strip().partition(" ")
+        return first, last if separator else ""
+
+    async def get_contact(self, contact: ContactRef) -> Contact | None:
+        """Resolve a Telegram peer into a provider-neutral contact."""
+
+        try:
+            entity = await self.client.get_entity(contact)
+        except (ValueError, TypeError, PeerIdInvalidError):
+            return None
+        return self._contact_from_entity(entity)
+
+    async def add_contact(self, contact: Contact) -> Contact:
+        """Import a phone contact into the Telegram address book."""
+
+        phone = str(contact.phone or "").strip()
+        if not phone:
+            raise ValueError("Telegram add_contact requires phone")
+        first_name, last_name = self._contact_names(contact)
+        result = await self.client(
+            functions.contacts.ImportContactsRequest(
+                contacts=[
+                    types.InputPhoneContact(
+                        client_id=stable_ref_id(phone),
+                        phone=phone,
+                        first_name=first_name,
+                        last_name=last_name,
+                    )
+                ]
+            )
+        )
+        users = list(getattr(result, "users", ()) or ())
+        imported = self._contact_from_entity(users[0]) if users else None
+        if imported is None:
+            raise ChatOperationError(f"Telegram did not import contact: {phone}")
+        return imported
+
+    async def edit_contact(
+        self,
+        contact: ContactRef,
+        *,
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        username: str | None = None,
+        phone: str | None = None,
+        email: str | None = None,
+    ) -> Contact:
+        """Update Telegram-local contact names by re-importing its phone record."""
+
+        if username is not None or email is not None:
+            raise AdapterNotSupported("Telegram contacts cannot edit username or email")
+        current = await self.get_contact(contact)
+        if current is None:
+            raise LookupError(f"contact not found: {contact!r}")
+        if display_name is not None and first_name is None and last_name is None:
+            first_name, separator, parsed_last = display_name.strip().partition(" ")
+            last_name = parsed_last if separator else ""
+        return await self.add_contact(
+            Contact(
+                id=current.id,
+                display_name=display_name if display_name is not None else current.display_name,
+                first_name=current.first_name if first_name is None else first_name,
+                last_name=current.last_name if last_name is None else last_name,
+                username=current.username,
+                phone=current.phone if phone is None else phone,
+                is_contact=True,
+            )
+        )
+
+    async def remove_contact(self, contact: ContactRef) -> bool:
+        """Remove a peer from the Telegram address book."""
+
+        entity = await self.client.get_entity(contact)
+        await self.client(functions.contacts.DeleteContactsRequest(id=[entity]))
+        return True
+
+    async def add_contact_to_group(
+        self, contact: ContactRef, group: ChatRef
+    ) -> bool:
+        """Invite a contact to a Telegram group."""
+
+        member = await self.client.get_entity(contact)
+        target = await self.client.get_entity(self._chat_id(group))
+        if isinstance(target, types.Chat):
+            request = functions.messages.AddChatUserRequest(
+                chat_id=target.id, user_id=member, fwd_limit=0
+            )
+        else:
+            request = functions.channels.InviteToChannelRequest(
+                channel=target, users=[member]
+            )
+        try:
+            await self.client(request)
+        except UserAlreadyParticipantError:
+            return True
+        return True
+
+    async def remove_contact_from_group(
+        self, contact: ContactRef, group: ChatRef
+    ) -> bool:
+        """Remove a contact from a group without leaving it permanently banned."""
+
+        member = await self.client.get_entity(contact)
+        target = await self.client.get_entity(self._chat_id(group))
+        kick = getattr(self.client, "kick_participant", None)
+        if kick is None:
+            raise AdapterNotSupported("Telegram client does not support removing group members")
+        await kick(target, member)
+        return True
 
     async def send_message(
         self, chat: ChatRef, text: str, *, reply_to: int | None = None

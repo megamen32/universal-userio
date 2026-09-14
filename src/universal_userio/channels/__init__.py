@@ -6,6 +6,7 @@ extras they need.  Spec: docs/2026-09-03-universal-adapters-spec.md.
 """
 
 from universal_userio.channels.core import (
+    AdapterCapabilities,
     AdapterNotSupported,
     Channel,
     ChatId,
@@ -17,13 +18,20 @@ from universal_userio.channels.core import (
     ChatRateLimitError,
     ChatRef,
     ChatSummary,
+    Contact,
+    ContactPort,
+    ContactRef,
     DownloadedMedia,
+    FilePort,
+    GroupContactPort,
     MessageRef,
+    Omnichannel,
     mapping_value,
 )
 
 __all__ = [
     "AdapterNotSupported",
+    "AdapterCapabilities",
     "Channel",
     "ChatId",
     "ChatInvalidPeerError",
@@ -34,7 +42,13 @@ __all__ = [
     "ChatRateLimitError",
     "ChatRef",
     "ChatSummary",
+    "Contact",
+    "ContactPort",
+    "ContactRef",
     "DownloadedMedia",
+    "FilePort",
+    "GroupContactPort",
     "MessageRef",
+    "Omnichannel",
     "mapping_value",
 ]
