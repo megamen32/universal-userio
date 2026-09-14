@@ -1011,7 +1011,10 @@ class SQLiteUserIOStore:
             if row is None:
                 raise KeyError("draft not found")
             if row["status"] == "approved":
-                return ReplyDraft(row["id"], row["conversation_id"], row["body"], row["status"])
+                return ReplyDraft(
+                    row["id"], row["conversation_id"], row["body"], row["status"],
+                    str(row["outbox_receipt"] or ""),
+                )
             if row["status"] != "proposed":
                 raise ValueError("draft is not approvable")
             self._connection.execute(
@@ -1021,7 +1024,7 @@ class SQLiteUserIOStore:
                 """,
                 (time.time(), receipt, user_id, draft_id),
             )
-        return ReplyDraft(row["id"], row["conversation_id"], row["body"], "approved")
+        return ReplyDraft(row["id"], row["conversation_id"], row["body"], "approved", receipt)
 
     def reject(self, draft_id: str, *, user_id: str | None = None) -> ReplyDraft:
         user_id = self._user(user_id)

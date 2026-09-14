@@ -474,7 +474,10 @@ def handler(
                     conversation = service._store.conversation(
                         conversation_id, user_id=target_user_id
                     )
-                    if accepted and conversation and conversation["response_mode"] == "auto_send":
+                    if (
+                        accepted and conversation and conversation["response_mode"] == "auto_send"
+                        and not service.manual_approval_required(conversation)
+                    ):
                         proposed = service.propose(
                             conversation_id, message, user_id=target_user_id
                         )

@@ -30,6 +30,7 @@ class ReplyDraft:
     conversation_id: str
     body: str
     status: str
+    receipt: str = ""
 
 
 @dataclass(frozen=True, slots=True)
