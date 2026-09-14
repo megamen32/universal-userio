@@ -277,7 +277,7 @@ class EmailChannel:
     """Universal email channel over an injected SMTP/IMAP transport."""
 
     platform = "email"
-    capabilities = frozenset({"read", "send", "media"})
+    capabilities = frozenset({"read", "send", "media", "download"})
 
     def __init__(self, transport: SmtpImapTransport) -> None:
         self._transport = transport
@@ -398,6 +398,11 @@ class EmailChannel:
             mime_type=chosen[1],
             filename=chosen[0],
         )
+
+    async def download(self, chat: ChatRef, message: MessageRef) -> DownloadedMedia:
+        """Canonical file-download alias for the attachment implementation."""
+
+        return await self.download_media(chat, message)
 
     async def send_message(
         self, chat: ChatRef, text: str, *, reply_to: int | None = None

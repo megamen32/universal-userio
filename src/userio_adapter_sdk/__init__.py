@@ -19,6 +19,51 @@ from typing import Any, Protocol, runtime_checkable
 ChatId = int | str
 ChatRef = ChatId
 MessageRef = Any
+ContactRef = ChatId
+
+
+class AdapterCapabilities:
+    """Stable capability names shared by adapters and consumers."""
+
+    READ = "read"
+    SEND = "send"
+    EDIT = "edit"
+    DELETE = "delete"
+    MEDIA = "media"
+    TYPING = "typing"
+    REACT = "react"
+    FORWARD = "forward"
+    ACK = "ack"
+    DOWNLOAD = "download"
+    UPLOAD = "upload"
+    GET_CONTACT = "get_contact"
+    ADD_CONTACT = "add_contact"
+    EDIT_CONTACT = "edit_contact"
+    REMOVE_CONTACT = "remove_contact"
+    ADD_CONTACT_TO_GROUP = "add_contact_to_group"
+    REMOVE_CONTACT_FROM_GROUP = "remove_contact_from_group"
+
+    ALL = frozenset(
+        {
+            READ,
+            SEND,
+            EDIT,
+            DELETE,
+            MEDIA,
+            TYPING,
+            REACT,
+            FORWARD,
+            ACK,
+            DOWNLOAD,
+            UPLOAD,
+            GET_CONTACT,
+            ADD_CONTACT,
+            EDIT_CONTACT,
+            REMOVE_CONTACT,
+            ADD_CONTACT_TO_GROUP,
+            REMOVE_CONTACT_FROM_GROUP,
+        }
+    )
 
 
 def stable_ref_id(message_id: str) -> int:
@@ -215,6 +260,25 @@ class DownloadedMedia:
         return self.mime_type
 
 
+@dataclass(frozen=True, slots=True)
+class Contact:
+    """Provider-neutral address-book contact.
+
+    ``id`` may be absent before :meth:`ChatPort.add_contact`; providers return
+    a populated id when they expose one. No provider SDK object crosses this
+    boundary.
+    """
+
+    id: ContactRef | None = None
+    display_name: str = ""
+    first_name: str | None = None
+    last_name: str | None = None
+    username: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    is_contact: bool | None = None
+
+
 @runtime_checkable
 class ChatPort(Protocol):
     """Async chat operations required by the dialogue core."""
@@ -256,13 +320,70 @@ class ChatPort(Protocol):
     def typing(self, chat: ChatRef) -> AbstractAsyncContextManager[None]: ...
 
 
+
+@runtime_checkable
+class FilePort(Protocol):
+    """Optional file operations advertised by ``download``/``upload`` caps."""
+
+    async def download(
+        self, chat: ChatRef, message: MessageRef
+    ) -> DownloadedMedia: ...
+
+    async def upload(
+        self,
+        chat: ChatRef,
+        data: bytes,
+        *,
+        filename: str,
+        mime_type: str | None = None,
+        caption: str | None = None,
+    ) -> ChatMessage: ...
+
+
+@runtime_checkable
+class ContactPort(Protocol):
+    """Optional provider address-book operations advertised by contact caps."""
+
+    async def get_contact(self, contact: ContactRef) -> Contact | None: ...
+
+    async def add_contact(self, contact: Contact) -> Contact: ...
+
+    async def edit_contact(
+        self,
+        contact: ContactRef,
+        *,
+        display_name: str | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+        username: str | None = None,
+        phone: str | None = None,
+        email: str | None = None,
+    ) -> Contact: ...
+
+    async def remove_contact(self, contact: ContactRef) -> bool: ...
+
+
+@runtime_checkable
+class GroupContactPort(Protocol):
+    """Optional operations for managing contact membership in provider groups."""
+
+    async def add_contact_to_group(
+        self, contact: ContactRef, group: ChatRef
+    ) -> bool: ...
+
+    async def remove_contact_from_group(
+        self, contact: ContactRef, group: ChatRef
+    ) -> bool: ...
+
+
 @runtime_checkable
 class Channel(ChatPort, Protocol):
     """A ChatPort bound to one platform with declared capabilities.
 
     ``platform`` is the lowercase channel name ("telegram", "email", ...);
     ``capabilities`` lists supported operations out of
-    ``read, send, edit, delete, media, typing, react, forward, ack``.
+    :class:`AdapterCapabilities`. Legacy ``media`` remains distinct from the
+    explicit ``download`` and ``upload`` operations.
     Operations outside ``capabilities`` raise :class:`AdapterNotSupported`.
     """
 
@@ -283,6 +404,8 @@ __all__ = [
     "ChatId",
     "ChatRef",
     "MessageRef",
+    "ContactRef",
+    "AdapterCapabilities",
     "stable_ref_id",
     "ChatOperationError",
     "ChatPermissionError",
@@ -292,7 +415,11 @@ __all__ = [
     "ChatSummary",
     "ChatMessage",
     "DownloadedMedia",
+    "Contact",
     "ChatPort",
+    "FilePort",
+    "ContactPort",
+    "GroupContactPort",
     "Channel",
     "mapping_value",
 ]

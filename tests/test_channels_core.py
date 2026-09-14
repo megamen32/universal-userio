@@ -3,12 +3,18 @@
 import pytest
 
 from universal_userio.channels import (
+    AdapterCapabilities,
     AdapterNotSupported,
     ChatMessage,
     ChatPort,
     ChatRateLimitError,
     ChatSummary,
+    Contact,
+    ContactPort,
     DownloadedMedia,
+    FilePort,
+    GroupContactPort,
+    Omnichannel,
     mapping_value,
 )
 
@@ -68,3 +74,9 @@ def test_chat_port_runtime_check_on_full_implementation() -> None:
 def test_mapping_value_first_present_key() -> None:
     assert mapping_value({"b": 2, "a": 1}, "a", "b") == 1
     assert mapping_value({"b": 2}, "a", default=5) == 5
+
+
+def test_library_root_reexports_optional_omnichannel_contracts() -> None:
+    assert AdapterCapabilities.UPLOAD == "upload"
+    assert Contact(display_name="Ada").display_name == "Ada"
+    assert FilePort and ContactPort and GroupContactPort and Omnichannel
