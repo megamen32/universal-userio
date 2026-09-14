@@ -3,7 +3,7 @@
 Started at 2026-09-14T03:21:06+03:00 (system clock; uptime 3 days, 2 hours, 24 minutes).
 Estimate: 90-180 active minutes. Active time is not continuously measured.
 
-Status: implementation complete; deployment canary pending
+Status: complete
 
 - Wanted result: the stable omnichannel adapter SDK supports download/upload, contact CRUD, and adding/removing contacts from groups with truthful per-adapter capabilities.
 - Shortest real canary: invoke every operation through a deployed `Omnichannel` binding, observe provider-neutral DTOs for supported operations, and an early `AdapterNotSupported` for an unsupported binding.
@@ -19,7 +19,7 @@ Status: implementation complete; deployment canary pending
 - [x] Telegram implements the supported operations without leaking Telethon objects.
 - [x] Unsupported adapters fail with `AdapterNotSupported` and do not advertise false capabilities.
 - [x] Focused and full tests pass; Graphify is refreshed.
-- [ ] Main is pushed, deployed SDK is current, and deployed canary passes.
+- [x] Main is pushed, deployed SDK is current, and deployed canary passes.
 
 Evidence before deployment:
 
@@ -27,3 +27,11 @@ Evidence before deployment:
 - full UserIO suite: 159 passed in 68.44s;
 - AutoFindClient consumer compatibility: 3 passed;
 - Graphify update: 5,888 nodes / 19,991 edges.
+
+Deployment evidence:
+
+- implementation commit `974aba4` pushed to `origin/main`;
+- five task-owned SDK/channel files installed byte-for-byte under `/opt/universal-userio`;
+- production import smoke passed;
+- `universal-userio.service` active since 2026-09-14 03:47:40 MSK, PID 3441751, `NRestarts=0`;
+- deployed `Omnichannel` canary passed all eight requested operations and the unsupported-adapter capability gate without contacting real people or mutating a real address book.
