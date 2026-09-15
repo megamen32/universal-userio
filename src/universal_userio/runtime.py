@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import stat
 from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any
 
 from .adapters import ChatGPTWebOutbox, DirectProviderOutbox, HimalayaGmailOutbox
 from .channels.sms_gateway import AndroidSmsGatewayClient
@@ -16,6 +21,55 @@ from .draft_notifications import TelegramDraftApprovalNotifier
 from .http_api import handler
 from .service import UserIOService
 from .store import SQLiteUserIOStore
+
+
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UNVERIFIED_IDENTITY = MappingProxyType(
+    {
+        "schema_version": 1,
+        "commit": None,
+        "manifest_sha256": None,
+        "verified": False,
+    }
+)
+
+
+def load_runtime_identity(path: str | Path) -> Mapping[str, Any]:
+    """Load a strict, public release identity without consulting runtime Git state."""
+
+    release_path = Path(path)
+    try:
+        file_stat = release_path.lstat()
+        if not stat.S_ISREG(file_stat.st_mode) or stat.S_IMODE(file_stat.st_mode) != 0o644:
+            return _UNVERIFIED_IDENTITY
+        if file_stat.st_size > 4_096:
+            return _UNVERIFIED_IDENTITY
+        payload = json.loads(release_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return _UNVERIFIED_IDENTITY
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "commit",
+        "manifest_sha256",
+    }:
+        return _UNVERIFIED_IDENTITY
+    if payload["schema_version"] != 1 or isinstance(payload["schema_version"], bool):
+        return _UNVERIFIED_IDENTITY
+    commit = payload["commit"]
+    manifest_sha256 = payload["manifest_sha256"]
+    if not isinstance(commit, str) or not _COMMIT_RE.fullmatch(commit):
+        return _UNVERIFIED_IDENTITY
+    if not isinstance(manifest_sha256, str) or not _SHA256_RE.fullmatch(manifest_sha256):
+        return _UNVERIFIED_IDENTITY
+    return MappingProxyType(
+        {
+            "schema_version": 1,
+            "commit": commit,
+            "manifest_sha256": manifest_sha256,
+            "verified": True,
+        }
+    )
 
 
 def _required(environment: Mapping[str, str], name: str) -> str:
@@ -107,11 +161,15 @@ def main() -> None:
     environment = os.environ
     service = build_service(environment)
     token = _required(environment, "USERIO_API_TOKEN")
+    runtime_identity = load_runtime_identity(
+        environment.get("USERIO_RELEASE_FILE", "/opt/universal-userio/.userio-release.json")
+    )
     server = ThreadingHTTPServer(
         (environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))),
         handler(
             service, token=token, vkid_app_id=environment.get("USERIO_VKID_APP_ID", ""),
             trusted_proxy_token=environment.get("USERIO_TRUSTED_PROXY_TOKEN", ""),
+            runtime_identity=runtime_identity,
         ),
     )
     server.serve_forever()

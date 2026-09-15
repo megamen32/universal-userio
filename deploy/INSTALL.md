@@ -18,3 +18,36 @@ If the proxy uses the dashboard trust header, configure
 accepted.
 The same HTTPS proxy may publish `/mcp` for ChatGPT; do not expose the
 loopback listener directly. Give each connector its own user bearer token.
+
+## Exact release identity
+
+Production deployment owns `/opt/universal-userio/.userio-release.json`. It
+must be a root-owned, mode-`0644`, regular file with exactly this public schema:
+
+```json
+{
+  "schema_version": 1,
+  "commit": "0000000000000000000000000000000000000000",
+  "manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}
+```
+
+`commit` is the verified 40-character commit published to the owned remote;
+`manifest_sha256` is the digest produced by the deployment manifest. The
+runtime never infers either value from `/opt/universal-userio/.git`, because
+that checkout may contain classified local state and old Git metadata.
+
+After authentication, `GET /v1/runtime` returns only `schema_version`,
+`commit`, `manifest_sha256`, and `verified`. Development instances without a
+valid release file remain available but return `verified: false`. For a local
+manual probe, put the authorization header in a mode-`0600` curl config file
+outside the repository so the bearer never enters shell history or process
+arguments:
+
+```bash
+curl --config /run/user/$(id -u)/userio-curl.conf \
+  http://127.0.0.1:18093/v1/runtime
+```
+
+The supported deployment and secret-redacted verification commands are
+provided by `scripts/runtime_release.py`; prefer them for production rollout.

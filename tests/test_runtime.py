@@ -66,6 +66,10 @@ def test_runtime_identity_missing_or_wrong_mode_is_unverified(tmp_path) -> None:
     )
     release_file.chmod(0o666)
     assert load_runtime_identity(release_file)["verified"] is False
+    release_file.chmod(0o644)
+    symlink = tmp_path / "release-link.json"
+    symlink.symlink_to(release_file)
+    assert load_runtime_identity(symlink)["verified"] is False
 
 
 def test_runtime_builds_service_from_deployment_owned_configuration(tmp_path) -> None:

@@ -20,6 +20,7 @@ from typing import Type
 from urllib.parse import parse_qs, unquote, urlparse
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
 from .adapters import inbox_message_from_envelope
@@ -51,11 +52,18 @@ _PLACEHOLDER_RE = re.compile(
 
 def handler(
     service: UserIOService, *, token: str, vkid_app_id: str = "",
-    trusted_proxy_token: str = "",
+    trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
     oauth = OAuthProvider(service._store)
     subscriptions = ResourceSubscriptionHub()
+    supplied_identity = runtime_identity or {}
+    public_runtime_identity = {
+        "schema_version": supplied_identity.get("schema_version", 1),
+        "commit": supplied_identity.get("commit"),
+        "manifest_sha256": supplied_identity.get("manifest_sha256"),
+        "verified": supplied_identity.get("verified", False),
+    }
     service.add_inbound_listener(lambda user_id, _conversation_id, _message: subscriptions.publish(user_id, "userio://inbox/unread"))
 
     class UserIOHandler(BaseHTTPRequestHandler):
@@ -710,6 +718,9 @@ def handler(
                 return
             path = urlparse(self.path).path
             user_id = principal.user_id
+            if path == "/v1/runtime":
+                self._reply(200, public_runtime_identity)
+                return
             if path == "/v1/inbox":
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"}); return
