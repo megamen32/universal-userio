@@ -117,6 +117,25 @@ def test_unknown_and_unreviewed_safe_delta_are_unresolved(tmp_path: Path) -> Non
     assert {row["category"] for row in report["entries"]} == {"source", "unknown"}
 
 
+def test_excluded_generated_file_is_not_read(tmp_path: Path) -> None:
+    canonical = tmp_path / "canonical"
+    runtime = tmp_path / "runtime"
+    _repo(canonical, {"README.md": "ok\n"})
+    _repo(runtime, {"README.md": "ok\n"})
+    generated = runtime / "node_modules/pkg/private.bin"
+    generated.parent.mkdir(parents=True)
+    generated.write_bytes(b"must not be read")
+    generated.chmod(0)
+
+    try:
+        report = audit_runtime(canonical, runtime, policy={"schema_version": 1, "decisions": {}})
+    finally:
+        generated.chmod(0o600)
+
+    assert report["category_counts"] == {"generated_dependency": 1}
+    assert "sha256" not in report["entries"][0]
+
+
 def test_escape_symlink_is_rejected_without_following_it(tmp_path: Path) -> None:
     canonical = tmp_path / "canonical"
     runtime = tmp_path / "runtime"
@@ -136,4 +155,3 @@ def test_write_report_is_atomic_and_leaves_no_temporary_file(tmp_path: Path) -> 
 
     assert json.loads(output.read_text(encoding="utf-8"))["total_entries"] == 0
     assert list(tmp_path.glob(f".{output.name}.*.tmp")) == []
-
