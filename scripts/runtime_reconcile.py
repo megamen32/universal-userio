@@ -130,7 +130,7 @@ def _classify(path: str, status_code: str) -> str:
     if basename.endswith((".db", ".log", ".pid", ".sock", ".sqlite", ".sqlite3")):
         return "diagnostic_state"
     if lowered.startswith("src/universal_userio/static/assets/") or (
-        lowered.startswith("src/universal_userio/static/") and basename.endswith(".zip")
+        lowered.startswith("src/universal_userio/static/") and basename.endswith((".crx", ".zip"))
     ):
         return "generated_build"
     if parts[0] in {"config", "deploy"} or basename in _CONFIG_NAMES:
@@ -142,7 +142,7 @@ def _classify(path: str, status_code: str) -> str:
     return "unknown"
 
 
-def _metadata(root: Path, relative: str) -> dict[str, Any]:
+def _metadata(root: Path, relative: str, *, read_content: bool = False) -> dict[str, Any]:
     target = root / _safe_relative(relative)
     try:
         info = target.lstat()
@@ -159,7 +159,7 @@ def _metadata(root: Path, relative: str) -> dict[str, Any]:
             raise ReconciliationError(f"symlink escapes {root.name} root") from error
         return {"present": True, "mode": f"{stat.S_IMODE(info.st_mode):04o}", "sha256": None}
     digest = None
-    if stat.S_ISREG(info.st_mode):
+    if read_content and stat.S_ISREG(info.st_mode):
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
     return {
         "present": True,
@@ -210,7 +210,8 @@ def audit_runtime(
     for record in records:
         normalized = _safe_relative(record.path).as_posix()
         category = _classify(normalized, record.status)
-        runtime_meta = _metadata(runtime_root, normalized)
+        read_content = category in {"source", "config"}
+        runtime_meta = _metadata(runtime_root, normalized, read_content=read_content)
         if category == "secret_session":
             entries.append(
                 {
@@ -225,7 +226,7 @@ def audit_runtime(
             )
             continue
 
-        canonical_meta = _metadata(canonical_root, normalized)
+        canonical_meta = _metadata(canonical_root, normalized, read_content=read_content)
         if category in _EXCLUDED_CATEGORIES:
             disposition = "exclude_runtime_artifact"
             reason = f"{category} is not canonical source"
@@ -355,4 +356,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
