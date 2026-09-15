@@ -143,6 +143,32 @@ def test_preserve_canonical_policy_requires_the_canonical_path(tmp_path: Path) -
     assert "canonical path is absent" in report["entries"][0]["reason"]
 
 
+def test_deployment_identity_is_explicit_config_not_unknown(tmp_path: Path) -> None:
+    canonical = tmp_path / "canonical"
+    runtime = tmp_path / "runtime"
+    _repo(canonical, {"README.md": "ok\n"})
+    _repo(runtime, {"README.md": "ok\n"})
+    (runtime / ".userio-release.json").write_text("{}\n", encoding="utf-8")
+
+    report = audit_runtime(
+        canonical,
+        runtime,
+        policy={
+            "schema_version": 1,
+            "decisions": {
+                ".userio-release.json": {
+                    "disposition": "exclude_runtime_artifact",
+                    "reason": "deployment-owned identity is verified separately",
+                }
+            },
+        },
+    )
+
+    assert report["category_counts"] == {"config": 1}
+    assert report["unresolved_count"] == 0
+    assert report["entries"][0]["disposition"] == "exclude_runtime_artifact"
+
+
 def test_excluded_generated_file_is_not_read(tmp_path: Path) -> None:
     canonical = tmp_path / "canonical"
     runtime = tmp_path / "runtime"
