@@ -1,6 +1,71 @@
 from __future__ import annotations
 
-from universal_userio.runtime import build_service
+import json
+
+import pytest
+
+from universal_userio.runtime import build_service, load_runtime_identity
+
+
+def test_runtime_identity_loads_strict_verified_release_file(tmp_path) -> None:
+    release_file = tmp_path / ".userio-release.json"
+    release_file.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "commit": "a" * 40,
+                "manifest_sha256": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    release_file.chmod(0o644)
+
+    identity = load_runtime_identity(release_file)
+
+    assert dict(identity) == {
+        "schema_version": 1,
+        "commit": "a" * 40,
+        "manifest_sha256": "b" * 64,
+        "verified": True,
+    }
+    with pytest.raises(TypeError):
+        identity["verified"] = False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not-json",
+        json.dumps({"schema_version": 1, "commit": "a" * 40, "manifest_sha256": "b" * 64, "secret": "sentinel"}),
+        json.dumps({"schema_version": "1", "commit": "a" * 40, "manifest_sha256": "b" * 64}),
+        json.dumps({"schema_version": 1, "commit": "A" * 40, "manifest_sha256": "b" * 64}),
+        json.dumps({"schema_version": 1, "commit": "a" * 40, "manifest_sha256": "short"}),
+    ],
+)
+def test_runtime_identity_rejects_malformed_or_extra_data(tmp_path, payload: str) -> None:
+    release_file = tmp_path / ".userio-release.json"
+    release_file.write_text(payload, encoding="utf-8")
+    release_file.chmod(0o644)
+
+    assert dict(load_runtime_identity(release_file)) == {
+        "schema_version": 1,
+        "commit": None,
+        "manifest_sha256": None,
+        "verified": False,
+    }
+
+
+def test_runtime_identity_missing_or_wrong_mode_is_unverified(tmp_path) -> None:
+    missing = tmp_path / "missing.json"
+    assert load_runtime_identity(missing)["verified"] is False
+    release_file = tmp_path / ".userio-release.json"
+    release_file.write_text(
+        json.dumps({"schema_version": 1, "commit": "a" * 40, "manifest_sha256": "b" * 64}),
+        encoding="utf-8",
+    )
+    release_file.chmod(0o666)
+    assert load_runtime_identity(release_file)["verified"] is False
 
 
 def test_runtime_builds_service_from_deployment_owned_configuration(tmp_path) -> None:
