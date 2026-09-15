@@ -26,6 +26,52 @@ class Outbox:
         return "event_1"
 
 
+def test_v1_runtime_identity_is_bearer_protected_and_allowlisted(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    _, user_token = service._store.create_user("runtime-reader", "correct horse battery staple")
+    identity = {
+        "schema_version": 1,
+        "commit": "a" * 40,
+        "manifest_sha256": "b" * 64,
+        "verified": True,
+        "release_file": "/private/sentinel/path",
+        "secret": "TOP-SECRET-SENTINEL",
+    }
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), handler(service, token="test-token", runtime_identity=identity)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        try:
+            urlopen(base + "/v1/runtime")
+        except HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError("runtime identity leaked without authentication")
+
+        expected = {
+            "schema_version": 1,
+            "commit": "a" * 40,
+            "manifest_sha256": "b" * 64,
+            "verified": True,
+        }
+        for bearer in ("test-token", user_token):
+            request = Request(
+                base + "/v1/runtime", headers={"Authorization": f"Bearer {bearer}"}
+            )
+            with urlopen(request) as response:
+                raw = response.read()
+                assert response.status == 200
+            assert json.loads(raw) == expected
+            assert b"private" not in raw
+            assert b"TOP-SECRET-SENTINEL" not in raw
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path) -> None:
     outbox = Outbox()
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), outbox)
