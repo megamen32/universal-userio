@@ -34,6 +34,7 @@ _SOURCE_SUFFIXES = {".cjs", ".js", ".jsonl", ".md", ".mjs", ".py", ".ts", ".tsx"
 _CONFIG_NAMES = {
     ".env.example",
     ".gitignore",
+    ".userio-release.json",
     "mcp.json",
     "package-lock.json",
     "package.json",
