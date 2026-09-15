@@ -205,6 +205,7 @@ def audit_runtime(
         _git(runtime_root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
     )
     decisions = _load_policy(policy)
+    used_decisions: set[str] = set()
     entries: list[dict[str, Any]] = []
 
     for record in records:
@@ -233,6 +234,17 @@ def audit_runtime(
         elif category == "unknown":
             disposition = "unresolved"
             reason = "path does not match an approved reconciliation category"
+        elif normalized in decisions:
+            decision = decisions[normalized]
+            used_decisions.add(normalized)
+            disposition = decision["disposition"]
+            reason = decision["reason"]
+            if disposition == "preserve_canonical" and not canonical_meta["present"]:
+                disposition = "unresolved"
+                reason = "policy requires canonical content, but the canonical path is absent"
+            elif disposition == "preserve_runtime" and not runtime_meta["present"]:
+                disposition = "unresolved"
+                reason = "policy requires runtime content, but the runtime path is absent"
         elif (
             runtime_meta["present"]
             and canonical_meta["present"]
@@ -242,9 +254,8 @@ def audit_runtime(
             disposition = "already_canonical"
             reason = "runtime content matches canonical source"
         else:
-            decision = decisions.get(normalized)
-            disposition = decision["disposition"] if decision else "unresolved"
-            reason = decision["reason"] if decision else "safe source/config delta requires review"
+            disposition = "unresolved"
+            reason = "safe source/config delta requires review"
 
         entry: dict[str, Any] = {
             "status": record.status,
@@ -270,6 +281,12 @@ def audit_runtime(
             entry["canonical_sha256"] = canonical_meta["sha256"]
         entries.append(entry)
 
+    unused_decisions = sorted(set(decisions) - used_decisions)
+    if unused_decisions:
+        raise ReconciliationError(
+            "policy contains paths absent from the current safe status set: "
+            + ", ".join(unused_decisions)
+        )
     entries.sort(key=lambda row: (str(row.get("path", "")), str(row.get("path_id", ""))))
     category_counts = dict(sorted(Counter(row["category"] for row in entries).items()))
     disposition_counts = dict(sorted(Counter(row["disposition"] for row in entries).items()))
