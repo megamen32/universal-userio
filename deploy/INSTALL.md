@@ -51,3 +51,52 @@ curl --config /run/user/$(id -u)/userio-curl.conf \
 
 The supported deployment and secret-redacted verification commands are
 provided by `scripts/runtime_release.py`; prefer them for production rollout.
+
+## Rollback-first release procedure
+
+Run these commands only from a clean canonical `main` whose `HEAD` equals
+`origin/main`. Keep the manifest outside the repository so generating release
+evidence does not dirty the source checkout:
+
+```bash
+python3 scripts/runtime_release.py manifest \
+  --source . --remote-ref origin/main \
+  --output /var/tmp/universal-userio-release-manifest.json
+
+sudo -n python3 scripts/runtime_release.py prepare \
+  --manifest /var/tmp/universal-userio-release-manifest.json \
+  --runtime /opt/universal-userio \
+  --unit-root /etc/systemd/system \
+  --rollback-dir /var/backups/universal-userio
+```
+
+`prepare` prints a JSON receipt with `receipt_path`, `archive_sha256`, and an
+exact `restore_argv`. Save that output. The archive contains only the explicit
+deployment-owned source and unit paths plus prior release identity; it never
+contains `/etc/universal-userio.env`, `/var/lib/universal-userio`, provider
+state, or the complete dirty checkout.
+
+Use the emitted rollback receipt for installation, then activate and verify:
+
+```bash
+sudo -n python3 scripts/runtime_release.py install \
+  --source . \
+  --manifest /var/tmp/universal-userio-release-manifest.json \
+  --rollback-receipt /var/backups/universal-userio/RECEIPT.json
+
+sudo -n python3 scripts/runtime_release.py activate
+
+sudo -n python3 scripts/runtime_release.py verify \
+  --source . \
+  --manifest /var/tmp/universal-userio-release-manifest.json \
+  --check-systemd
+
+sudo -n python3 scripts/runtime_release.py canary \
+  --env-file /etc/universal-userio.env
+```
+
+The canary uses a unique Matrix conversation sender and the unmapped route
+`phase7-no-delivery`; it requires `accepted: true`, `draft: null`, and an exact
+read-back from the live inbox. It reads the bearer in-process and never prints
+it. If install, activation, verification, or canary fails, run the receipt's
+`restore_argv`, activate both services again, and record the release as partial.

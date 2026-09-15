@@ -107,7 +107,8 @@ def test_prepare_install_verify_and_restore_are_allowlisted(tmp_path: Path) -> N
     verification = verify_release(source, manifest, runtime, unit_root)
 
     assert Path(rollback["archive_path"]).is_file()
-    assert rollback["restore_argv"][1:3] == ["scripts/runtime_release.py", "restore"]
+    assert rollback["restore_argv"][1].endswith("/scripts/runtime_release.py")
+    assert rollback["restore_argv"][2] == "restore"
     assert install["commit"] == manifest["commit"]
     assert verification == {
         "commit": manifest["commit"],
@@ -225,6 +226,7 @@ def test_canary_reads_env_without_echo_and_never_calls_provider(tmp_path: Path) 
     assert receipt["draft"] is None
     assert receipt["read_back"] is True
     assert receipt["message_id"] == "phase7-canary-fixed"
+    assert receipt["source"] == "matrix"
+    assert receipt["canary_kind"] == "phase7-runtime"
     assert outbox.calls == []
     assert "canary-secret" not in encoded
-
