@@ -1016,6 +1016,10 @@ class SQLiteUserIOStore:
             if exists is None:
                 return False
             self._connection.execute(
+                "DELETE FROM workspace_events WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
+            )
+            self._connection.execute(
                 "DELETE FROM drafts WHERE user_id=? AND conversation_id=?", (user_id, conversation_id)
             )
             self._connection.execute(
