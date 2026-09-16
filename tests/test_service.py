@@ -60,6 +60,62 @@ def test_duplicate_ingress_is_suppressed_and_rejection_never_sends(tmp_path) -> 
     assert outbox.calls == []
 
 
+def test_workspace_event_feed_survives_seen_duplicate_and_vacuum(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    first = InboxMessage("gmail:self", "m-001", "self@example.test", "/work alpha first", 1.0)
+    second = InboxMessage("gmail:self", "m-002", "self@example.test", "/work alpha second", 2.0)
+    outgoing = InboxMessage("gmail:self", "m-003", "self@example.test", "reply", 3.0, direction="outgoing")
+
+    conversation_id, accepted = service.receive(first, route_id="workspace-test")
+    service.receive(second, route_id="workspace-test")
+    service.receive(outgoing, route_id="workspace-test")
+    assert accepted is True
+    assert service.receive(first, route_id="workspace-test")[1] is False
+    store.set_conversation_account(conversation_id, "gmail-self")
+    assert store.mark_seen(source="gmail:self", message_id="m-001") is True
+
+    first_page = store.workspace_events(after=0, limit=1)
+    assert first_page["head"] > 0
+    assert len(first_page["events"]) == 1
+    assert first_page["events"][0]["source"] == "gmail:self"
+    assert first_page["events"][0]["message_id"] == "m-001"
+    assert first_page["events"][0]["conversation_id"] == conversation_id
+    assert first_page["events"][0]["account_ref"] == "gmail-self"
+    assert first_page["events"][0]["route_id"] == "workspace-test"
+    assert first_page["events"][0]["direction"] == "incoming"
+    assert first_page["events"][0]["body"] == "/work alpha first"
+    assert first_page["cursor"] == first_page["events"][0]["seq"]
+
+    second_page = store.workspace_events(after=first_page["cursor"], limit=5)
+    assert [entry["message_id"] for entry in second_page["events"]] == ["m-002"]
+    assert second_page["cursor"] == second_page["head"]
+    store._connection.execute("VACUUM")
+    assert store.workspace_events(after=0, limit=5)["events"] == [
+        *first_page["events"], *second_page["events"]
+    ]
+
+
+def test_workspace_event_cursor_is_per_user_and_validated(tmp_path) -> None:
+    import pytest
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    second_user, _ = store.create_user("workspace-other", "correct horse battery staple")
+    store.bind_channel_route(user_id=second_user.user_id, source="matrix", route_id="other")
+    service.receive(InboxMessage("matrix", "owner-1", "owner", "owner body", 1.0), route_id="owner")
+    other_conv, _ = service.receive(
+        InboxMessage("matrix", "other-1", "other", "other body", 2.0),
+        route_id="other", user_id=second_user.user_id,
+    )
+    assert [entry["message_id"] for entry in store.workspace_events(after=0, user_id=second_user.user_id)["events"]] == ["other-1"]
+    assert store.workspace_events(after=0)["events"][0]["message_id"] == "owner-1"
+    assert store.workspace_events(after=0)["events"][0]["conversation_id"] != other_conv
+    for after, limit in [(-1, 1), (0, 0), (0, 101), ("0", 1), (0, True)]:
+        with pytest.raises(ValueError):
+            store.workspace_events(after=after, limit=limit)
+
+
 def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     store.register_account(
