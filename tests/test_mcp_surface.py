@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import pytest
 
 from universal_userio.contracts import InboxMessage
 from universal_userio.mcp_surface import UserIOMcpSurface
@@ -16,6 +17,92 @@ class Generator:
 class Outbox:
     def __init__(self): self.calls = []
     def send_reply(self, **kwargs): self.calls.append(kwargs); return "receipt"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("expected_text", "stale reply"),
+    ("expected_chat_id", "another conversation"),
+    ("expected_attachments", ["unexpected-file"]),
+])
+def test_approve_rejects_stale_snapshot_before_provider(tmp_path, field, value):
+    store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+    surface = UserIOMcpSurface(store, service)
+    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
+    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+            "expected_chat_id": conversation, "expected_attachments": []}
+    args[field] = value
+    result = surface.dispatch("userio.draft.approve_send", args)
+    assert result == {"ok": False, "error": "draft_snapshot_conflict"}
+    assert outbox.calls == []
+    assert store.draft(draft["id"]).status == "proposed"
+
+
+def test_matching_snapshot_claim_blocks_edit_and_duplicate_send(tmp_path):
+    store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+    surface = UserIOMcpSurface(store, service)
+    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
+    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+            "expected_chat_id": conversation, "expected_attachments": []}
+    other_store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    def sending(**kwargs):
+        with pytest.raises(ValueError):
+            other_store.update_draft(draft["id"], body="racing edit")
+        with pytest.raises(ValueError):
+            other_store.delete_draft(draft["id"])
+        with pytest.raises(ValueError):
+            other_store.delete_conversation(conversation)
+        assert other_store.set_conversation_account(conversation, "different-account") is False
+        again = surface.dispatch("userio.draft.approve_send", args)
+        assert again["ok"] is False
+        outbox.calls.append(kwargs)
+        return "receipt"
+    outbox.send_reply = sending
+    sent = surface.dispatch("userio.draft.approve_send", args)
+    assert sent["sent"] is True
+    assert sent["receipt"] == "receipt"
+    assert len(outbox.calls) == 1
+    assert surface.dispatch("userio.draft.approve_send", args)["sent"] is True
+    assert len(outbox.calls) == 1
+
+
+@pytest.mark.parametrize("fail_receipt", [False, True])
+def test_uncertain_delivery_keeps_claim_and_blocks_retry(tmp_path, fail_receipt):
+    store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+    surface = UserIOMcpSurface(store, service)
+    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
+    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+            "expected_chat_id": conversation, "expected_attachments": []}
+    assert store.set_conversation_account(conversation, "different-account") is False
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("acceptance outcome uncertain")
+    if fail_receipt:
+        store.approve = fail
+    else:
+        def accepted_then_timeout(**kwargs):
+            outbox.calls.append(kwargs)
+            fail()
+        outbox.send_reply = accepted_then_timeout
+    assert surface.dispatch("userio.draft.approve_send", args)["ok"] is False
+    assert store.draft(draft["id"]).status == "sending"
+    assert surface.dispatch("userio.draft.approve_send", args)["ok"] is False
+    assert len(outbox.calls) == 1
+
+
+def test_unconfigured_provider_releases_claim_before_io(tmp_path):
+    store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    conversation, _ = service.receive(InboxMessage("gmail", "1", "anna", "hello", 1.0), route_id="reply")
+    surface = UserIOMcpSurface(store, service)
+    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
+    assert surface.dispatch("userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True})["ok"] is False
+    assert store.draft(draft["id"]).status == "proposed"
+    assert outbox.calls == []
 
 
 def test_mcp_reads_edits_and_sends_only_after_exact_confirmation(tmp_path) -> None:

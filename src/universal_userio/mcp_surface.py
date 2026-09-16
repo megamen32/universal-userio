@@ -72,6 +72,10 @@ TOOL_SPECS = (
     }, ["draft_id"])),
     ToolSpec("userio.draft.approve_send", "Explicitly send one exact approved draft.", _schema({
         "draft_id": {"type": "string"}, "confirm": {"type": "boolean"},
+        "expected_text": {"type": "string"},
+        "expected_chat_id": {"type": "string", "description": "Exact stored draft conversation_id."},
+        "expected_attachments": {"type": "array", "items": {"type": "string"},
+                                 "description": "Must be empty for text-only drafts."},
     }, ["draft_id", "confirm"])),
     ToolSpec("userio.conversation.delete_local", "Delete only the local conversation copy.", _schema({
         "conversation_id": {"type": "string"}, "confirm": {"type": "boolean"},
@@ -313,8 +317,19 @@ class UserIOMcpSurface:
     def _approve(self, arguments: dict[str, Any], principal: UserPrincipal) -> dict[str, Any]:
         if arguments.get("confirm") is not True:
             return {"ok": False, "error": "exact_confirmation_required"}
+        keys = ("expected_text", "expected_chat_id", "expected_attachments")
+        snapshot = None
+        if any(key in arguments for key in keys):
+            if (not all(key in arguments for key in keys)
+                    or not isinstance(arguments["expected_text"], str)
+                    or not isinstance(arguments["expected_chat_id"], str)
+                    or not isinstance(arguments["expected_attachments"], list)
+                    or not all(isinstance(item, str) for item in arguments["expected_attachments"])):
+                raise ValueError("complete_draft_snapshot_required")
+            snapshot = {key: arguments[key] for key in keys}
         draft = self._service.approve(
-            self._required(arguments, "draft_id"), user_id=principal.user_id
+            self._required(arguments, "draft_id"), user_id=principal.user_id,
+            expected_snapshot=snapshot,
         )
         conversation = self._store.conversation(draft.conversation_id, user_id=principal.user_id) or {}
         return {

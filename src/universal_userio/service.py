@@ -8,6 +8,7 @@ import os
 import threading
 import uuid
 from collections.abc import Sequence
+from functools import partial
 
 from .contracts import DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
@@ -252,15 +253,27 @@ class UserIOService:
             self._store.add_draft(draft, user_id=user_id)
         return drafts
 
-    def approve(self, draft_id: str, *, user_id: str | None = None) -> ReplyDraft:
+    def approve(self, draft_id: str, *, user_id: str | None = None,
+                expected_snapshot: dict[str, object] | None = None) -> ReplyDraft:
         resolved_user_id = self._store._user(user_id)
         if not self._store.send_enabled(user_id=resolved_user_id):
             raise DeliveryUnavailableError("outbound delivery is disabled by user policy")
-        draft = self._store.draft(draft_id, user_id=resolved_user_id)
+        draft = self._store.claim_draft_send(
+            draft_id, user_id=resolved_user_id, expected_snapshot=expected_snapshot,
+        )
         if draft.status == "approved":
             return draft
-        if draft.status != "proposed":
-            raise ValueError("draft is not approvable")
+        try:
+            send = self._prepare_claimed_draft(draft, user_id=resolved_user_id)
+        except Exception:
+            self._store.release_draft_send(draft_id, user_id=resolved_user_id)
+            raise
+        # Once a provider may have accepted delivery, a timeout or receipt-store
+        # failure is uncertain. Keep the durable claim; never retry blindly.
+        receipt = send()
+        return self._store.approve(draft_id, receipt, user_id=resolved_user_id)
+
+    def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id)
         if conversation is None:
             raise KeyError("conversation not found")
@@ -284,7 +297,7 @@ class UserIOService:
             if account is None:
                 raise DeliveryUnavailableError("Gmail account is not configured")
             latest = list(conversation["messages"])[-1]
-            receipt = self.gmail_outbox.send_reply(
+            send = partial(self.gmail_outbox.send_reply,
                 account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),
                 message_id=str(latest["message_id"]), body=draft.body, draft_id=draft.id,
             )
@@ -295,7 +308,7 @@ class UserIOService:
                 principal = self._store.user(user_id)
                 if principal is None:
                     raise ValueError(f"unknown UserIO user: {user_id}")
-                receipt = self.chatgpt_outbox.send_reply(
+                send = partial(self.chatgpt_outbox.send_reply,
                     chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body,
                     account_ref=account_ref, user=principal.username,
                     agent_fallback=self._chatgpt_agent_fallback,
@@ -304,27 +317,27 @@ class UserIOService:
                 send_chatgpt_reply = getattr(self._outbox, "send_chatgpt_reply", None)
                 if not callable(send_chatgpt_reply):
                     raise ValueError("configured outbox does not support ChatGPT delivery")
-                receipt = send_chatgpt_reply(
+                send = partial(send_chatgpt_reply,
                     chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body
                 )
         elif conversation["source"] == "sms":
             if self.sms_gateway is None or user_id != self.sms_user_id:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")
-            receipt = self.sms_gateway.send(to=str(conversation["sender"]), body=draft.body)
+            send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
         elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
             messages = list(conversation["messages"])
             chat_id = str(messages[-1]["message_id"]).partition(":")[0] if messages else ""
-            receipt = self.telegram_outbox.send_reply(
+            send = partial(self.telegram_outbox.send_reply,
                 chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
                 account_ref=str(conversation.get("account_ref") or ""),
             )
         elif conversation["source"] == "whatsapp" and self.whatsapp_outbox is not None:
-            receipt = self.whatsapp_outbox.send(
+            send = partial(self.whatsapp_outbox.send,
                 chat_id=str(conversation["sender"]), text=draft.body
             )
         else:
-            receipt = self._outbox.send_reply(
+            send = partial(self._outbox.send_reply,
                 route_id=str(conversation["route_id"]), conversation_id=draft.conversation_id,
                 draft_id=draft.id, body=draft.body,
             )
-        return self._store.approve(draft_id, receipt, user_id=user_id)
+        return send
