@@ -139,6 +139,21 @@ def test_workspace_event_feed_backfills_existing_messages_once(tmp_path) -> None
     assert restarted.workspace_events(after=0)["events"] == first
 
 
+def test_workspace_event_feed_does_not_retain_deleted_local_conversation(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    old_id, _ = service.receive(
+        InboxMessage("matrix", "remove-1", "owner", "private text", 1.0), route_id="matrix"
+    )
+    old_seq = store.workspace_events(after=0)["events"][0]["seq"]
+    assert store.delete_conversation(old_id) is True
+    assert store.workspace_events(after=0) == {"events": [], "cursor": 0, "head": 0}
+    service.receive(InboxMessage("matrix", "keep-2", "owner", "new text", 2.0), route_id="matrix")
+    page = store.workspace_events(after=old_seq)
+    assert [item["message_id"] for item in page["events"]] == ["keep-2"]
+    assert page["cursor"] > old_seq
+
+
 def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     store.register_account(
