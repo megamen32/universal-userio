@@ -721,6 +721,24 @@ def handler(
             if path == "/v1/runtime":
                 self._reply(200, public_runtime_identity)
                 return
+            if path == "/v1/workspace/events":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                if any(key not in {"after", "limit"} or len(values) != 1 for key, values in query.items()):
+                    self._reply(400, {"error": "invalid workspace event query"})
+                    return
+                try:
+                    after = int(query.get("after", ["0"])[0])
+                    limit = int(query.get("limit", ["50"])[0])
+                    page = service._store.workspace_events(
+                        after=after, limit=limit, user_id=user_id,
+                    )
+                except ValueError:
+                    self._reply(400, {"error": "invalid workspace event cursor or limit"})
+                    return
+                self._reply(200, {"schema": "universal.workspace-events.v1", **page})
+                return
             if path == "/v1/inbox":
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"}); return
