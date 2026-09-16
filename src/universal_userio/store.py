@@ -41,6 +41,7 @@ class SQLiteUserIOStore:
                 self._connection.execute(
                     "ALTER TABLE messages ADD COLUMN direction TEXT NOT NULL DEFAULT 'incoming'"
                 )
+            self._backfill_workspace_events()
 
     @property
     def default_user_id(self) -> str:
@@ -209,6 +210,14 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
                 ON messages(user_id,conversation_id,received_at);
+            CREATE TABLE IF NOT EXISTS workspace_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,source TEXT NOT NULL,
+                message_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                UNIQUE(user_id,source,message_id)
+            );
+            CREATE INDEX IF NOT EXISTS workspace_events_user_seq_idx
+                ON workspace_events(user_id,seq);
             CREATE TABLE IF NOT EXISTS contact_names (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
                 name TEXT NOT NULL,updated_at REAL NOT NULL,
@@ -286,6 +295,23 @@ class SQLiteUserIOStore:
             self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
         except sqlite3.OperationalError:  # column already exists
             pass
+
+    def _backfill_workspace_events(self) -> None:
+        marker = "workspace_events_backfilled_v1"
+        if self._connection.execute(
+            "SELECT 1 FROM settings WHERE key=?", (marker,)
+        ).fetchone():
+            return
+        self._connection.execute(
+            """
+            INSERT OR IGNORE INTO workspace_events(user_id,source,message_id,conversation_id)
+            SELECT user_id,source,message_id,conversation_id FROM messages
+            WHERE direction='incoming' ORDER BY received_at,rowid
+            """
+        )
+        self._connection.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (marker, "1")
+        )
 
     @staticmethod
     def _digest(password: str, salt: bytes | None = None, iterations: int = _ITERATIONS) -> tuple[bytes, bytes]:
@@ -790,6 +816,14 @@ class SQLiteUserIOStore:
                     message.sender, message.body, message.direction, message.received_at,
                 ),
             ).rowcount == 1
+            if inserted and message.direction == "incoming":
+                self._connection.execute(
+                    """
+                    INSERT INTO workspace_events(user_id,source,message_id,conversation_id)
+                    VALUES (?,?,?,?)
+                    """,
+                    (user_id, message.source, message.message_id, conversation_id),
+                )
             if getattr(message, "sender_name", ""):
                 self._connection.execute(
                     """
@@ -1265,6 +1299,42 @@ class SQLiteUserIOStore:
                 (self._user(user_id), limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def workspace_events(
+        self, *, after: int = 0, limit: int = 50, user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Read one user's append-only inbound sequence without changing seen state."""
+        if type(after) is not int or after < 0 or after >= 2**63:
+            raise ValueError("workspace cursor must be a non-negative integer")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("workspace limit must be between 1 and 100")
+        scoped_user = self._user(user_id)
+        with self._lock:
+            head = self._connection.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM workspace_events WHERE user_id=?",
+                (scoped_user,),
+            ).fetchone()[0]
+            rows = self._connection.execute(
+                """
+                SELECT e.seq,e.source,e.message_id,e.conversation_id,
+                       m.sender,m.body,m.received_at,m.direction,
+                       c.route_id,c.account_ref
+                FROM workspace_events AS e
+                JOIN messages AS m ON m.user_id=e.user_id
+                    AND m.source=e.source AND m.message_id=e.message_id
+                JOIN conversations AS c ON c.user_id=e.user_id
+                    AND c.id=e.conversation_id
+                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
+                ORDER BY e.seq LIMIT ?
+                """,
+                (scoped_user, after, limit),
+            ).fetchall()
+        events = [dict(row) for row in rows]
+        return {
+            "events": events,
+            "cursor": events[-1]["seq"] if events else after,
+            "head": head,
+        }
 
     @staticmethod
     def _source_filter(source: str | None) -> tuple[str, list[object]]:
