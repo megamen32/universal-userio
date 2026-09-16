@@ -120,6 +120,7 @@ def test_workspace_events_http_is_authenticated_user_scoped_and_read_only(tmp_pa
             "/v1/workspace/events?after=-1",
             "/v1/workspace/events?after=not-a-cursor",
             "/v1/workspace/events?limit=101",
+            "/v1/workspace/events?after=0&after=1",
             f"/v1/workspace/events?user_id={other.user_id}",
         ):
             assert get(suffix, "owner-token")[0] == 400

@@ -116,6 +116,29 @@ def test_workspace_event_cursor_is_per_user_and_validated(tmp_path) -> None:
             store.workspace_events(after=after, limit=limit)
 
 
+def test_workspace_event_feed_backfills_existing_messages_once(tmp_path) -> None:
+    import sqlite3
+
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    service.receive(InboxMessage("matrix", "historical-1", "owner", "first", 1.0), route_id="matrix")
+    service.receive(InboxMessage("matrix", "historical-2", "owner", "second", 2.0), route_id="matrix")
+    store.close()
+
+    # An older database had messages but not the dedicated sequence journal.
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE workspace_events")
+        connection.execute("DELETE FROM settings WHERE key='workspace_events_backfilled_v1'")
+
+    upgraded = SQLiteUserIOStore(database)
+    first = upgraded.workspace_events(after=0)["events"]
+    assert [event["message_id"] for event in first] == ["historical-1", "historical-2"]
+    upgraded.close()
+    restarted = SQLiteUserIOStore(database)
+    assert restarted.workspace_events(after=0)["events"] == first
+
+
 def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     store.register_account(

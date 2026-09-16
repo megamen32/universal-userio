@@ -49,6 +49,17 @@ curl --config /run/user/$(id -u)/userio-curl.conf \
   http://127.0.0.1:18093/v1/runtime
 ```
 
+`GET /v1/workspace/events?after=0&limit=50` is the authenticated,
+read-capability-gated cursor feed for an opt-in workspace worker. It returns
+`schema`, `events`, `cursor`, and `head` for the current principal only. Each
+accepted incoming message has one durable integer sequence, source/message/
+conversation identity, current account/route binding, sender, body and receive
+time; duplicates and outgoing messages do not add events. `head` lets a newly
+enabled worker start after historical messages without marking them seen.
+When a worker processes an event it must still enforce an explicit provider,
+account, route and `/work` trigger allowlist. This endpoint never sends or
+approves a reply; disabling the user's read capability returns 403.
+
 The supported deployment and secret-redacted verification commands are
 provided by `scripts/runtime_release.py`; prefer them for production rollout.
 
