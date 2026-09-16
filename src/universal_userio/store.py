@@ -988,9 +988,12 @@ class SQLiteUserIOStore:
                 raise KeyError("draft not found")
             if row["status"] != "proposed":
                 raise ValueError("only proposed drafts can be edited")
-            self._connection.execute(
-                "UPDATE drafts SET body=? WHERE user_id=? AND id=?", (text, user_id, draft_id)
-            )
+            changed = self._connection.execute(
+                "UPDATE drafts SET body=? WHERE user_id=? AND id=? AND status='proposed'",
+                (text, user_id, draft_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("only proposed drafts can be edited")
         return ReplyDraft(str(row["id"]), str(row["conversation_id"]), text, "proposed")
 
     def delete_draft(self, draft_id: str, *, user_id: str | None = None) -> bool:
@@ -1001,15 +1004,25 @@ class SQLiteUserIOStore:
             ).fetchone()
             if row is None:
                 return False
-            if row["status"] == "approved":
+            if row["status"] in ("approved", "sending"):
                 raise ValueError("approved drafts are immutable receipts")
-            return self._connection.execute(
-                "DELETE FROM drafts WHERE user_id=? AND id=?", (user_id, draft_id)
-            ).rowcount == 1
+            changed = self._connection.execute(
+                "DELETE FROM drafts WHERE user_id=? AND id=? AND status NOT IN ('approved','sending')",
+                (user_id, draft_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("draft changed during deletion")
+            return True
 
     def delete_conversation(self, conversation_id: str, *, user_id: str | None = None) -> bool:
         user_id = self._user(user_id)
         with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            if self._connection.execute(
+                "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND status='sending'",
+                (user_id, conversation_id),
+            ).fetchone():
+                raise ValueError("conversation has a delivery in progress")
             exists = self._connection.execute(
                 "SELECT 1 FROM conversations WHERE user_id=? AND id=?", (user_id, conversation_id)
             ).fetchone()
@@ -1033,12 +1046,41 @@ class SQLiteUserIOStore:
     def draft(self, draft_id: str, *, user_id: str | None = None) -> ReplyDraft:
         with self._lock:
             row = self._connection.execute(
-                "SELECT id,conversation_id,body,status FROM drafts WHERE user_id=? AND id=?",
+                "SELECT id,conversation_id,body,status,outbox_receipt FROM drafts WHERE user_id=? AND id=?",
                 (self._user(user_id), draft_id),
             ).fetchone()
         if row is None:
             raise KeyError("draft not found")
-        return ReplyDraft(str(row["id"]), str(row["conversation_id"]), str(row["body"]), str(row["status"]))
+        return ReplyDraft(str(row["id"]), str(row["conversation_id"]), str(row["body"]), str(row["status"]), str(row["outbox_receipt"] or ""))
+
+    def claim_draft_send(self, draft_id: str, *, user_id: str,
+                         expected_snapshot: dict[str, object] | None = None) -> ReplyDraft:
+        # Commit the sending claim before provider IO. Other connections and
+        # processes see an immutable draft, not merely an in-process mutex.
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            draft = self.draft(draft_id, user_id=user_id)
+            if expected_snapshot is not None and expected_snapshot != {
+                "expected_text": draft.body, "expected_chat_id": draft.conversation_id,
+                "expected_attachments": [],
+            }:
+                raise ValueError("draft_snapshot_conflict")
+            if draft.status == "approved":
+                return draft
+            if draft.status != "proposed":
+                raise ValueError("draft is not approvable")
+            self._connection.execute(
+                "UPDATE drafts SET status='sending' WHERE user_id=? AND id=?",
+                (user_id, draft_id),
+            )
+            return draft
+
+    def release_draft_send(self, draft_id: str, *, user_id: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE drafts SET status='proposed' WHERE user_id=? AND id=? AND status='sending'",
+                (user_id, draft_id),
+            )
 
     def approve(self, draft_id: str, receipt: str, *, user_id: str | None = None) -> ReplyDraft:
         user_id = self._user(user_id)
@@ -1053,7 +1095,7 @@ class SQLiteUserIOStore:
                     row["id"], row["conversation_id"], row["body"], row["status"],
                     str(row["outbox_receipt"] or ""),
                 )
-            if row["status"] != "proposed":
+            if row["status"] not in ("proposed", "sending"):
                 raise ValueError("draft is not approvable")
             self._connection.execute(
                 """
@@ -1073,9 +1115,12 @@ class SQLiteUserIOStore:
             if row is None:
                 raise KeyError("draft not found")
             if row["status"] == "proposed":
-                self._connection.execute(
-                    "UPDATE drafts SET status='rejected' WHERE user_id=? AND id=?", (user_id, draft_id)
-                )
+                changed = self._connection.execute(
+                    "UPDATE drafts SET status='rejected' WHERE user_id=? AND id=? AND status='proposed'",
+                    (user_id, draft_id),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("draft changed during rejection")
                 return ReplyDraft(row["id"], row["conversation_id"], row["body"], "rejected")
         return ReplyDraft(row["id"], row["conversation_id"], row["body"], row["status"])
 
@@ -1180,12 +1225,16 @@ class SQLiteUserIOStore:
     def set_conversation_account(
         self, conversation_id: str, account_ref: str, *, user_id: str | None = None
     ) -> bool:
-        """Pin (or clear) which connected account owns and replies in this chat."""
+        """Pin the reply account; a pending approval pins its existing account."""
         user_id = self._user(user_id)
         with self._lock, self._connection:
             return self._connection.execute(
-                "UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?",
-                (account_ref.strip(), user_id, conversation_id),
+                """UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?
+                   AND (COALESCE(account_ref,'')=? OR NOT EXISTS (
+                       SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=?
+                       AND status IN ('proposed','sending')))
+                """,
+                (account_ref.strip(), user_id, conversation_id, account_ref.strip(), user_id, conversation_id),
             ).rowcount == 1
 
     # --- per-user AI (BYOK) ----------------------------------------------------

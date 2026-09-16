@@ -245,7 +245,10 @@ def test_default_gmail_approval_refuses_non_reply_account_or_mismatched_binding(
         account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
         can_read=True, can_reply=True, credential_ref="himalaya:gmail",
     )
-    store.set_conversation_account(conversation_id, "careviolan")
+    assert not store.set_conversation_account(conversation_id, "careviolan")
+    store.delete_draft(draft.id)
+    assert store.set_conversation_account(conversation_id, "careviolan")
+    draft = service.create_manual_draft(conversation_id, body="reply")
     with pytest.raises(DeliveryUnavailableError, match="does not match source"):
         service.approve(draft.id)
     assert gmail_outbox.calls == []
