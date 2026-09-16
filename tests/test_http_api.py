@@ -72,6 +72,65 @@ def test_v1_runtime_identity_is_bearer_protected_and_allowlisted(tmp_path) -> No
         server.server_close()
 
 
+def test_workspace_events_http_is_authenticated_user_scoped_and_read_only(tmp_path) -> None:
+    outbox = Outbox()
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), outbox)
+    other, other_token = store.create_user("workspace-user", "correct horse battery staple")
+    store.bind_channel_route(user_id=other.user_id, source="matrix", route_id="workspace-other")
+    owner_conversation, _ = service.receive(
+        InboxMessage("gmail:self", "owner-message", "self@example.test", "/work alpha item", 1.0),
+        route_id="workspace-owner",
+    )
+    store.set_conversation_account(owner_conversation, "gmail-self")
+    service.receive(
+        InboxMessage("matrix", "other-message", "other", "private other", 2.0),
+        route_id="workspace-other", user_id=other.user_id,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="owner-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    def get(suffix: str, bearer: str = "") -> tuple[int, dict]:
+        headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+        request = Request(base + suffix, headers=headers)
+        try:
+            with urlopen(request) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    try:
+        assert get("/v1/workspace/events")[0] == 401
+        code, owner_page = get("/v1/workspace/events?after=0&limit=1", "owner-token")
+        assert code == 200
+        assert owner_page["schema"] == "universal.workspace-events.v1"
+        assert [event["message_id"] for event in owner_page["events"]] == ["owner-message"]
+        assert owner_page["events"][0]["account_ref"] == "gmail-self"
+        assert owner_page["events"][0]["route_id"] == "workspace-owner"
+        assert owner_page["cursor"] == owner_page["head"]
+        assert store.new_messages()[0]["message_id"] == "owner-message"
+        assert get(f"/v1/workspace/events?after={owner_page['cursor']}", "owner-token")[1]["events"] == []
+
+        code, other_page = get("/v1/workspace/events?after=0", other_token)
+        assert code == 200
+        assert [event["message_id"] for event in other_page["events"]] == ["other-message"]
+        for suffix in (
+            "/v1/workspace/events?after=-1",
+            "/v1/workspace/events?after=not-a-cursor",
+            "/v1/workspace/events?limit=101",
+            f"/v1/workspace/events?user_id={other.user_id}",
+        ):
+            assert get(suffix, "owner-token")[0] == 400
+        store.set_user_capability("read", False, user_id=other.user_id)
+        assert get("/v1/workspace/events", other_token)[0] == 403
+        assert outbox.calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path) -> None:
     outbox = Outbox()
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), outbox)
