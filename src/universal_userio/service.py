@@ -269,11 +269,18 @@ class UserIOService:
             user_id=user_id, source=str(conversation["source"]), route_id=str(conversation["route_id"])
         ):
             raise ValueError("route is not assigned to user")
-        if str(conversation["source"]).startswith("gmail:"):
+        source = str(conversation["source"])
+        if source == "gmail" or source.startswith("gmail:"):
             if self.gmail_outbox is None:
                 raise DeliveryUnavailableError("Gmail delivery is not configured")
-            account_alias = str(conversation["source"]).partition(":")[2]
-            account = next((item for item in self._store.accounts(user_id=user_id) if item["id"] == f"gmail-{account_alias}"), None)
+            account_alias = "gmail" if source == "gmail" else source.partition(":")[2]
+            account_ref = str(conversation.get("account_ref") or "")
+            if account_ref and account_ref != account_alias:
+                raise DeliveryUnavailableError("Gmail conversation account does not match source")
+            account = next((item for item in self._store.accounts(user_id=user_id)
+                            if item["provider"] == "gmail"
+                            and item["credential_ref"] == f"himalaya:{account_alias}"
+                            and item["enabled"] and "reply" in item["capabilities"]), None)
             if account is None:
                 raise DeliveryUnavailableError("Gmail account is not configured")
             latest = list(conversation["messages"])[-1]

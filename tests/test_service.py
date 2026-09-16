@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from universal_userio.contracts import InboxMessage
-from universal_userio.adapters import inbox_message_from_envelope
+from universal_userio.adapters import DirectProviderOutbox, inbox_message_from_envelope
 from universal_userio.service import DeliveryUnavailableError, UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
@@ -178,6 +180,76 @@ def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     assert approved.status == "approved"
     assert gmail_outbox.calls == [{"account": "careviolan", "sender": "careviolan@gmail.com", "recipient": "sender", "message_id": "m-1", "body": "reply", "draft_id": draft.id}]
     assert outbox.calls == []
+
+
+def test_default_gmail_source_uses_registered_himalaya_account_for_approved_reply(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
+        can_read=True, can_reply=True, credential_ref="himalaya:gmail",
+    )
+
+    class GmailOutbox:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def send_reply(self, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "himalaya:gmail:draft"
+
+    gmail_outbox = GmailOutbox()
+    service = UserIOService(store, Generator(), DirectProviderOutbox(), gmail_outbox=gmail_outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail", "m-1", "careviolan@gmail.com", "/work read-only", 1.0),
+        route_id="gmail-read-only",
+    )
+    store.set_conversation_account(conversation_id, "gmail")
+    draft = service.create_manual_draft(conversation_id, body="Verified result")
+
+    approved = service.approve(draft.id)
+    assert approved.status == "approved"
+    assert gmail_outbox.calls == [{
+        "account": "gmail", "sender": "megamen932@gmail.com", "recipient": "careviolan@gmail.com",
+        "message_id": "m-1", "body": "Verified result", "draft_id": draft.id,
+    }]
+    assert store.conversation(conversation_id)["drafts"][0]["outbox_receipt"] == "himalaya:gmail:draft"
+
+
+def test_default_gmail_approval_refuses_non_reply_account_or_mismatched_binding(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
+        can_read=True, can_reply=False, credential_ref="himalaya:gmail",
+    )
+
+    class GmailOutbox:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def send_reply(self, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "unexpected-send"
+
+    gmail_outbox = GmailOutbox()
+    service = UserIOService(store, Generator(), DirectProviderOutbox(), gmail_outbox=gmail_outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail", "m-2", "careviolan@gmail.com", "hello", 1.0),
+        route_id="gmail-read-only",
+    )
+    store.set_conversation_account(conversation_id, "gmail")
+    draft = service.create_manual_draft(conversation_id, body="reply")
+    with pytest.raises(DeliveryUnavailableError, match="Gmail account is not configured"):
+        service.approve(draft.id)
+
+    store.register_account(
+        account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
+        can_read=True, can_reply=True, credential_ref="himalaya:gmail",
+    )
+    store.set_conversation_account(conversation_id, "careviolan")
+    with pytest.raises(DeliveryUnavailableError, match="does not match source"):
+        service.approve(draft.id)
+    assert gmail_outbox.calls == []
+    assert store.draft(draft.id).status == "proposed"
 
 
 
