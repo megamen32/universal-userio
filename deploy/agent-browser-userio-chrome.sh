@@ -5,7 +5,8 @@ chrome="$HOME/.agent-browser/browsers/chrome-153.0.8010.36/chrome"
 profile="$HOME/.config/agent-browser-userio-chrome"
 extension="$HOME/agents-projects/universal-userio/extensions/vk-inbox"
 set -- --disable-extensions
-if [ "${USERIO_CHROME_EXTENSION_ENABLED:-1}" = 1 ]; then
+# Activation can execute queued commands; enable only with explicit owner approval.
+if [ "${USERIO_CHROME_EXTENSION_ENABLED:-0}" = 1 ]; then
     set -- "--disable-extensions-except=$extension" "--load-extension=$extension"
 fi
 exec "$chrome" \
