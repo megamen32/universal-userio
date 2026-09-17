@@ -52,6 +52,7 @@ TOOL_SPECS = (
     }, ["username", "password"])),
     ToolSpec("userio.inbox.list_new", "Compatibility alias: list this user's unread messages.", _schema({
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.conversation.get", "Compatibility alias: read a conversation.", _schema({
@@ -258,12 +259,14 @@ class UserIOMcpSurface:
                 }
             if name == "userio.inbox.list_new":
                 ignored_chats = self._ignored_chats(arguments)
+                channel = self._optional(arguments, "channel")
                 messages = self._store.new_messages(
                     limit=int(arguments.get("limit", 50)), user_id=user_id
                 )
                 return {"ok": True, "messages": [
                     message for message in messages
                     if str(message["conversation_id"]) not in ignored_chats
+                    and (channel is None or str(message["source"]) == channel)
                 ]}
             if name == "userio.conversation.get":
                 ignored_chats = self._ignored_chats(arguments)
