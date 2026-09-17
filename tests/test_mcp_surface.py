@@ -125,6 +125,19 @@ def test_mcp_reads_edits_and_sends_only_after_exact_confirmation(tmp_path) -> No
     assert outbox.calls[0]["body"] == "edited reply"
 
 
+def test_mcp_lists_new_messages_for_one_channel_without_marking_seen(tmp_path) -> None:
+    store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
+    service = UserIOService(store, Generator(), outbox)
+    service.receive(InboxMessage("telegram", "tg-1", "anna", "telegram unread", 1.0), route_id="telegram")
+    service.receive(InboxMessage("matrix", "mx-1", "bob", "matrix unread", 2.0), route_id="matrix")
+    surface = UserIOMcpSurface(store, service)
+
+    result = surface.dispatch("userio.inbox.list_new", {"channel": "telegram", "limit": 10})
+
+    assert [message["source"] for message in result["messages"]] == ["telegram"]
+    assert store.new_messages(limit=10)[0]["source"] == "matrix"
+
+
 def test_mcp_transport_advertises_tools_and_local_delete_is_explicit(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
