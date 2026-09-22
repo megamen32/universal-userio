@@ -207,6 +207,7 @@ export function App() {
   const [hiddenPlatforms, setHiddenPlatforms] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem("userio-hidden-platforms") || "[]") } catch { return [] } })
   const [toast, setToast] = useState("")
   const [newChatOpen, setNewChatOpen] = useState(false)
+  const [newChatSource, setNewChatSource] = useState("sms")
   const [newChatPhone, setNewChatPhone] = useState("")
   const [editDraftId, setEditDraftId] = useState("")
   const [editDraftBody, setEditDraftBody] = useState("")
@@ -341,6 +342,14 @@ export function App() {
 
   const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
   const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
+  const openNewChat = () => {
+    const preferredSource = account
+      ? sourceForAccount(account)
+      : activeChannel || (accounts.some((item) => ["sms", "phone"].includes(providerForSource(item.provider))) ? "sms" : "sms")
+    setNewChatSource(preferredSource)
+    setNewChatPhone("")
+    setNewChatOpen(true)
+  }
 
   const openAttachment = async (message: Message) => {
     if (!conversation) return
@@ -391,18 +400,25 @@ export function App() {
     }
   }
   const createChat = async () => {
-    const phone = newChatPhone.trim()
-    if (!/^\+\d{8,15}$/.test(phone)) {
+    const target = newChatPhone.trim()
+    const normalizedTarget = newChatSource === "sms" || newChatSource === "phone"
+      ? target.replace(/[()\s-]/g, "").replace(/^8(?=\d{10}$)/, "+7")
+      : target
+    if ((newChatSource === "sms" || newChatSource === "phone") && !/^\+\d{8,15}$/.test(normalizedTarget)) {
       notify("Номер в формате +79XXXXXXXXX")
       return
     }
+    if (!normalizedTarget) {
+      notify("Укажите получателя")
+      return
+    }
     try {
-      const data = await api<{ conversation: { id: string } }>("/v1/conversations", { method: "POST", body: JSON.stringify({ source: "sms", sender: phone }) })
+      const data = await api<{ conversation: { id: string } }>("/v1/conversations", { method: "POST", body: JSON.stringify({ source: newChatSource, sender: normalizedTarget }) })
       setNewChatOpen(false)
       setNewChatPhone("")
       await refreshChats()
       openChat(data.conversation.id)
-      notify("Чат создан — напишите черновик и отправьте")
+      notify("Диалог создан — напишите сообщение")
     } catch (error) {
       notify(`Не удалось создать чат: ${(error as Error).message}`)
     }
@@ -598,7 +614,7 @@ export function App() {
 
     {/* Chat list: default pane on mobile */}
     <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card transition-[width,flex-basis] duration-200 ease-out ${selectedChat ? "md:w-[340px] md:flex-none" : "md:flex-1"} ${mobilePane === "chats" || !selectedChat ? "flex" : "hidden"} md:flex`}>
-      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ДИАЛОГИ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setNewChatOpen(true)} title="Новый SMS-чат"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
+      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ДИАЛОГИ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={openNewChat} aria-label="Новое сообщение" title="Новое сообщение"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
       <ScrollArea className="min-h-0 flex-1 px-2 pb-3">
         <div key={viewKey}>
         {visibleChats.map((chat, chatIndex) => {
@@ -663,7 +679,7 @@ export function App() {
             <span className="flex gap-2"><Button variant="outline" size="sm" onClick={() => setByokOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void saveByok()}>Сохранить</Button></span>
           </div>
         </div></div>}
-      {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новый SMS-чат</h2><p className="mt-1 text-xs text-muted-foreground">Отправка пойдёт с подключённого телефона-агента после вашего approve.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder="+79XXXXXXXXX" autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
+      {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новое сообщение</h2><p className="mt-1 text-xs text-muted-foreground">Канал: {displayChannel(newChatSource)}. Отправка останется черновиком до вашего подтверждения.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder={newChatSource === "sms" || newChatSource === "phone" ? "+79XXXXXXXXX" : "Получатель или идентификатор"} autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
       {runsOpen && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">Прогон/Кошелёк · затраты ИИ</h2>{aiTotals && <span className="text-xs text-muted-foreground">{aiTotals.calls} прогонов · ${aiTotals.costUsd.toFixed(4)} / {aiTotals.costRub.toFixed(2)}₽{aiTotals.fxRate ? ` · курс ${aiTotals.fxRate}` : ""}</span>}<Button className="ml-auto" variant="outline" size="sm" onClick={() => setRunsOpen(false)}><X /> Закрыть</Button></header><div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6"><div className="mx-auto max-w-4xl"><div ref={runsHost} /><div ref={runDetailsHost} /></div></div></div>}
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Закрыть</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Письмо" /></div>}
       {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">Сообщение {attachmentPreview.message.message_id}{attachmentPreview.meta?.size ? ` · ${humanSize(attachmentPreview.meta.size)}` : ""}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : attachmentPreview.meta.content_type === "application/pdf" ? <iframe title="PDF preview" src={attachmentPreview.meta.download_url} className="h-72 w-full rounded-lg border bg-white" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.content_type || "Файл"} · {humanSize(attachmentPreview.meta.size ?? 0)} — превью недоступно, скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
