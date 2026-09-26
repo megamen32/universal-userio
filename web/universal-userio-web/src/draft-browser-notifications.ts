@@ -105,7 +105,7 @@ function installPermissionPrompt(onGranted: () => void) {
   button.type = "button"
   button.textContent = "🔔 Включить уведомления о черновиках"
   Object.assign(button.style, {
-    position: "fixed", right: "16px", top: "16px", zIndex: "2147483647",
+    position: "fixed", right: "16px", bottom: "16px", zIndex: "2147483647",
     border: "1px solid rgba(127,127,127,.35)", borderRadius: "999px", padding: "9px 14px",
     background: "rgba(24,37,51,.96)", color: "white", font: "500 13px system-ui, sans-serif",
     boxShadow: "0 8px 28px rgba(0,0,0,.25)", cursor: "pointer",
