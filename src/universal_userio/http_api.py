@@ -26,8 +26,8 @@ from . import agent_channel, chatgpt_sessions, collect, vault
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
+from .mcp_http import McpHttpEndpoint
 from .mcp_surface import UserIOMcpSurface
-from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
 from .search import search_conversations
 from .service import DeliveryUnavailableError, UserIOService
@@ -55,8 +55,8 @@ def handler(
     trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
+    mcp = McpHttpEndpoint(surface)
     oauth = OAuthProvider(service._store)
-    subscriptions = ResourceSubscriptionHub()
     supplied_identity = runtime_identity or {}
     public_runtime_identity = {
         "schema_version": supplied_identity.get("schema_version", 1),
@@ -64,7 +64,9 @@ def handler(
         "manifest_sha256": supplied_identity.get("manifest_sha256"),
         "verified": supplied_identity.get("verified", False),
     }
-    service.add_inbound_listener(lambda user_id, _conversation_id, _message: subscriptions.publish(user_id, "userio://inbox/unread"))
+    service.add_inbound_listener(
+        lambda user_id, _conversation_id, _message: mcp.publish_inbox_update(user_id)
+    )
 
     class UserIOHandler(BaseHTTPRequestHandler):
         def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
@@ -100,7 +102,7 @@ def handler(
             self.wfile.write(encoded)
 
         def _sse(self, payload: dict) -> None:
-            encoded = sse_message(payload)
+            encoded = mcp.encode_sse(payload)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -189,11 +191,8 @@ def handler(
             self._reply(error.status, {"error": error.error, "error_description": error.description}, headers)
 
         def _mcp_unauthorized(self) -> None:
-            metadata = self._base_url() + "/.well-known/oauth-protected-resource"
-            self._reply(
-                401, {"error": "unauthorized"},
-                {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'},
-            )
+            payload, headers = mcp.unauthorized(self._base_url())
+            self._reply(401, payload, headers)
 
         def _redirect(self, location: str, *, cookie: str | None = None) -> None:
             self.send_response(302)
@@ -306,7 +305,7 @@ def handler(
             try:
                 if path == "/mcp":
                     request = self._json()
-                    response = json_rpc_response(surface, request, principal=principal, subscription_hub=subscriptions)
+                    response = mcp.post(request, principal=principal)
                     if response is None:
                         self.send_response(202)
                         self.send_header("Content-Length", "0")
@@ -666,11 +665,9 @@ def handler(
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.end_headers()
-                ready = {"jsonrpc": "2.0", "method": "userio/ready", "params": {"endpoint": "/mcp", "username": principal.username}}
-                self.wfile.write(sse_message(ready)); self.wfile.flush()
-                event = subscriptions.wait(principal.user_id, timeout=30.0)
-                if event is not None:
-                    self.wfile.write(sse_message(event)); self.wfile.flush()
+                for payload in mcp.event_stream(principal):
+                    self.wfile.write(payload)
+                    self.wfile.flush()
                 return
             if requested_path == "/login":
                 if self._cookie_principal("userio_web_session") is not None:
