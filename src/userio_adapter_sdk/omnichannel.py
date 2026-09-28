@@ -140,10 +140,20 @@ class Omnichannel:
         mime_type: str | None = None,
         caption: str | None = None,
         account_id: str | None = None,
+        as_photo: bool = False,
+        idempotency_key: str | None = None,
     ) -> ChatMessage:
-        return await self._capable_channel(
+        channel = self._capable_channel(
             platform, AdapterCapabilities.UPLOAD, account_id=account_id
-        ).upload(chat, data, filename=filename, mime_type=mime_type, caption=caption)
+        )
+        options = dict(filename=filename, mime_type=mime_type, caption=caption)
+        if as_photo:
+            self._capable_channel(platform, AdapterCapabilities.PHOTO_UPLOAD, account_id=account_id)
+            options['as_photo'] = True
+        if idempotency_key is not None:
+            self._capable_channel(platform, AdapterCapabilities.IDEMPOTENT_UPLOAD, account_id=account_id)
+            options['idempotency_key'] = idempotency_key
+        return await channel.upload(chat, data, **options)
 
     async def get_contact(
         self, platform: str, contact: ContactRef, *, account_id: str | None = None
