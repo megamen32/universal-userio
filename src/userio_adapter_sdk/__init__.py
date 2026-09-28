@@ -36,6 +36,8 @@ class AdapterCapabilities:
     ACK = "ack"
     DOWNLOAD = "download"
     UPLOAD = "upload"
+    PHOTO_UPLOAD = "photo_upload"
+    IDEMPOTENT_UPLOAD = "idempotent_upload"
     GET_CONTACT = "get_contact"
     ADD_CONTACT = "add_contact"
     EDIT_CONTACT = "edit_contact"
@@ -56,6 +58,8 @@ class AdapterCapabilities:
             ACK,
             DOWNLOAD,
             UPLOAD,
+            PHOTO_UPLOAD,
+            IDEMPOTENT_UPLOAD,
             GET_CONTACT,
             ADD_CONTACT,
             EDIT_CONTACT,
@@ -337,6 +341,8 @@ class FilePort(Protocol):
         filename: str,
         mime_type: str | None = None,
         caption: str | None = None,
+        as_photo: bool = False,
+        idempotency_key: str | None = None,
     ) -> ChatMessage: ...
 
 

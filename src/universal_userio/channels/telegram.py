@@ -81,6 +81,8 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
             "read", "send", "edit", "delete", "media", "typing", "react", "forward", "ack",
             AdapterCapabilities.DOWNLOAD,
             AdapterCapabilities.UPLOAD,
+            AdapterCapabilities.PHOTO_UPLOAD,
+            AdapterCapabilities.IDEMPOTENT_UPLOAD,
             AdapterCapabilities.GET_CONTACT,
             AdapterCapabilities.ADD_CONTACT,
             AdapterCapabilities.EDIT_CONTACT,
@@ -289,10 +291,19 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
         filename: str,
         mime_type: str | None = None,
         caption: str | None = None,
+        as_photo: bool = False,
+        idempotency_key: str | None = None,
     ) -> ChatMessage:
         """Upload bytes to a chat and return the resulting message DTO."""
 
         target = self._chat_id(chat)
+        if as_photo:
+            from .telegram_photo import upload_photo
+
+            return await upload_photo(self.client, target, data, caption=caption or '',
+                                      idempotency_key=idempotency_key)
+        if idempotency_key is not None:
+            raise AdapterNotSupported("idempotent upload currently requires as_photo=True")
         payload = BytesIO(bytes(data))
         payload.name = filename
         kwargs: dict[str, Any] = {"caption": caption or "", "force_document": True}
