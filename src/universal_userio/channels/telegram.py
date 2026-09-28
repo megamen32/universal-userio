@@ -80,6 +80,7 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
         {
             "read", "send", "edit", "delete", "media", "typing", "react", "forward", "ack",
             AdapterCapabilities.DOWNLOAD,
+            AdapterCapabilities.DOWNLOAD_PREVIEW,
             AdapterCapabilities.UPLOAD,
             AdapterCapabilities.PHOTO_UPLOAD,
             AdapterCapabilities.IDEMPOTENT_UPLOAD,
@@ -282,6 +283,18 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
         """Canonical file-download operation; ``download_media`` stays compatible."""
 
         return await self.download_media(chat, message)
+
+    async def download_preview(self, chat: ChatRef, message: Any) -> DownloadedMedia:
+        """Download Telegram's thumbnail, including previews of animated TGS stickers."""
+        raw = await self._raw_message(chat, message)
+        data = await self.client.download_media(raw, file=bytes, thumb=-1)
+        if not data:
+            raise LookupError('Media preview is unavailable')
+        mime = 'image/webp' if data[:4] == b'RIFF' and data[8:12] == b'WEBP' else 'image/jpeg'
+        if data.startswith(b'\x89PNG'):
+            mime = 'image/png'
+        return DownloadedMedia(chat_id=self._chat_id(chat), message_id=int(self._message_id(raw) or 0),
+                               data=data, mime_type=mime)
 
     async def upload(
         self,

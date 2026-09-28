@@ -130,6 +130,13 @@ class Omnichannel:
             platform, AdapterCapabilities.DOWNLOAD, account_id=account_id
         ).download(chat, message)
 
+    async def download_preview(self, platform: str, chat: ChatRef, message: MessageRef,
+                               *, account_id: str | None = None) -> DownloadedMedia:
+        """Get a provider-supplied static preview without fetching the original attachment."""
+        return await self._capable_channel(
+            platform, AdapterCapabilities.DOWNLOAD_PREVIEW, account_id=account_id
+        ).download_preview(chat, message)
+
     async def upload(
         self,
         platform: str,

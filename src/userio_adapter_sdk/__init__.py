@@ -35,6 +35,7 @@ class AdapterCapabilities:
     FORWARD = "forward"
     ACK = "ack"
     DOWNLOAD = "download"
+    DOWNLOAD_PREVIEW = "download_preview"
     UPLOAD = "upload"
     PHOTO_UPLOAD = "photo_upload"
     IDEMPOTENT_UPLOAD = "idempotent_upload"
@@ -57,6 +58,7 @@ class AdapterCapabilities:
             FORWARD,
             ACK,
             DOWNLOAD,
+            DOWNLOAD_PREVIEW,
             UPLOAD,
             PHOTO_UPLOAD,
             IDEMPOTENT_UPLOAD,
@@ -347,6 +349,13 @@ class FilePort(Protocol):
 
 
 @runtime_checkable
+class PreviewPort(Protocol):
+    """Optional static previews advertised by ``download_preview``."""
+
+    async def download_preview(self, chat: ChatRef, message: MessageRef) -> DownloadedMedia: ...
+
+
+@runtime_checkable
 class ContactPort(Protocol):
     """Optional provider address-book operations advertised by contact caps."""
 
@@ -424,6 +433,7 @@ __all__ = [
     "Contact",
     "ChatPort",
     "FilePort",
+    "PreviewPort",
     "ContactPort",
     "GroupContactPort",
     "Channel",
