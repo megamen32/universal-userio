@@ -1,0 +1,355 @@
+"""Execution of capability-gated UserIO MCP tools."""
+
+from __future__ import annotations
+
+import base64
+from typing import Any
+
+from .adapters import AdapterNotSupported, UnifiedChannels
+from .contracts import InboxMessage, UserPrincipal
+from .mcp_catalog import TOOL_CAPABILITIES
+from .service import UserIOService
+from .store import SQLiteUserIOStore
+
+
+_WORKSPACE_EVENT_BODY_LIMIT = 4096
+
+
+class UserIOToolDispatcher:
+    """Run one authenticated tool without owning transport or manifest logic."""
+
+    def __init__(self, store: SQLiteUserIOStore, service: UserIOService) -> None:
+        self._store = store
+        self._service = service
+
+    def dispatch(
+        self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
+    ) -> dict[str, Any]:
+        user_id = principal.user_id
+        channels = UnifiedChannels(self._store, self._service, user_id)
+        try:
+            required_capability = TOOL_CAPABILITIES.get(name)
+            if required_capability and not self._store.capability_enabled(
+                required_capability, user_id=user_id
+            ):
+                return {
+                    "ok": False,
+                    "error": f"{required_capability}_capability_disabled",
+                }
+            if name == "userio.channels.list":
+                ignored_chats = self._ignored_chats(arguments)
+                adapter = channels.adapter(self._optional(arguments, "channel"))
+                chats = adapter.list(limit=int(arguments.get("limit", 100)))
+                return {
+                    "ok": True,
+                    "chats": [
+                        chat
+                        for chat in chats
+                        if str(chat["id"]) not in ignored_chats
+                    ],
+                }
+            if name == "userio.channels.read":
+                ignored_chats = self._ignored_chats(arguments)
+                adapter = channels.adapter(self._optional(arguments, "channel"))
+                result = adapter.read(
+                    chat_id=self._optional(arguments, "chat_id"),
+                    message_id=self._optional(arguments, "message_id"),
+                )
+                record = result.get("chat") or result.get("message") or {}
+                conversation_id = str(
+                    record.get("id") or record.get("conversation_id") or ""
+                )
+                if conversation_id in ignored_chats:
+                    raise KeyError("chat not found")
+                return {"ok": True, **result}
+            if name == "userio.channels.download":
+                file = channels.download(
+                    file_ref=self._required(arguments, "file_ref")
+                )
+                return {
+                    "ok": True,
+                    "file": {
+                        "filename": file.filename,
+                        "content_type": file.content_type,
+                        "encoding": "base64",
+                        "data": base64.b64encode(file.data).decode(),
+                    },
+                }
+            if name == "userio.channels.send_draft":
+                attachments = arguments.get("attachments")
+                if attachments is not None and not isinstance(attachments, list):
+                    raise ValueError("attachments must be an array")
+                draft = channels.send(
+                    chat_id=self._required(arguments, "chat_id"),
+                    text=self._required(arguments, "text"),
+                    attachments=attachments,
+                )
+                conversation = self._store.conversation(
+                    draft.conversation_id, user_id=user_id
+                ) or {}
+                manual_lock = self._service.manual_approval_required(conversation)
+                hint = (
+                    "SMS manual-approve lock is ON: nothing is sent until the "
+                    "owner explicitly approves this exact draft via "
+                    "userio_draft_approve_send (confirm=true)."
+                    if manual_lock
+                    else "Draft only: nothing is sent until "
+                    "userio_draft_approve_send is called with confirm=true."
+                )
+                return {
+                    "ok": True,
+                    "draft": self._draft(draft),
+                    "sent": False,
+                    "approval_required": True,
+                    "channel": str(conversation.get("source") or ""),
+                    "response_mode": str(conversation.get("response_mode") or ""),
+                    "manual_approval_only": manual_lock,
+                    "approval_hint": hint,
+                }
+            if name == "userio.workspace.poll":
+                page = self._store.workspace_events(
+                    after=arguments.get("after", 0),
+                    limit=arguments.get("limit", 50),
+                    user_id=user_id,
+                )
+                events = [self._workspace_event(event) for event in page["events"]]
+                return {
+                    "ok": True,
+                    "schema": "universal.workspace-events.v1",
+                    **page,
+                    "events": events,
+                }
+            if name == "userio.users.create":
+                if principal.role != "owner":
+                    return {"ok": False, "error": "owner_required"}
+                user, token = self._store.create_user(
+                    self._required(arguments, "username"),
+                    self._required(arguments, "password"),
+                )
+                return {
+                    "ok": True,
+                    "user": {
+                        "id": user.user_id,
+                        "username": user.username,
+                        "role": user.role,
+                    },
+                    "token": token,
+                    "token_returned_once": True,
+                }
+            if name == "userio.inbox.list_new":
+                ignored_chats = self._ignored_chats(arguments)
+                channel = self._optional(arguments, "channel")
+                messages = self._store.new_messages(
+                    limit=int(arguments.get("limit", 50)), user_id=user_id
+                )
+                return {
+                    "ok": True,
+                    "messages": [
+                        message
+                        for message in messages
+                        if str(message["conversation_id"]) not in ignored_chats
+                        and (
+                            channel is None
+                            or str(message["source"]) == channel
+                        )
+                    ],
+                }
+            if name == "userio.conversation.get":
+                ignored_chats = self._ignored_chats(arguments)
+                conversation_id = self._required(arguments, "conversation_id")
+                if conversation_id in ignored_chats:
+                    return {"ok": True, "conversation": None}
+                return {
+                    "ok": True,
+                    "conversation": self._store.conversation(
+                        conversation_id, user_id=user_id
+                    ),
+                }
+            if name == "userio.message.mark_seen":
+                return {
+                    "ok": True,
+                    "changed": self._store.mark_seen(
+                        source=self._required(arguments, "source"),
+                        message_id=self._required(arguments, "message_id"),
+                        user_id=user_id,
+                    ),
+                }
+            if name == "userio.draft.create":
+                draft = self._service.create_manual_draft(
+                    self._required(arguments, "conversation_id"),
+                    body=self._required(arguments, "body"),
+                    user_id=user_id,
+                )
+                return {"ok": True, "draft": self._draft(draft)}
+            if name == "userio.draft.update":
+                draft = self._store.update_draft(
+                    self._required(arguments, "draft_id"),
+                    body=self._required(arguments, "body"),
+                    user_id=user_id,
+                )
+                return {"ok": True, "draft": self._draft(draft)}
+            if name == "userio.draft.delete":
+                return {
+                    "ok": True,
+                    "deleted": self._store.delete_draft(
+                        self._required(arguments, "draft_id"), user_id=user_id
+                    ),
+                }
+            if name == "userio.draft.approve_send":
+                if not self._store.send_enabled(user_id=user_id):
+                    return {"ok": False, "error": "outbound_delivery_disabled"}
+                return self._approve(arguments, principal)
+            if name == "userio.conversation.delete_local":
+                return self._delete_conversation(arguments, principal)
+            if name == "userio.accounts.list":
+                return {
+                    "ok": True,
+                    "accounts": self._store.accounts(user_id=user_id),
+                }
+            if name == "userio.ai.propose":
+                return self._propose(arguments, principal)
+        except PermissionError as error:
+            return {"ok": False, "error": str(error)}
+        except AdapterNotSupported as error:
+            return {"ok": False, "error": str(error)}
+        except RuntimeError as error:
+            return {"ok": False, "error": str(error)}
+        except (KeyError, TypeError, ValueError) as error:
+            return {
+                "ok": False,
+                "error": str(error).strip("'") or "invalid_arguments",
+            }
+        return {"ok": False, "error": "unknown_tool"}
+
+    def _approve(
+        self, arguments: dict[str, Any], principal: UserPrincipal
+    ) -> dict[str, Any]:
+        if arguments.get("confirm") is not True:
+            return {"ok": False, "error": "exact_confirmation_required"}
+        keys = ("expected_text", "expected_chat_id", "expected_attachments")
+        snapshot = None
+        if any(key in arguments for key in keys):
+            if (
+                not all(key in arguments for key in keys)
+                or not isinstance(arguments["expected_text"], str)
+                or not isinstance(arguments["expected_chat_id"], str)
+                or not isinstance(arguments["expected_attachments"], list)
+                or not all(
+                    isinstance(item, str)
+                    for item in arguments["expected_attachments"]
+                )
+            ):
+                raise ValueError("complete_draft_snapshot_required")
+            snapshot = {key: arguments[key] for key in keys}
+        draft = self._service.approve(
+            self._required(arguments, "draft_id"),
+            user_id=principal.user_id,
+            expected_snapshot=snapshot,
+        )
+        conversation = self._store.conversation(
+            draft.conversation_id, user_id=principal.user_id
+        ) or {}
+        return {
+            "ok": True,
+            "draft": self._draft(draft),
+            "sent": draft.status == "approved",
+            "receipt": draft.receipt or None,
+            "channel": str(conversation.get("source") or ""),
+            "delivery_note": self._delivery_note(conversation),
+        }
+
+    @staticmethod
+    def _delivery_note(conversation: dict[str, Any]) -> str:
+        source = str(conversation.get("source") or "")
+        if source == "sms":
+            return "Android gateway accepted the SMS; carrier delivery is not guaranteed."
+        if source.startswith("gmail:"):
+            return "Sent through the Gmail account."
+        if source.startswith("chatgpt"):
+            return "Sent through the ChatGPT web session."
+        if source == "telegram":
+            return "Sent through the Telegram account."
+        if source == "whatsapp":
+            return "Sent through the WhatsApp bridge."
+        route = conversation.get("route_id") or source or "unknown"
+        return f"Sent through route {route}."
+
+    def _delete_conversation(
+        self, arguments: dict[str, Any], principal: UserPrincipal
+    ) -> dict[str, Any]:
+        if arguments.get("confirm") is not True:
+            return {"ok": False, "error": "exact_confirmation_required"}
+        deleted = self._store.delete_conversation(
+            self._required(arguments, "conversation_id"),
+            user_id=principal.user_id,
+        )
+        return {"ok": True, "deleted": deleted, "scope": "local_userio_only"}
+
+    def _propose(
+        self, arguments: dict[str, Any], principal: UserPrincipal
+    ) -> dict[str, Any]:
+        message = InboxMessage(
+            self._required(arguments, "source"),
+            self._required(arguments, "message_id"),
+            self._required(arguments, "sender"),
+            self._required(arguments, "body"),
+            0.0,
+        )
+        drafts = self._service.propose_for_approval(
+            self._required(arguments, "conversation_id"),
+            message,
+            limit=int(arguments.get("limit", 3)),
+            user_id=principal.user_id,
+        )
+        return {"ok": True, "drafts": [self._draft(draft) for draft in drafts]}
+
+    @staticmethod
+    def _required(arguments: dict[str, Any], key: str) -> str:
+        value = arguments.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} is required")
+        return value.strip()
+
+    @staticmethod
+    def _optional(arguments: dict[str, Any], key: str) -> str | None:
+        value = arguments.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string")
+        return value.strip() or None
+
+    @staticmethod
+    def _ignored_chats(arguments: dict[str, Any]) -> frozenset[str]:
+        values = arguments.get("ignored_chats", [])
+        if not isinstance(values, list) or len(values) > 100:
+            raise ValueError(
+                "ignored_chats must be an array of at most 100 chat ids"
+            )
+        if any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            raise ValueError("ignored_chats must contain non-empty chat ids")
+        return frozenset(value.strip() for value in values)
+
+    @staticmethod
+    def _workspace_event(event: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(event)
+        body = str(payload.get("body") or "")
+        if len(body) > _WORKSPACE_EVENT_BODY_LIMIT:
+            payload["body"] = body[:_WORKSPACE_EVENT_BODY_LIMIT]
+            payload["body_truncated"] = True
+        return payload
+
+    @staticmethod
+    def _draft(draft: Any) -> dict[str, str]:
+        payload = {
+            "id": draft.id,
+            "conversation_id": draft.conversation_id,
+            "body": draft.body,
+            "status": draft.status,
+        }
+        receipt = getattr(draft, "receipt", "")
+        if receipt:
+            payload["receipt"] = receipt
+        return payload

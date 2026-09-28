@@ -34,6 +34,13 @@ returns JSON normally and SSE when the client sends
 legacy `USERIO_API_TOKEN` remains a service-account token mapped to the seeded
 owner, so existing exmanager configuration keeps working.
 
+Airlock agents can use the same endpoint as a callback-only MCP. Because the
+current Agent SDK callback exposes tool calls rather than MCP resource
+subscriptions, `userio.workspace.poll` provides durable, user-scoped inbound
+events with an explicit cursor and never marks a message seen. See
+[docs/airlock.md](docs/airlock.md) for identity, polling and exact-approval
+requirements.
+
 ```text
 provider adapters / sidecars -> Universal UserIO -> provider adapters / sidecars
               ingress + subscribe        send only after per-user policy + approval

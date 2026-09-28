@@ -4,6 +4,7 @@ from io import StringIO
 import pytest
 
 from universal_userio.contracts import InboxMessage
+from universal_userio.mcp_http import McpHttpEndpoint
 from universal_userio.mcp_surface import UserIOMcpSurface
 from universal_userio.mcp_transport import StdioJsonRpcTransport
 from universal_userio.service import UserIOService
@@ -17,6 +18,28 @@ class Generator:
 class Outbox:
     def __init__(self): self.calls = []
     def send_reply(self, **kwargs): self.calls.append(kwargs); return "receipt"
+
+
+def test_http_mcp_stream_emits_ready_before_waiting_for_updates(
+    tmp_path, monkeypatch
+) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    endpoint = McpHttpEndpoint(
+        UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+    )
+    monkeypatch.setattr(
+        endpoint._subscriptions,
+        "wait",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("wait happened before ready was consumed")
+        ),
+    )
+    stream = endpoint.event_stream(store.owner())
+
+    ready = next(stream)
+
+    assert b'"method":"userio/ready"' in ready
+    stream.close()
 
 
 @pytest.mark.parametrize("field,value", [
@@ -321,3 +344,59 @@ def test_mcp_send_draft_states_approval_need_and_approve_returns_receipt(tmp_pat
     assert sent["receipt"] == "sms-receipt-1"
     assert sent["delivery_note"].startswith("Android gateway accepted")
     assert gateway.sent == [("+15551234567", "manual reply")]
+
+
+def test_workspace_poll_is_durable_user_scoped_and_does_not_mark_seen(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    surface = UserIOMcpSurface(store, service)
+    reader, _ = store.create_user("airlock_reader", "reader-password")
+    conversation_id, accepted = service.receive(
+        InboxMessage("telegram", "airlock-event-1", "anna", "hello", 1.0),
+        route_id="telegram",
+    )
+
+    first = surface.dispatch(
+        "userio.workspace.poll", {"after": 0, "limit": 10}
+    )
+    repeated = surface.dispatch(
+        "userio.workspace.poll", {"after": first["cursor"], "limit": 10}
+    )
+    isolated = surface.dispatch(
+        "userio.workspace.poll", {"after": 0, "limit": 10}, principal=reader
+    )
+
+    assert accepted is True
+    assert first["schema"] == "universal.workspace-events.v1"
+    assert first["events"] == [{
+        "seq": first["cursor"],
+        "source": "telegram",
+        "message_id": "airlock-event-1",
+        "conversation_id": conversation_id,
+        "sender": "anna",
+        "body": "hello",
+        "received_at": 1.0,
+        "direction": "incoming",
+        "route_id": "telegram",
+        "account_ref": "",
+    }]
+    assert first["head"] == first["cursor"]
+    assert repeated["events"] == []
+    assert repeated["cursor"] == first["cursor"]
+    assert isolated["events"] == []
+    assert isolated["head"] == 0
+    assert store.new_messages(user_id=store.default_user_id)[0]["message_id"] == "airlock-event-1"
+
+    service.receive(
+        InboxMessage(
+            "telegram", "airlock-event-2", "anna", "x" * 5000, 2.0
+        ),
+        route_id="telegram",
+    )
+    bounded = surface.dispatch(
+        "userio.workspace.poll", {"after": first["cursor"], "limit": 10}
+    )["events"][0]
+    exact = store.conversation(conversation_id)["messages"][-1]["body"]
+    assert len(bounded["body"]) == 4096
+    assert bounded["body_truncated"] is True
+    assert exact == "x" * 5000
