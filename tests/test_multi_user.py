@@ -12,6 +12,7 @@ import pytest
 
 from universal_userio.adapters import (
     AdapterNotSupported,
+    ChatGPTCDPChannelAdapter,
     MailChannelAdapter,
     TelegramChannelAdapter,
     VKChannelAdapter,
@@ -90,7 +91,6 @@ def test_users_with_same_provider_ids_are_isolated_and_approval_is_scoped(tmp_pa
 @pytest.mark.parametrize(
     ("adapter_type", "source"),
     [
-        (MailChannelAdapter, "gmail"),
         (TelegramChannelAdapter, "telegram"),
         (WhatsAppChannelAdapter, "whatsapp"),
         (VKChannelAdapter, "vk"),
@@ -107,8 +107,210 @@ def test_each_provider_wrapper_implements_unified_contract(adapter_type, source,
     assert adapter.list()[0]["id"] == chat_id
     assert adapter.read(chat_id=chat_id)["chat"]["messages"][0]["body"] == "hello"
     assert adapter.send(chat_id=chat_id, text="reply").status == "proposed"
-    with pytest.raises(AdapterNotSupported, match="not supported by adapter"):
+    # Telegram/WhatsApp bridge out to the live QR connector at
+    # 127.0.0.1:18095/30100; with no bridge URL set in the test env, the
+    # adapter raises AdapterNotSupported with a clear reason. VK never
+    # had download wired in this codebase; both still raise the same
+    # public exception class so the chat-list UI can render an honest
+    # "not available" modal.
+    with pytest.raises(AdapterNotSupported):
         adapter.download(file_ref="missing")
+
+
+def test_mail_channel_adapter_downloads_through_injected_channel(tmp_path) -> None:
+    """MailChannelAdapter now routes download() through a real email channel.
+    The factory hook lets tests inject a fake channel without touching IMAP."""
+    from universal_userio.adapters import MailChannelAdapter
+    from universal_userio.channels.core import ChatRef, DownloadedMedia, MessageRef
+
+    class FakeChannel:
+        last_call = None
+
+        async def download_media(self, *, chat: ChatRef, message: MessageRef) -> DownloadedMedia:
+            type(self).last_call = (chat, message)
+            return DownloadedMedia(
+                chat_id=chat, message_id=int(message),
+                data=b"%PDF-1.4 fake", mime_type="application/pdf", filename="invoice.pdf",
+            )
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("gmail", "1042", "billing@example.com", "[Gmail document]", 1.0),
+        route_id="gmail",
+    )
+    fake = FakeChannel()
+    adapter = MailChannelAdapter(store, service, store.default_user_id, channel_factory=lambda: fake)
+    file = adapter.download(file_ref="1042")
+    assert file.filename == "invoice.pdf"
+    assert file.content_type == "application/pdf"
+    assert file.data.startswith(b"%PDF-1.4")
+    assert FakeChannel.last_call == ("billing@example.com", 1042)
+
+
+def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch) -> None:
+    """TelegramChannelAdapter POSTs {chat, chat_id, message_id} to the bridge
+    and turns the bytes it gets back into a ChannelFile. The runner is
+    injectable so the test never touches the live connector."""
+    import urllib.request as urllib_request
+    from universal_userio.adapters import TelegramChannelAdapter
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    service.receive(
+        InboxMessage("telegram", "42", "@alice", "[Telegram document]", 1.0), route_id="telegram-reply",
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.body = b"telegram-bytes"
+            self._headers = {"Content-Type": "image/jpeg", "X-Filename": "from-tg.jpg"}
+
+        def read(self) -> bytes:
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        @property
+        def headers(self) -> dict[str, str]:
+            return self._headers
+
+    def fake_runner(request, timeout):
+        # request is the urllib.request.Request object the adapter built.
+        captured["url"] = request.full_url
+        captured["method"] = request.method
+        captured["headers"] = dict(request.headers)
+        captured["body"] = json.loads(request.data.decode())
+        return FakeResponse()
+
+    monkeypatch.setenv("USERIO_API_TOKEN", "test-token")
+    monkeypatch.setenv("USERIO_TELEGRAM_QR_URL", "http://127.0.0.1:18095")
+    # Bypass __init__'s auto-fetch of os.environ; we already set the value above
+    # but the adapter captured it at __init__ time which happened before
+    # monkeypatch.setenv — so we pass it explicitly.
+    adapter = TelegramChannelAdapter(
+        store, service, store.default_user_id,
+        bridge_url="http://127.0.0.1:18095",
+        runner=fake_runner,
+    )
+    file = adapter.download(file_ref="42")
+    assert captured["url"].endswith("/download"), captured
+    assert captured["method"] == "POST"
+    assert captured["body"] == {"chat": "@alice", "chat_id": "@alice", "message_id": "42"}
+    assert captured["headers"]["Authorization"] == "Bearer test-token"
+    assert file.content_type == "image/jpeg"
+    assert file.filename == "from-tg.jpg"
+    assert file.data == b"telegram-bytes"
+
+
+def test_whatsapp_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch) -> None:
+    """WhatsApp bridge contract mirrors Telegram: POST /download with the
+    same JSON body and bearer auth."""
+    from universal_userio.adapters import WhatsAppChannelAdapter
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    service.receive(
+        InboxMessage("whatsapp", "9911@s.whatsapp.net", "97103332444@s.whatsapp.net",
+                     "[WhatsApp document]", 1.0),
+        route_id="whatsapp-reply",
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self.body = b"wa-bytes"
+            self._headers = {"Content-Type": "application/pdf"}
+
+        def read(self) -> bytes:
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        @property
+        def headers(self) -> dict[str, str]:
+            return self._headers
+
+    def fake_runner(request, timeout):
+        captured["body"] = json.loads(request.data.decode())
+        captured["url"] = request.full_url
+        return FakeResponse()
+
+    monkeypatch.setenv("USERIO_API_TOKEN", "test-token")
+    monkeypatch.setenv("USERIO_WHATSAPP_BRIDGE_URL", "http://127.0.0.1:30100")
+    adapter = WhatsAppChannelAdapter(
+        store, service, store.default_user_id,
+        bridge_url="http://127.0.0.1:30100",
+        runner=fake_runner,
+    )
+    file = adapter.download(file_ref="9911@s.whatsapp.net")
+    assert captured["body"]["chat"] == "97103332444@s.whatsapp.net"
+    assert captured["body"]["message_id"] == "9911@s.whatsapp.net"
+    assert captured["url"].endswith("/download")
+    assert file.content_type == "application/pdf"
+    assert file.data == b"wa-bytes"
+
+
+def test_vk_and_sms_adapters_explain_their_unavailability(tmp_path) -> None:
+    """VK flows through the browser extension; SMS carries no media at all.
+    Both must raise AdapterNotSupported with a reason that an operator can
+    act on, not a generic stub message."""
+    from universal_userio.adapters import VKChannelAdapter, AndroidSmsChannelAdapter
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    vk = VKChannelAdapter(store, service, store.default_user_id)
+    sms = AndroidSmsChannelAdapter(store, service, store.default_user_id)
+    with pytest.raises(AdapterNotSupported, match="browser extension"):
+        vk.download(file_ref="x")
+    with pytest.raises(AdapterNotSupported, match="deliver attachments"):
+        sms.download(file_ref="x")
+
+
+def test_chatgpt_cdp_adapter_reads_page_visible_chats_without_provider_credentials(tmp_path) -> None:
+    class CdpMcp:
+        def call(self, name, arguments):
+            assert name == "list_chats" or arguments["chatRef"] == "chat_ref_1"
+            if name == "list_chats":
+                return {"chats": [{"chatRef": "chat_ref_1", "title": "Roadmap", "updatedAt": "2026-08-30T12:00:00Z", "unread": True}]}
+            assert name == "export_chat"
+            return {"content": json.dumps({"chatRef": "chat_ref_1", "title": "Roadmap", "messages": [{"messageRef": "msg_ref_1", "role": "user", "text": "status?"}]})}
+
+    store = SQLiteUserIOStore(tmp_path / "chatgpt.sqlite3")
+    adapter = ChatGPTCDPChannelAdapter(store, UserIOService(store, Generator(), Outbox()), store.default_user_id, client=CdpMcp())
+
+    assert adapter.list() == [{"id": "chat_ref_1", "channel": "chatgpt", "title": "Roadmap", "last_message_snippet": "", "unread": True}]
+    assert adapter.read(chat_id="chat_ref_1")["chat"]["messages"][0]["text"] == "status?"
+    draft = adapter.send(chat_id="chat_ref_1", text="reply")
+
+    class ChatGPTOutbox:
+        def __init__(self):
+            self.calls = []
+
+        def send_reply(self, **_kwargs):
+            raise AssertionError("ChatGPT must not use the NoticePlace route")
+
+        def send_chatgpt_reply(self, **kwargs):
+            self.calls.append(kwargs)
+            return "message_ref_sent"
+
+    outbox = ChatGPTOutbox()
+    service = UserIOService(store, Generator(), outbox)
+    approved = service.approve(draft.id)
+
+    assert approved.status == "approved"
+    assert outbox.calls == [{"chat_ref": "chat_ref_1", "draft_id": draft.id, "body": "reply"}]
 
 
 def test_private_seed_creates_owner_login_without_exposing_password(tmp_path) -> None:

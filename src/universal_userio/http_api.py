@@ -18,30 +18,55 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Type
 from urllib.parse import parse_qs, unquote, urlparse
+import urllib.error
+import urllib.request
+from collections.abc import Mapping
 
-from . import collect
+from . import agent_channel, chatgpt_sessions, collect, vault
 from .adapters import inbox_message_from_envelope
+from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
+from .mcp_http import McpHttpEndpoint
 from .mcp_surface import UserIOMcpSurface
-from .mcp_transport import json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
-from .service import UserIOService
+from .search import search_conversations
+from .service import DeliveryUnavailableError, UserIOService
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
 _HIMALAYA_CONFIG = Path("/home/roomhacker/.config/himalaya/config.toml")
 _GMAIL_SECRET_ROOT = Path("/home/roomhacker/.hermes/secrets/universal-userio-gmail")
-_GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-inbox/gmail-accounts.txt")
+_GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-userio/gmail-accounts.txt")
 _GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
 _DASHBOARD_SESSION_LIFETIME = 12 * 60 * 60
+
+# Mirrors the web client's MEDIA_PLACEHOLDER regex so the /media endpoint can
+# describe a bubble without trusting the client.
+_PLACEHOLDER_RE = re.compile(
+    r"^\[\s*(?:WhatsApp|Telegram)?\s*"
+    r"(image|video|audio|voice|document|sticker|фото|видео|аудио|голосовое|файл)"
+    r"\s*\]$",
+    re.IGNORECASE,
+)
 
 
 def handler(
     service: UserIOService, *, token: str, vkid_app_id: str = "",
-    trusted_proxy_token: str = "",
+    trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
+    mcp = McpHttpEndpoint(surface)
     oauth = OAuthProvider(service._store)
+    supplied_identity = runtime_identity or {}
+    public_runtime_identity = {
+        "schema_version": supplied_identity.get("schema_version", 1),
+        "commit": supplied_identity.get("commit"),
+        "manifest_sha256": supplied_identity.get("manifest_sha256"),
+        "verified": supplied_identity.get("verified", False),
+    }
+    service.add_inbound_listener(
+        lambda user_id, _conversation_id, _message: mcp.publish_inbox_update(user_id)
+    )
 
     class UserIOHandler(BaseHTTPRequestHandler):
         def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
@@ -77,7 +102,7 @@ def handler(
             self.wfile.write(encoded)
 
         def _sse(self, payload: dict) -> None:
-            encoded = sse_message(payload)
+            encoded = mcp.encode_sse(payload)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -92,6 +117,16 @@ def handler(
             self.send_header("Content-Length", str(len(body)))
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _reply_raw(self, status: int, body: bytes, *, content_type: str, filename: str) -> None:
+            disposition = 'attachment; filename="' + filename.replace('"', "") + '"'
+            self.send_response(status)
+            self.send_header("Content-Type", content_type or "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", disposition)
+            self.send_header("Cache-Control", "private, max-age=0")
             self.end_headers()
             self.wfile.write(body)
 
@@ -156,11 +191,8 @@ def handler(
             self._reply(error.status, {"error": error.error, "error_description": error.description}, headers)
 
         def _mcp_unauthorized(self) -> None:
-            metadata = self._base_url() + "/.well-known/oauth-protected-resource"
-            self._reply(
-                401, {"error": "unauthorized"},
-                {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'},
-            )
+            payload, headers = mcp.unauthorized(self._base_url())
+            self._reply(401, payload, headers)
 
         def _redirect(self, location: str, *, cookie: str | None = None) -> None:
             self.send_response(302)
@@ -273,7 +305,7 @@ def handler(
             try:
                 if path == "/mcp":
                     request = self._json()
-                    response = json_rpc_response(surface, request, principal=principal)
+                    response = mcp.post(request, principal=principal)
                     if response is None:
                         self.send_response(202)
                         self.send_header("Content-Length", "0")
@@ -311,6 +343,121 @@ def handler(
                     )
                     self._reply(201, {"accepted": True})
                     return
+                if path == "/v1/conversations":
+                    payload = self._json()
+                    source = str(payload.get("source") or "").strip().lower()
+                    sender = str(payload.get("sender") or "").strip()
+                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail"} and not source.startswith("gmail:"):
+                        raise ValueError("unsupported conversation source")
+                    if not sender:
+                        raise ValueError("sender is required")
+                    record = service._store.create_conversation(source, sender, user_id=user_id)
+                    self._reply(201, {"conversation": record})
+                    return
+                if path == "/v1/conversations/set-account":
+                    payload = self._json()
+                    conversation_id = str(payload.get("conversation_id") or "").strip()
+                    account_ref = str(payload.get("account_id") or "").strip()
+                    if not conversation_id:
+                        raise ValueError("conversation_id is required")
+                    updated = service._store.set_conversation_account(
+                        conversation_id, account_ref, user_id=user_id
+                    )
+                    self._reply(200 if updated else 404, {"updated": updated})
+                    return
+                if path == "/v1/ai-settings":
+                    payload = self._json()
+                    settings = service._store.ai_settings(user_id=user_id)
+                    self._reply(200, {
+                        "endpoint": settings["endpoint"] if settings else "",
+                        "model": settings["model"] if settings else "",
+                        "has_key": settings is not None,
+                    })
+                    return
+                if path == "/v1/ai-runs":
+                    bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
+                    bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "")
+                    if not bridge:
+                        self._reply(200, {"runs": [], "totals": None})
+                        return
+                    proxy_request = urllib.request.Request(  # noqa: S310
+                        bridge + "/runs?user_id=owner", headers={"Authorization": f"Bearer {bridge_token}"},
+                    )
+                    try:
+                        with urllib.request.urlopen(proxy_request, timeout=10) as bridge_response:
+                            self._reply(200, json.loads(bridge_response.read()))
+                    except (OSError, urllib.error.URLError):
+                        self._reply(200, {"runs": [], "totals": None})
+                    return
+                if path == "/v1/ai-presets":
+                    bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
+                    bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "")
+                    if not bridge:
+                        self._reply(200, {"presets": [], "source": "disabled"})
+                        return
+                    proxy_request = urllib.request.Request(  # noqa: S310
+                        bridge + "/presets", headers={"Authorization": f"Bearer {bridge_token}"},
+                    )
+                    try:
+                        with urllib.request.urlopen(proxy_request, timeout=10) as bridge_response:
+                            self._reply(200, json.loads(bridge_response.read()))
+                    except (OSError, urllib.error.URLError):
+                        self._reply(200, {"presets": [], "source": "unavailable"})
+                    return
+                if path == "/v1/ai-settings/save":
+                    payload = self._json()
+                    service._store.set_ai_settings(
+                        endpoint=str(payload.get("endpoint") or ""),
+                        model=str(payload.get("model") or ""),
+                        token=str(payload.get("token") or ""),
+                        user_id=user_id,
+                    )
+                    service._user_generators.pop(user_id, None)
+                    self._reply(200, {"ok": True})
+                    return
+                if path == "/v1/ai-settings/reset":
+                    cleared = service._store.clear_ai_settings(user_id=user_id)
+                    service._user_generators.pop(user_id, None)
+                    self._reply(200, {"cleared": cleared})
+                    return
+                if path.startswith("/v1/source-cursors/"):
+                    source = unquote(path.removeprefix("/v1/source-cursors/")).strip()
+                    if not source:
+                        raise ValueError("source is required")
+                    payload = self._json()
+                    cursor = str(payload.get("cursor") or "").strip()
+                    if not cursor:
+                        raise ValueError("cursor is required")
+                    service._store.set_user_preference(f"source_cursor:{source}", cursor, user_id=user_id)
+                    self._reply(200, {"source": source, "cursor": cursor})
+                    return
+                if path == "/v1/drafts/browser-notified":
+                    payload = self._json()
+                    draft_ids = payload.get("draft_ids") or []
+                    if not isinstance(draft_ids, list):
+                        raise ValueError("draft_ids must be an array")
+                    changed = service._store.mark_drafts_browser_notified(
+                        [str(item) for item in draft_ids], user_id=user_id
+                    )
+                    self._reply(200, {"ok": True, "marked": changed})
+                    return
+                if path == "/v1/preferences/capabilities":
+                    payload = self._json()
+                    updates = payload.get("capabilities", payload)
+                    if not isinstance(updates, dict):
+                        raise ValueError("capabilities must be an object")
+                    for name, enabled in updates.items():
+                        if name not in service._store.USER_CAPABILITIES:
+                            raise ValueError(f"unknown user capability: {name}")
+                        service._store.set_user_capability(name, bool(enabled), user_id=user_id)
+                    self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})
+                    return
+                if path == "/v1/preferences/send":
+                    payload = self._json()
+                    enabled = bool(payload.get("enabled"))
+                    service._store.set_user_capability("send", enabled, user_id=user_id)
+                    self._reply(200, {"send_enabled": enabled})
+                    return
                 if path == "/v1/messages":
                     payload = self._json()
                     route_id = str(payload.get("route_id") or "")
@@ -325,11 +472,19 @@ def handler(
                     conversation_id, accepted = service.receive(
                         message, route_id=route_id, user_id=target_user_id
                     )
+                    account_ref = str(payload.get("account_id") or "").strip()
+                    if account_ref:
+                        service._store.set_conversation_account(
+                            conversation_id, account_ref, user_id=target_user_id
+                        )
                     draft = None
                     conversation = service._store.conversation(
                         conversation_id, user_id=target_user_id
                     )
-                    if accepted and conversation and conversation["response_mode"] == "auto_send":
+                    if (
+                        accepted and conversation and conversation["response_mode"] == "auto_send"
+                        and not service.manual_approval_required(conversation)
+                    ):
                         proposed = service.propose(
                             conversation_id, message, user_id=target_user_id
                         )
@@ -389,7 +544,7 @@ def handler(
                     account_id, display_name = _connect_gmail_account(email, app_password)
                     service._store.register_account(
                         account_id=account_id, provider="gmail", display_name=display_name,
-                        can_read=True, can_reply=False, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
+                        can_read=True, can_reply=True, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
                         user_id=user_id,
                     )
                     self._reply(202, {"accepted": True, "account_id": account_id, "mode": "himalaya_imap_app_password"})
@@ -415,16 +570,69 @@ def handler(
                     collect.append_result(self._json(), user=principal.username)
                     self._reply(202, {"accepted": True})
                     return
+                if path == "/v1/chatgpt/sessions":
+                    payload = self._json()
+                    record = chatgpt_sessions.save_session(payload, user=principal.username)
+                    slug = record["slug"]
+                    service._store.register_account(
+                        account_id=f"chatgpt:{slug}", provider="chatgpt",
+                        display_name=str(payload.get("email") or payload.get("name") or f"ChatGPT {slug}"),
+                        can_read=True, can_reply=True,
+                        credential_ref=f"chatgpt-session:{slug}", enabled=True,
+                        user_id=user_id,
+                    )
+                    self._reply(202, {"accepted": True, "account_id": f"chatgpt:{slug}", "slug": slug})
+                    return
+                if path == "/v1/agent/commands":
+                    self._reply(202, agent_channel.enqueue(self._json(), user=principal.username))
+                    return
+                if path == "/v1/agent/results":
+                    agent_channel.push_result(self._json(), user=principal.username)
+                    self._reply(202, {"accepted": True})
+                    return
+                if path.startswith("/v1/vault/sessions/"):
+                    name = unquote(path.removeprefix("/v1/vault/sessions/")).strip("/")
+                    try:
+                        vault.save_session(name, self._json(), user=principal.username)
+                    except ValueError as error:
+                        self._reply(400, {"error": str(error)})
+                        return
+                    self._reply(202, {"accepted": True, "name": name})
+                    return
                 if path.startswith("/v1/drafts/") and path.endswith("/approve"):
                     draft_id = path.removeprefix("/v1/drafts/").removesuffix("/approve").strip("/")
                     draft = service.approve(draft_id, user_id=user_id)
                     self._reply(202, {"id": draft.id, "status": draft.status})
                     return
                 self._reply(404, {"error": "not found"})
+            except DeliveryUnavailableError as error:
+                self._reply(409, {"error": str(error), "code": "delivery_unavailable"})
             except (KeyError, ValueError) as error:
                 self._reply(400, {"error": str(error)})
             except RuntimeError as error:
                 self._reply(502, {"error": str(error)})
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            path = urlparse(self.path).path
+            principal = self._principal(allow_proxy=True)
+            if principal is None:
+                self._reply(401, {"error": "unauthorized"})
+                return
+            try:
+                if path.startswith("/v1/drafts/"):
+                    draft_id = path.removeprefix("/v1/drafts/").strip("/")
+                    payload = self._json()
+                    body = str(payload.get("body") or "")
+                    if not draft_id or not body.strip():
+                        raise ValueError("draft id and body are required")
+                    draft = service._store.update_draft(draft_id, body=body, user_id=principal.user_id)
+                    self._reply(200, {"id": draft.id, "status": draft.status, "body": draft.body})
+                    return
+                self._reply(404, {"error": "not found"})
+            except KeyError as error:
+                self._reply(404, {"error": str(error)})
+            except ValueError as error:
+                self._reply(400, {"error": str(error)})
 
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)
@@ -452,10 +660,14 @@ def handler(
                 if "text/event-stream" not in self.headers.get("Accept", ""):
                     self._reply(405, {"error": "Accept: text/event-stream required"})
                     return
-                self._sse({
-                    "jsonrpc": "2.0", "method": "userio/ready",
-                    "params": {"endpoint": "/mcp", "username": principal.username},
-                })
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                for payload in mcp.event_stream(principal):
+                    self.wfile.write(payload)
+                    self.wfile.flush()
                 return
             if requested_path == "/login":
                 if self._cookie_principal("userio_web_session") is not None:
@@ -471,7 +683,12 @@ def handler(
                 return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
-            if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip"} and self._static(requested_path):
+            if requested_path == "/download":
+                self._html(200, _download_page().encode())
+                return
+            if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
+                                  "/vk-userio-extension.crx", "/vk-userio-updates.xml",
+                                  "/chatgpt-cdp-setup.zip"} and self._static(requested_path):
                 return
             if requested_path in {"/vk/connect/new", "/vk/callback"}:
                 if self._principal(allow_proxy=True) is None:
@@ -498,17 +715,101 @@ def handler(
                 return
             path = urlparse(self.path).path
             user_id = principal.user_id
+            if path == "/v1/runtime":
+                self._reply(200, public_runtime_identity)
+                return
+            if path == "/v1/workspace/events":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                if any(key not in {"after", "limit"} or len(values) != 1 for key, values in query.items()):
+                    self._reply(400, {"error": "invalid workspace event query"})
+                    return
+                try:
+                    after = int(query.get("after", ["0"])[0])
+                    limit = int(query.get("limit", ["50"])[0])
+                    page = service._store.workspace_events(
+                        after=after, limit=limit, user_id=user_id,
+                    )
+                except ValueError:
+                    self._reply(400, {"error": "invalid workspace event cursor or limit"})
+                    return
+                self._reply(200, {"schema": "universal.workspace-events.v1", **page})
+                return
             if path == "/v1/inbox":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
                 self._reply(200, {"messages": service._store.new_messages(user_id=user_id)})
                 return
+            if path.startswith("/v1/source-cursors/"):
+                source = unquote(path.removeprefix("/v1/source-cursors/")).strip()
+                if not source:
+                    self._reply(400, {"error": "source is required"})
+                    return
+                cursor = service._store.user_preference(f"source_cursor:{source}", user_id=user_id)
+                self._reply(200, {"source": source, "cursor": cursor})
+                return
+            if path == "/v1/preferences/capabilities":
+                self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})
+                return
+            if path == "/v1/preferences/send":
+                self._reply(200, {"send_enabled": service._store.send_enabled(user_id=user_id)})
+                return
             if path == "/v1/accounts":
-                self._reply(200, {"accounts": service._store.accounts(user_id=user_id)})
+                accounts = service._store.accounts(user_id=user_id)
+                caps = service._store.user_capabilities(user_id=user_id)
+                for account in accounts:
+                    visible = list(account.get("capabilities", []))
+                    if not caps["read"]:
+                        visible = [cap for cap in visible if cap != "read"]
+                    if not caps["send"]:
+                        visible = [cap for cap in visible if cap != "reply"]
+                    if not caps["download"]:
+                        visible = [cap for cap in visible if cap not in {"download", "media"}]
+                    account["capabilities"] = visible
+                self._reply(200, {"accounts": accounts})
+                return
+            if path == "/v1/search":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
+                text = query.get("q", [""])[0].strip()
+                source = query.get("source", [""])[0].strip().lower() or None
+                try:
+                    limit = max(1, min(int(query.get("limit", ["100"])[0]), 500))
+                except ValueError:
+                    limit = 100
+                self._reply(200, {"results": search_conversations(
+                    service._store, text, source=source, limit=limit, user_id=user_id,
+                )})
+                return
+            if path == "/v1/drafts/pending":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
+                try:
+                    limit = max(1, min(int(query.get("limit", ["100"])[0]), 200))
+                except ValueError:
+                    limit = 100
+                self._reply(200, {"drafts": service._store.pending_drafts(limit=limit, user_id=user_id)})
                 return
             if path == "/v1/conversations":
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
                 source = query.get("source", [""])[0].strip().lower() or None
-                self._reply(200, {
-                    "conversations": service._store.conversations(source=source, user_id=user_id)
-                })
+                conversations = service._store.conversations(source=source, user_id=user_id)
+                # If the latest message in a conversation is an attachment
+                # placeholder ([image], [document] …) replace it with the most
+                # recent text body so the chat list and the search box always
+                # point at real content the operator can act on.
+                text_overrides = service._store.last_text_bodies_for(
+                    [str(c["id"]) for c in conversations], user_id=user_id,
+                )
+                for entry in conversations:
+                    preview = str(entry.get("preview") or "")
+                    if preview.startswith("[") and preview.endswith("]"):
+                        replacement = text_overrides.get(str(entry["id"]))
+                        if replacement:
+                            entry["preview"] = replacement
+                self._reply(200, {"conversations": conversations})
                 return
             if path == "/v1/collect/tasks":
                 try:
@@ -525,9 +826,170 @@ def handler(
                 except ValueError as error:
                     self._reply(400, {"error": str(error)})
                 return
+            if path == "/v1/agent/poll":
+                try:
+                    self._reply(200, agent_channel.poll(
+                        query.get("agent_id", [""])[0],
+                        query.get("wait", ["20"])[0],
+                        user=principal.username,
+                    ))
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
+                return
+            if path == "/v1/agent/results":
+                try:
+                    self._reply(200, agent_channel.read_results(
+                        user=principal.username,
+                        agent_id=query.get("agent_id", [""])[0].strip(),
+                        limit=query.get("limit", ["20"])[0],
+                    ))
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
+                return
+            if path == "/v1/agent/status":
+                self._reply(200, agent_channel.status(user=principal.username))
+                return
+            if path == "/v1/chatgpt/sessions":
+                self._reply(200, {"accounts": chatgpt_sessions.list_sessions(user=principal.username)})
+                return
+            if path == "/v1/vault/sessions":
+                self._reply(200, {"sessions": vault.list_sessions(user=principal.username)})
+                return
+            if path.startswith("/v1/vault/sessions/"):
+                name = unquote(path.removeprefix("/v1/vault/sessions/")).strip("/")
+                try:
+                    record = vault.load_session(name, user=principal.username)
+                except KeyError as error:
+                    self._reply(404, {"error": str(error.args[0])})
+                    return
+                self._reply(200, record)
+                return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})
+                return
+            # /v1/conversations/{id}/media/{message_id} -> describe one
+            # message's media: its placeholder kind, source channel, and the
+            # bare minimum the chat bubble needs to render a clickable
+            # preview. Real bytes flow only when an adapter's
+            # StoredChannelAdapter.download implementation actually returns
+            # them; today every adapter raises AdapterNotSupported, so the
+            # honest answer for any platform is `available: false`.
+            if conversation_id.endswith("/raw"):
+                real_id, _, message_id = conversation_id.removesuffix("/raw").rpartition("/media/")
+                # Message ids contain ':' (e.g. "540308572:1322"); callers pass
+                # them percent-encoded in the path segment.
+                real_id, message_id = unquote(real_id), unquote(message_id)
+                if not real_id or not message_id:
+                    self._reply(404, {"error": "raw path requires /v1/conversations/{id}/media/{message_id}/raw"})
+                    return
+                conv = service._store.conversation(real_id, user_id=user_id)
+                if conv is None:
+                    self._reply(404, {"error": "conversation not found"})
+                    return
+                source_hint = str(conv.get("source") or "")
+                message = service._store.message(message_id, source=source_hint, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    # Gmail threads can carry a different source than the message
+                    # (self-mails land in the other account's conversation).
+                    message = service._store.message(message_id, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    self._reply(404, {"error": "message not found"})
+                    return
+                adapter = _adapter_for_message(service, message, user_id)
+                # VK adapter needs attachment_id; everything else keys on message_id.
+                file_ref = message_id
+                if str(message.get("source") or "") == "vk":
+                    attachments = service._store.attachments_for_message(
+                        source=str(message.get("source") or ""),
+                        message_id=str(message.get("message_id") or ""),
+                        user_id=user_id,
+                    )
+                    if attachments:
+                        file_ref = str(attachments[0].get("attachment_id") or message_id)
+                try:
+                    file = adapter.download(file_ref=file_ref)
+                except KeyError:
+                    self._reply(404, {"error": "message not found"})
+                    return
+                except (AdapterNotSupported, ValueError) as error:
+                    self._reply(503, {"error": str(error)})
+                    return
+                self._reply_raw(200, file.data, content_type=file.content_type,
+                                filename=file.filename)
+                return
+            if "/media/" in conversation_id:
+                real_id, _, message_id = conversation_id.rpartition("/media/")
+                real_id, message_id = unquote(real_id), unquote(message_id)
+                if not real_id or not message_id or message_id == conversation_id:
+                    self._reply(404, {"error": "media path requires /v1/conversations/{id}/media/{message_id}"})
+                    return
+                conv = service._store.conversation(real_id, user_id=user_id)
+                if conv is None:
+                    self._reply(404, {"error": "conversation not found"})
+                    return
+                source_hint = str(conv.get("source") or "")
+                message = service._store.message(message_id, source=source_hint, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    # Gmail threads can carry a different source than the message
+                    # (self-mails land in the other account's conversation).
+                    message = service._store.message(message_id, user_id=user_id)
+                if message is None or str(message.get("conversation_id") or "") != real_id:
+                    self._reply(404, {"error": "message not found"})
+                    return
+                placeholder = _PLACEHOLDER_RE.match(str(message.get("body") or "").strip())
+                # VK stores its media in the extension's IndexedDB; expose the
+                # attachment rows so the chat bubble can show filenames even
+                # before any byte has been pulled.
+                attachments = service._store.attachments_for_message(
+                    source=source_hint, message_id=str(message.get("message_id") or ""),
+                    user_id=user_id,
+                )
+                payload = {
+                    "conversation_id": real_id,
+                    "message_id": str(message.get("message_id") or ""),
+                    "source": str(message.get("source") or ""),
+                    "received_at": message.get("received_at"),
+                    "kind": (
+                        placeholder.group(1).lower() if placeholder
+                        else (str(attachments[0].get("kind") or "").lower() if attachments else None)
+                    ),
+                    "available": False,
+                    "reason": "media download is not connected for this account yet",
+                    "attachments": [
+                        {
+                            "idx": a.get("idx"),
+                            "kind": a.get("kind"),
+                            "content_type": a.get("content_type"),
+                            "filename": a.get("filename"),
+                            "size": a.get("size"),
+                            "attachment_id": a.get("attachment_id"),
+                            "transcript": a.get("transcript"),
+                            "transcription_status": a.get("transcription_status"),
+                            "transcription_model": a.get("transcription_model"),
+                        }
+                        for a in attachments
+                    ],
+                }
+                adapter = _adapter_for_message(service, message, user_id)
+                # VK adapter needs the FIRST attachment_id, not message_id;
+                # every other channel still keys on message_id which we
+                # already pass through.
+                file_ref = message_id
+                if str(message.get("source") or "") == "vk" and attachments:
+                    file_ref = str(attachments[0].get("attachment_id") or message_id)
+                try:
+                    file = adapter.download(file_ref=file_ref)
+                except (AdapterNotSupported, KeyError, ValueError) as error:
+                    payload["reason"] = str(error)
+                else:
+                    payload["available"] = True
+                    payload["reason"] = ""
+                    payload["filename"] = file.filename
+                    payload["content_type"] = file.content_type
+                    payload["size"] = len(file.data)
+                    payload["download_url"] = f"/v1/conversations/{real_id}/media/{message_id}/raw"
+                self._reply(200, payload)
                 return
             record = service._store.conversation(conversation_id, user_id=user_id)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})
@@ -544,12 +1006,105 @@ def handler(
                     "deleted": service._store.delete_account(account_id, user_id=principal.user_id)
                 })
                 return
+            if path.startswith("/v1/drafts/"):
+                draft_id = path.removeprefix("/v1/drafts/").strip("/")
+                try:
+                    deleted = service._store.delete_draft(draft_id, user_id=principal.user_id)
+                except ValueError as error:
+                    self._reply(409, {"error": str(error)})
+                    return
+                self._reply(200, {"deleted": deleted})
+                return
+            if path.startswith("/v1/vault/sessions/"):
+                name = unquote(path.removeprefix("/v1/vault/sessions/")).strip("/")
+                try:
+                    self._reply(200, vault.delete_session(name, user=principal.username))
+                except KeyError as error:
+                    self._reply(404, {"error": str(error.args[0])})
+                return
             self._reply(404, {"error": "not found"})
 
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
     return UserIOHandler
+
+
+def _adapter_for_message(service, message: dict[str, object], user_id: str):
+    """Pick the StoredChannelAdapter that owns this message's source."""
+    from .adapters import (
+        MailChannelAdapter,
+        TelegramChannelAdapter,
+        WhatsAppChannelAdapter,
+        VKChannelAdapter,
+        AndroidSmsChannelAdapter,
+    )
+    source = str(message.get("source") or "")
+    table = {
+        "mail": MailChannelAdapter,
+        "email": MailChannelAdapter,
+        "gmail": MailChannelAdapter,
+        "telegram": TelegramChannelAdapter,
+        "whatsapp": WhatsAppChannelAdapter,
+        "vk": VKChannelAdapter,
+        "sms": AndroidSmsChannelAdapter,
+    }
+    key = source.split(":", 1)[0] if ":" in source else source
+    adapter_type = table.get(key)
+    if adapter_type is None:
+        raise ValueError(f"unsupported channel for media: {source!r}")
+    return adapter_type(service._store, service, user_id)
+
+
+def _download_page() -> str:
+    return """<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloads — Universal UserIO</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { min-height:100vh; margin:0; background:#0b1020; color:#edf2ff; }
+  main { max-width: 720px; margin: 8vh auto; padding: 0 24px 48px; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  p.lead { color:#aebbd7; margin-top: 0; }
+  .card { border:1px solid #2b3554; border-radius:16px; background:#121a2e; padding:22px 24px; margin-top:18px; }
+  .card h2 { margin:0 0 8px; font-size:19px; }
+  .card p { color:#aebbd7; margin:6px 0; font-size:14px; }
+  .btn { display:inline-block; margin-top:12px; margin-right:10px; padding:10px 18px; border-radius:9px; background:#6d7cff; color:white; font-weight:700; text-decoration:none; }
+  .btn.secondary { background:#2b3554; }
+  code { background:#0b1020; border:1px solid #2b3554; border-radius:6px; padding:2px 7px; font-size:13px; }
+  ol { color:#aebbd7; font-size:14px; padding-left: 20px; }
+  .tag { display:inline-block; font-size:11px; border-radius:999px; padding:2px 10px; margin-left:8px; background:#24345c; color:#9eabff; vertical-align: middle; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Universal UserIO — загрузки</h1>
+  <p class="lead">Скачайте коннектор, распакуйте и загрузите как unpacked-расширение в Chrome / Chromium / BrowserOS / Brave.</p>
+
+  <div class="card">
+    <h2>Universal UserIO Agent <span class="tag">браузерное расширение</span></h2>
+    <p>Захват VK Web (чаты, поиск, отправка) + универсальный агент сбора данных с сайтов через пользовательские сессии. Никаких куки и токенов сайтов наружу — только ваш настроенный UserIO.</p>
+    <a class="btn" href="/vk-userio-extension-mv3.zip">Скачать для Chrome / Chromium (MV3)</a>
+    <a class="btn secondary" href="/vk-userio-extension.zip">Legacy MV2</a>
+    <ol>
+      <li>Распакуйте zip в постоянную папку.</li>
+      <li>Откройте <code>chrome://extensions</code>, включите Developer mode → <b>Load unpacked</b> → выберите папку.</li>
+      <li>В настройках расширения укажите endpoint <code>https://msg.bezrabotnyi.com</code> и свой UserIO API token.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>ChatGPT CDP starter <span class="tag">экспериментально</span></h2>
+    <p>Серверный пакет <code>chatgpt-cdp-mcp</code>: превращает одну залогиненную страницу ChatGPT в ограниченный MCP-инструмент для UserIO. Требует Node.js 20+ и CDP-драйвер к вашему браузеру (см. README внутри пакета).</p>
+    <a class="btn" href="/chatgpt-cdp-setup.zip">Скачать setup-пакет</a>
+    <a class="btn secondary" href="https://github.com/megamen32/chatgpt-cdp-mcp">GitHub</a>
+  </div>
+</main>
+</body>
+</html>"""
 
 
 def _dashboard_login_page(*, invalid: bool = False) -> str:
@@ -695,7 +1250,7 @@ def _connect_gmail_account(email: str, app_password: str) -> tuple[str, str]:
         pass
     _append_himalaya_account(alias, email)
     _append_gmail_account(alias)
-    subprocess.run(["systemctl", "restart", "universal-inbox-gmail.service"], check=True, timeout=30)
+    subprocess.run(["systemctl", "restart", "userio-gmail-ingress.service"], check=True, timeout=30)
     return f"gmail-{alias}", email
 
 

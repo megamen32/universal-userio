@@ -1,10 +1,12 @@
 # VK Inbox sidecar — install
 
-This extension runs **inside the operator's own Chromium-based browser** (Chrome,
-Chromium, BrowserOS, Brave, Edge, Arc) and uses the already-logged-in VK Web
-session to capture chats and send messages through UserIO. It does **not** store
-or transmit VK cookies, tokens, or any auth material — it only reads the live
-DOM of `vk.com` / `vk.ru` and the local IndexedDB.
+This extension (**Universal UserIO Agent**, v0.3+) runs **inside the operator's
+own Chromium-based browser** (Chrome, Chromium, BrowserOS, Brave, Edge, Arc),
+uses the already-logged-in VK Web session to capture chats and send messages
+through UserIO, and doubles as a universal site-data collection agent (see
+section below). It does **not** store or transmit VK cookies, tokens, or any
+auth material — it only reads the live DOM of `vk.com` / `vk.ru`, the local
+IndexedDB, and the response bodies of tasks published by your UserIO server.
 
 UserIO never sees your browser session. The UserIO HTTP API only sees the
 captured message envelopes and the manual `send` requests; nothing more.
@@ -73,14 +75,69 @@ right-click the extension icon → **Options**. Set:
 
 1. Open `https://vk.com/im` in the same browser profile (or `https://vk.ru/im`).
 2. Open at least one conversation.
-3. Click the extension icon → **Universal UserIO · VK** popup should show:
+3. Click the extension icon → **Universal UserIO Agent** popup should show:
    - **Чаты** tab: the captured chats with last preview.
    - **Поиск** tab: typing a substring of any visible message returns hits.
    - **Отправить** tab: enter a `peer_id` and text, click **Отправить через VK Web**.
      The message appears in the open VK Web chat; the local IndexedDB has it as
      `direction: "out"`, `status: "sent"`.
+   - Footer: `чатов: … · сообщений: …` and the `сбор: …` status line.
 4. From the UserIO side, query `GET /v1/inbox` (with bearer if configured) — new
    captures appear there within seconds.
+
+## Universal site collection (v0.3+)
+
+The extension polls your UserIO server once a minute for collection tasks and
+executes each due task as a real browser `fetch` — with the user's own session
+cookies when the recipe sets `credentials: "include"`. This is how you "connect
+another site" without writing any per-site code: publish a task, and every
+installed agent reports the response body back.
+
+1. Publish a task on the server: edit
+   `/var/lib/universal-userio/collect-tasks.json` (or the path configured via
+   `USERIO_COLLECT_TASKS_FILE`). Start from
+   `extensions/vk-inbox/collect-tasks.example.json`:
+
+   ```json
+   [
+     {
+       "id": "sitecart-orders",
+       "title": "SiteCart orders",
+       "site": "https://admin.sitecart.ru",
+       "active": true,
+       "every_sec": 300,
+       "recipe": {
+         "kind": "fetch",
+         "url": "https://admin.sitecart.ru/api/orders?limit=20",
+         "method": "GET",
+         "headers": {"Accept": "application/json"},
+         "credentials": "include",
+         "response": "json"
+       }
+     }
+   ]
+   ```
+
+2. Make sure the browser profile is logged in to that site (for
+   `credentials: "include"`); for public APIs use `credentials: "omit"`.
+3. Trigger a run immediately with the **↻** button in the popup footer, or wait
+   for the next alarm (the extension polls every minute; a task runs at most
+   once per `every_sec`, default 300).
+4. Read results from the server (any UserIO bearer token):
+
+   ```bash
+   curl -H "Authorization: Bearer $TOKEN" \
+     "http://127.0.0.1:18093/v1/collect/results?task_id=sitecart-orders&limit=10"
+   ```
+
+   Each result is a `universal.collect.result.v1` envelope with `status`
+   (`ok`/`error`), `http_status`, `data` (parsed JSON or raw text), and the
+   `user`/`agent` that produced it. Results are also appended to
+   `/var/lib/universal-userio/collect-results.jsonl`
+   (`USERIO_COLLECT_RESULTS_FILE` overrides).
+
+Trust boundary: tasks come only from your UserIO endpoint and results go only
+back to it; site cookies and tokens never leave the browser profile.
 
 ## 6. Updates
 

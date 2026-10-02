@@ -1,13 +1,13 @@
 // Popup UI: tabs (chats, search, compose). Communicates with the background SW.
 
 (function () {
-  const U = self.UserIO;
   const $ = (id) => document.getElementById(id);
   const tabs = document.querySelectorAll("nav button");
   const sections = {
     chats: $("tab-chats"),
     search: $("tab-search"),
     compose: $("tab-compose"),
+    vault: $("tab-vault"),
   };
 
   tabs.forEach((b) => {
@@ -16,6 +16,7 @@
       Object.entries(sections).forEach(([k, el]) => el.classList.toggle("active", k === b.dataset.tab));
       if (b.dataset.tab === "chats") refreshChats();
       if (b.dataset.tab === "search") $("searchInput").focus();
+      if (b.dataset.tab === "vault") refreshVault();
     });
   });
 
@@ -173,6 +174,21 @@
     }
   }
 
+  async function refreshCollect() {
+    const el = $("collect");
+    const res = await callSW({ kind: "collectStatus" });
+    const last = res && res.ok && res.state && res.state.last;
+    el.textContent = last
+      ? `сбор: ${last.task_id} · ${last.status} · ${fmtTime(last.at)}`
+      : "сбор: —";
+  }
+
+  $("collectRun").addEventListener("click", async () => {
+    $("collect").textContent = "сбор: выполняю…";
+    await callSW({ kind: "collectRun" });
+    refreshCollect();
+  });
+
   $("composeSend").addEventListener("click", send);
   $("composeBody").addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send();
@@ -185,6 +201,113 @@
     refreshStats();
   });
 
+  // --- vault (облачное сохранение сессий) ---------------------------------
+
+  function vaultStatus(text, cls) {
+    const el = $("vaultStatus");
+    el.textContent = text;
+    el.className = "status" + (cls ? " " + cls : "");
+  }
+
+  function fmtAgo(ts) {
+    if (!ts) return "";
+    const min = Math.round((Date.now() - ts * 1000) / 60000);
+    if (min < 1) return "только что";
+    if (min < 60) return `${min} мин назад`;
+    const h = Math.round(min / 60);
+    if (h < 24) return `${h} ч назад`;
+    return new Date(ts * 1000).toLocaleDateString();
+  }
+
+  async function refreshVault() {
+    const list = $("vaultList");
+    list.innerHTML = '<div class="empty">Загрузка…</div>';
+    const res = await callSW({ kind: "vaultList" });
+    if (!res || !res.ok) {
+      list.innerHTML = `<div class="empty">Ошибка: ${(res && res.error) || "нет ответа"}</div>`;
+      return;
+    }
+    const sessions = res.sessions || [];
+    if (!sessions.length) {
+      list.innerHTML = '<div class="empty">В облаке пока нет сессий.</div>';
+      return;
+    }
+    list.innerHTML = "";
+    for (const s of sessions) {
+      const el = document.createElement("div");
+      el.className = "chat";
+      el.innerHTML = `
+        <div class="row"><span class="name"></span><span class="time"></span></div>
+        <div class="row"><span class="preview"></span></div>
+      `;
+      el.querySelector(".name").textContent = s.name;
+      el.querySelector(".time").textContent = fmtAgo(s.stored_at);
+      const meta = [
+        s.cookie_count ? `${s.cookie_count} куки` : "",
+        s.enc && s.enc !== "none" ? "шифр." : "",
+        s.machine || "",
+      ].filter(Boolean).join(" · ");
+      el.querySelector(".preview").textContent = meta;
+      el.addEventListener("click", async () => {
+        $("vaultName").value = s.name;
+        vaultStatus(`Восстанавливаю ${s.name}…`);
+        const r = await callSW({
+          kind: "vaultRestore",
+          options: { name: s.name, passphrase: $("vaultPass").value },
+        });
+        if (r && r.ok) {
+          vaultStatus(`Готово: ${r.cookies_restored} куки` +
+            (r.cookies_failed && r.cookies_failed.length ? `, ошибок: ${r.cookies_failed.length}` : ""), "ok");
+        } else {
+          vaultStatus(`Ошибка: ${(r && r.error) || "нет ответа"}`, "err");
+        }
+      });
+      list.appendChild(el);
+    }
+  }
+
+  $("vaultSaveBtn").addEventListener("click", async () => {
+    const name = $("vaultName").value.trim();
+    if (!name) {
+      vaultStatus("Укажите имя сессии, например vk-m1-main.", "err");
+      return;
+    }
+    vaultStatus("Сохраняю сессию в облако…");
+    const r = await callSW({
+      kind: "vaultSave",
+      options: {
+        name,
+        passphrase: $("vaultPass").value,
+        machine: navigator.platform || "",
+      },
+    });
+    if (r && r.ok) {
+      vaultStatus(`Сохранено: ${r.cookies} куки (${r.enc === "none" ? "без шифрования" : r.enc}).`, "ok");
+      refreshVault();
+    } else {
+      vaultStatus(`Ошибка: ${(r && r.error) || "нет ответа"}`, "err");
+    }
+  });
+
+  $("vaultRestoreBtn").addEventListener("click", async () => {
+    const name = $("vaultName").value.trim();
+    if (!name) {
+      vaultStatus("Укажите имя сессии.", "err");
+      return;
+    }
+    vaultStatus(`Восстанавливаю ${name}…`);
+    const r = await callSW({
+      kind: "vaultRestore",
+      options: { name, passphrase: $("vaultPass").value },
+    });
+    if (r && r.ok) {
+      vaultStatus(`Готово: ${r.cookies_restored} куки` +
+        (r.cookies_failed && r.cookies_failed.length ? `, ошибок: ${r.cookies_failed.length}` : ""), "ok");
+    } else {
+      vaultStatus(`Ошибка: ${(r && r.error) || "нет ответа"}`, "err");
+    }
+  });
+
   chrome.runtime.onMessage.addListener((m) => {
     if (m && m.kind === "captured") {
       refreshStats();
@@ -194,4 +317,5 @@
 
   refreshChats();
   refreshStats();
+  refreshCollect();
 })();

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from typing import Any
 
 from .contracts import InboxMessage
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 class OpenAICompatibleDraftGenerator:
@@ -31,9 +34,21 @@ class OpenAICompatibleDraftGenerator:
             "You write concise reply drafts for a human operator. Return only the proposed reply text. "
             f"Conversation {conversation_id}; source={latest_message.source}.\nHistory:\n{transcript}"
         )
+        # Some providers (e.g. MiniMax) reject n>1, so variants are separate calls.
+        drafts: list[str] = []
+        for _ in range(max(1, limit)):
+            draft = self._one_draft(prompt)
+            if draft and draft not in drafts:
+                drafts.append(draft)
+            if len(drafts) >= limit:
+                break
+        return drafts
+
+    def _one_draft(self, prompt: str) -> str:
         payload = {
             "model": self._model,
-            "n": limit,
+            # Reasoning models spend budget on <think> before the answer.
+            "max_tokens": 2000,
             "messages": [
                 {"role": "system", "content": "Do not claim to send messages. Produce drafts only."},
                 {"role": "user", "content": prompt},
@@ -46,12 +61,15 @@ class OpenAICompatibleDraftGenerator:
             method="POST",
         )
         try:
-            with self._runner(request, timeout=20) as response:
+            with self._runner(request, timeout=60) as response:
                 if int(response.status) != 200:
                     raise RuntimeError(f"AI provider returned HTTP {response.status}")
                 result = json.loads(response.read())
         except urllib.error.HTTPError as error:
-            raise RuntimeError(f"AI provider returned HTTP {error.code}") from error
+            detail = error.read().decode(errors="replace")[:200]
+            raise RuntimeError(f"AI provider returned HTTP {error.code}: {detail}") from error
         choices = result.get("choices", []) if isinstance(result, dict) else []
-        drafts = [str(choice.get("message", {}).get("content", "")).strip() for choice in choices if isinstance(choice, dict)]
-        return [draft for draft in drafts if draft]
+        for choice in choices:
+            if isinstance(choice, dict):
+                return _THINK_BLOCK.sub("", str(choice.get("message", {}).get("content", ""))).strip()
+        return ""

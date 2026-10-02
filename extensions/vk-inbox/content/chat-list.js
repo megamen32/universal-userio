@@ -49,17 +49,17 @@
       for (const m of mutations) {
         m.addedNodes.forEach((n) => {
           if (n.nodeType === 1) {
-            if (n.matches && (n.matches('[role="link"]') || n.matches('[role="button"]') || n.classList.contains("FCThumb"))) {
+            if (n.matches && n.matches('.ConvoList__item, [role="listitem"], [role="link"], [role="button"], .FCThumb')) {
               pushChat(n);
             }
             // descendants
-            n.querySelectorAll && n.querySelectorAll('[role="link"], [role="button"], .FCThumb').forEach(pushChat);
+            n.querySelectorAll && n.querySelectorAll('.ConvoList__item, [role="listitem"], [role="link"], [role="button"], .FCThumb').forEach(pushChat);
           }
         });
         if (m.type === "characterData" || m.type === "attributes") {
           // text updates (preview/unread change) — re-scan the affected subtree root
           const t = m.target;
-          if (t && t.nodeType === 1) pushChat(t.closest('[role="link"], [role="button"], .FCThumb'));
+          if (t && t.nodeType === 1) pushChat(t.closest('.ConvoList__item, [role="listitem"], [role="link"], [role="button"], .FCThumb'));
         }
       }
     });

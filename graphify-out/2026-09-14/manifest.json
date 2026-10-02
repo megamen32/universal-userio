@@ -1,0 +1,957 @@
+{
+  ".fast-agent/sessions/2608271618-FFSjCE/history_agent.json": {
+    "mtime": 1787836701.3635008,
+    "ast_hash": "d1424c52fb61ee6040ac11b351602bcc",
+    "semantic_hash": "d1424c52fb61ee6040ac11b351602bcc"
+  },
+  ".fast-agent/sessions/2608271618-FFSjCE/session.json": {
+    "mtime": 1787836701.3745012,
+    "ast_hash": "4a32ed87c3ea66adada4ff07051f7155",
+    "semantic_hash": "4a32ed87c3ea66adada4ff07051f7155"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/children/2608271643-Bt81eM/history_dev02_mcp_http_review.json": {
+    "mtime": 1787838591.2411833,
+    "ast_hash": "fdc03639e77ec0ebb79c36ea37f13409",
+    "semantic_hash": "fdc03639e77ec0ebb79c36ea37f13409"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/children/2608271643-Bt81eM/session.json": {
+    "mtime": 1787838591.2541838,
+    "ast_hash": "6fb2da8da188932fc0d4586a4567ea77",
+    "semantic_hash": "6fb2da8da188932fc0d4586a4567ea77"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/children/2608271643-Z6U41t/history_dev01_schema_security_review.json": {
+    "mtime": 1787838733.175342,
+    "ast_hash": "4ac9872924e40cb2cf0e6a670d16fec0",
+    "semantic_hash": "4ac9872924e40cb2cf0e6a670d16fec0"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/children/2608271643-Z6U41t/session.json": {
+    "mtime": 1787838733.1863425,
+    "ast_hash": "b23e4dfcd61f5e8fb61dcb10b69bd8f1",
+    "semantic_hash": "b23e4dfcd61f5e8fb61dcb10b69bd8f1"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/children/2608271658-z50dEb/history_dev03_final_correctness_review.json": {
+    "mtime": 1787839426.0052497,
+    "ast_hash": "9531ed86a05492101b1a8fba892eced2",
+    "semantic_hash": "9531ed86a05492101b1a8fba892eced2"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/children/2608271658-z50dEb/session.json": {
+    "mtime": 1787839426.01325,
+    "ast_hash": "1b25e6264a7653f237a46e315dd9efc7",
+    "semantic_hash": "1b25e6264a7653f237a46e315dd9efc7"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/history_dev.json": {
+    "mtime": 1787839540.6287575,
+    "ast_hash": "382b62c7d32d47c04fe610b460d7b225",
+    "semantic_hash": "382b62c7d32d47c04fe610b460d7b225"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/history_dev_previous.json": {
+    "mtime": 1787839497.291434,
+    "ast_hash": "e52e909b46f97863b9ae2cf7e2457347",
+    "semantic_hash": "e52e909b46f97863b9ae2cf7e2457347"
+  },
+  ".fast-agent/sessions/2608271625-8Bv5kZ/session.json": {
+    "mtime": 1787839540.6417577,
+    "ast_hash": "fcce22d87e90266c3a682446c71abc83",
+    "semantic_hash": "fcce22d87e90266c3a682446c71abc83"
+  },
+  ".fast-agent/sessions/2608272045-i4UN9l/history_dev.json": {
+    "mtime": 1787853188.0426404,
+    "ast_hash": "6f6f989159cc24f1ae9e1f298fb75861",
+    "semantic_hash": "6f6f989159cc24f1ae9e1f298fb75861"
+  },
+  ".fast-agent/sessions/2608272045-i4UN9l/history_dev_previous.json": {
+    "mtime": 1787853143.6613517,
+    "ast_hash": "e604af3d9e4a4048a17fdc6ab779d1ec",
+    "semantic_hash": "e604af3d9e4a4048a17fdc6ab779d1ec"
+  },
+  ".fast-agent/sessions/2608272045-i4UN9l/session.json": {
+    "mtime": 1787853188.0516407,
+    "ast_hash": "21a9acf08d0b8bfc04f56a7c5aaebc9b",
+    "semantic_hash": "21a9acf08d0b8bfc04f56a7c5aaebc9b"
+  },
+  "deploy/byok-bridge/package.json": {
+    "mtime": 1788628628.2840388,
+    "ast_hash": "8c201343567e834ba680f597069828fb",
+    "semantic_hash": "8c201343567e834ba680f597069828fb"
+  },
+  "deploy/byok-bridge/server.ts": {
+    "mtime": 1788628191.9609053,
+    "ast_hash": "800f393258f4890f3cb298c015fcf9be",
+    "semantic_hash": "800f393258f4890f3cb298c015fcf9be"
+  },
+  "deploy/telegram-qr-connector/agent-deliver.mjs": {
+    "mtime": 1789163561.488036,
+    "ast_hash": "faa748ee20d92862d1b619694c90c335",
+    "semantic_hash": "faa748ee20d92862d1b619694c90c335"
+  },
+  "deploy/telegram-qr-connector/agent-deliver.test.mjs": {
+    "mtime": 1789163561.4860358,
+    "ast_hash": "891fa29bbc568b3f9ce8f557ae7c699e",
+    "semantic_hash": "891fa29bbc568b3f9ce8f557ae7c699e"
+  },
+  "deploy/telegram-qr-connector/deliver-hermes-context.py": {
+    "mtime": 1789163642.8909752,
+    "ast_hash": "555d8dc3d70d62601df631603b75cf22",
+    "semantic_hash": "555d8dc3d70d62601df631603b75cf22"
+  },
+  "deploy/telegram-qr-connector/deliver-hermes-context.test.py": {
+    "mtime": 1789163581.7475154,
+    "ast_hash": "7b3098349274f581ce676c98cc1fcda7",
+    "semantic_hash": "7b3098349274f581ce676c98cc1fcda7"
+  },
+  "deploy/telegram-qr-connector/group-routing.mjs": {
+    "mtime": 1789159300.9204798,
+    "ast_hash": "7ec33554b35184ce55d108963e5786a1",
+    "semantic_hash": "7ec33554b35184ce55d108963e5786a1"
+  },
+  "deploy/telegram-qr-connector/server.mjs": {
+    "mtime": 1789163070.654333,
+    "ast_hash": "11b46e68df4b6c8c53a88c71a81d0e6f",
+    "semantic_hash": "11b46e68df4b6c8c53a88c71a81d0e6f"
+  },
+  "deploy/telegram-qr-connector/transcription.mjs": {
+    "mtime": 1788738436.8677378,
+    "ast_hash": "da20c9ce98d4d4b9acb12ea60f770e22",
+    "semantic_hash": "da20c9ce98d4d4b9acb12ea60f770e22"
+  },
+  "deploy/telegram-qr-connector/transcription.test.mjs": {
+    "mtime": 1788715535.0786672,
+    "ast_hash": "cafb156e92345cbed0ab0ba85110fadc",
+    "semantic_hash": "cafb156e92345cbed0ab0ba85110fadc"
+  },
+  "deploy/universal-userio-gmail-password": {
+    "mtime": 1787322625.7663076,
+    "ast_hash": "1b0598c9acc2b7dc0ec6031622426e35",
+    "semantic_hash": "1b0598c9acc2b7dc0ec6031622426e35"
+  },
+  "deploy/whatsapp-bridge/allowlist.js": {
+    "mtime": 1788387276.1622653,
+    "ast_hash": "665a081905127b345b7673c88e1fc1b7",
+    "semantic_hash": "665a081905127b345b7673c88e1fc1b7"
+  },
+  "deploy/whatsapp-bridge/bridge.js": {
+    "mtime": 1788387276.1622653,
+    "ast_hash": "d50d7f4a5cd4e7e829fb616e08181f41",
+    "semantic_hash": "d50d7f4a5cd4e7e829fb616e08181f41"
+  },
+  "deploy/whatsapp-bridge/bridge_helpers.js": {
+    "mtime": 1788387276.1622653,
+    "ast_hash": "aa26efc3de7aab6e586368c59a1ca399",
+    "semantic_hash": "aa26efc3de7aab6e586368c59a1ca399"
+  },
+  "deploy/whatsapp-bridge/outbound_ids.js": {
+    "mtime": 1788387276.1632652,
+    "ast_hash": "95cb00ff772790da9a5136be2b7a5475",
+    "semantic_hash": "95cb00ff772790da9a5136be2b7a5475"
+  },
+  "deploy/whatsapp-bridge/owner_message_gate.js": {
+    "mtime": 1788387276.1632652,
+    "ast_hash": "f69e3a5dcc87e3e86f501db4335df04c",
+    "semantic_hash": "f69e3a5dcc87e3e86f501db4335df04c"
+  },
+  "deploy/whatsapp-bridge/package.json": {
+    "mtime": 1788387276.1632652,
+    "ast_hash": "8fb506f6f9ef4d678e63232d778d1afa",
+    "semantic_hash": "8fb506f6f9ef4d678e63232d778d1afa"
+  },
+  "extensions/vk-inbox/background.js": {
+    "mtime": 1788746315.645288,
+    "ast_hash": "167c604df157f52360184090c66cbcb1",
+    "semantic_hash": "167c604df157f52360184090c66cbcb1"
+  },
+  "extensions/vk-inbox/collect-tasks.example.json": {
+    "mtime": 1788227276.3230073,
+    "ast_hash": "97beccb6694e351fd16840041e14b01f",
+    "semantic_hash": "97beccb6694e351fd16840041e14b01f"
+  },
+  "extensions/vk-inbox/content/chat-list.js": {
+    "mtime": 1788249490.4032495,
+    "ast_hash": "e4f6aef6211311da879f0aa8068de8fb",
+    "semantic_hash": "e4f6aef6211311da879f0aa8068de8fb"
+  },
+  "extensions/vk-inbox/content/chat-view.js": {
+    "mtime": 1788491128.8373098,
+    "ast_hash": "5b9fac38431797eb824b86c1f3b83b15",
+    "semantic_hash": "5b9fac38431797eb824b86c1f3b83b15"
+  },
+  "extensions/vk-inbox/lib/agent.js": {
+    "mtime": 1788817545.3785865,
+    "ast_hash": "428717c06dfa2cdaaed27e3e86cbc7c0",
+    "semantic_hash": "428717c06dfa2cdaaed27e3e86cbc7c0"
+  },
+  "extensions/vk-inbox/lib/chatgpt.js": {
+    "mtime": 1788747133.120259,
+    "ast_hash": "25fb841c776d078de3908eb568d07f6a",
+    "semantic_hash": "25fb841c776d078de3908eb568d07f6a"
+  },
+  "extensions/vk-inbox/lib/collect.js": {
+    "mtime": 1788227275.007968,
+    "ast_hash": "83f4464334fcdf11cb798fddcfc3830d",
+    "semantic_hash": "83f4464334fcdf11cb798fddcfc3830d"
+  },
+  "extensions/vk-inbox/lib/config.js": {
+    "mtime": 1788628814.1115694,
+    "ast_hash": "7207da3c5cf87c06a374911cba670b60",
+    "semantic_hash": "7207da3c5cf87c06a374911cba670b60"
+  },
+  "extensions/vk-inbox/lib/db.js": {
+    "mtime": 1788817545.3775866,
+    "ast_hash": "540bb0f640068beabebb0abab599c755",
+    "semantic_hash": "540bb0f640068beabebb0abab599c755"
+  },
+  "extensions/vk-inbox/lib/selectors.js": {
+    "mtime": 1788250421.5196416,
+    "ast_hash": "f3f6f32dd65a481c88a4c5c5fc68f32e",
+    "semantic_hash": "f3f6f32dd65a481c88a4c5c5fc68f32e"
+  },
+  "extensions/vk-inbox/lib/userio.js": {
+    "mtime": 1788628815.7846582,
+    "ast_hash": "5df0091ce82b35da84c07bce453969b9",
+    "semantic_hash": "5df0091ce82b35da84c07bce453969b9"
+  },
+  "extensions/vk-inbox/lib/vault.js": {
+    "mtime": 1788738229.7138414,
+    "ast_hash": "8fda540103802d6539e8d7ba02cd5b06",
+    "semantic_hash": "8fda540103802d6539e8d7ba02cd5b06"
+  },
+  "extensions/vk-inbox/manifest.json": {
+    "mtime": 1788746315.646288,
+    "ast_hash": "f56cd2cadbc29ce22666e33805cc7411",
+    "semantic_hash": "f56cd2cadbc29ce22666e33805cc7411"
+  },
+  "extensions/vk-inbox/options.js": {
+    "mtime": 1787241384.6833923,
+    "ast_hash": "e0eb59f734f6b1ccc6769217e536dd44",
+    "semantic_hash": "e0eb59f734f6b1ccc6769217e536dd44"
+  },
+  "extensions/vk-inbox/popup.js": {
+    "mtime": 1788738332.3507617,
+    "ast_hash": "52ae1d9a5065cf9737cfb8a2b20f932b",
+    "semantic_hash": "52ae1d9a5065cf9737cfb8a2b20f932b"
+  },
+  "extensions/vk-inbox/scripts/build.sh": {
+    "mtime": 1788629114.8930006,
+    "ast_hash": "33bd16d2411c921b9bb94771a8444208",
+    "semantic_hash": "33bd16d2411c921b9bb94771a8444208"
+  },
+  "mcp.json": {
+    "mtime": 1788665644.4160545,
+    "ast_hash": "c4d223e94bd844030f8b79b89a2901e5",
+    "semantic_hash": "c4d223e94bd844030f8b79b89a2901e5"
+  },
+  "plugin.json": {
+    "mtime": 1788665644.4140544,
+    "ast_hash": "51d1d10f2884529405409eb184bcdfd0",
+    "semantic_hash": "51d1d10f2884529405409eb184bcdfd0"
+  },
+  "pyproject.toml": {
+    "mtime": 1788398244.9386458,
+    "ast_hash": "c22dec88f68e50933de8b4e4ee5a253b",
+    "semantic_hash": "c22dec88f68e50933de8b4e4ee5a253b"
+  },
+  "scripts/cdp_diag.cjs": {
+    "mtime": 1788570508.1936965,
+    "ast_hash": "3e7a3bfc4c6eece6e6f882d95eea1933",
+    "semantic_hash": "3e7a3bfc4c6eece6e6f882d95eea1933"
+  },
+  "scripts/cdp_inject_vk.cjs": {
+    "mtime": 1788623520.75153,
+    "ast_hash": "791f790556ee431e00022befb1d11331",
+    "semantic_hash": "791f790556ee431e00022befb1d11331"
+  },
+  "scripts/cdp_listen.cjs": {
+    "mtime": 1788570581.222901,
+    "ast_hash": "9f95c3d26e206eaf1fc46370db5a28ce",
+    "semantic_hash": "9f95c3d26e206eaf1fc46370db5a28ce"
+  },
+  "scripts/cdp_path.cjs": {
+    "mtime": 1788570540.1336603,
+    "ast_hash": "3f2cae75810fa36a8ad3f38e4069865c",
+    "semantic_hash": "3f2cae75810fa36a8ad3f38e4069865c"
+  },
+  "scripts/cdp_probe.cjs": {
+    "mtime": 1788570434.126464,
+    "ast_hash": "513873e09327b50dce3812903c0908f6",
+    "semantic_hash": "513873e09327b50dce3812903c0908f6"
+  },
+  "scripts/cdp_probe.mjs": {
+    "mtime": 1788570067.0254755,
+    "ast_hash": "ddf04ca8e12fe2d42ef54f3fac5808c9",
+    "semantic_hash": "ddf04ca8e12fe2d42ef54f3fac5808c9"
+  },
+  "scripts/cdp_vk.cjs": {
+    "mtime": 1788570600.3164783,
+    "ast_hash": "fef3b9f55810d2acb13c760190de6481",
+    "semantic_hash": "fef3b9f55810d2acb13c760190de6481"
+  },
+  "scripts/vk_extension_gateway.mjs": {
+    "mtime": 1788491732.578234,
+    "ast_hash": "ffefc237e3f6183cd055998420cf7a6e",
+    "semantic_hash": "ffefc237e3f6183cd055998420cf7a6e"
+  },
+  "src/universal_userio/__init__.py": {
+    "mtime": 1786952974.1486087,
+    "ast_hash": "2fa23c01b3a91ae1c88e2a919aa687af",
+    "semantic_hash": "2fa23c01b3a91ae1c88e2a919aa687af"
+  },
+  "src/universal_userio/__main__.py": {
+    "mtime": 1786963472.9759355,
+    "ast_hash": "c3a55ca6d3c3160edcf1e43a92fa79ce",
+    "semantic_hash": "c3a55ca6d3c3160edcf1e43a92fa79ce"
+  },
+  "src/universal_userio/adapters.py": {
+    "mtime": 1789295911.8904061,
+    "ast_hash": "1f2ea6e3e8a8dcafdc03a4b266f85a05",
+    "semantic_hash": "1f2ea6e3e8a8dcafdc03a4b266f85a05"
+  },
+  "src/universal_userio/agent_channel.py": {
+    "mtime": 1788747467.0075223,
+    "ast_hash": "0cc66de7b2111e012f4fea2ba449f506",
+    "semantic_hash": "0cc66de7b2111e012f4fea2ba449f506"
+  },
+  "src/universal_userio/agentcall_ingress.py": {
+    "mtime": 1789295973.9786997,
+    "ast_hash": "21c8d9bfad1712ad6af2e3ff7244a548",
+    "semantic_hash": "21c8d9bfad1712ad6af2e3ff7244a548"
+  },
+  "src/universal_userio/ai.py": {
+    "mtime": 1788620923.7950265,
+    "ast_hash": "654ef79150cfed6f547cc65970c393c9",
+    "semantic_hash": "654ef79150cfed6f547cc65970c393c9"
+  },
+  "src/universal_userio/channels/__init__.py": {
+    "mtime": 1788386318.6936994,
+    "ast_hash": "8431fbd897a4f3ec76b9b794c728cee1",
+    "semantic_hash": "8431fbd897a4f3ec76b9b794c728cee1"
+  },
+  "src/universal_userio/channels/core.py": {
+    "mtime": 1788665867.6559715,
+    "ast_hash": "f4299c9caf5fb86ffb915a4107b74a28",
+    "semantic_hash": "f4299c9caf5fb86ffb915a4107b74a28"
+  },
+  "src/universal_userio/channels/email.py": {
+    "mtime": 1788818731.266128,
+    "ast_hash": "56bf14316f1770cfb07cddbd729b9f3e",
+    "semantic_hash": "56bf14316f1770cfb07cddbd729b9f3e"
+  },
+  "src/universal_userio/channels/gmail.py": {
+    "mtime": 1788666858.5659957,
+    "ast_hash": "a939bb355828ed35626805654bddf28f",
+    "semantic_hash": "a939bb355828ed35626805654bddf28f"
+  },
+  "src/universal_userio/channels/live_telegram.py": {
+    "mtime": 1788665867.6589715,
+    "ast_hash": "a15c891a1dc0dcfdf3b656717d2aab41",
+    "semantic_hash": "a15c891a1dc0dcfdf3b656717d2aab41"
+  },
+  "src/universal_userio/channels/matrix.py": {
+    "mtime": 1788666858.5669956,
+    "ast_hash": "44cad8fc920aeb35c70102cac537fc88",
+    "semantic_hash": "44cad8fc920aeb35c70102cac537fc88"
+  },
+  "src/universal_userio/channels/sms.py": {
+    "mtime": 1788666537.4477446,
+    "ast_hash": "e9ae8b01715553635a5d0b8940755c99",
+    "semantic_hash": "e9ae8b01715553635a5d0b8940755c99"
+  },
+  "src/universal_userio/channels/sms_gateway.py": {
+    "mtime": 1788665867.6589715,
+    "ast_hash": "370f37f371ef53ca0f5f4423ef62241e",
+    "semantic_hash": "370f37f371ef53ca0f5f4423ef62241e"
+  },
+  "src/universal_userio/channels/sync_runner.py": {
+    "mtime": 1788665867.6579716,
+    "ast_hash": "b8dccd82eb5ddef56776e4db696b11d7",
+    "semantic_hash": "b8dccd82eb5ddef56776e4db696b11d7"
+  },
+  "src/universal_userio/channels/telegram.py": {
+    "mtime": 1788665867.6589715,
+    "ast_hash": "76b4528c77f6023203d0a4f7d2e888af",
+    "semantic_hash": "76b4528c77f6023203d0a4f7d2e888af"
+  },
+  "src/universal_userio/channels/telegram_contracts.py": {
+    "mtime": 1788665867.6569717,
+    "ast_hash": "7a5b132956bd8820d8aa12b68235fa86",
+    "semantic_hash": "7a5b132956bd8820d8aa12b68235fa86"
+  },
+  "src/universal_userio/channels/telegram_login.py": {
+    "mtime": 1788665867.6569717,
+    "ast_hash": "e053871a63b1656739522349cb4f6077",
+    "semantic_hash": "e053871a63b1656739522349cb4f6077"
+  },
+  "src/universal_userio/channels/vk.py": {
+    "mtime": 1788665867.6579716,
+    "ast_hash": "0c22342d2adab0b51dd910ba1d9259df",
+    "semantic_hash": "0c22342d2adab0b51dd910ba1d9259df"
+  },
+  "src/universal_userio/channels/whatsapp.py": {
+    "mtime": 1788994764.2456887,
+    "ast_hash": "6538aa36eaca8cf26bdb159700578a2a",
+    "semantic_hash": "6538aa36eaca8cf26bdb159700578a2a"
+  },
+  "src/universal_userio/chatgpt_sessions.py": {
+    "mtime": 1788747833.403907,
+    "ast_hash": "29382e091b77bf84bedc420d01d5c6ac",
+    "semantic_hash": "29382e091b77bf84bedc420d01d5c6ac"
+  },
+  "src/universal_userio/collect.py": {
+    "mtime": 1788227274.145942,
+    "ast_hash": "418cd7a513e89943fd089f168ebddc8e",
+    "semantic_hash": "418cd7a513e89943fd089f168ebddc8e"
+  },
+  "src/universal_userio/contracts.py": {
+    "mtime": 1789295911.886406,
+    "ast_hash": "5441413abc0c329ab6432378a6b455fb",
+    "semantic_hash": "5441413abc0c329ab6432378a6b455fb"
+  },
+  "src/universal_userio/draft_notifications.py": {
+    "mtime": 1788792711.755573,
+    "ast_hash": "c5761fbbe34e5612301c6751a261ac34",
+    "semantic_hash": "c5761fbbe34e5612301c6751a261ac34"
+  },
+  "src/universal_userio/gmail_ingress.py": {
+    "mtime": 1788669151.133888,
+    "ast_hash": "6369ca530c9c68fd9b45e663f8d747ed",
+    "semantic_hash": "6369ca530c9c68fd9b45e663f8d747ed"
+  },
+  "src/universal_userio/http_api.py": {
+    "mtime": 1789161520.6970837,
+    "ast_hash": "9986ceda6ec074336acb09dc0f030320",
+    "semantic_hash": "9986ceda6ec074336acb09dc0f030320"
+  },
+  "src/universal_userio/matrix_ingress.py": {
+    "mtime": 1788669037.6295688,
+    "ast_hash": "409373dd79f025d7c6a53d8871ce26da",
+    "semantic_hash": "409373dd79f025d7c6a53d8871ce26da"
+  },
+  "src/universal_userio/mcp_surface.py": {
+    "mtime": 1789161622.507069,
+    "ast_hash": "c5f3c57d3302883f51470a3da11dc4fe",
+    "semantic_hash": "c5f3c57d3302883f51470a3da11dc4fe"
+  },
+  "src/universal_userio/mcp_transport.py": {
+    "mtime": 1789161529.0593288,
+    "ast_hash": "ccf8da6975339ebebb02abc1cb7ed0e4",
+    "semantic_hash": "ccf8da6975339ebebb02abc1cb7ed0e4"
+  },
+  "src/universal_userio/oauth.py": {
+    "mtime": 1787853092.2988605,
+    "ast_hash": "cf21248ff208e8217300541af5520d54",
+    "semantic_hash": "cf21248ff208e8217300541af5520d54"
+  },
+  "src/universal_userio/runtime.py": {
+    "mtime": 1788994959.9512472,
+    "ast_hash": "ed2fd83169b74f964bb0f01e1c6bc859",
+    "semantic_hash": "ed2fd83169b74f964bb0f01e1c6bc859"
+  },
+  "src/universal_userio/search.py": {
+    "mtime": 1788746054.7265646,
+    "ast_hash": "265e194e89d5f282d5d1cc157d8d5410",
+    "semantic_hash": "265e194e89d5f282d5d1cc157d8d5410"
+  },
+  "src/universal_userio/service.py": {
+    "mtime": 1788994901.8815956,
+    "ast_hash": "9510ec98998ab38f1a6ea177f6160ad3",
+    "semantic_hash": "9510ec98998ab38f1a6ea177f6160ad3"
+  },
+  "src/universal_userio/sms_ingress.py": {
+    "mtime": 1788665867.6599717,
+    "ast_hash": "115072763c82e6803b6bffa6bb24de28",
+    "semantic_hash": "115072763c82e6803b6bffa6bb24de28"
+  },
+  "src/universal_userio/static/assets/index-7AoOQ2cN.js": {
+    "mtime": 1789296135.9073596,
+    "ast_hash": "492b590f5dfee8e6c45d99fe769c4038",
+    "semantic_hash": "492b590f5dfee8e6c45d99fe769c4038"
+  },
+  "src/universal_userio/static/assets/index-BDHIfE0-.js": {
+    "mtime": 1788793940.2328691,
+    "ast_hash": "065f9cc55de5c6be1675145171ff3b78",
+    "semantic_hash": "065f9cc55de5c6be1675145171ff3b78"
+  },
+  "src/universal_userio/static/assets/index-BZa--jkH.js": {
+    "mtime": 1788825648.944655,
+    "ast_hash": "bb3ee6ed8743345da0301be2b1817655",
+    "semantic_hash": "bb3ee6ed8743345da0301be2b1817655"
+  },
+  "src/universal_userio/static/assets/index-ChlMeMcN.js": {
+    "mtime": 1788793823.8455381,
+    "ast_hash": "cd1a7088e83848bc17e76df398f4de72",
+    "semantic_hash": "cd1a7088e83848bc17e76df398f4de72"
+  },
+  "src/universal_userio/static/assets/index-CxLUMw7i.js": {
+    "mtime": 1788746155.913567,
+    "ast_hash": "1007b04207e01c78b93bb18696f8a63c",
+    "semantic_hash": "1007b04207e01c78b93bb18696f8a63c"
+  },
+  "src/universal_userio/static/assets/index-D7SnVdOK.js": {
+    "mtime": 1788668923.0322177,
+    "ast_hash": "1cb7cf74bf95cf96290be72093520716",
+    "semantic_hash": "1cb7cf74bf95cf96290be72093520716"
+  },
+  "src/universal_userio/static/assets/index-DSPT1BVB.js": {
+    "mtime": 1788747809.3521707,
+    "ast_hash": "013465e4074fc3001057d82728616efa",
+    "semantic_hash": "013465e4074fc3001057d82728616efa"
+  },
+  "src/universal_userio/static/assets/index-DWodf9JG.js": {
+    "mtime": 1788799609.2190294,
+    "ast_hash": "600b4836aa4e2e6333040495cf82344f",
+    "semantic_hash": "600b4836aa4e2e6333040495cf82344f"
+  },
+  "src/universal_userio/static/assets/index-DuKNzKr_.js": {
+    "mtime": 1788747996.178861,
+    "ast_hash": "4b577996973bdae78b3230b9eb277d82",
+    "semantic_hash": "4b577996973bdae78b3230b9eb277d82"
+  },
+  "src/universal_userio/static/assets/index-FQlC4kKN.js": {
+    "mtime": 1788748329.9829068,
+    "ast_hash": "ea1c931bb8e51ff6a38f6ceb7abd6912",
+    "semantic_hash": "ea1c931bb8e51ff6a38f6ceb7abd6912"
+  },
+  "src/universal_userio/static/assets/index-dPl1AlHM.js": {
+    "mtime": 1788826460.0876546,
+    "ast_hash": "b250b4ca5c5abbbb31db41f37f8ecc6e",
+    "semantic_hash": "b250b4ca5c5abbbb31db41f37f8ecc6e"
+  },
+  "src/universal_userio/store.py": {
+    "mtime": 1789295911.8964062,
+    "ast_hash": "7fc2e7a04755d2c7ffa738ae3525f96a",
+    "semantic_hash": "7fc2e7a04755d2c7ffa738ae3525f96a"
+  },
+  "src/universal_userio/vault.py": {
+    "mtime": 1788747467.0065222,
+    "ast_hash": "08238233d75ba82fb902e6517bc2027c",
+    "semantic_hash": "08238233d75ba82fb902e6517bc2027c"
+  },
+  "src/userio_adapter_sdk/__init__.py": {
+    "mtime": 1789319351.6896172,
+    "ast_hash": "edc82ccfd6cb8ec22a159a7412eadf3b",
+    "semantic_hash": ""
+  },
+  "tests/telegram_group_routing.test.mjs": {
+    "mtime": 1789159300.9194798,
+    "ast_hash": "87b97e5b58ad0506295bc8a023d3dfe0",
+    "semantic_hash": "87b97e5b58ad0506295bc8a023d3dfe0"
+  },
+  "tests/test_agent_channel.py": {
+    "mtime": 1788747519.9881954,
+    "ast_hash": "ee5569233bdf460e5b7e67645b5ac51d",
+    "semantic_hash": "ee5569233bdf460e5b7e67645b5ac51d"
+  },
+  "tests/test_agentcall_ingress.py": {
+    "mtime": 1789295791.4767146,
+    "ast_hash": "a75222855cf3c54c32ac79815629eaeb",
+    "semantic_hash": "a75222855cf3c54c32ac79815629eaeb"
+  },
+  "tests/test_ai.py": {
+    "mtime": 1788621110.9666135,
+    "ast_hash": "92bef0471aea7a4497fcd7dd47a496f9",
+    "semantic_hash": "92bef0471aea7a4497fcd7dd47a496f9"
+  },
+  "tests/test_ai_settings.py": {
+    "mtime": 1788622208.802761,
+    "ast_hash": "8864967780a637ee932cfcfe26472636",
+    "semantic_hash": "8864967780a637ee932cfcfe26472636"
+  },
+  "tests/test_android_sms_adapter.py": {
+    "mtime": 1788995055.0579557,
+    "ast_hash": "7cbe56db7b93df52faae43f528842e2d",
+    "semantic_hash": "7cbe56db7b93df52faae43f528842e2d"
+  },
+  "tests/test_channels_core.py": {
+    "mtime": 1788386372.315307,
+    "ast_hash": "5d14cbaab46a4c4189ea275670a44fc3",
+    "semantic_hash": "5d14cbaab46a4c4189ea275670a44fc3"
+  },
+  "tests/test_channels_email.py": {
+    "mtime": 1788387192.9077733,
+    "ast_hash": "b320d65868a28809264c09f5e612f113",
+    "semantic_hash": "b320d65868a28809264c09f5e612f113"
+  },
+  "tests/test_channels_sms_vk.py": {
+    "mtime": 1788387581.1754012,
+    "ast_hash": "ae108c1a9dfa56d3d991b1e22b89c4bc",
+    "semantic_hash": "ae108c1a9dfa56d3d991b1e22b89c4bc"
+  },
+  "tests/test_channels_telegram.py": {
+    "mtime": 1788388096.2938442,
+    "ast_hash": "b4130dfe8eff637b5997af0ae406f1ad",
+    "semantic_hash": "b4130dfe8eff637b5997af0ae406f1ad"
+  },
+  "tests/test_channels_telegram_login.py": {
+    "mtime": 1788390358.0225484,
+    "ast_hash": "664c91465b56fa8a23270b3b3496faf1",
+    "semantic_hash": "664c91465b56fa8a23270b3b3496faf1"
+  },
+  "tests/test_channels_whatsapp.py": {
+    "mtime": 1788387340.9262042,
+    "ast_hash": "446e70f9ac0fddff12642c269d1eb739",
+    "semantic_hash": "446e70f9ac0fddff12642c269d1eb739"
+  },
+  "tests/test_chatgpt_web.py": {
+    "mtime": 1788747596.4945931,
+    "ast_hash": "426a861c5187363814092b59dff47734",
+    "semantic_hash": "426a861c5187363814092b59dff47734"
+  },
+  "tests/test_collect.py": {
+    "mtime": 1788227277.1870332,
+    "ast_hash": "dc03991ecf0d44b4df117d5d69730607",
+    "semantic_hash": "dc03991ecf0d44b4df117d5d69730607"
+  },
+  "tests/test_draft_notifications.py": {
+    "mtime": 1788792711.7565732,
+    "ast_hash": "029591787a81083800e2793635d826de",
+    "semantic_hash": "029591787a81083800e2793635d826de"
+  },
+  "tests/test_gmail_ingress.py": {
+    "mtime": 1788664326.092578,
+    "ast_hash": "ee6c51f4e26755b273fe3c6fbc1417c3",
+    "semantic_hash": "ee6c51f4e26755b273fe3c6fbc1417c3"
+  },
+  "tests/test_http_api.py": {
+    "mtime": 1789160685.989134,
+    "ast_hash": "7a18b78b02bb82ca71e292dc6c7cf77c",
+    "semantic_hash": "7a18b78b02bb82ca71e292dc6c7cf77c"
+  },
+  "tests/test_live_telegram_outbox.py": {
+    "mtime": 1788387050.6625183,
+    "ast_hash": "40e5245d4f604758013b314e51fc828a",
+    "semantic_hash": "40e5245d4f604758013b314e51fc828a"
+  },
+  "tests/test_matrix_ingress.py": {
+    "mtime": 1788664556.8857093,
+    "ast_hash": "ee06db0fa7f2ab26b39cb0e3fc67fdd6",
+    "semantic_hash": "ee06db0fa7f2ab26b39cb0e3fc67fdd6"
+  },
+  "tests/test_mcp_consumer_visibility.py": {
+    "mtime": 1789160728.0873027,
+    "ast_hash": "eda31d49362badb016a705b3218b5feb",
+    "semantic_hash": "eda31d49362badb016a705b3218b5feb"
+  },
+  "tests/test_mcp_surface.py": {
+    "mtime": 1788995055.0629559,
+    "ast_hash": "8e4f3d9284edd0af0f663c44a56561b4",
+    "semantic_hash": "8e4f3d9284edd0af0f663c44a56561b4"
+  },
+  "tests/test_multi_user.py": {
+    "mtime": 1788715486.4578786,
+    "ast_hash": "70537286c3482e3919bc7e44ff33d6fa",
+    "semantic_hash": "70537286c3482e3919bc7e44ff33d6fa"
+  },
+  "tests/test_oauth.py": {
+    "mtime": 1787853076.4494007,
+    "ast_hash": "482a125d42904cf02d9e0fc05ae619a7",
+    "semantic_hash": "482a125d42904cf02d9e0fc05ae619a7"
+  },
+  "tests/test_runtime.py": {
+    "mtime": 1788793123.3104494,
+    "ast_hash": "2d326de2b6c2f3adffce376f5612ab11",
+    "semantic_hash": "2d326de2b6c2f3adffce376f5612ab11"
+  },
+  "tests/test_search.py": {
+    "mtime": 1788746071.226055,
+    "ast_hash": "66a0d3ce84587b5742e89ad9a288daa5",
+    "semantic_hash": "66a0d3ce84587b5742e89ad9a288daa5"
+  },
+  "tests/test_service.py": {
+    "mtime": 1789295791.4777148,
+    "ast_hash": "15bb751e0bc21f010e68c7a4bf1cd036",
+    "semantic_hash": "15bb751e0bc21f010e68c7a4bf1cd036"
+  },
+  "tests/test_session_security.py": {
+    "mtime": 1788747540.3848367,
+    "ast_hash": "561b2a25bb481c8f84ddba2c28419d73",
+    "semantic_hash": "561b2a25bb481c8f84ddba2c28419d73"
+  },
+  "tests/test_sms_ingress.py": {
+    "mtime": 1788665644.4220548,
+    "ast_hash": "6982aad88ff594f6c2bbde311ad0e9df",
+    "semantic_hash": "6982aad88ff594f6c2bbde311ad0e9df"
+  },
+  "tests/test_telegram_author_metadata.py": {
+    "mtime": 1789160837.6393726,
+    "ast_hash": "d0e9aa7357039017679ac32946109328",
+    "semantic_hash": "d0e9aa7357039017679ac32946109328"
+  },
+  "tests/test_telegram_qr_outbox.py": {
+    "mtime": 1788614272.7778294,
+    "ast_hash": "9dfb88b0e3ae1de09dbafb69e4a557bb",
+    "semantic_hash": "9dfb88b0e3ae1de09dbafb69e4a557bb"
+  },
+  "tests/test_vk_attachment_e2e.py": {
+    "mtime": 1788491773.7139797,
+    "ast_hash": "4b3907f4b0d46347095cfaf2a9af00a6",
+    "semantic_hash": "4b3907f4b0d46347095cfaf2a9af00a6"
+  },
+  "tests/test_whatsapp_outbox.py": {
+    "mtime": 1788995000.2273936,
+    "ast_hash": "aece004f0214fc10e699b57972eb94cf",
+    "semantic_hash": "aece004f0214fc10e699b57972eb94cf"
+  },
+  "web/universal-userio-web/components.json": {
+    "mtime": 1786994364.0200713,
+    "ast_hash": "4309401ded0527ef65581f5ae99855a6",
+    "semantic_hash": "4309401ded0527ef65581f5ae99855a6"
+  },
+  "web/universal-userio-web/eslint.config.js": {
+    "mtime": 1786994652.3319933,
+    "ast_hash": "aa11e78c83f1edee3f3a386520e811d6",
+    "semantic_hash": "aa11e78c83f1edee3f3a386520e811d6"
+  },
+  "web/universal-userio-web/package.json": {
+    "mtime": 1786994372.9133332,
+    "ast_hash": "9c040100375956d6aa924282cc9d505b",
+    "semantic_hash": "9c040100375956d6aa924282cc9d505b"
+  },
+  "web/universal-userio-web/src/App.tsx": {
+    "mtime": 1789295911.8984063,
+    "ast_hash": "7c8c7b51de6c539092e7d758fc062a81",
+    "semantic_hash": "7c8c7b51de6c539092e7d758fc062a81"
+  },
+  "web/universal-userio-web/src/components/theme-provider.tsx": {
+    "mtime": 1786994343.58947,
+    "ast_hash": "7acb1d3d5f4e7cc8d9b87e04f197c094",
+    "semantic_hash": "7acb1d3d5f4e7cc8d9b87e04f197c094"
+  },
+  "web/universal-userio-web/src/components/ui/avatar.tsx": {
+    "mtime": 1786994408.9003928,
+    "ast_hash": "27b492afbe72e648f8f73daf5783d077",
+    "semantic_hash": "27b492afbe72e648f8f73daf5783d077"
+  },
+  "web/universal-userio-web/src/components/ui/badge.tsx": {
+    "mtime": 1786994408.9203935,
+    "ast_hash": "633c33997e6137921ae433dd2dd0cb31",
+    "semantic_hash": "633c33997e6137921ae433dd2dd0cb31"
+  },
+  "web/universal-userio-web/src/components/ui/button.tsx": {
+    "mtime": 1786994373.932363,
+    "ast_hash": "37ff09090166aa7d6fae96e0b081e492",
+    "semantic_hash": "37ff09090166aa7d6fae96e0b081e492"
+  },
+  "web/universal-userio-web/src/components/ui/input.tsx": {
+    "mtime": 1786994408.9503944,
+    "ast_hash": "2b0e9e810580f227dd255d9b78a83835",
+    "semantic_hash": "2b0e9e810580f227dd255d9b78a83835"
+  },
+  "web/universal-userio-web/src/components/ui/scroll-area.tsx": {
+    "mtime": 1786994408.9703948,
+    "ast_hash": "5a04c269a377e8176ebbf27ee8ac35bf",
+    "semantic_hash": "5a04c269a377e8176ebbf27ee8ac35bf"
+  },
+  "web/universal-userio-web/src/components/ui/separator.tsx": {
+    "mtime": 1786994408.980395,
+    "ast_hash": "1449ebdaae30a546b22655bd37adee9b",
+    "semantic_hash": "1449ebdaae30a546b22655bd37adee9b"
+  },
+  "web/universal-userio-web/src/draft-browser-notifications.ts": {
+    "mtime": 1788799511.2861416,
+    "ast_hash": "fc1d06f5ce755618aa698ba323a76049",
+    "semantic_hash": "fc1d06f5ce755618aa698ba323a76049"
+  },
+  "web/universal-userio-web/src/lib/utils.ts": {
+    "mtime": 1786994373.9453635,
+    "ast_hash": "5a6fd53fdcf2be529e9cc0b718fde352",
+    "semantic_hash": "5a6fd53fdcf2be529e9cc0b718fde352"
+  },
+  "web/universal-userio-web/src/main.tsx": {
+    "mtime": 1788793801.0158846,
+    "ast_hash": "cc09f124b06cc17f1c5a8a8b66661dda",
+    "semantic_hash": "cc09f124b06cc17f1c5a8a8b66661dda"
+  },
+  "web/universal-userio-web/src/vendor/byok-runs-ui.d.ts": {
+    "mtime": 1788631147.0327904,
+    "ast_hash": "72c747850883154c9a52b57cb1432ce0",
+    "semantic_hash": "72c747850883154c9a52b57cb1432ce0"
+  },
+  "web/universal-userio-web/src/vendor/byok-runs-ui.js": {
+    "mtime": 1788631147.0327904,
+    "ast_hash": "d67c456f33234684cbfa3336b697e64e",
+    "semantic_hash": "d67c456f33234684cbfa3336b697e64e"
+  },
+  "web/universal-userio-web/src/vendor/byok-ui.d.ts": {
+    "mtime": 1788625237.2362034,
+    "ast_hash": "459f33730fa2ee110e501eb4e5284f27",
+    "semantic_hash": "459f33730fa2ee110e501eb4e5284f27"
+  },
+  "web/universal-userio-web/src/vendor/byok-ui.js": {
+    "mtime": 1788625199.4436738,
+    "ast_hash": "c8ae05ed3644e8c3aabde6ad12d1455b",
+    "semantic_hash": "c8ae05ed3644e8c3aabde6ad12d1455b"
+  },
+  "web/universal-userio-web/tsconfig.app.json": {
+    "mtime": 1786994343.58947,
+    "ast_hash": "0a945f88dfc05a308359ccfc7c9210b5",
+    "semantic_hash": "0a945f88dfc05a308359ccfc7c9210b5"
+  },
+  "web/universal-userio-web/tsconfig.json": {
+    "mtime": 1786994343.5904698,
+    "ast_hash": "597111e0871da06310089fd23d923ad7",
+    "semantic_hash": "597111e0871da06310089fd23d923ad7"
+  },
+  "web/universal-userio-web/tsconfig.node.json": {
+    "mtime": 1786994343.5904698,
+    "ast_hash": "70bdd0a673bcfc0e828080b306e7c680",
+    "semantic_hash": "70bdd0a673bcfc0e828080b306e7c680"
+  },
+  "web/universal-userio-web/vite.config.ts": {
+    "mtime": 1788397153.153884,
+    "ast_hash": "f24994243bb939349c616d3a43698f9e",
+    "semantic_hash": "f24994243bb939349c616d3a43698f9e"
+  },
+  "src/userio_adapter_sdk/omnichannel.py": {
+    "mtime": 1789319351.688617,
+    "ast_hash": "52450340f00ec0db4c1a46e65b9ad6d9",
+    "semantic_hash": ""
+  },
+  "tests/test_omnichannel_sdk.py": {
+    "mtime": 1789319351.690617,
+    "ast_hash": "69e61e05b8dab4cae14944e920ba4269",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/android-sms-adapter.md": {
+    "mtime": 1788278212.4951837,
+    "ast_hash": "1971d555e7e6a1f34edfc5f8b6915893",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/attachment-download-epic-2026-09-04.md": {
+    "mtime": 1788485589.801103,
+    "ast_hash": "cebce4bacdb47a17bb9b0079ea53d78b",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/browser-approve-400.md": {
+    "mtime": 1788282513.6478736,
+    "ast_hash": "ee7cdd0b39ec2858e72ba5f20338edca",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/chatgpt-cdp-adapter.md": {
+    "mtime": 1788127709.2768226,
+    "ast_hash": "0155b63d74facbabf0642d8ad219f230",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/dashboard-login.md": {
+    "mtime": 1787926512.2541604,
+    "ast_hash": "20755466797d140085d489624fec6df7",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/fix-marat-review-ui-2026-09-04.md": {
+    "mtime": 1788483371.9826694,
+    "ast_hash": "405477146051aa8515a21a8713d9b086",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/gmail-himalaya-reply.md": {
+    "mtime": 1788288612.0492377,
+    "ast_hash": "557be79e82bd2f8ed1bcda934c4c01ae",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/universal-userio-mvp.md": {
+    "mtime": 1786953870.4676814,
+    "ast_hash": "cde282765dadfb1c2c532dad64aa3353",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/ux-fixes-round-1.md": {
+    "mtime": 1788481411.9332902,
+    "ast_hash": "a3bdeeafe194154f300769a722fee888",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/vk-inbox-universal-collect.md": {
+    "mtime": 1788249824.3885183,
+    "ast_hash": "6a3d6199c21cf5724935db732ff2e5b3",
+    "semantic_hash": ""
+  },
+  ".agents/tasks/work-vk-inbox-full.md": {
+    "mtime": 1787240872.8928237,
+    "ast_hash": "f0fdf09fb0d7419226b6737199d223bf",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1788666947.778579,
+    "ast_hash": "3221bfb6def69d86395a969c360c13c5",
+    "semantic_hash": ""
+  },
+  "deploy/INSTALL.md": {
+    "mtime": 1788668898.6725054,
+    "ast_hash": "b42d59864ece36d425498a304123e357",
+    "semantic_hash": ""
+  },
+  "deploy/telegram-qr-connector/README.md": {
+    "mtime": 1789159300.9234798,
+    "ast_hash": "fe96583f096ebbe9754b7098c618d70d",
+    "semantic_hash": ""
+  },
+  "deploy/whatsapp-bridge/README.md": {
+    "mtime": 1788666537.4497447,
+    "ast_hash": "dfb8daa127ab731fc555c71c53fe8190",
+    "semantic_hash": ""
+  },
+  "docs/2026-09-03-universal-adapters-spec.md": {
+    "mtime": 1788666537.4497447,
+    "ast_hash": "7d68ffa7e7b35db99b6cd2efcf706793",
+    "semantic_hash": ""
+  },
+  "docs/adapter-sdk.md": {
+    "mtime": 1789319351.6916173,
+    "ast_hash": "fa0b62e2193bfb45934060c8bbdf3c7a",
+    "semantic_hash": ""
+  },
+  "downloads/chatgpt-cdp/README.md": {
+    "mtime": 1788316830.0658429,
+    "ast_hash": "b99eda1e022de80e4e54528656b2fb03",
+    "semantic_hash": ""
+  },
+  "extensions/vk-inbox/INSTALL.md": {
+    "mtime": 1788245236.0324748,
+    "ast_hash": "b5edea576441f99210a32b5c6371a991",
+    "semantic_hash": ""
+  },
+  "extensions/vk-inbox/README.md": {
+    "mtime": 1788245234.3964255,
+    "ast_hash": "bc9c4bc54523ab23e7129dec6e197cf9",
+    "semantic_hash": ""
+  },
+  "extensions/vk-inbox/options.html": {
+    "mtime": 1787241383.7883651,
+    "ast_hash": "aa5a82ade27b631fbe93c7deb4d2b477",
+    "semantic_hash": ""
+  },
+  "extensions/vk-inbox/popup.html": {
+    "mtime": 1788738281.9963286,
+    "ast_hash": "1da369f7f321eb118d08c539a40c7cd1",
+    "semantic_hash": ""
+  },
+  "skills/userio/SKILL.md": {
+    "mtime": 1788665644.4170547,
+    "ast_hash": "9384496c068feaab17d7e5961c538ada",
+    "semantic_hash": ""
+  },
+  "src/universal_userio/static/index.html": {
+    "mtime": 1789296135.9083598,
+    "ast_hash": "ea8d9776c6032217f7052efabfed0ae3",
+    "semantic_hash": ""
+  },
+  "web/universal-userio-web/README.md": {
+    "mtime": 1786994343.58847,
+    "ast_hash": "ac62a74ff455692432b00e882d1ab32a",
+    "semantic_hash": ""
+  },
+  "web/universal-userio-web/index.html": {
+    "mtime": 1786994524.8398705,
+    "ast_hash": "df442dd91da517229cf853f1b734e7c0",
+    "semantic_hash": ""
+  },
+  "src/universal_userio/static/vite.svg": {
+    "mtime": 1789296135.3023393,
+    "ast_hash": "8e3a10e157f75ada21ab742c022d5430",
+    "semantic_hash": ""
+  },
+  "web/universal-userio-web/public/vite.svg": {
+    "mtime": 1786994343.58947,
+    "ast_hash": "8e3a10e157f75ada21ab742c022d5430",
+    "semantic_hash": ""
+  },
+  "web/universal-userio-web/src/assets/react.svg": {
+    "mtime": 1786994343.58947,
+    "ast_hash": "f0402b67b6ce880f65666bb49e841696",
+    "semantic_hash": ""
+  }
+}

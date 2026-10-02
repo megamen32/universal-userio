@@ -128,3 +128,12 @@
     @apply font-sans;
     }
 }
+/* View-toggle re-render animation: staggered fade/slide for chat rows. */
+@keyframes userio-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.userio-row-in { animation: userio-row-in 0.24s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .userio-row-in { animation: none; }
+}

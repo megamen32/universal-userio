@@ -1,0 +1,23 @@
+[Unit]
+Description=Project AgentCall events into Universal UserIO
+After=agentcall-gatewayd.service universal-userio.service
+Requires=agentcall-gatewayd.service universal-userio.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/universal-userio
+Environment=PYTHONPATH=/opt/universal-userio/src
+Environment=USERIO_PHONE_ROUTE_ID=phone
+Environment="USERIO_PHONE_LABEL=S21 AI call"
+EnvironmentFile=/etc/universal-userio.env
+ExecStart=/usr/bin/python3 -m universal_userio.agentcall_ingress
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

@@ -4,11 +4,16 @@
 (function (root) {
   const lib = {};
 
+  // Baked build config (lib/config.js) provides the global-host defaults;
+  // anything saved in chrome.storage.local wins over them.
+  const CFG = root.USERIO_CONFIG || {};
+
   const DEFAULTS = {
-    endpoint: "http://127.0.0.1:18093",
-    token: "",
+    endpoint: CFG.endpoint || "http://127.0.0.1:18093",
+    token: CFG.token || "",
     source: "vk",
-    routeId: "vk-browser",
+    routeId: CFG.routeId || "vk-browser",
+    agentId: CFG.agentId || "vk-browser",
   };
 
   lib.settings = async () => {
@@ -37,6 +42,8 @@
     return data;
   }
 
+  lib.call = call;
+
   lib.postMessage = async (message) => {
     const s = await lib.settings();
     return call("POST", "/v1/messages", { route_id: s.routeId, message });
@@ -56,7 +63,8 @@
     call("POST", `/v1/drafts/${encodeURIComponent(draftId)}/approve`, {});
 
   // Convenience: forward a captured message envelope to UserIO.
-  lib.forwardCapture = async ({ peerId, peerName, msgId, body, ts, direction }) => {
+  lib.forwardCapture = async ({ peerId, peerName, msgId, body, ts, direction, attachments }) => {
+    const attList = Array.isArray(attachments) ? attachments : [];
     return lib.postMessage({
       schema: "universal.inbox.message.v1",
       source: "vk",
@@ -65,6 +73,52 @@
       body: String(body || "").slice(0, 8000),
       received_at: (ts || Date.now()) / 1000,
       ...(peerName ? { display_name: peerName } : {}),
+      ...(attList.length
+        ? {
+            attachments: attList.map((a) => ({
+              // Pure metadata; bytes live in extension IDB and UserIO pulls
+              // them via /v1/channels/vk/attachments/{id} on demand.
+              kind: a.kind || guessAttachmentKind(a),
+              content_type: a.content_type || "application/octet-stream",
+              filename: a.filename || deriveFilename(a.src, a.content_type),
+              size: typeof a.size === "number" ? a.size : null,
+              src: a.src || null,
+              attachment_id: `vk:sw:${peerId}:${msgId}:${a.idx}`,
+            })),
+          }
+        : {}),
+    });
+  };
+
+  function guessAttachmentKind(a) {
+    const ct = (a && a.content_type) || "";
+    if (ct.startsWith("image/")) return "image";
+    if (ct.startsWith("video/")) return "video";
+    if (ct.startsWith("audio/")) return "audio";
+    if (ct === "application/pdf" || /\.pdf($|\?)/i.test(a && a.src || "")) return "doc";
+    if (/\.(png|jpe?g|gif|webp|bmp|heic)($|\?)/i.test(a && a.src || "")) return "image";
+    return "doc";
+  }
+
+  function deriveFilename(src, content_type) {
+    try {
+      const u = new URL(src);
+      const last = u.pathname.split("/").filter(Boolean).pop() || "";
+      if (last && /\.[a-z0-9]{2,5}$/i.test(last)) return decodeURIComponent(last);
+    } catch (_) {}
+    if (content_type && content_type.startsWith("image/")) return `image.${content_type.split("/")[1] || "bin"}`;
+    return "attachment";
+  }
+
+  // UserIO calls us back when it needs the bytes for a VK attachment.
+  // We reply with base64 over the SW RPC channel (lib/db.js stores ArrayBuffer).
+  lib.serveAttachment = async (peer_id, msg_id, idx) => {
+    // The actual stream happens server-side; here we just expose the lookup
+    // helper for the popup / debug surface.
+    return call("POST", `/v1/channels/vk/attachments`, {
+      peer_id: String(peer_id),
+      msg_id: String(msg_id),
+      idx: Number(idx),
     });
   };
 

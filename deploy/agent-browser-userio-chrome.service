@@ -1,0 +1,20 @@
+[Unit]
+Description=Chrome for Testing runtime for UserIO Agent Browser bridge
+After=graphical-session.target network-online.target
+
+[Service]
+Type=simple
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/run/user/1000/gdm/Xauthority
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+ExecStart=%h/.local/bin/agent-browser-userio-chrome
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=default.target

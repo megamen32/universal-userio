@@ -33,6 +33,15 @@ class SQLiteUserIOStore:
             if self._is_legacy() or self._table_exists("legacy_conversations"):
                 self._migrate_legacy()
             self._data_schema()
+            message_columns = {
+                str(row["name"])
+                for row in self._connection.execute("PRAGMA table_info(messages)")
+            }
+            if "direction" not in message_columns:
+                self._connection.execute(
+                    "ALTER TABLE messages ADD COLUMN direction TEXT NOT NULL DEFAULT 'incoming'"
+                )
+            self._backfill_workspace_events()
 
     @property
     def default_user_id(self) -> str:
@@ -196,15 +205,28 @@ class SQLiteUserIOStore:
             CREATE TABLE IF NOT EXISTS messages (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,sender TEXT NOT NULL,body TEXT NOT NULL,
-                received_at REAL NOT NULL,seen_at REAL,
+                direction TEXT NOT NULL DEFAULT 'incoming',received_at REAL NOT NULL,seen_at REAL,
                 PRIMARY KEY(user_id,source,message_id)
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
                 ON messages(user_id,conversation_id,received_at);
+            CREATE TABLE IF NOT EXISTS workspace_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,source TEXT NOT NULL,
+                message_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                UNIQUE(user_id,source,message_id)
+            );
+            CREATE INDEX IF NOT EXISTS workspace_events_user_seq_idx
+                ON workspace_events(user_id,seq);
+            CREATE TABLE IF NOT EXISTS contact_names (
+                user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
+                name TEXT NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,source,sender)
+            );
             CREATE TABLE IF NOT EXISTS drafts (
                 user_id TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 body TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,
-                approved_at REAL,outbox_receipt TEXT,PRIMARY KEY(user_id,id)
+                approved_at REAL,outbox_receipt TEXT,browser_notified_at REAL,PRIMARY KEY(user_id,id)
             );
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
@@ -228,10 +250,68 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,source TEXT NOT NULL,route_id TEXT NOT NULL,
                 PRIMARY KEY(user_id,source,route_id)
             );
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,kind TEXT NOT NULL,content_type TEXT NOT NULL,
+                filename TEXT NOT NULL,size INTEGER,src TEXT,
+                attachment_id TEXT,provider_ref TEXT,transcript TEXT,
+                transcription_status TEXT,transcription_model TEXT,
+                PRIMARY KEY(user_id,source,message_id,idx)
+            );
+            CREATE INDEX IF NOT EXISTS message_attachments_msg_idx
+                ON message_attachments(user_id,source,message_id);
+            CREATE TABLE IF NOT EXISTS user_ai_settings (
+                user_id TEXT PRIMARY KEY,
+                endpoint TEXT NOT NULL,
+                model TEXT NOT NULL,
+                token TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,key)
+            );
         """
         for statement in script.split(";"):
             if statement.strip():
                 self._connection.execute(statement)
+        # Lightweight migration: conversations learn which connected account
+        # owns them so replies always leave from the identity the user picked.
+        try:
+            self._connection.execute("ALTER TABLE conversations ADD COLUMN account_ref TEXT NOT NULL DEFAULT ''")
+        except Exception:  # column already exists
+            pass
+        # Attachment transcript metadata was added after the original media
+        # table. Keep upgrades in-place; old databases must not need a rebuild.
+        for column in ("transcript TEXT", "transcription_status TEXT", "transcription_model TEXT"):
+            try:
+                self._connection.execute(f"ALTER TABLE message_attachments ADD COLUMN {column}")
+            except sqlite3.OperationalError:  # column already exists
+                pass
+        try:
+            self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
+        except sqlite3.OperationalError:  # column already exists
+            pass
+
+    def _backfill_workspace_events(self) -> None:
+        marker = "workspace_events_backfilled_v1"
+        if self._connection.execute(
+            "SELECT 1 FROM settings WHERE key=?", (marker,)
+        ).fetchone():
+            return
+        self._connection.execute(
+            """
+            INSERT OR IGNORE INTO workspace_events(user_id,source,message_id,conversation_id)
+            SELECT user_id,source,message_id,conversation_id FROM messages
+            WHERE direction='incoming' ORDER BY received_at,rowid
+            """
+        )
+        self._connection.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (marker, "1")
+        )
 
     @staticmethod
     def _digest(password: str, salt: bytes | None = None, iterations: int = _ITERATIONS) -> tuple[bytes, bytes]:
@@ -575,8 +655,11 @@ class SQLiteUserIOStore:
     def ingress_user(self, *, source: str, account_id: str = "") -> str | None:
         clauses, values = ["enabled=1"], []
         if account_id:
-            clauses.append("id=?")
-            values.append(account_id)
+            clauses.append("(id=? OR credential_ref=?)")
+            # Himalaya ingress sends the himalaya account name ("gmail",
+            # "careviolan"); registered gmail accounts carry it as
+            # credential_ref ("himalaya:<name>"), not in the id.
+            values.extend([account_id, "himalaya:" + account_id])
         elif source.startswith("gmail:"):
             clauses.append("credential_ref=?")
             values.append("himalaya:" + source.partition(":")[2])
@@ -644,6 +727,18 @@ class SQLiteUserIOStore:
             ],
             "credential_ref": row["credential_ref"], "enabled": bool(row["enabled"]),
         } for row in rows]
+
+    def source_can_reply(self, source: str, *, user_id: str | None = None) -> bool | None:
+        """Return a configured source account's reply capability, when it exists."""
+        account_id = source.strip().lower()
+        if account_id.startswith("gmail:"):
+            account_id = "gmail-" + account_id.removeprefix("gmail:")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT can_reply FROM provider_accounts WHERE user_id=? AND id=? AND enabled=1",
+                (self._user(user_id), account_id),
+            ).fetchone()
+        return None if row is None else bool(row["can_reply"])
 
     def delete_account(self, account_id: str, *, user_id: str | None = None) -> bool:
         with self._lock, self._connection:
@@ -713,20 +808,165 @@ class SQLiteUserIOStore:
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                (user_id,source,message_id,conversation_id,sender,body,received_at)
-                VALUES (?,?,?,?,?,?,?)
+                (user_id,source,message_id,conversation_id,sender,body,direction,received_at)
+                VALUES (?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, message.source, message.message_id, conversation_id,
-                    message.sender, message.body, message.received_at,
+                    message.sender, message.body, message.direction, message.received_at,
                 ),
             ).rowcount == 1
+            if inserted and message.direction == "incoming":
+                self._connection.execute(
+                    """
+                    INSERT INTO workspace_events(user_id,source,message_id,conversation_id)
+                    VALUES (?,?,?,?)
+                    """,
+                    (user_id, message.source, message.message_id, conversation_id),
+                )
+            if getattr(message, "sender_name", ""):
+                self._connection.execute(
+                    """
+                    INSERT OR REPLACE INTO contact_names
+                    (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)
+                    """,
+                    (user_id, message.source, message.sender, message.sender_name, now),
+                )
+            for att in (message.attachments or ()):
+                self.upsert_attachment(
+                    source=message.source, message_id=message.message_id, attachment=att,
+                    user_id=user_id,
+                )
             if inserted:
                 self._connection.execute(
                     "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
                     (now, user_id, conversation_id),
                 )
+            else:
+                existing = self._connection.execute(
+                    "SELECT body FROM messages WHERE user_id=? AND source=? AND message_id=?",
+                    (user_id, message.source, message.message_id),
+                ).fetchone()
+                old_body = str(existing["body"] or "") if existing else ""
+                new_body = str(message.body or "").strip()
+                old_placeholder = (not old_body.strip()) or (
+                    old_body.strip().startswith("[") and old_body.strip().endswith("]")
+                )
+                new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
+                if old_placeholder and new_is_text:
+                    self._connection.execute(
+                        "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
+                        (new_body, user_id, message.source, message.message_id),
+                    )
+                    self._connection.execute(
+                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                        (now, user_id, conversation_id),
+                    )
         return inserted
+
+    def create_conversation(
+        self, source: str, sender: str, *, user_id: str | None = None
+    ) -> dict[str, object]:
+        """Create (or return the existing) empty conversation for source+sender.
+
+        Lets the dashboard start a chat — e.g. a new SMS thread — before any
+        inbound message exists.
+        """
+        user_id = self._user(user_id)
+        source, sender = source.strip(), sender.strip()
+        if not source or not sender:
+            raise ValueError("source and sender are required")
+        message_key = "email:" + sender.casefold() if source in {"mail", "email", "gmail"} or source.startswith("gmail:") else f"{source}:{sender}"
+        conversation_id = self.conversation_id_for_key(message_key, user_id=user_id)
+        if conversation_id is None:
+            conversation_id = "conv_" + hashlib.sha256(f"{user_id}\0{message_key}".encode()).hexdigest()[:24]
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO conversations
+                (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at)
+                VALUES (?,?,?,?,?,?,NULL,'approve',?)
+                """,
+                (user_id, conversation_id, message_key, source, source, sender, time.time()),
+            )
+        record = self.conversation(conversation_id, user_id=user_id)
+        assert record is not None
+        return record
+
+    # ---- attachments ---------------------------------------------------------
+    # Stored separately from messages: a message may carry multiple attachments
+    # and we need to fetch them by (source, message_id, idx) for the VK extension
+    # bridge and by attachment_id when relaying the file back to the client.
+
+    def upsert_attachment(
+        self, *, source: str, message_id: str, attachment: dict[str, object],
+        user_id: str | None = None,
+    ) -> None:
+        user_id = self._user(user_id)
+        idx = int(attachment.get("idx") or 0)
+        kind = str(attachment.get("kind") or "doc")
+        content_type = str(attachment.get("content_type") or "application/octet-stream")
+        filename = str(attachment.get("filename") or f"attachment-{idx}")
+        size = attachment.get("size")
+        try:
+            size_int = int(size) if size is not None else None
+        except (TypeError, ValueError):
+            size_int = None
+        src = attachment.get("src")
+        attachment_id = attachment.get("attachment_id")
+        provider_ref = attachment.get("provider_ref")
+        transcript = attachment.get("transcript")
+        transcription_status = attachment.get("transcription_status")
+        transcription_model = attachment.get("transcription_model")
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR REPLACE INTO message_attachments
+                (user_id,source,message_id,idx,kind,content_type,filename,size,src,attachment_id,provider_ref,
+                 transcript,transcription_status,transcription_model)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    user_id, source, message_id, idx, kind, content_type, filename,
+                    size_int, str(src) if src else None,
+                    str(attachment_id) if attachment_id else None,
+                    str(provider_ref) if provider_ref else None,
+                    str(transcript) if transcript is not None else None,
+                    str(transcription_status) if transcription_status is not None else None,
+                    str(transcription_model) if transcription_model is not None else None,
+                ),
+            )
+
+    def attachments_for_message(
+        self, *, source: str, message_id: str, user_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT idx,kind,content_type,filename,size,src,attachment_id,provider_ref,
+                       transcript,transcription_status,transcription_model
+                FROM message_attachments
+                WHERE user_id=? AND source=? AND message_id=?
+                ORDER BY idx
+                """,
+                (self._user(user_id), source, message_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def attachment_by_id(
+        self, attachment_id: str, *, user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT source,message_id,idx,kind,content_type,filename,size,src,
+                       attachment_id,provider_ref,transcript,transcription_status,transcription_model
+                FROM message_attachments
+                WHERE user_id=? AND attachment_id=? LIMIT 1
+                """,
+                (self._user(user_id), attachment_id),
+            ).fetchone()
+        return None if row is None else dict(row)
 
     def add_draft(self, draft: ReplyDraft, *, user_id: str | None = None) -> None:
         with self._lock, self._connection:
@@ -748,9 +988,12 @@ class SQLiteUserIOStore:
                 raise KeyError("draft not found")
             if row["status"] != "proposed":
                 raise ValueError("only proposed drafts can be edited")
-            self._connection.execute(
-                "UPDATE drafts SET body=? WHERE user_id=? AND id=?", (text, user_id, draft_id)
-            )
+            changed = self._connection.execute(
+                "UPDATE drafts SET body=? WHERE user_id=? AND id=? AND status='proposed'",
+                (text, user_id, draft_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("only proposed drafts can be edited")
         return ReplyDraft(str(row["id"]), str(row["conversation_id"]), text, "proposed")
 
     def delete_draft(self, draft_id: str, *, user_id: str | None = None) -> bool:
@@ -761,20 +1004,34 @@ class SQLiteUserIOStore:
             ).fetchone()
             if row is None:
                 return False
-            if row["status"] == "approved":
+            if row["status"] in ("approved", "sending"):
                 raise ValueError("approved drafts are immutable receipts")
-            return self._connection.execute(
-                "DELETE FROM drafts WHERE user_id=? AND id=?", (user_id, draft_id)
-            ).rowcount == 1
+            changed = self._connection.execute(
+                "DELETE FROM drafts WHERE user_id=? AND id=? AND status NOT IN ('approved','sending')",
+                (user_id, draft_id),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("draft changed during deletion")
+            return True
 
     def delete_conversation(self, conversation_id: str, *, user_id: str | None = None) -> bool:
         user_id = self._user(user_id)
         with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            if self._connection.execute(
+                "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND status='sending'",
+                (user_id, conversation_id),
+            ).fetchone():
+                raise ValueError("conversation has a delivery in progress")
             exists = self._connection.execute(
                 "SELECT 1 FROM conversations WHERE user_id=? AND id=?", (user_id, conversation_id)
             ).fetchone()
             if exists is None:
                 return False
+            self._connection.execute(
+                "DELETE FROM workspace_events WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
+            )
             self._connection.execute(
                 "DELETE FROM drafts WHERE user_id=? AND conversation_id=?", (user_id, conversation_id)
             )
@@ -789,12 +1046,41 @@ class SQLiteUserIOStore:
     def draft(self, draft_id: str, *, user_id: str | None = None) -> ReplyDraft:
         with self._lock:
             row = self._connection.execute(
-                "SELECT id,conversation_id,body,status FROM drafts WHERE user_id=? AND id=?",
+                "SELECT id,conversation_id,body,status,outbox_receipt FROM drafts WHERE user_id=? AND id=?",
                 (self._user(user_id), draft_id),
             ).fetchone()
         if row is None:
             raise KeyError("draft not found")
-        return ReplyDraft(str(row["id"]), str(row["conversation_id"]), str(row["body"]), str(row["status"]))
+        return ReplyDraft(str(row["id"]), str(row["conversation_id"]), str(row["body"]), str(row["status"]), str(row["outbox_receipt"] or ""))
+
+    def claim_draft_send(self, draft_id: str, *, user_id: str,
+                         expected_snapshot: dict[str, object] | None = None) -> ReplyDraft:
+        # Commit the sending claim before provider IO. Other connections and
+        # processes see an immutable draft, not merely an in-process mutex.
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            draft = self.draft(draft_id, user_id=user_id)
+            if expected_snapshot is not None and expected_snapshot != {
+                "expected_text": draft.body, "expected_chat_id": draft.conversation_id,
+                "expected_attachments": [],
+            }:
+                raise ValueError("draft_snapshot_conflict")
+            if draft.status == "approved":
+                return draft
+            if draft.status != "proposed":
+                raise ValueError("draft is not approvable")
+            self._connection.execute(
+                "UPDATE drafts SET status='sending' WHERE user_id=? AND id=?",
+                (user_id, draft_id),
+            )
+            return draft
+
+    def release_draft_send(self, draft_id: str, *, user_id: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE drafts SET status='proposed' WHERE user_id=? AND id=? AND status='sending'",
+                (user_id, draft_id),
+            )
 
     def approve(self, draft_id: str, receipt: str, *, user_id: str | None = None) -> ReplyDraft:
         user_id = self._user(user_id)
@@ -805,8 +1091,11 @@ class SQLiteUserIOStore:
             if row is None:
                 raise KeyError("draft not found")
             if row["status"] == "approved":
-                return ReplyDraft(row["id"], row["conversation_id"], row["body"], row["status"])
-            if row["status"] != "proposed":
+                return ReplyDraft(
+                    row["id"], row["conversation_id"], row["body"], row["status"],
+                    str(row["outbox_receipt"] or ""),
+                )
+            if row["status"] not in ("proposed", "sending"):
                 raise ValueError("draft is not approvable")
             self._connection.execute(
                 """
@@ -815,7 +1104,7 @@ class SQLiteUserIOStore:
                 """,
                 (time.time(), receipt, user_id, draft_id),
             )
-        return ReplyDraft(row["id"], row["conversation_id"], row["body"], "approved")
+        return ReplyDraft(row["id"], row["conversation_id"], row["body"], "approved", receipt)
 
     def reject(self, draft_id: str, *, user_id: str | None = None) -> ReplyDraft:
         user_id = self._user(user_id)
@@ -826,11 +1115,64 @@ class SQLiteUserIOStore:
             if row is None:
                 raise KeyError("draft not found")
             if row["status"] == "proposed":
-                self._connection.execute(
-                    "UPDATE drafts SET status='rejected' WHERE user_id=? AND id=?", (user_id, draft_id)
-                )
+                changed = self._connection.execute(
+                    "UPDATE drafts SET status='rejected' WHERE user_id=? AND id=? AND status='proposed'",
+                    (user_id, draft_id),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("draft changed during rejection")
                 return ReplyDraft(row["id"], row["conversation_id"], row["body"], "rejected")
         return ReplyDraft(row["id"], row["conversation_id"], row["body"], row["status"])
+
+    def mark_drafts_browser_notified(
+        self, draft_ids: list[str], *, user_id: str | None = None
+    ) -> int:
+        """Record that the browser actually displayed these proposed drafts."""
+        ids = list(dict.fromkeys(str(x).strip() for x in draft_ids if str(x).strip()))
+        if not ids:
+            return 0
+        user_id = self._user(user_id)
+        now = time.time()
+        changed = 0
+        with self._lock, self._connection:
+            for draft_id in ids[:200]:
+                changed += self._connection.execute(
+                    """UPDATE drafts SET browser_notified_at=?
+                       WHERE user_id=? AND id=? AND status='proposed'
+                         AND browser_notified_at IS NULL""",
+                    (now, user_id, draft_id),
+                ).rowcount
+        return changed
+
+    def draft_browser_notified(self, draft_id: str, *, user_id: str | None = None) -> bool:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT browser_notified_at FROM drafts WHERE user_id=? AND id=?",
+                (self._user(user_id), str(draft_id)),
+            ).fetchone()
+        return bool(row is not None and row["browser_notified_at"] is not None)
+
+    def pending_drafts(
+        self, *, limit: int = 100, user_id: str | None = None
+    ) -> list[dict[str, object]]:
+        """List proposed drafts with just enough conversation context for operator notifications."""
+        user_id = self._user(user_id)
+        limit = max(1, min(int(limit), 200))
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT d.id,d.conversation_id,d.body,d.status,d.created_at,
+                       c.source,c.sender,c.identity_id,
+                       COALESCE((SELECT name FROM contact_names n
+                                 WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=c.sender), '') AS display_name
+                FROM drafts d JOIN conversations c
+                  ON c.user_id=d.user_id AND c.id=d.conversation_id
+                WHERE d.user_id=? AND d.status='proposed'
+                ORDER BY d.created_at DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def conversation(
         self, conversation_id: str, *, user_id: str | None = None, text_limit: int | None = None
@@ -845,7 +1187,7 @@ class SQLiteUserIOStore:
             messages = self._connection.execute(
                 """
                 SELECT * FROM (
-                    SELECT source,message_id,sender,body,received_at,seen_at FROM messages
+                    SELECT source,message_id,sender,body,direction,received_at,seen_at FROM messages
                     WHERE user_id=? AND conversation_id=? ORDER BY received_at DESC LIMIT 200
                 ) ORDER BY received_at
                 """,
@@ -858,15 +1200,112 @@ class SQLiteUserIOStore:
                 """,
                 (user_id, conversation_id),
             ).fetchall()
+            name_row = self._connection.execute(
+                "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
+                (user_id, row["source"], row["sender"]),
+            ).fetchone()
         message_records = [dict(item) for item in messages]
+        for item in message_records:
+            attachments = self.attachments_for_message(
+                source=str(item["source"]), message_id=str(item["message_id"]), user_id=user_id
+            )
+            if attachments:
+                item["attachments"] = attachments
         if text_limit is not None:
             for item in message_records:
                 item["body"] = str(item["body"])[:text_limit]
         return {
             "id": row["id"], "route_id": row["route_id"], "response_mode": row["response_mode"],
             "identity_id": row["identity_id"], "source": row["source"], "sender": row["sender"],
+            "account_ref": str(row["account_ref"] or ""),
+            "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
         }
+
+    def set_conversation_account(
+        self, conversation_id: str, account_ref: str, *, user_id: str | None = None
+    ) -> bool:
+        """Pin the reply account; a pending approval pins its existing account."""
+        user_id = self._user(user_id)
+        with self._lock, self._connection:
+            return self._connection.execute(
+                """UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?
+                   AND (COALESCE(account_ref,'')=? OR NOT EXISTS (
+                       SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=?
+                       AND status IN ('proposed','sending')))
+                """,
+                (account_ref.strip(), user_id, conversation_id, account_ref.strip(), user_id, conversation_id),
+            ).rowcount == 1
+
+    # --- per-user AI (BYOK) ----------------------------------------------------
+
+    def user_preference(self, key: str, *, user_id: str | None = None, default: str | None = None) -> str | None:
+        row = self._connection.execute(
+            "SELECT value FROM user_preferences WHERE user_id=? AND key=?",
+            (self._user(user_id), key),
+        ).fetchone()
+        return default if row is None else str(row["value"])
+
+    def set_user_preference(self, key: str, value: str, *, user_id: str | None = None) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO user_preferences(user_id,key,value,updated_at) VALUES (?,?,?,?)",
+                (self._user(user_id), key, str(value), time.time()),
+            )
+
+    USER_CAPABILITIES = ("read", "subscribe", "download", "send")
+
+    def capability_enabled(self, capability: str, *, user_id: str | None = None) -> bool:
+        capability = str(capability).strip().lower()
+        if capability not in self.USER_CAPABILITIES:
+            raise ValueError(f"unknown user capability: {capability}")
+        key = f"capability:{capability}"
+        # Backward compatibility for the first per-user policy rollout.
+        default = self.user_preference("send_enabled", user_id=user_id, default="1") if capability == "send" else "1"
+        value = self.user_preference(key, user_id=user_id, default=default)
+        return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+    def user_capabilities(self, *, user_id: str | None = None) -> dict[str, bool]:
+        return {name: self.capability_enabled(name, user_id=user_id) for name in self.USER_CAPABILITIES}
+
+    def set_user_capability(self, capability: str, enabled: bool, *, user_id: str | None = None) -> None:
+        capability = str(capability).strip().lower()
+        if capability not in self.USER_CAPABILITIES:
+            raise ValueError(f"unknown user capability: {capability}")
+        self.set_user_preference(f"capability:{capability}", "1" if enabled else "0", user_id=user_id)
+        if capability == "send":
+            self.set_user_preference("send_enabled", "1" if enabled else "0", user_id=user_id)
+
+    def send_enabled(self, *, user_id: str | None = None) -> bool:
+        return self.capability_enabled("send", user_id=user_id)
+
+    def ai_settings(self, *, user_id: str | None = None) -> dict[str, str] | None:
+        """Return the user's own AI endpoint/model/token, or None for server default."""
+        row = self._connection.execute(
+            "SELECT endpoint,model,token FROM user_ai_settings WHERE user_id=?",
+            (self._user(user_id),),
+        ).fetchone()
+        return None if row is None else {
+            "endpoint": str(row["endpoint"]), "model": str(row["model"]), "token": str(row["token"]),
+        }
+
+    def set_ai_settings(
+        self, *, endpoint: str, model: str, token: str, user_id: str | None = None
+    ) -> None:
+        endpoint, model, token = endpoint.strip(), model.strip(), token.strip()
+        if not endpoint.startswith(("http://", "https://")) or not model or not token:
+            raise ValueError("AI settings require an http(s) endpoint, model and token")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO user_ai_settings (user_id,endpoint,model,token,updated_at) VALUES (?,?,?,?,?)",
+                (self._user(user_id), endpoint, model, token, time.time()),
+            )
+
+    def clear_ai_settings(self, *, user_id: str | None = None) -> bool:
+        with self._lock, self._connection:
+            return self._connection.execute(
+                "DELETE FROM user_ai_settings WHERE user_id=?", (self._user(user_id),)
+            ).rowcount == 1
 
     def message(
         self, message_id: str, *, source: str | None = None, user_id: str | None = None,
@@ -892,6 +1331,11 @@ class SQLiteUserIOStore:
             return None
         result = dict(rows[0])
         result["body"] = str(result["body"])[:text_limit]
+        attachments = self.attachments_for_message(
+            source=str(result["source"]), message_id=str(result["message_id"]), user_id=user_id
+        )
+        if attachments:
+            result["attachments"] = attachments
         return result
 
     def new_messages(self, *, limit: int = 50, user_id: str | None = None) -> list[dict[str, object]]:
@@ -909,6 +1353,42 @@ class SQLiteUserIOStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def workspace_events(
+        self, *, after: int = 0, limit: int = 50, user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Read one user's append-only inbound sequence without changing seen state."""
+        if type(after) is not int or after < 0 or after >= 2**63:
+            raise ValueError("workspace cursor must be a non-negative integer")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("workspace limit must be between 1 and 100")
+        scoped_user = self._user(user_id)
+        with self._lock:
+            head = self._connection.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM workspace_events WHERE user_id=?",
+                (scoped_user,),
+            ).fetchone()[0]
+            rows = self._connection.execute(
+                """
+                SELECT e.seq,e.source,e.message_id,e.conversation_id,
+                       m.sender,m.body,m.received_at,m.direction,
+                       c.route_id,c.account_ref
+                FROM workspace_events AS e
+                JOIN messages AS m ON m.user_id=e.user_id
+                    AND m.source=e.source AND m.message_id=e.message_id
+                JOIN conversations AS c ON c.user_id=e.user_id
+                    AND c.id=e.conversation_id
+                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
+                ORDER BY e.seq LIMIT ?
+                """,
+                (scoped_user, after, limit),
+            ).fetchall()
+        events = [dict(row) for row in rows]
+        return {
+            "events": events,
+            "cursor": events[-1]["seq"] if events else after,
+            "head": head,
+        }
+
     @staticmethod
     def _source_filter(source: str | None) -> tuple[str, list[object]]:
         if not source:
@@ -921,20 +1401,72 @@ class SQLiteUserIOStore:
         self, *, source: str | None = None, limit: int = 100, user_id: str | None = None
     ) -> list[dict[str, object]]:
         source_sql, values = self._source_filter(source)
+        # Sort strictly by the latest message timestamp so the UI's "fresh on top"
+        # rule never drifts because of bookkeeping fields like updated_at.
+        # `preview` is the latest body; if that happens to be an attachment
+        # placeholder ([image], [document] …) the service layer swaps in the
+        # newest text body via `last_text_bodies_for` so the search and the
+        # list item show real content.
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,
+                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,c.account_ref,
                        (SELECT body FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
                         ORDER BY received_at DESC LIMIT 1) AS preview,
+                       (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
+                        ORDER BY received_at DESC LIMIT 1) AS last_at,
                        (SELECT COUNT(*) FROM messages WHERE user_id=c.user_id
-                        AND conversation_id=c.id AND seen_at IS NULL) AS unread_count
+                        AND conversation_id=c.id AND seen_at IS NULL) AS unread_count,
+                       (SELECT name FROM contact_names WHERE user_id=c.user_id
+                        AND source=c.source AND sender=c.sender) AS display_name,
+                       (SELECT MAX(received_at) FROM messages
+                        WHERE user_id=c.user_id AND source=c.source) AS account_last_at
                 FROM conversations c WHERE c.user_id=? {source_sql}
-                ORDER BY c.updated_at DESC LIMIT ?
+                ORDER BY last_at DESC, c.updated_at DESC LIMIT ?
                 """,
                 [self._user(user_id), *values, limit],
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def last_text_bodies_for(
+        self, conversation_ids: list[str], *, user_id: str | None = None,
+    ) -> dict[str, str]:
+        """For each conversation_id return the newest non-placeholder body, or ''.
+
+        Walks at most 30 most recent messages per conversation. Attachment
+        placeholders ([image], [video], [document] and their Russian siblings)
+        never count as text, so callers can substitute them for the placeholder
+        that `conversations()` returns in the `preview` column.
+        """
+        if not conversation_ids:
+            return {}
+        placeholders = ",".join("?" for _ in conversation_ids)
+        params: list[object] = [self._user(user_id), *conversation_ids]
+        query = f"""
+            SELECT conversation_id, body, received_at
+            FROM (
+              SELECT conversation_id, body, received_at,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY conversation_id ORDER BY received_at DESC
+                     ) AS rn
+              FROM messages
+              WHERE user_id=?
+                AND conversation_id IN ({placeholders})
+            ) WHERE rn <= 30
+            ORDER BY conversation_id, received_at DESC
+        """
+        out: dict[str, str] = {}
+        with self._lock:
+            rows = self._connection.execute(query, params).fetchall()
+        for row in rows:
+            cid = str(row["conversation_id"])
+            body = str(row["body"])
+            # Placeholder bodies like "[image]" still match `body NOT LIKE '[[]%]'`
+            # because of how SQLite expands the wildcard; skip them explicitly.
+            if body.startswith("[") and body.endswith("]"):
+                continue
+            out.setdefault(cid, body)
+        return out
 
     def mark_seen(
         self, *, source: str, message_id: str, user_id: str | None = None

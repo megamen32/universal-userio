@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from universal_userio.contracts import InboxMessage
-from universal_userio.adapters import NoticePlaceOutboxClient, NoticePlaceRoute, inbox_message_from_envelope
-from universal_userio.service import UserIOService
+from universal_userio.adapters import DirectProviderOutbox, inbox_message_from_envelope
+from universal_userio.service import DeliveryUnavailableError, UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
 
@@ -60,40 +62,238 @@ def test_duplicate_ingress_is_suppressed_and_rejection_never_sends(tmp_path) -> 
     assert outbox.calls == []
 
 
-def test_canonical_inbox_envelope_and_policy_bound_outbox_contract() -> None:
+def test_workspace_event_feed_survives_seen_duplicate_and_vacuum(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    first = InboxMessage("gmail:self", "m-001", "self@example.test", "/work alpha first", 1.0)
+    second = InboxMessage("gmail:self", "m-002", "self@example.test", "/work alpha second", 2.0)
+    outgoing = InboxMessage("gmail:self", "m-003", "self@example.test", "reply", 3.0, direction="outgoing")
+
+    conversation_id, accepted = service.receive(first, route_id="workspace-test")
+    service.receive(second, route_id="workspace-test")
+    service.receive(outgoing, route_id="workspace-test")
+    assert accepted is True
+    assert service.receive(first, route_id="workspace-test")[1] is False
+    store.set_conversation_account(conversation_id, "gmail-self")
+    assert store.mark_seen(source="gmail:self", message_id="m-001") is True
+
+    first_page = store.workspace_events(after=0, limit=1)
+    assert first_page["head"] > 0
+    assert len(first_page["events"]) == 1
+    assert first_page["events"][0]["source"] == "gmail:self"
+    assert first_page["events"][0]["message_id"] == "m-001"
+    assert first_page["events"][0]["conversation_id"] == conversation_id
+    assert first_page["events"][0]["account_ref"] == "gmail-self"
+    assert first_page["events"][0]["route_id"] == "workspace-test"
+    assert first_page["events"][0]["direction"] == "incoming"
+    assert first_page["events"][0]["body"] == "/work alpha first"
+    assert first_page["cursor"] == first_page["events"][0]["seq"]
+
+    second_page = store.workspace_events(after=first_page["cursor"], limit=5)
+    assert [entry["message_id"] for entry in second_page["events"]] == ["m-002"]
+    assert second_page["cursor"] == second_page["head"]
+    store._connection.execute("VACUUM")
+    assert store.workspace_events(after=0, limit=5)["events"] == [
+        *first_page["events"], *second_page["events"]
+    ]
+
+
+def test_workspace_event_cursor_is_per_user_and_validated(tmp_path) -> None:
+    import pytest
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    second_user, _ = store.create_user("workspace-other", "correct horse battery staple")
+    store.bind_channel_route(user_id=second_user.user_id, source="matrix", route_id="other")
+    service.receive(InboxMessage("matrix", "owner-1", "owner", "owner body", 1.0), route_id="owner")
+    other_conv, _ = service.receive(
+        InboxMessage("matrix", "other-1", "other", "other body", 2.0),
+        route_id="other", user_id=second_user.user_id,
+    )
+    assert [entry["message_id"] for entry in store.workspace_events(after=0, user_id=second_user.user_id)["events"]] == ["other-1"]
+    assert store.workspace_events(after=0)["events"][0]["message_id"] == "owner-1"
+    assert store.workspace_events(after=0)["events"][0]["conversation_id"] != other_conv
+    for after, limit in [(-1, 1), (0, 0), (0, 101), ("0", 1), (0, True)]:
+        with pytest.raises(ValueError):
+            store.workspace_events(after=after, limit=limit)
+
+
+def test_workspace_event_feed_backfills_existing_messages_once(tmp_path) -> None:
+    import sqlite3
+
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    service.receive(InboxMessage("matrix", "historical-1", "owner", "first", 1.0), route_id="matrix")
+    service.receive(InboxMessage("matrix", "historical-2", "owner", "second", 2.0), route_id="matrix")
+    store.close()
+
+    # An older database had messages but not the dedicated sequence journal.
+    with sqlite3.connect(database) as connection:
+        connection.execute("DROP TABLE workspace_events")
+        connection.execute("DELETE FROM settings WHERE key='workspace_events_backfilled_v1'")
+
+    upgraded = SQLiteUserIOStore(database)
+    first = upgraded.workspace_events(after=0)["events"]
+    assert [event["message_id"] for event in first] == ["historical-1", "historical-2"]
+    upgraded.close()
+    restarted = SQLiteUserIOStore(database)
+    assert restarted.workspace_events(after=0)["events"] == first
+
+
+def test_workspace_event_feed_does_not_retain_deleted_local_conversation(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    old_id, _ = service.receive(
+        InboxMessage("matrix", "remove-1", "owner", "private text", 1.0), route_id="matrix"
+    )
+    old_seq = store.workspace_events(after=0)["events"][0]["seq"]
+    assert store.delete_conversation(old_id) is True
+    assert store.workspace_events(after=0) == {"events": [], "cursor": 0, "head": 0}
+    service.receive(InboxMessage("matrix", "keep-2", "owner", "new text", 2.0), route_id="matrix")
+    page = store.workspace_events(after=old_seq)
+    assert [item["message_id"] for item in page["events"]] == ["keep-2"]
+    assert page["cursor"] > old_seq
+
+
+def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="gmail-careviolan", provider="gmail", display_name="careviolan@gmail.com",
+        can_read=True, can_reply=True, credential_ref="himalaya:careviolan",
+    )
+    outbox = Outbox()
+    class GmailOutbox:
+        def __init__(self) -> None:
+            self.calls = []
+        def send_reply(self, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "himalaya:careviolan:draft"
+    gmail_outbox = GmailOutbox()
+    service = UserIOService(store, Generator(), outbox, gmail_outbox=gmail_outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail:careviolan", "m-1", "sender", "hello", 1.0), route_id="gmail-read-only"
+    )
+    draft = service.create_manual_draft(conversation_id, body="reply")
+
+    approved = service.approve(draft.id)
+    assert approved.status == "approved"
+    assert gmail_outbox.calls == [{"account": "careviolan", "sender": "careviolan@gmail.com", "recipient": "sender", "message_id": "m-1", "body": "reply", "draft_id": draft.id}]
+    assert outbox.calls == []
+
+
+def test_default_gmail_source_uses_registered_himalaya_account_for_approved_reply(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
+        can_read=True, can_reply=True, credential_ref="himalaya:gmail",
+    )
+
+    class GmailOutbox:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def send_reply(self, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "himalaya:gmail:draft"
+
+    gmail_outbox = GmailOutbox()
+    service = UserIOService(store, Generator(), DirectProviderOutbox(), gmail_outbox=gmail_outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail", "m-1", "careviolan@gmail.com", "/work read-only", 1.0),
+        route_id="gmail-read-only",
+    )
+    store.set_conversation_account(conversation_id, "gmail")
+    draft = service.create_manual_draft(conversation_id, body="Verified result")
+
+    approved = service.approve(draft.id)
+    assert approved.status == "approved"
+    assert gmail_outbox.calls == [{
+        "account": "gmail", "sender": "megamen932@gmail.com", "recipient": "careviolan@gmail.com",
+        "message_id": "m-1", "body": "Verified result", "draft_id": draft.id,
+    }]
+    assert store.conversation(conversation_id)["drafts"][0]["outbox_receipt"] == "himalaya:gmail:draft"
+
+
+def test_default_gmail_approval_refuses_non_reply_account_or_mismatched_binding(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_account(
+        account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
+        can_read=True, can_reply=False, credential_ref="himalaya:gmail",
+    )
+
+    class GmailOutbox:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def send_reply(self, **kwargs) -> str:
+            self.calls.append(kwargs)
+            return "unexpected-send"
+
+    gmail_outbox = GmailOutbox()
+    service = UserIOService(store, Generator(), DirectProviderOutbox(), gmail_outbox=gmail_outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail", "m-2", "careviolan@gmail.com", "hello", 1.0),
+        route_id="gmail-read-only",
+    )
+    store.set_conversation_account(conversation_id, "gmail")
+    draft = service.create_manual_draft(conversation_id, body="reply")
+    with pytest.raises(DeliveryUnavailableError, match="Gmail account is not configured"):
+        service.approve(draft.id)
+
+    store.register_account(
+        account_id="gmail-megamen932", provider="gmail", display_name="megamen932@gmail.com",
+        can_read=True, can_reply=True, credential_ref="himalaya:gmail",
+    )
+    assert not store.set_conversation_account(conversation_id, "careviolan")
+    store.delete_draft(draft.id)
+    assert store.set_conversation_account(conversation_id, "careviolan")
+    draft = service.create_manual_draft(conversation_id, body="reply")
+    with pytest.raises(DeliveryUnavailableError, match="does not match source"):
+        service.approve(draft.id)
+    assert gmail_outbox.calls == []
+    assert store.draft(draft.id).status == "proposed"
+
+
+
+def test_canonical_inbox_envelope_contract() -> None:
     message = inbox_message_from_envelope(
         {"schema": "universal.inbox.message.v1", "source": "vk", "message_id": "m-1", "sender": "customer", "body": "hello"},
         received_at=1.0,
     )
-    requests = []
-
-    class Response:
-        status = 202
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        @staticmethod
-        def read() -> bytes:
-            return b'{"event_id":"evt_1"}'
-
-    def runner(request, *, timeout):
-        requests.append((request, timeout))
-        return Response()
-
-    outbox = NoticePlaceOutboxClient({"vk-reply": NoticePlaceRoute("http://127.0.0.1:8091", "scoped-token", "userio")}, runner=runner)
-    receipt = outbox.send_reply(route_id="vk-reply", conversation_id="conv_1", draft_id="draft_1", body="answer")
-
     assert message.conversation_key == "vk:customer"
-    assert receipt == "evt_1"
-    payload = __import__("json").loads(requests[0][0].data)
-    assert payload["event_type"] == "userio.reply.v1"
-    assert "target" not in payload
-    assert requests[0][0].get_header("Authorization") == "Bearer scoped-token"
+    assert message.message_id == "m-1"
 
+
+def test_message_direction_is_preserved_in_conversation(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    message = inbox_message_from_envelope(
+        {
+            "schema": "universal.inbox.message.v1",
+            "source": "phone",
+            "message_id": "call-1-agent-1",
+            "sender": "call-1",
+            "body": "Здравствуйте",
+            "direction": "outgoing",
+        },
+        received_at=1.0,
+    )
+
+    conversation_id, accepted = service.receive(message, route_id="phone")
+
+    assert accepted is True
+    assert store.conversation(conversation_id)["messages"] == [
+        {
+            "source": "phone",
+            "message_id": "call-1-agent-1",
+            "sender": "call-1",
+            "body": "Здравствуйте",
+            "direction": "outgoing",
+            "received_at": 1.0,
+            "seen_at": None,
+        }
+    ]
 
 def test_identity_rule_enables_autosend_and_new_message_feed(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
@@ -166,3 +366,200 @@ def test_account_registry_exposes_capabilities_not_browser_session(tmp_path) -> 
         "id": "vk-sales", "provider": "vk", "display_name": "Sales VK", "capabilities": ["read", "reply"],
         "credential_ref": "secret://userio/vk-sales", "enabled": True,
     }]
+
+
+def test_send_policy_blocks_approval_but_keeps_drafts(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    store.set_user_preference("send_enabled", "0")
+    message = InboxMessage("telegram", "m-policy", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.create_manual_draft(conversation_id, body="reply")
+    assert draft.status == "proposed"
+    import pytest
+    with pytest.raises(DeliveryUnavailableError):
+        service.approve(draft.id)
+
+
+def test_audio_transcript_is_promoted_to_canonical_body_and_persisted(tmp_path) -> None:
+    payload = {
+        "schema": "universal.inbox.message.v1",
+        "source": "telegram",
+        "message_id": "chat:77",
+        "sender": "chat",
+        "body": "[Telegram voice]",
+        "attachments": [{
+            "kind": "voice",
+            "content_type": "audio/ogg",
+            "filename": "voice-77.ogg",
+            "provider_ref": "77",
+            "transcript": "Это автоматическая транскрипция.",
+            "transcription_status": "completed",
+            "transcription_model": "whisper-1",
+        }],
+    }
+    message = inbox_message_from_envelope(payload, received_at=2.0)
+    assert message.body == "Это автоматическая транскрипция."
+    assert message.attachments[0]["transcript"] == "Это автоматическая транскрипция."
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, accepted = service.receive(message, route_id="telegram")
+    assert accepted is True
+    record = store.conversation(conversation_id)
+    assert record["messages"][0]["body"] == "Это автоматическая транскрипция."
+    attachment = record["messages"][0]["attachments"][0]
+    assert attachment["transcript"] == "Это автоматическая транскрипция."
+    assert attachment["transcription_status"] == "completed"
+    assert attachment["transcription_model"] == "whisper-1"
+
+
+def test_replayed_audio_enriches_old_placeholder_without_duplicate(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    placeholder = InboxMessage("telegram", "chat:88", "chat", "[Telegram voice]", 1.0)
+    conversation_id, accepted = service.receive(placeholder, route_id="telegram")
+    assert accepted is True
+
+    enriched = inbox_message_from_envelope({
+        "schema": "universal.inbox.message.v1",
+        "source": "telegram",
+        "message_id": "chat:88",
+        "sender": "chat",
+        "body": "[Telegram voice]",
+        "attachments": [{
+            "kind": "voice", "content_type": "audio/ogg", "filename": "voice-88.ogg",
+            "transcript": "Старое голосовое теперь распознано.",
+            "transcription_status": "completed", "transcription_model": "whisper-1",
+        }],
+    }, received_at=1.0)
+    same_id, duplicate = service.receive(enriched, route_id="telegram")
+    assert same_id == conversation_id
+    assert duplicate is False
+    record = store.conversation(conversation_id)
+    assert len(record["messages"]) == 1
+    assert record["messages"][0]["body"] == "Старое голосовое теперь распознано."
+    assert record["messages"][0]["attachments"][0]["transcript"] == "Старое голосовое теперь распознано."
+
+
+def test_long_audio_transcript_does_not_duplicate_ingress_prefix() -> None:
+    transcript = "слово " * 3000
+    prefix = transcript[:8000]
+    message = inbox_message_from_envelope({
+        "schema": "universal.inbox.message.v1",
+        "source": "telegram",
+        "message_id": "chat:long",
+        "sender": "chat",
+        "body": prefix,
+        "attachments": [{
+            "kind": "voice", "content_type": "audio/ogg", "filename": "long.ogg",
+            "transcript": transcript, "transcription_status": "completed",
+            "transcription_model": "whisper-1",
+        }],
+    }, received_at=3.0)
+    assert message.body == transcript.strip()[:65_536]
+    assert message.body.count(prefix[:100]) >= 1
+    assert "[Транскрипция]" not in message.body
+
+
+class _DraftNotifier:
+    def __init__(self):
+        self.calls = []
+
+    def notify(self, **kwargs):
+        self.calls.append(kwargs)
+        return "notice-receipt"
+
+
+def test_manual_draft_notifies_when_approval_is_required(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(
+        store, Generator(), Outbox(), draft_notifier=notifier, draft_notification_delay_seconds=0
+    )
+    message = InboxMessage("telegram", "m-notify", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+
+    draft = service.create_manual_draft(conversation_id, body="reply")
+
+    assert draft.status == "proposed"
+    assert len(notifier.calls) == 1
+    assert notifier.calls[0]["drafts"][0].id == draft.id
+
+
+def test_receive_and_plan_does_not_notify_before_auto_send(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    store.register_identity(source="vk", external_id="42", identity_id="person_auto", display_name="Auto")
+    store.set_rule(identity_id="person_auto", source="vk", route_id="vip-vk", mode="auto_send")
+    notifier = _DraftNotifier()
+    service = UserIOService(
+        store, Generator(), Outbox(), draft_notifier=notifier, draft_notification_delay_seconds=0
+    )
+
+    _, accepted, draft = service.receive_and_plan(
+        InboxMessage("vk", "auto-1", "42", "urgent", 1.0), route_id="ordinary-vk"
+    )
+
+    assert accepted is True
+    assert draft is not None and draft.status == "approved"
+    assert notifier.calls == []
+
+def test_explicit_ai_variants_notify_once_as_one_approval_event(tmp_path) -> None:
+    class VariantGenerator:
+        def suggest(self, **_kwargs): return "fallback"
+        def suggest_variants(self, **_kwargs): return ["one", "two"]
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(
+        store, VariantGenerator(), Outbox(), draft_notifier=notifier,
+        draft_notification_delay_seconds=0,
+    )
+    message = InboxMessage("telegram", "m-variants", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+
+    drafts = service.propose_for_approval(conversation_id, message, limit=3)
+
+    assert [d.body for d in drafts] == ["one", "two"]
+    assert len(notifier.calls) == 1
+    assert [d.id for d in notifier.calls[0]["drafts"]] == [d.id for d in drafts]
+
+
+def test_delayed_notification_skips_draft_already_approved(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(store, Generator(), Outbox(), draft_notifier=notifier)
+    message = InboxMessage("telegram", "m-fast-approve", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.propose(conversation_id, message)
+    service.approve(draft.id)
+
+    service._notify_drafts_if_still_proposed([draft.id])
+
+    assert notifier.calls == []
+
+def test_delayed_notification_skips_deleted_draft(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(store, Generator(), Outbox(), draft_notifier=notifier)
+    message = InboxMessage("telegram", "m-fast-delete", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.propose(conversation_id, message)
+    store.delete_draft(draft.id)
+
+    service._notify_drafts_if_still_proposed([draft.id])
+
+    assert notifier.calls == []
+
+
+def test_telegram_fallback_skips_draft_already_shown_by_browser(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    notifier = _DraftNotifier()
+    service = UserIOService(store, Generator(), Outbox(), draft_notifier=notifier)
+    message = InboxMessage("telegram", "browser-ack", "alice", "hello", 1.0)
+    conversation_id, _ = service.receive(message, route_id="telegram")
+    draft = service.propose(conversation_id, message)
+    assert store.mark_drafts_browser_notified([draft.id]) == 1
+
+    service._notify_drafts_if_still_proposed([draft.id])
+
+    assert notifier.calls == []

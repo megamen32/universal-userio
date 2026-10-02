@@ -1,0 +1,73 @@
+{
+  "schema_version": 4,
+  "session_id": "2608271625-8Bv5kZ",
+  "created_at": "2026-08-27T16:25:44.131619",
+  "last_activity": "2026-08-27T17:05:40.625039",
+  "metadata": {
+    "title": null,
+    "label": null,
+    "first_user_preview": "# Task: userio multi-user OAuth rework + unified channel abstraction + ChatGPT-connectable MCP Repository: /home/roomhacker/agents-projects/universal-userio (Python, stdlib-first). Work ONLY in that repository. Tests: `python -m pytest test",
+    "pinned": false,
+    "extras": {
+      "harness_session_id": "2608271625-8Bv5kZ"
+    }
+  },
+  "continuation": {
+    "active_agent": "dev",
+    "cwd": "/home/roomhacker/agents-projects/universal-userio",
+    "git": null,
+    "lineage": {
+      "forked_from": null,
+      "acp_session_id": null
+    },
+    "agents": {
+      "dev": {
+        "history_file": "history_dev.json",
+        "resolved_prompt": "You are a development agent, tasked with helping the user read, modify and write source code. \n\nYou prefer terse, idiomatic code.\n\nAvoid mocking or \"monkeypatching\" for tests, preferring simulators and well targetted coverage rather than arbitrary completeness.\n\n## Resources\n\nFor detailed fast-agent guidance, call `get_resource` with `internal://fast-agent/agent-cards` for AgentCards, `internal://fast-agent/model-overlays` for model overlay manifests, and `internal://fast-agent/execution-environments` for named execution environment config.\nThe bundled internal resources listed below are always available to `get_resource`.\n<available_resources>\n  <resource>\n    <uri>internal://fast-agent/agent-cards</uri>\n    <description>AgentCard schema, placeholders, and execution behavior reference.</description>\n    <why>Use when creating, validating, or loading AgentCards and ToolCards.</why>\n  </resource>\n  <resource>\n    <uri>internal://fast-agent/model-overlays</uri>\n    <description>Model overlay manifest format, auth options, defaults, metadata, and llama.cpp import behavior.</description>\n    <why>Use when creating, validating, or editing local model overlays and overlay-related model config.</why>\n  </resource>\n  <resource>\n    <uri>internal://fast-agent/execution-environments</uri>\n    <description>Generated named execution environment config schema, examples, and rules.</description>\n    <why>Use when creating, validating, or editing local, Docker, Hugging Face Sandbox, or custom execution environments in fast-agent.yaml.</why>\n  </resource>\n</available_resources>\n\n\n\n\n\n## Operating Guidance\n\nParallelize tool calls where possible. Mermaid diagrams between code fences are supported.\n\nRead any project specific instructions included:\n\n---\n\n\n\n---\n\nEnvironment:\n- Workspace root: /home/roomhacker/agents-projects/universal-userio\n- Execution environment: local local (shell: bash, cwd: /home/roomhacker/agents-projects/universal-userio)\n- Client: fast-agent\n- Fast-agent runtime: CPython 3.12.13\n- Host platform: Linux-6.8.0-136-generic-x86_64-with-glibc2.35\n\nThe fast-agent environment directory is {{environmentDir}}\n\nBefore making tool calls, send a brief preamble to the user explaining what you\u2019re about to do.\n\nThe current date is 27 August 2026.",
+        "model": "gpt-5.6-sol",
+        "model_spec": "codexresponses.gpt-5.6-sol?reasoning=high",
+        "provider": "codexresponses",
+        "request_settings": {
+          "max_tokens": 128000,
+          "temperature": null,
+          "top_p": null,
+          "top_k": null,
+          "min_p": null,
+          "presence_penalty": null,
+          "frequency_penalty": null,
+          "repetition_penalty": null,
+          "use_history": true,
+          "parallel_tool_calls": true,
+          "max_iterations": 9999,
+          "tool_result_mode": "postprocess",
+          "streaming_timeout": 120.0,
+          "service_tier": null
+        },
+        "card_provenance": [
+          {
+            "ref": "/home/roomhacker/.fast-agent/agent-cards/dev.md"
+          }
+        ],
+        "attachment_refs": [],
+        "model_overlay_refs": []
+      }
+    }
+  },
+  "analysis": {
+    "usage_summary": {
+      "prompt_tokens": 6035934,
+      "completion_tokens": 91966,
+      "total_tokens": 6127900
+    },
+    "timing_summary": null,
+    "provider_diagnostics": [],
+    "transport_diagnostics": []
+  },
+  "execution": {
+    "resumable": true,
+    "child_link": null,
+    "status": "completed",
+    "started_at": null,
+    "completed_at": null
+  }
+}

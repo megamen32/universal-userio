@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "decisions": {
+    ".agents/tasks/ai-calls-userio.md": {
+      "disposition": "preserve_canonical",
+      "reason": "historical AgentCall implementation and live canary evidence is preserved in canonical source"
+    },
+    ".env.example": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical configuration intentionally removed retired NoticePlace route variables"
+    },
+    ".gitignore": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical ignore policy covers current build, dependency, temporary, and graph artifacts"
+    },
+    "deploy/byok-bridge/bun.lock": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical lockfile is owned by the source checkout and supersedes the runtime-generated variant"
+    },
+    "deploy/userio-agentcall-ingress.service": {
+      "disposition": "preserve_canonical",
+      "reason": "the active AgentCall sidecar unit is now preserved byte-for-byte in canonical source"
+    },
+    "pyproject.toml": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical packaging supports Python 3.10 and current optional channel dependencies"
+    },
+    "src/universal_userio/agent_channel.py": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical implementation bounds waiter result retention and removes completed results"
+    },
+    "src/universal_userio/channels/gmail.py": {
+      "disposition": "preserve_canonical",
+      "reason": "runtime difference is trailing whitespace only"
+    },
+    "src/universal_userio/channels/matrix.py": {
+      "disposition": "preserve_canonical",
+      "reason": "runtime difference is trailing whitespace only"
+    },
+    "src/universal_userio/chatgpt_sessions.py": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical implementation isolates session files per user and enforces private modes"
+    },
+    "src/universal_userio/email.py": {
+      "disposition": "exclude_runtime_artifact",
+      "reason": "unreferenced runtime duplicate is superseded by canonical channels/email.py"
+    },
+    "src/universal_userio/http_api.py": {
+      "disposition": "preserve_canonical",
+      "reason": "observed runtime delta is formatting-only and canonical HTTP behavior is authoritative"
+    },
+    "src/universal_userio/mcp_transport.py": {
+      "disposition": "preserve_canonical",
+      "reason": "observed runtime delta is formatting-only and canonical MCP behavior is authoritative"
+    },
+    "src/universal_userio/vault.py": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical implementation adds per-user namespaces and private permissions"
+    },
+    "tests/test_agentcall_ingress.py": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical focused contract supersedes the stale runtime test variant"
+    },
+    "tests/test_android_sms_adapter.py": {
+      "disposition": "preserve_canonical",
+      "reason": "canonical tests additionally cover manual approval lock and auto-send behavior"
+    }
+  }
+}
