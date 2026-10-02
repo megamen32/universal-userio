@@ -35,9 +35,3 @@
 - Existing unrelated suite debt remains: full collection fails on removed `routes_from_environment` / `NoticePlaceOutboxClient`; `test_multi_user.py` has four stale exact-message assertions. None is caused by this task.
 - Commit is blocked by a pre-existing merge (`MERGE_HEAD=d932a3f`) with unrelated staged work; partial commit is forbidden. Task files were returned to unstaged/untracked state and no foreign path was committed.
 - Measured active time at 2026-09-12T01:17:19+03:00: 1385.17s (23m05s), derived from monotonic uptime 86266.07 -> 87651.24.
-
-## Reconciliation note
-
-Preserved from the managed runtime on 2026-09-16. The historical merge blocker
-above describes the original runtime attempt; the canonical AgentCall source and
-focused tests were already present on `main` when this record was recovered.
