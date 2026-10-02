@@ -1082,7 +1082,7 @@ def _download_page() -> str:
 <body>
 <main>
   <h1>Universal UserIO — загрузки</h1>
-  <p class="lead">Скачайте коннектор, распакуйте и загрузите как unpacked-расширение в Chrome / Chromium / BrowserOS / Brave.</p>
+  <p class="lead">Скачайте коннектор, распакуйте и загрузите как unpacked-расширение в Chrome / Chromium / Brave. Для автоматизации используйте Agent Browser с тем же профилем Chrome, где уже выполнен вход.</p>
 
   <div class="card">
     <h2>Universal UserIO Agent <span class="tag">браузерное расширение</span></h2>
