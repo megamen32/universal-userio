@@ -26,6 +26,112 @@ class Outbox:
         return "event_1"
 
 
+def test_v1_runtime_identity_is_bearer_protected_and_allowlisted(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    _, user_token = service._store.create_user("runtime-reader", "correct horse battery staple")
+    identity = {
+        "schema_version": 1,
+        "commit": "a" * 40,
+        "manifest_sha256": "b" * 64,
+        "verified": True,
+        "release_file": "/private/sentinel/path",
+        "secret": "TOP-SECRET-SENTINEL",
+    }
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), handler(service, token="test-token", runtime_identity=identity)
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        try:
+            urlopen(base + "/v1/runtime")
+        except HTTPError as error:
+            assert error.code == 401
+        else:
+            raise AssertionError("runtime identity leaked without authentication")
+
+        expected = {
+            "schema_version": 1,
+            "commit": "a" * 40,
+            "manifest_sha256": "b" * 64,
+            "verified": True,
+        }
+        for bearer in ("test-token", user_token):
+            request = Request(
+                base + "/v1/runtime", headers={"Authorization": f"Bearer {bearer}"}
+            )
+            with urlopen(request) as response:
+                raw = response.read()
+                assert response.status == 200
+            assert json.loads(raw) == expected
+            assert b"private" not in raw
+            assert b"TOP-SECRET-SENTINEL" not in raw
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_workspace_events_http_is_authenticated_user_scoped_and_read_only(tmp_path) -> None:
+    outbox = Outbox()
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), outbox)
+    other, other_token = store.create_user("workspace-user", "correct horse battery staple")
+    store.bind_channel_route(user_id=other.user_id, source="matrix", route_id="workspace-other")
+    owner_conversation, _ = service.receive(
+        InboxMessage("gmail:self", "owner-message", "self@example.test", "/work alpha item", 1.0),
+        route_id="workspace-owner",
+    )
+    store.set_conversation_account(owner_conversation, "gmail-self")
+    service.receive(
+        InboxMessage("matrix", "other-message", "other", "private other", 2.0),
+        route_id="workspace-other", user_id=other.user_id,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="owner-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    def get(suffix: str, bearer: str = "") -> tuple[int, dict]:
+        headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+        request = Request(base + suffix, headers=headers)
+        try:
+            with urlopen(request) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    try:
+        assert get("/v1/workspace/events")[0] == 401
+        code, owner_page = get("/v1/workspace/events?after=0&limit=1", "owner-token")
+        assert code == 200
+        assert owner_page["schema"] == "universal.workspace-events.v1"
+        assert [event["message_id"] for event in owner_page["events"]] == ["owner-message"]
+        assert owner_page["events"][0]["account_ref"] == "gmail-self"
+        assert owner_page["events"][0]["route_id"] == "workspace-owner"
+        assert owner_page["cursor"] == owner_page["head"]
+        assert store.new_messages()[0]["message_id"] == "owner-message"
+        assert get(f"/v1/workspace/events?after={owner_page['cursor']}", "owner-token")[1]["events"] == []
+
+        code, other_page = get("/v1/workspace/events?after=0", other_token)
+        assert code == 200
+        assert [event["message_id"] for event in other_page["events"]] == ["other-message"]
+        for suffix in (
+            "/v1/workspace/events?after=-1",
+            "/v1/workspace/events?after=not-a-cursor",
+            "/v1/workspace/events?limit=101",
+            "/v1/workspace/events?after=0&after=1",
+            f"/v1/workspace/events?user_id={other.user_id}",
+        ):
+            assert get(suffix, "owner-token")[0] == 400
+        store.set_user_capability("read", False, user_id=other.user_id)
+        assert get("/v1/workspace/events", other_token)[0] == 403
+        assert outbox.calls == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path) -> None:
     outbox = Outbox()
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), outbox)
@@ -102,6 +208,218 @@ def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_pat
         server.server_close()
 
 
+def test_conversations_preview_falls_back_to_last_text_when_latest_is_attachment(tmp_path) -> None:
+    """When the latest message is an attachment placeholder, the chat list and
+    search results must surface the most recent real text body instead. This is
+    what made "догов" miss `+79103332444` in the Marat review."""
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    route_id = "tg-reply"
+    cid, _ = service.receive(
+        InboxMessage("telegram", "1", "client", "И приложите договор пожалуйста", 100.0),
+        route_id=route_id,
+    )
+    service.receive(
+        InboxMessage("telegram", "2", "client", "[Telegram document]", 200.0),
+        route_id=route_id,
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/conversations", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        conversation = payload["conversations"][0]
+        assert conversation["preview"] == "И приложите договор пожалуйста", (
+            f"placeholder leaked into preview: {conversation['preview']!r}"
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversations_are_sorted_by_latest_message_not_conversation_updated_at(tmp_path) -> None:
+    """An older conversation that just received a fresh message must rank above
+    a conversation that was merely re-tagged without new activity."""
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    fresh, _ = service.receive(
+        InboxMessage("telegram", "fresh", "x", "свежее сообщение", 1000.0), route_id="tg-reply",
+    )
+    stale, _ = service.receive(
+        InboxMessage("telegram", "stale", "y", "старое сообщение", 100.0), route_id="tg-reply",
+    )
+    # Add a draft on the older conversation so its updated_at jumps ahead of
+    # the newer conversation in the legacy sort; the new contract must still
+    # rank by last_at and keep `fresh` first.
+    from universal_userio.contracts import ReplyDraft
+    service._store.add_draft(
+        ReplyDraft(id="draft-touch", conversation_id=stale, body="touch", status="proposed"),
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/conversations", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert [c["id"] for c in payload["conversations"]] == [fresh, stale], payload
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversation_media_endpoint_describes_attachment_placeholder(tmp_path) -> None:
+    """The /media endpoint pins the contract for attachment bubbles: every
+    adapter currently reports `available=false` because StoredChannelAdapter
+    does not implement download. The frontend relies on this contract to
+    render an honest "not yet wired" modal instead of a silently dead click."""
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("telegram", "doc-1", "client", "[Telegram document]", 1.0), route_id="tg-reply",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(
+            base + f"/v1/conversations/{cid}/media/doc-1",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert payload["kind"] == "document", payload
+        assert payload["available"] is False
+        assert payload["reason"], "expected a non-empty reason when media is unavailable"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+
+def test_transcribed_audio_media_keeps_voice_kind_after_body_promotion(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage(
+            "telegram", "voice-1", "client", "Распознанный текст", 1.0,
+            attachments=({
+                "kind": "voice", "content_type": "audio/ogg", "filename": "voice-1.ogg",
+                "transcript": "Распознанный текст", "transcription_status": "completed",
+                "transcription_model": "whisper-1",
+            },),
+        ),
+        route_id="tg-reply",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/conversations/{cid}/media/voice-1",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert payload["kind"] == "voice"
+        assert payload["attachments"][0]["transcription_status"] == "completed"
+        assert payload["attachments"][0]["transcription_model"] == "whisper-1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversation_media_endpoint_rejects_unknown_message(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("telegram", "x", "client", "hi", 1.0), route_id="tg-reply",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(
+            base + f"/v1/conversations/{cid}/media/missing",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        try:
+            urlopen(request)
+        except HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("expected 404 for unknown message_id")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversation_media_endpoint_streams_real_bytes_for_email(tmp_path) -> None:
+    """With a fake email channel injected into MailChannelAdapter, the
+    /media and /media/raw endpoints must surface the real filename,
+    content_type and bytes — proving the contract works end to end."""
+    from universal_userio.adapters import MailChannelAdapter
+    from universal_userio.channels.core import ChatRef, DownloadedMedia, MessageRef
+
+    class FakeEmail:
+        async def download_media(self, *, chat: ChatRef, message: MessageRef) -> DownloadedMedia:
+            return DownloadedMedia(
+                chat_id=chat, message_id=int(message),
+                data=b"%PDF-1.4 demo", mime_type="application/pdf", filename="invoice.pdf",
+            )
+
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(
+        InboxMessage("gmail", "1042", "billing@example.com", "[Gmail document]", 1.0),
+        route_id="gmail",
+    )
+    service._mail_adapter_factory = lambda: FakeEmail()  # opaque injection point
+    # Patch the adapter picker so the test can route through the fake.
+    from universal_userio import http_api as api
+    original = api._adapter_for_message
+    def patched(service, message, user_id):
+        adapter = MailChannelAdapter(
+            service._store, service, user_id, channel_factory=service._mail_adapter_factory,
+        )
+        return adapter
+    api._adapter_for_message = patched
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            meta_request = Request(
+                base + f"/v1/conversations/{cid}/media/1042",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            with urlopen(meta_request) as response:
+                meta = json.loads(response.read())
+            assert meta["available"] is True, meta
+            assert meta["filename"] == "invoice.pdf"
+            assert meta["content_type"] == "application/pdf"
+            assert meta["size"] == len(b"%PDF-1.4 demo")
+            assert meta["download_url"].endswith("/raw")
+
+            raw_request = Request(
+                base + f"/v1/conversations/{cid}/media/1042/raw",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            with urlopen(raw_request) as response:
+                body = response.read()
+                content_type = response.headers.get("Content-Type")
+                disposition = response.headers.get("Content-Disposition")
+            assert body == b"%PDF-1.4 demo"
+            assert content_type == "application/pdf"
+            assert "invoice.pdf" in (disposition or "")
+        finally:
+            server.shutdown()
+            server.server_close()
+    finally:
+        api._adapter_for_message = original
+
+
 def test_email_messages_share_one_case_insensitive_conversation(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     first = InboxMessage("email", "1", "Anna@Example.com", "first", 1.0)
@@ -153,6 +471,49 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
         with urlopen(request) as response:
             result = json.loads(response.read())["result"]
         assert "userio.draft.approve_send" in [tool["name"] for tool in result["tools"]]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_mcp_exclusions_apply_only_to_the_requesting_consumer(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    hermes_conversation_id, _ = service.receive(
+        InboxMessage("telegram", "hermes-1", "Hermes", "own agent output", 1.0),
+        route_id="telegram",
+    )
+    other_conversation_id, _ = service.receive(
+        InboxMessage("telegram", "other-1", "Anna", "ordinary chat", 2.0),
+        route_id="telegram",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def list_chat_ids(*, ignored_chats: list[str] | None = None) -> set[str]:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "userio.channels.list", "arguments": {
+                "channel": "telegram", "ignored_chats": ignored_chats or [],
+            }},
+        }
+        headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/mcp",
+            data=json.dumps(payload).encode(),
+            method="POST",
+            headers=headers,
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())["result"]["structuredContent"]
+        return {str(chat["id"]) for chat in result["chats"]}
+
+    try:
+        assert list_chat_ids() == {hermes_conversation_id, other_conversation_id}
+        assert list_chat_ids(ignored_chats=[hermes_conversation_id]) == {other_conversation_id}
+        assert list_chat_ids() == {hermes_conversation_id, other_conversation_id}
     finally:
         server.shutdown()
         server.server_close()
@@ -243,3 +604,99 @@ def test_accounts_can_be_removed_without_deleting_provider_data(tmp_path) -> Non
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_send_preference_is_per_authenticated_user(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    headers = {"Authorization":"Bearer test-token", "Content-Type":"application/json"}
+    try:
+        with urlopen(Request(base+"/v1/preferences/send", headers=headers)) as response:
+            assert json.loads(response.read())["send_enabled"] is True
+        with urlopen(Request(base+"/v1/preferences/send", data=b'{"enabled":false}', method="POST", headers=headers)) as response:
+            assert json.loads(response.read())["send_enabled"] is False
+        with urlopen(Request(base+"/v1/preferences/send", headers=headers)) as response:
+            assert json.loads(response.read())["send_enabled"] is False
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_capability_preferences_are_per_user_and_enforced_for_reads(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    headers = {"Authorization":"Bearer test-token", "Content-Type":"application/json"}
+    try:
+        with urlopen(Request(base+"/v1/preferences/capabilities", headers=headers)) as response:
+            caps = json.loads(response.read())["capabilities"]
+        assert caps == {"read": True, "subscribe": True, "download": True, "send": True}
+        payload = b'{"capabilities":{"read":false,"download":false}}'
+        with urlopen(Request(base+"/v1/preferences/capabilities", data=payload, method="POST", headers=headers)) as response:
+            caps = json.loads(response.read())["capabilities"]
+        assert caps["read"] is False and caps["download"] is False and caps["send"] is True
+        try:
+            urlopen(Request(base+"/v1/conversations", headers=headers))
+        except HTTPError as error:
+            assert error.code == 403
+            assert json.loads(error.read())["error"] == "read_capability_disabled"
+        else:
+            raise AssertionError("read-disabled user could read conversations")
+        with urlopen(Request(base+"/v1/preferences/capabilities", headers=headers)) as response:
+            assert json.loads(response.read())["capabilities"]["read"] is False
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_pending_drafts_endpoint_lists_only_proposed_with_chat_context(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(InboxMessage("telegram", "1", "alice", "hello", 1.0), route_id="telegram")
+    pending = service.create_manual_draft(cid, body="needs approval")
+    sent = service.create_manual_draft(cid, body="already sent")
+    service._store.approve(sent.id, "receipt-1")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/drafts/pending",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert [item["id"] for item in payload["drafts"]] == [pending.id]
+        assert payload["drafts"][0]["conversation_id"] == cid
+        assert payload["drafts"][0]["source"] == "telegram"
+        assert payload["drafts"][0]["sender"] == "alice"
+        assert payload["drafts"][0]["body"] == "needs approval"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_browser_notification_ack_marks_only_proposed_draft(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    cid, _ = service.receive(InboxMessage("telegram", "browser-1", "alice", "hello", 1.0), route_id="telegram")
+    pending = service.create_manual_draft(cid, body="needs approval")
+    sent = service.create_manual_draft(cid, body="sent")
+    service._store.approve(sent.id, "receipt")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/drafts/browser-notified",
+            data=json.dumps({"draft_ids": [pending.id, sent.id]}).encode(), method="POST",
+            headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"},
+        )
+        with urlopen(request) as response:
+            result = json.loads(response.read())
+        assert result == {"ok": True, "marked": 1}
+        assert service._store.draft_browser_notified(pending.id) is True
+        assert service._store.draft_browser_notified(sent.id) is False
+    finally:
+        server.shutdown(); server.server_close()

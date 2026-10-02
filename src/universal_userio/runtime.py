@@ -4,15 +4,72 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import stat
 from collections.abc import Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
+from typing import Any
 
-from .adapters import NoticePlaceOutboxClient, NoticePlaceRoute
+from .adapters import ChatGPTWebOutbox, DirectProviderOutbox, HimalayaGmailOutbox
+from .channels.sms_gateway import AndroidSmsGatewayClient
+from .channels.whatsapp import WhatsAppBridgeClient
 from .ai import OpenAICompatibleDraftGenerator
+from .channels.live_telegram import live_telegram_outbox_from_env
+from .draft_notifications import TelegramDraftApprovalNotifier
 from .http_api import handler
 from .service import UserIOService
 from .store import SQLiteUserIOStore
+
+
+_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_UNVERIFIED_IDENTITY = MappingProxyType(
+    {
+        "schema_version": 1,
+        "commit": None,
+        "manifest_sha256": None,
+        "verified": False,
+    }
+)
+
+
+def load_runtime_identity(path: str | Path) -> Mapping[str, Any]:
+    """Load a strict, public release identity without consulting runtime Git state."""
+
+    release_path = Path(path)
+    try:
+        file_stat = release_path.lstat()
+        if not stat.S_ISREG(file_stat.st_mode) or stat.S_IMODE(file_stat.st_mode) != 0o644:
+            return _UNVERIFIED_IDENTITY
+        if file_stat.st_size > 4_096:
+            return _UNVERIFIED_IDENTITY
+        payload = json.loads(release_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return _UNVERIFIED_IDENTITY
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "commit",
+        "manifest_sha256",
+    }:
+        return _UNVERIFIED_IDENTITY
+    if payload["schema_version"] != 1 or isinstance(payload["schema_version"], bool):
+        return _UNVERIFIED_IDENTITY
+    commit = payload["commit"]
+    manifest_sha256 = payload["manifest_sha256"]
+    if not isinstance(commit, str) or not _COMMIT_RE.fullmatch(commit):
+        return _UNVERIFIED_IDENTITY
+    if not isinstance(manifest_sha256, str) or not _SHA256_RE.fullmatch(manifest_sha256):
+        return _UNVERIFIED_IDENTITY
+    return MappingProxyType(
+        {
+            "schema_version": 1,
+            "commit": commit,
+            "manifest_sha256": manifest_sha256,
+            "verified": True,
+        }
+    )
 
 
 def _required(environment: Mapping[str, str], name: str) -> str:
@@ -21,26 +78,6 @@ def _required(environment: Mapping[str, str], name: str) -> str:
         raise ValueError(f"{name} is required")
     return value
 
-
-def routes_from_environment(environment: Mapping[str, str]) -> dict[str, NoticePlaceRoute]:
-    raw = _required(environment, "USERIO_ROUTES_JSON")
-    try:
-        registry = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise ValueError("USERIO_ROUTES_JSON must be valid JSON") from error
-    if not isinstance(registry, dict) or not registry:
-        raise ValueError("USERIO_ROUTES_JSON must contain routes")
-    routes = {}
-    for route_id, config in registry.items():
-        if not isinstance(config, dict):
-            raise ValueError(f"route {route_id} must be an object")
-        token_env = str(config.get("token_env") or "")
-        routes[str(route_id)] = NoticePlaceRoute(
-            event_url=str(config.get("event_url") or ""), token=_required(environment, token_env),
-            project=str(config.get("project") or "userio"), recipient=str(config.get("recipient") or "userio"),
-            severity=str(config.get("severity") or "notice"),
-        )
-    return routes
 
 
 def seed_owner_from_file(store: SQLiteUserIOStore, path: str | Path) -> bool:
@@ -64,6 +101,17 @@ def seed_owner_from_file(store: SQLiteUserIOStore, path: str | Path) -> bool:
     return True
 
 
+def telegram_outbox_from_env(environment: Mapping[str, str]):
+    """Prefer the telegram-qr connector HTTP outbox; fall back to in-process Telethon."""
+    qr_url = environment.get("USERIO_TELEGRAM_QR_URL", "").strip()
+    if qr_url:
+        from .adapters import TelegramQrHttpOutbox
+
+        token = environment.get("USERIO_TELEGRAM_QR_TOKEN", "").strip() or environment.get("USERIO_API_TOKEN", "")
+        return TelegramQrHttpOutbox(qr_url, token)
+    return live_telegram_outbox_from_env(environment)
+
+
 def build_service(environment: Mapping[str, str] | None = None) -> UserIOService:
     environment = os.environ if environment is None else environment
     store = SQLiteUserIOStore(_required(environment, "USERIO_DB_PATH"))
@@ -71,18 +119,57 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     generator = OpenAICompatibleDraftGenerator(
         endpoint=_required(environment, "USERIO_AI_ENDPOINT"), token=_required(environment, "USERIO_AI_TOKEN"), model=_required(environment, "USERIO_AI_MODEL"),
     )
-    return UserIOService(store, generator, NoticePlaceOutboxClient(routes_from_environment(environment)))
+    sms_url, sms_token = environment.get("USERIO_SMS_GATEWAY_URL", "").strip(), environment.get("USERIO_SMS_GATEWAY_TOKEN", "").strip()
+    if bool(sms_url) != bool(sms_token):
+        raise ValueError("USERIO_SMS_GATEWAY_URL and USERIO_SMS_GATEWAY_TOKEN must be set together")
+    gateway = AndroidSmsGatewayClient(sms_url, sms_token) if sms_url else None
+    sms_user_id = environment.get("USERIO_SMS_USER_ID", store.default_user_id).strip()
+    sms_manual_approve = environment.get("USERIO_SMS_MANUAL_APPROVE_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
+    telegram_outbox = telegram_outbox_from_env(environment)
+    whatsapp_bridge_url = environment.get("USERIO_WHATSAPP_BRIDGE_URL", "").strip()
+    whatsapp_outbox = WhatsAppBridgeClient(whatsapp_bridge_url) if whatsapp_bridge_url else None
+    notify_chat = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT", "").strip()
+    notify_chat_id = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT_ID", "").strip()
+    notify_account_ref = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_ACCOUNT_REF", "").strip()
+    notify_values = (notify_chat, notify_chat_id, notify_account_ref)
+    if any(notify_values) and not all(notify_values):
+        raise ValueError(
+            "USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT, USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT_ID and "
+            "USERIO_DRAFT_NOTIFY_TELEGRAM_ACCOUNT_REF must be set together"
+        )
+    draft_notifier = None
+    if all(notify_values):
+        draft_notifier = TelegramDraftApprovalNotifier(
+            telegram_outbox, owner_user_id=store.owner().user_id,
+            chat=notify_chat, chat_id=notify_chat_id, account_ref=notify_account_ref,
+        )
+    return UserIOService(
+        store, generator, DirectProviderOutbox(), sms_gateway=gateway,
+        sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
+        sms_manual_approve=sms_manual_approve,
+        gmail_outbox=HimalayaGmailOutbox(),
+        chatgpt_outbox=ChatGPTWebOutbox(),
+        telegram_outbox=telegram_outbox, whatsapp_outbox=whatsapp_outbox,
+        draft_notifier=draft_notifier,
+        draft_notification_delay_seconds=float(
+            environment.get("USERIO_DRAFT_NOTIFY_DELAY_SECONDS", "5") or "5"
+        ),
+    )
 
 
 def main() -> None:
     environment = os.environ
     service = build_service(environment)
     token = _required(environment, "USERIO_API_TOKEN")
+    runtime_identity = load_runtime_identity(
+        environment.get("USERIO_RELEASE_FILE", "/opt/universal-userio/.userio-release.json")
+    )
     server = ThreadingHTTPServer(
         (environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))),
         handler(
             service, token=token, vkid_app_id=environment.get("USERIO_VKID_APP_ID", ""),
             trusted_proxy_token=environment.get("USERIO_TRUSTED_PROXY_TOKEN", ""),
+            runtime_identity=runtime_identity,
         ),
     )
     server.serve_forever()
