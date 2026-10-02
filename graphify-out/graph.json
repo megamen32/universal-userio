@@ -63806,19 +63806,19 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "work-vk-inbox-full.md"
     },
     {
-      "label": "VK Inbox \u2014 full feature + BrowserOS install",
+      "label": "VK Inbox \u2014 full feature + Agent Browser install",
       "file_type": "document",
       "source_file": ".agents/tasks/work-vk-inbox-full.md",
       "source_location": "L6",
       "_origin": "ast",
-      "id": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "id": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
-      "norm_label": "vk inbox \u2014 full feature + browseros install"
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
+      "norm_label": "vk inbox \u2014 full feature + agent_browser install"
     },
     {
       "label": "\u0417\u0430\u043f\u0440\u043e\u0441 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f",
@@ -63828,7 +63828,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u0437\u0430\u043f\u0440\u043e\u0441_\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u0437\u0430\u043f\u0440\u043e\u0441 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f"
     },
     {
@@ -63839,7 +63839,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u0440\u0435\u0448\u0435\u043d\u0438\u044f_\u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0435_\u0441_\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u043c",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u0440\u0435\u0448\u0435\u043d\u0438\u044f, \u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0435 \u0441 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u043c"
     },
     {
@@ -63850,7 +63850,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u0431\u0438\u0437\u043d\u0435\u0441_camary_definition_of_done",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u0431\u0438\u0437\u043d\u0435\u0441-camary (definition of done)"
     },
     {
@@ -63861,7 +63861,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u0430\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430_\u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0438\u0435_mv3",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u0430\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430 (\u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0438\u0435 mv3)"
     },
     {
@@ -63872,7 +63872,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u0434\u0430\u043d\u043d\u044b\u0435_indexeddb",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u0434\u0430\u043d\u043d\u044b\u0435 (indexeddb)"
     },
     {
@@ -63883,19 +63883,19 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u043f\u043e\u0442\u043e\u043a",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u043f\u043e\u0442\u043e\u043a"
     },
     {
-      "label": "BrowserOS install",
+      "label": "Agent Browser install",
       "file_type": "document",
       "source_file": ".agents/tasks/work-vk-inbox-full.md",
       "source_location": "L62",
       "_origin": "ast",
-      "id": "agents_tasks_work_vk_inbox_full_browseros_install",
+      "id": "agents_tasks_work_vk_inbox_full_agent_browser_install",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
-      "norm_label": "browseros install"
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
+      "norm_label": "agent_browser install"
     },
     {
       "label": "\u0420\u0435\u0448\u0435\u043d\u0438\u044f, \u0442\u0440\u0435\u0431\u0443\u044e\u0449\u0438\u0435 \u0432\u0430\u0448\u0435\u0433\u043e \u043e\u0442\u0432\u0435\u0442\u0430",
@@ -63905,7 +63905,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u0440\u0435\u0448\u0435\u043d\u0438\u044f_\u0442\u0440\u0435\u0431\u0443\u044e\u0449\u0438\u0435_\u0432\u0430\u0448\u0435\u0433\u043e_\u043e\u0442\u0432\u0435\u0442\u0430",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u0440\u0435\u0448\u0435\u043d\u0438\u044f, \u0442\u0440\u0435\u0431\u0443\u044e\u0449\u0438\u0435 \u0432\u0430\u0448\u0435\u0433\u043e \u043e\u0442\u0432\u0435\u0442\u0430"
     },
     {
@@ -63916,7 +63916,7 @@
       "_origin": "ast",
       "id": "agents_tasks_work_vk_inbox_full_\u043e\u0446\u0435\u043d\u043a\u0430",
       "community": 199,
-      "community_name": "VK Inbox \u2014 full feature + BrowserOS install",
+      "community_name": "VK Inbox \u2014 full feature + Agent Browser install",
       "norm_label": "\u043e\u0446\u0435\u043d\u043a\u0430"
     },
     {
@@ -64679,15 +64679,15 @@
       "norm_label": "\u0447\u0442\u043e \u0443\u043c\u0435\u0435\u0442"
     },
     {
-      "label": "\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 \u0432 BrowserOS (localhost:9223)",
+      "label": "\u0423\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 \u0432 Agent Browser (authenticated Chrome profile)",
       "file_type": "document",
       "source_file": "extensions/vk-inbox/README.md",
       "source_location": "L17",
       "_origin": "ast",
-      "id": "extensions_vk_inbox_readme_\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430_\u0432_browseros_localhost_9223",
+      "id": "extensions_vk_inbox_readme_\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430_\u0432_agent_browser_localhost_9223",
       "community": 210,
       "community_name": "Universal UserIO Agent extension (v0.3)",
-      "norm_label": "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 \u0432 browseros (localhost:9223)"
+      "norm_label": "\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 \u0432 agent_browser (authenticated Chrome profile)"
     },
     {
       "label": "\u0410\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430",
@@ -298182,7 +298182,7 @@
       "weight": 1.0,
       "_origin": "ast",
       "source": "agents_tasks_work_vk_inbox_full",
-      "target": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "target": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "confidence_score": 1.0
     },
     {
@@ -298192,8 +298192,8 @@
       "source_location": "L62",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
-      "target": "agents_tasks_work_vk_inbox_full_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
+      "target": "agents_tasks_work_vk_inbox_full_agent_browser_install",
       "confidence_score": 1.0
     },
     {
@@ -298203,7 +298203,7 @@
       "source_location": "L25",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u0430\u0440\u0445\u0438\u0442\u0435\u043a\u0442\u0443\u0440\u0430_\u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043d\u0438\u0435_mv3",
       "confidence_score": 1.0
     },
@@ -298214,7 +298214,7 @@
       "source_location": "L18",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u0431\u0438\u0437\u043d\u0435\u0441_camary_definition_of_done",
       "confidence_score": 1.0
     },
@@ -298225,7 +298225,7 @@
       "source_location": "L45",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u0434\u0430\u043d\u043d\u044b\u0435_indexeddb",
       "confidence_score": 1.0
     },
@@ -298236,7 +298236,7 @@
       "source_location": "L8",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u0437\u0430\u043f\u0440\u043e\u0441_\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f",
       "confidence_score": 1.0
     },
@@ -298247,7 +298247,7 @@
       "source_location": "L77",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u043e\u0446\u0435\u043d\u043a\u0430",
       "confidence_score": 1.0
     },
@@ -298258,7 +298258,7 @@
       "source_location": "L53",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u043f\u043e\u0442\u043e\u043a",
       "confidence_score": 1.0
     },
@@ -298269,7 +298269,7 @@
       "source_location": "L12",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u0440\u0435\u0448\u0435\u043d\u0438\u044f_\u0437\u0430\u0444\u0438\u043a\u0441\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0435_\u0441_\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u043c",
       "confidence_score": 1.0
     },
@@ -298280,7 +298280,7 @@
       "source_location": "L71",
       "weight": 1.0,
       "_origin": "ast",
-      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_browseros_install",
+      "source": "agents_tasks_work_vk_inbox_full_vk_inbox_full_feature_agent_browser_install",
       "target": "agents_tasks_work_vk_inbox_full_\u0440\u0435\u0448\u0435\u043d\u0438\u044f_\u0442\u0440\u0435\u0431\u0443\u044e\u0449\u0438\u0435_\u0432\u0430\u0448\u0435\u0433\u043e_\u043e\u0442\u0432\u0435\u0442\u0430",
       "confidence_score": 1.0
     },
@@ -298974,7 +298974,7 @@
       "weight": 1.0,
       "_origin": "ast",
       "source": "extensions_vk_inbox_readme_universal_userio_agent_extension_v0_3",
-      "target": "extensions_vk_inbox_readme_\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430_\u0432_browseros_localhost_9223",
+      "target": "extensions_vk_inbox_readme_\u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430_\u0432_agent_browser_localhost_9223",
       "confidence_score": 1.0
     },
     {

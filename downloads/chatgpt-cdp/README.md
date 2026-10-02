@@ -11,7 +11,7 @@
 
 - macOS с Homebrew
 - Node.js 20+
-- Chrome / Chromium / BrowserOS с залогиненным chatgpt.com
+- Chrome с залогиненным `chatgpt.com`; для управления профилем используйте Agent Browser CLI
 
 ```bash
 brew install node      # если Node.js ещё нет

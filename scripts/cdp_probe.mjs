@@ -1,4 +1,5 @@
-// Raw CDP probe over WS — talks to BrowserOS on 9223 directly.
+// Raw CDP probe over WebSocket for the Chrome profile opened by Agent Browser.
+// Set AGENT_BROWSER_CDP_BASE when Chrome uses a different debugging endpoint.
 // 1. attaches to the UserIO extension background page (our ID)
 // 2. evaluates JS in that context
 // 3. navigates the only foreground page to vk.com/im
@@ -6,7 +7,7 @@
 import WebSocket from 'ws';
 import http from 'node:http';
 
-const CDP_BASE = 'http://127.0.0.1:9223';
+const CDP_BASE = process.env.AGENT_BROWSER_CDP_BASE || 'http://127.0.0.1:9222';
 const EXT_BG = 'chrome-extension://kniehgiejgnnpgojkdhhjbgbllnfkfdk/_generated_background_page.html';
 
 function getJSON(path) {
@@ -97,7 +98,7 @@ async function main() {
   console.log('after nav1:', nav1.result.value);
 
   if (nav1.result.value.includes('id.vk.ru') || nav1.result.value.includes('login')) {
-    console.log('VK is on login — session not live in this BrowserOS profile.');
+    console.log('VK is on login — session not live in this Chrome profile.');
   }
 
   // Walk into background page console events

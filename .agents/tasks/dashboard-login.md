@@ -17,7 +17,7 @@ Evidence so far:
 - Regression first failed because anonymous `/` still returned the dashboard; after the change, all 34 tests pass.
 - Deployed `src/universal_userio/http_api.py` to `/opt/universal-userio`; runtime hash matches the committed source and `universal-userio.service` is active.
 - Public anonymous `/` now returns `302 Location: /login`; `/mcp` still returns the OAuth protected-resource challenge.
-- BrowserOS fresh-tab canary redirected to `/login`; `roomhacker` authenticated successfully and the expanded Email section showed `careviolan@gmail.com` and `megamen932@gmail.com`.
+- Chrome-profile fresh-tab canary redirected to `/login`; `roomhacker` authenticated successfully and the expanded Email section showed `careviolan@gmail.com` and `megamen932@gmail.com`.
 
 ## Follow-up: public signup
 

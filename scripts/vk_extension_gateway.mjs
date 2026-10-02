@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Standalone VK Inbox extension gateway.
 //
-// In production this lives inside the BrowserOS extension (mv3) and reaches
+// In production this lives inside the Universal UserIO Chrome extension (MV3) and reaches
 // back into the service-worker IndexedDB. For headless testing and local
 // development it runs as a separate process that holds attachments in an
 // in-memory map keyed by `peer_id:msg_id:idx`.
