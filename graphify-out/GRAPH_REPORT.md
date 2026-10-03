@@ -203,7 +203,7 @@
 - @types/react-dom
 - typescript
 - universal-userio
-- VK Inbox — full feature + BrowserOS install
+- VK Inbox — full feature + Agent Browser install
 - VK Inbox sidecar — install
 - UserIOIngressClient
 - Zd
@@ -960,9 +960,9 @@ Nodes (4): compilerOptions, paths, files, references
 Cohesion: 0.67
 Nodes (3): defineByokPresetPicker(), esc(), renderPresetCards()
 
-### Community 199 - "VK Inbox — full feature + BrowserOS install"
+### Community 199 - "VK Inbox — full feature + Agent Browser install"
 Cohesion: 0.18
-Nodes (10): BrowserOS install, VK Inbox — full feature + BrowserOS install, Архитектура (расширение MV3), Бизнес-camary (Definition of Done), Данные (IndexedDB), Запрос пользователя, Оценка, Поток (+2 more)
+Nodes (10): Agent Browser install, VK Inbox — full feature + Agent Browser install, Архитектура (расширение MV3), Бизнес-camary (Definition of Done), Данные (IndexedDB), Запрос пользователя, Оценка, Поток (+2 more)
 
 ### Community 200 - "VK Inbox sidecar — install"
 Cohesion: 0.18
@@ -1006,7 +1006,7 @@ Nodes (6): VK Inbox → универсальный агент сбора дан�
 
 ### Community 210 - "Universal UserIO Agent extension (v0.3)"
 Cohesion: 0.29
-Nodes (6): Universal UserIO Agent extension (v0.3), Архитектура, Безопасность, Известные ограничения, Установка в BrowserOS (localhost:9223), Что умеет
+Nodes (6): Universal UserIO Agent extension (v0.3), Архитектура, Безопасность, Известные ограничения, Установка в Agent Browser (authenticated Chrome profile), Что умеет
 
 ### Community 211 - "Android SMS adapter"
 Cohesion: 0.40

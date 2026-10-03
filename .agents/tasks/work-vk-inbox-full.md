@@ -1,13 +1,13 @@
 ---
 name: vk-inbox-full
-description: VK inbox extension — full feature (real-time all-chats capture, search, send), plus install into BrowserOS on localhost
+description: VK inbox extension — full feature (real-time all-chats capture, search, send), install into the authenticated Chrome profile using Agent Browser
 ---
 
-# VK Inbox — full feature + BrowserOS install
+# VK Inbox — full feature + authenticated Chrome-profile install
 
 ## Запрос пользователя
 
-> надо сделать чтобы расширение забирало и отправляло все чаты в режиме реального времени умело по ним искать и отсылать сообщения. короче было полноценным. Плюс+добавь в browseros на локалхосте его я там уже вошел в вк.
+> Сделай полноценное VK-расширение и установи его в уже авторизованный профиль Chrome, доступный через Agent Browser.
 
 ## Решения, зафиксированные с пользователем
 
@@ -20,7 +20,7 @@ description: VK inbox extension — full feature (real-time all-chats capture, s
 1. Real-time: новые сообщения из ЛЮБОГО открытого чата попадают в IndexedDB за < 2 сек.
 2. Search: popup находит сообщение по подстроке тела или имени собеседника за < 500 мс на 5k сообщений.
 3. Send: из popup можно подготовить draft → отправить через UserIO `POST /v1/drafts/{id}/approve`. Текст появляется в VK после approve.
-4. Установлено в BrowserOS на localhost:9223 — расширение активно, popup открывается, иконка в toolbar.
+4. Установлено в авторизованный профиль Chrome, которым управляет Agent Browser; расширение активно, popup открывается, иконка видна в toolbar.
 
 ## Архитектура (расширение MV3)
 
@@ -59,20 +59,20 @@ extensions/vk-inbox/
 5. Compose: background создаёт draft через UserIO (или расширение держит draft локально + approve), popup жмёт Send → POST /v1/drafts/{id}/approve → content script пишет текст в input + click send (как fallback если UserIO не принял)
 6. Read markers: content script шлёт в background → POST /v1/inbox/seen
 
-## BrowserOS install
+## Установка в авторизованный Chrome-профиль
 
 1. Собрать extension (новая папка + обновлённый manifest)
-2. Открыть chrome://extensions через browseros-cli
+2. Открыть `chrome://extensions` в этом же профиле Chrome.
 3. Включить Developer mode (toggle)
 4. Click "Load unpacked" — откроется OS file picker
-5. File picker: ввести путь к папке расширения (через xdotool / native input)
+5. Chrome file picker: выберите папку расширения через системный диалог
 6. Verify: extension появилась в списке, нет ошибок
 
 ## Решения, требующие вашего ответа
 
 - ✅ Send через UserIO draft/approve (ответ выше)
 - ✅ History — DOM-only (ответ выше)
-- ⏳ BrowserOS file picker — если native dialog проблемный, fallback: скопировать в `~/.config/BrowserOS/Default/Extensions/{generated_id}/` — потребуется рестарт. Выбираю UI-flow как primary.
+- ⏳ Chrome file picker — проверить загрузку unpacked-расширения в выбранный профиль; Agent Browser дальше управляет этим же профилем.
 
 ## Оценка
 

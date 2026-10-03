@@ -14,13 +14,18 @@ UserIO, берёт оттуда задачи «с такого-то сайта �
 - Пересылает каждое захваченное сообщение в UserIO `POST /v1/messages` (route_id `vk-browser`) — UserIO остаётся каноническим стором.
 - **Собирает данные с сайтов** (v0.3): раз в минуту забирает `GET /v1/collect/tasks`, исполняет fetch-рецепты с куками пользователя (`credentials: include` по умолчанию) и постит `universal.collect.result.v1` в `POST /v1/collect/results`. Задачи публикует оператор в JSON-файле на сервере (`/var/lib/universal-userio/collect-tasks.json`); пример — `collect-tasks.example.json`.
 
-## Установка в BrowserOS (localhost:9223)
+## Установка и запуск через Agent Browser
 
-1. Откройте `chrome://extensions`.
-2. Включите **Режим разработчика** (Developer mode).
-3. Нажмите **Load unpacked** → выберите эту папку.
-4. В настройках расширения укажите endpoint UserIO и `route_id`.
-5. Откройте VK Web → `https://vk.ru/im` — захват начнётся автоматически.
+1. В обычном Chrome откройте `chrome://extensions`, включите **Developer mode** и загрузите распакованную папку `extensions/vk-inbox/` через **Load unpacked**.
+2. Убедитесь, что это профиль Chrome, где уже выполнен вход в VK Web.
+3. Используйте Agent Browser с тем же профилем:
+
+   ```sh
+   agent-browser --session vk-userio --profile Default open https://vk.ru/im
+   agent-browser --session vk-userio snapshot -i
+   ```
+
+4. В настройках расширения задайте endpoint UserIO и `route_id`; откройте VK Web — сбор начнётся автоматически.
 
 ## Архитектура
 
