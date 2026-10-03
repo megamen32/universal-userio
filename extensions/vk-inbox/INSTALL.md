@@ -1,28 +1,28 @@
 # VK Inbox sidecar — install
 
-This extension (**Universal UserIO Agent**, v0.3+) runs **inside the operator's
-own Chromium-based browser** (Chrome, Chromium, BrowserOS, Brave, Edge, Arc),
-uses the already-logged-in VK Web session to capture chats and send messages
-through UserIO, and doubles as a universal site-data collection agent (see
-section below). It does **not** store or transmit VK cookies, tokens, or any
+This extension (**Universal UserIO Agent**, v0.3+) runs inside the operator's
+existing Chromium profile (Chrome, Chromium, Brave, Edge, or Arc). It uses the
+already-authenticated VK Web session to capture chats and send messages through
+UserIO, and doubles as a universal site-data collection agent (see section below).
+It does **not** store or transmit VK cookies, tokens, or any
 auth material — it only reads the live DOM of `vk.com` / `vk.ru`, the local
 IndexedDB, and the response bodies of tasks published by your UserIO server.
 
 UserIO never sees your browser session. The UserIO HTTP API only sees the
 captured message envelopes and the manual `send` requests; nothing more.
 
-## 1. Pick a browser
+## 1. Choose the logged-in Chrome profile
 
-Any Chromium 120+ based browser. The same extension works in all of them.
-Pick the browser where you already have VK Web open and logged in.
+Use the Chromium profile where VK Web is already signed in. Install the extension
+once in that profile through Chrome's `chrome://extensions` page. Agent Browser
+then controls the same profile for automated reads and checks:
 
-Common profiles:
+```bash
+agent-browser --session vk-userio --profile Default open https://vk.ru/im
+agent-browser --session vk-userio snapshot -i
+```
 
-- BrowserOS (recommended for headless / agent-driven workflows):
-  `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
-  select `extensions/vk-inbox/`.
-- Regular Chrome / Brave / Edge: same flow. Use a dedicated profile if you
-  want to isolate the extension from personal browsing data.
+Use the actual Chrome profile name or path when it is not `Default`.
 
 ## 2. Build the static zips (only if you changed the source)
 
