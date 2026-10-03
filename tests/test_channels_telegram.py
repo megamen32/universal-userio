@@ -4,6 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from telethon import types
 
 from userio_adapter_sdk import Contact
 
@@ -71,6 +72,36 @@ def test_adapter_metadata() -> None:
         "get_contact", "add_contact", "edit_contact", "remove_contact",
         "add_contact_to_group", "remove_contact_from_group",
     } <= adapter.capabilities
+
+
+def test_telegram_profile_rejects_channel_peer() -> None:
+    """A channel id/access hash must never be exposed as a user profile."""
+
+    channel = types.ChannelForbidden(id=1566905024, access_hash=123, title="Global WB")
+
+    assert TelegramAPI._profile_from_entity(channel) is None
+
+
+def test_get_profile_does_not_request_user_details_for_channel() -> None:
+    """Username resolution stops before users.getFullUser for a channel."""
+
+    class Client:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def get_entity(self, target):
+            assert target == "globalwb"
+            return types.ChannelForbidden(id=1566905024, access_hash=123, title="Global WB")
+
+        async def __call__(self, request):
+            self.requests.append(request)
+            raise AssertionError("channel must not be passed to users.getFullUser")
+
+    client = Client()
+    profile = asyncio.run(TelegramAPI(client).get_profile("globalwb"))
+
+    assert profile is None
+    assert client.requests == []
 
 
 def test_file_contact_and_group_operations_are_provider_neutral() -> None:
