@@ -622,6 +622,12 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
 
     @staticmethod
     def _profile_from_entity(entity: Any, *, about: str | None = None) -> TelegramProfileRef | None:
+        # Telegram usernames can identify users, bots, groups, or channels.
+        # A provider-neutral participant profile represents a user only; if a
+        # channel is coerced into this DTO, downstream code can accidentally
+        # reinterpret its id/access_hash as InputPeerUser.
+        if not isinstance(entity, types.User):
+            return None
         user_id = getattr(entity, "id", None)
         if user_id is None:
             return None
@@ -655,6 +661,8 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
         else:
             target = participant
         entity = await self.client.get_entity(target)
+        if not isinstance(entity, types.User):
+            return None
         about = getattr(entity, "about", None)
         request = getattr(self.client, "__call__", None)
         if callable(request):
