@@ -61,6 +61,7 @@ TOOL_SPECS = (
     ToolSpec("userio.workspace.claim", "Atomically lease the oldest available inbound event to this worker.", _schema({
         "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+        "after": {"type": "integer", "minimum": 0},
     }, ["worker_id"])),
     ToolSpec("userio.workspace.renew", "Renew an active workspace event lease owned by this worker.", _schema({
         "event_seq": {"type": "integer", "minimum": 1},
@@ -313,6 +314,7 @@ class UserIOMcpSurface:
                 claimed = self._store.claim_workspace_event(
                     worker_id=self._required(arguments, "worker_id"),
                     lease_seconds=arguments.get("lease_seconds", 600),
+                    after=arguments.get("after", 0),
                     user_id=user_id,
                 )
                 if claimed is None:
