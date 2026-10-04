@@ -83,6 +83,14 @@ TOOL_SPECS = (
     ToolSpec("userio.workspace.claim_log", "Read the durable claim status and attempt log for one inbound event.", _schema({
         "event_seq": {"type": "integer", "minimum": 1},
     }, ["event_seq"])),
+    ToolSpec("userio.workspace.exclusions.list", "List chats excluded from all automatic workspace claims.", _schema({})),
+    ToolSpec("userio.workspace.exclusions.add", "Exclude a known chat from automatic claims without deleting its messages.", _schema({
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "reason": {"type": "string", "maxLength": 500},
+    }, ["conversation_id"])),
+    ToolSpec("userio.workspace.exclusions.remove", "Remove a chat from the automatic-claim exclusion list.", _schema({
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    }, ["conversation_id"])),
     ToolSpec("userio.users.create", "Owner only: create a user and return one token once.", _schema({
         "username": {"type": "string"}, "password": {"type": "string"},
     }, ["username", "password"])),
@@ -138,6 +146,9 @@ TOOL_CAPABILITIES = {
     "userio.workspace.complete": "read",
     "userio.workspace.fail": "read",
     "userio.workspace.claim_log": "read",
+    "userio.workspace.exclusions.list": "read",
+    "userio.workspace.exclusions.add": "read",
+    "userio.workspace.exclusions.remove": "read",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
@@ -349,6 +360,26 @@ class UserIOMcpSurface:
                 return {"ok": True, **self._store.workspace_claim_log(
                     event_seq=arguments.get("event_seq"), user_id=user_id,
                 )}
+            if name == "userio.workspace.exclusions.list":
+                return {
+                    "ok": True,
+                    "exclusions": self._store.workspace_exclusions(user_id=user_id),
+                }
+            if name == "userio.workspace.exclusions.add":
+                exclusion = self._store.add_workspace_exclusion(
+                    conversation_id=self._required(arguments, "conversation_id"),
+                    reason=self._optional(arguments, "reason") or "",
+                    user_id=user_id,
+                )
+                return {"ok": True, "exclusion": exclusion}
+            if name == "userio.workspace.exclusions.remove":
+                return {
+                    "ok": True,
+                    "removed": self._store.remove_workspace_exclusion(
+                        conversation_id=self._required(arguments, "conversation_id"),
+                        user_id=user_id,
+                    ),
+                }
             if name == "userio.inbox.list_new":
                 ignored_chats = self._ignored_chats(arguments)
                 channel = self._optional(arguments, "channel")

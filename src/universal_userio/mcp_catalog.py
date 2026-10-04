@@ -143,6 +143,26 @@ TOOL_SPECS = (
         schema({"event_seq": {"type": "integer", "minimum": 1}}, ["event_seq"]),
     ),
     ToolSpec(
+        "userio.workspace.exclusions.list",
+        "List chats excluded from all automatic workspace claims.",
+        schema({}),
+    ),
+    ToolSpec(
+        "userio.workspace.exclusions.add",
+        "Exclude a known chat from automatic claims without deleting its messages.",
+        schema({
+            "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "reason": {"type": "string", "maxLength": 500},
+        }, ["conversation_id"]),
+    ),
+    ToolSpec(
+        "userio.workspace.exclusions.remove",
+        "Remove a chat from the automatic-claim exclusion list.",
+        schema({
+            "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        }, ["conversation_id"]),
+    ),
+    ToolSpec(
         "userio.users.create",
         "Owner only: create a user and return one token once.",
         schema(
@@ -266,6 +286,9 @@ TOOL_CAPABILITIES = {
     "userio.workspace.complete": "read",
     "userio.workspace.fail": "read",
     "userio.workspace.claim_log": "read",
+    "userio.workspace.exclusions.list": "read",
+    "userio.workspace.exclusions.add": "read",
+    "userio.workspace.exclusions.remove": "read",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",

@@ -9,6 +9,8 @@ import pytest
 
 from universal_userio.contracts import InboxMessage
 from universal_userio.http_api import handler
+from universal_userio.mcp_catalog import TOOL_SPECS as MODULAR_TOOL_SPECS
+from universal_userio.mcp_dispatch import UserIOToolDispatcher
 from universal_userio.mcp_surface import UserIOMcpSurface
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
@@ -144,6 +146,109 @@ def test_direct_only_claim_skips_telegram_groups_without_consuming_them(tmp_path
     assert group["event"]["message_id"] == "-100123:10"
 
 
+def test_durable_chat_exclusion_skips_claims_and_can_be_removed(tmp_path) -> None:
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    excluded_id, _ = service.receive(
+        InboxMessage("telegram", "-100123:10", "ignored group", "noise", 1.0),
+        route_id="telegram",
+    )
+    service.receive(
+        InboxMessage("gmail:self", "mail-1", "useful@example.test", "useful", 2.0),
+        route_id="gmail-read-only",
+    )
+
+    added = store.add_workspace_exclusion(
+        conversation_id=excluded_id, reason="owner requested",
+    )
+    assert added["conversation_id"] == excluded_id
+    assert added["chat_name"] == "ignored group"
+    assert added["reason"] == "owner requested"
+    assert store.add_workspace_exclusion(
+        conversation_id=excluded_id, reason="still ignored",
+    )["created_at"] == added["created_at"]
+    store.close()
+    store = SQLiteUserIOStore(database)
+    assert store.workspace_exclusions()[0]["reason"] == "still ignored"
+
+    claimed = store.claim_workspace_event(worker_id="hermes")
+    assert claimed is not None
+    assert claimed["event"]["message_id"] == "mail-1"
+    assert store.complete_workspace_claim(
+        event_seq=claimed["claim"]["event_seq"], worker_id="hermes",
+        lease_token=claimed["claim"]["lease_token"],
+    )["status"] == "done"
+    assert store.claim_workspace_event(worker_id="hermes") is None
+
+    assert store.remove_workspace_exclusion(conversation_id=excluded_id) is True
+    group = store.claim_workspace_event(worker_id="group-worker")
+    assert group is not None
+    assert group["event"]["message_id"] == "-100123:10"
+
+
+def test_exclusions_are_user_scoped_and_removed_with_local_chat(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    owner_id, _ = service.receive(
+        InboxMessage("telegram", "same-message", "owner chat", "owner text", 1.0),
+        route_id="telegram",
+    )
+    user, _ = store.create_user("other_user", "other-password")
+    store.bind_channel_route(user_id=user.user_id, source="telegram", route_id="telegram")
+    other_id, _ = service.receive(
+        InboxMessage("telegram", "same-message", "other chat", "other text", 2.0),
+        route_id="telegram", user_id=user.user_id,
+    )
+    assert owner_id != other_id
+    store.add_workspace_exclusion(conversation_id=owner_id)
+    with pytest.raises(KeyError, match="conversation not found"):
+        store.add_workspace_exclusion(conversation_id=owner_id, user_id=user.user_id)
+    assert store.workspace_exclusions(user_id=user.user_id) == []
+    assert store.claim_workspace_event(worker_id="owner-worker") is None
+    assert store.claim_workspace_event(
+        worker_id="other-worker", user_id=user.user_id,
+    )["event"]["conversation_id"] == other_id
+    assert store.delete_conversation(owner_id) is True
+    assert store.workspace_exclusions() == []
+
+
+@pytest.mark.parametrize("modular", [False, True])
+def test_mcp_exclusion_tools_filter_claims_for_each_surface(tmp_path, modular: bool) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(
+        InboxMessage("telegram", "group:1", "quiet chat", "noise", 1.0),
+        route_id="telegram",
+    )
+    owner = store.owner()
+    if modular:
+        tool_names = {spec.name for spec in MODULAR_TOOL_SPECS}
+        dispatch = lambda name, args: UserIOToolDispatcher(store, service).dispatch(
+            name, args, principal=owner,
+        )
+    else:
+        surface = UserIOMcpSurface(store, service)
+        tool_names = {tool["name"] for tool in surface.tool_manifest()["tools"]}
+        dispatch = lambda name, args: surface.dispatch(name, args, principal=owner)
+    assert {
+        "userio.workspace.exclusions.list", "userio.workspace.exclusions.add",
+        "userio.workspace.exclusions.remove",
+    } <= tool_names
+    assert dispatch("userio.workspace.exclusions.add", {
+        "conversation_id": conversation_id, "reason": "owner requested",
+    })["exclusion"]["reason"] == "owner requested"
+    listed = dispatch("userio.workspace.exclusions.list", {})["exclusions"]
+    assert [item["conversation_id"] for item in listed] == [conversation_id]
+    assert dispatch("userio.workspace.claim", {"worker_id": "automatic"}) == {
+        "ok": True, "claimed": False,
+    }
+    assert dispatch("userio.workspace.exclusions.remove", {
+        "conversation_id": conversation_id,
+    }) == {"ok": True, "removed": True}
+    assert dispatch("userio.workspace.claim", {"worker_id": "automatic"})["claimed"] is True
+
+
 def test_mcp_claim_lifecycle_is_advertised_and_user_scoped(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = receive_one(store)
@@ -152,7 +257,8 @@ def test_mcp_claim_lifecycle_is_advertised_and_user_scoped(tmp_path) -> None:
     assert {
         "userio.workspace.claim", "userio.workspace.renew",
         "userio.workspace.complete", "userio.workspace.fail",
-        "userio.workspace.claim_log",
+        "userio.workspace.claim_log", "userio.workspace.exclusions.list",
+        "userio.workspace.exclusions.add", "userio.workspace.exclusions.remove",
     } <= names
     claimed = surface.dispatch(
         "userio.workspace.claim", {"worker_id": "codex-a", "lease_seconds": 600}
