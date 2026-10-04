@@ -236,6 +236,14 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS workspace_claim_log_event_idx
                 ON workspace_claim_log(user_id,event_seq,id);
+            CREATE TABLE IF NOT EXISTS workspace_exclusions (
+                user_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                source TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,conversation_id)
+            );
+            CREATE INDEX IF NOT EXISTS workspace_exclusions_user_source_idx
+                ON workspace_exclusions(user_id,source,conversation_id);
             CREATE TABLE IF NOT EXISTS contact_names (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
                 name TEXT NOT NULL,updated_at REAL NOT NULL,
@@ -1072,6 +1080,10 @@ class SQLiteUserIOStore:
                 "DELETE FROM messages WHERE user_id=? AND conversation_id=?", (user_id, conversation_id)
             )
             self._connection.execute(
+                "DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
+            )
+            self._connection.execute(
                 "DELETE FROM conversations WHERE user_id=? AND id=?", (user_id, conversation_id)
             )
         return True
@@ -1462,6 +1474,81 @@ class SQLiteUserIOStore:
     def _workspace_token_hash(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _workspace_conversation_id(value: object) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("conversation_id is required")
+        conversation_id = value.strip()
+        if len(conversation_id) > 128:
+            raise ValueError("conversation_id must be at most 128 characters")
+        return conversation_id
+
+    def workspace_exclusions(self, *, user_id: str | None = None) -> list[dict[str, object]]:
+        """List durable chat exclusions used by all workspace claim workers."""
+        scoped_user = self._user(user_id)
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT x.conversation_id,x.source,c.sender AS chat_name,x.reason,
+                       x.created_at,x.updated_at
+                FROM workspace_exclusions AS x
+                LEFT JOIN conversations AS c ON c.user_id=x.user_id
+                    AND c.id=x.conversation_id
+                WHERE x.user_id=?
+                ORDER BY x.updated_at DESC,x.conversation_id
+                """,
+                (scoped_user,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_workspace_exclusion(
+        self, *, conversation_id: str, reason: str = "", user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Exclude a known chat from future workspace claims without deleting it."""
+        scoped_user = self._user(user_id)
+        conversation_id = self._workspace_conversation_id(conversation_id)
+        if not isinstance(reason, str):
+            raise ValueError("reason must be a string")
+        reason = reason.strip()
+        if len(reason) > 500:
+            raise ValueError("reason must be at most 500 characters")
+        now = time.time()
+        with self._lock, self._connection:
+            conversation = self._connection.execute(
+                "SELECT source FROM conversations WHERE user_id=? AND id=?",
+                (scoped_user, conversation_id),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError("conversation not found")
+            self._connection.execute(
+                """
+                INSERT INTO workspace_exclusions
+                    (user_id,conversation_id,source,reason,created_at,updated_at)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(user_id,conversation_id) DO UPDATE SET
+                    source=excluded.source,reason=excluded.reason,
+                    updated_at=excluded.updated_at
+                """,
+                (scoped_user, conversation_id, str(conversation["source"]), reason, now, now),
+            )
+        return next(
+            item for item in self.workspace_exclusions(user_id=scoped_user)
+            if item["conversation_id"] == conversation_id
+        )
+
+    def remove_workspace_exclusion(
+        self, *, conversation_id: str, user_id: str | None = None,
+    ) -> bool:
+        """Allow a previously excluded chat to be claimed again."""
+        scoped_user = self._user(user_id)
+        conversation_id = self._workspace_conversation_id(conversation_id)
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
+                (scoped_user, conversation_id),
+            )
+        return cursor.rowcount > 0
+
     def claim_workspace_event(
         self, *, worker_id: str, lease_seconds: int = 600,
         after: int = 0, telegram_direct_only: bool = False,
@@ -1496,6 +1583,10 @@ class SQLiteUserIOStore:
                     AND wc.event_seq=e.seq
                 WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
                   AND (?=0 OR e.source!='telegram' OR e.message_id NOT LIKE '-%')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM workspace_exclusions AS wx
+                      WHERE wx.user_id=e.user_id AND wx.conversation_id=e.conversation_id
+                  )
                   AND (wc.event_seq IS NULL OR wc.status='failed'
                        OR (wc.status='claimed' AND wc.lease_expires_at<=?))
                 ORDER BY e.seq LIMIT 1

@@ -160,6 +160,26 @@ class UserIOToolDispatcher:
                         event_seq=arguments.get("event_seq"), user_id=user_id,
                     ),
                 }
+            if name == "userio.workspace.exclusions.list":
+                return {
+                    "ok": True,
+                    "exclusions": self._store.workspace_exclusions(user_id=user_id),
+                }
+            if name == "userio.workspace.exclusions.add":
+                exclusion = self._store.add_workspace_exclusion(
+                    conversation_id=self._required(arguments, "conversation_id"),
+                    reason=self._optional(arguments, "reason") or "",
+                    user_id=user_id,
+                )
+                return {"ok": True, "exclusion": exclusion}
+            if name == "userio.workspace.exclusions.remove":
+                return {
+                    "ok": True,
+                    "removed": self._store.remove_workspace_exclusion(
+                        conversation_id=self._required(arguments, "conversation_id"),
+                        user_id=user_id,
+                    ),
+                }
             if name == "userio.users.create":
                 if principal.role != "owner":
                     return {"ok": False, "error": "owner_required"}

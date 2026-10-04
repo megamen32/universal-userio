@@ -149,6 +149,12 @@ Service integration uses provider-owned transports directly. Telegram can use
 the QR sidecar or `LiveTelegramOutbox`; Gmail uses Himalaya; SMS uses the Android
 gateway. Providers without a configured `reply` capability fail closed.
 
+Gmail ingestion prefers the MIME `text/plain` part. When a sender provides only
+HTML, UserIO converts headings, paragraphs, table cells, button/link labels and
+image alternative text into readable plain text while discarding scripts,
+styles, hidden tracking content and link targets. The subject is stored with the
+readable body so downstream agents never have to infer it from an HTML shell.
+
 ## Boundaries
 
 - UserIO owns canonical ingress, cursors, deduplication, identity, conversations, drafts and per-user policy.
@@ -186,6 +192,13 @@ WhatsApp, and VK wrappers share that contract. `send_draft` only creates a
 user-scoped proposed draft; `userio.draft.approve_send` with exact
 `confirm: true` remains the sole delivery authority. Unsupported provider
 features return `not supported by adapter`.
+
+Automatic workers share a durable owner-scoped exclusion list. Use
+`userio.workspace.exclusions.add` with a known `conversation_id` and optional
+reason, inspect it with `userio.workspace.exclusions.list`, and re-enable a chat
+with `userio.workspace.exclusions.remove`. Exclusion suppresses future
+`userio.workspace.claim` leases for that chat; it does not delete history or
+change the source application.
 
 ### ChatGPT CDP adapter
 

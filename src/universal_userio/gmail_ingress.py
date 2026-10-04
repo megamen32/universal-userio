@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, hashlib, json, logging, os, signal, threading, time, urllib.request
 from pathlib import Path
 from typing import Any, Mapping
-from .channels.gmail import GmailMessage, HimalayaReader, _source
+from .channels.gmail import GmailMessage, HimalayaReader, _source, himalaya_mailbox_addresses, mailbox_identity, readable_message_body
 
 log = logging.getLogger("userio.gmail_ingress")
 
@@ -29,6 +29,7 @@ class NoticePlaceEmailNotifier:
             raise ValueError("NoticePlace email notifier requires URL, token, project and recipient")
 
     def notify(self, *, account: str, source: str, message: GmailMessage) -> None:
+        mailbox = mailbox_identity(message, account)
         digest = hashlib.sha256(f"{source}\0{message.message_id}".encode()).hexdigest()
         event_key = f"userio-gmail:{digest}"
         subject = _preview(message.subject or "Без темы", 240)
@@ -39,9 +40,9 @@ class NoticePlaceEmailNotifier:
             "recipient": self.recipient,
             "kind": "notification",
             "severity": "notice",
-            "title": "Новое письмо в Gmail",
+            "title": f"Новое письмо: {mailbox}",
             "body": (
-                f"Ящик: {account}. От: {sender}. Тема: {subject}. "
+                f"Почтовый аккаунт: {mailbox}. От: {sender}. Тема: {subject}. "
                 "Письмо сохранено в UserIO и доступно для разбора."
             ),
             "dedup_key": event_key,
@@ -125,7 +126,11 @@ class UserIOIngressClient:
 
     def send(self, account: str, message: GmailMessage) -> None:
         source = _source(account)
-        self.send_message(source=source, account_id=account, route_id="gmail-read-only", message_id=message.message_id, sender=message.sender, body=message.body)
+        self.send_message(
+            source=source, account_id=account, route_id="gmail-read-only",
+            message_id=message.message_id, sender=message.sender,
+            body=readable_message_body(message, account),
+        )
         notify = getattr(self.notifier, "notify", None)
         if callable(notify):
             notify(account=account, source=source, message=message)
@@ -168,9 +173,17 @@ def main(argv: list[str] | None = None) -> int:
     interval = float(os.environ.get("USERIO_GMAIL_POLL_INTERVAL_SECONDS", "60"))
     limit = int(os.environ.get("USERIO_GMAIL_POLL_LIMIT", "100"))
     snapshot_size = int(os.environ.get("USERIO_GMAIL_SNAPSHOT_SIZE", "500"))
+    accounts = accounts_from_file(accounts_file)
+    mailbox_addresses = himalaya_mailbox_addresses(
+        os.environ.get("USERIO_HIMALAYA_CONFIG", "/home/roomhacker/.config/himalaya/config.toml"),
+        accounts,
+    )
     readers = {
-        account: HimalayaReader(binary, account, snapshot_size=snapshot_size)
-        for account in accounts_from_file(accounts_file)
+        account: HimalayaReader(
+            binary, account, snapshot_size=snapshot_size,
+            mailbox_address=mailbox_addresses[account],
+        )
+        for account in accounts
     }
     notice_token = os.environ.get("USERIO_NOTICEPLACE_TOKEN", "").strip()
     notifier = NoticePlaceEmailNotifier(

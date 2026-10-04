@@ -16,6 +16,8 @@ import threading
 import time
 import urllib.request
 from dataclasses import dataclass
+from email.utils import parseaddr
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,6 +30,142 @@ class GmailMessage:
     sender: str
     body: str
     subject: str = ""
+    mailbox_address: str = ""
+
+
+_BLOCK_TAGS = frozenset({
+    "address", "article", "aside", "blockquote", "div", "footer", "h1", "h2",
+    "h3", "h4", "h5", "h6", "header", "li", "main", "nav", "p", "pre",
+    "section", "table", "td", "th", "tr", "ul", "ol",
+})
+_IGNORED_TAGS = frozenset({"head", "script", "style", "svg", "template"})
+_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+    "meta", "param", "source", "track", "wbr",
+})
+
+
+class _AccessibleHTMLText(HTMLParser):
+    """Extract readable email text without exposing markup or tracking URLs."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {key.lower(): (value or "") for key, value in attrs}
+        style = re.sub(r"\s+", "", attributes.get("style", "")).lower()
+        hidden = (
+            tag in _IGNORED_TAGS
+            or "hidden" in attributes
+            or attributes.get("aria-hidden", "").strip().lower() == "true"
+            or "display:none" in style
+            or "visibility:hidden" in style
+            or "mso-hide:all" in style
+        )
+        if self._ignored_depth:
+            if tag not in _VOID_TAGS:
+                self._ignored_depth += 1
+            return
+        if hidden:
+            if tag not in _VOID_TAGS:
+                self._ignored_depth = 1
+            return
+        if tag == "br" or tag in _BLOCK_TAGS:
+            self._chunks.append("\n")
+        if tag == "img":
+            alt = attributes.get("alt", "").strip()
+            if alt:
+                self._chunks.extend((alt, "\n"))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        prior_depth = self._ignored_depth
+        self.handle_starttag(tag, attrs)
+        if self._ignored_depth > prior_depth:
+            self._ignored_depth -= 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._ignored_depth:
+            self._ignored_depth -= 1
+            return
+        if tag in _BLOCK_TAGS:
+            self._chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth and data:
+            self._chunks.append(data)
+
+    def text(self) -> str:
+        lines: list[str] = []
+        for raw_line in "".join(self._chunks).replace("\xa0", " ").splitlines():
+            line = re.sub(r"[\t \f\v]+", " ", raw_line).strip()
+            if line:
+                lines.append(line)
+        return "\n".join(lines).strip()
+
+
+def html_to_accessible_text(value: str) -> str:
+    """Return human-readable text from an HTML email body."""
+    parser = _AccessibleHTMLText()
+    try:
+        parser.feed(value)
+        parser.close()
+    except (AssertionError, ValueError):
+        # HTMLParser is deliberately tolerant, but malformed vendor markup must
+        # not prevent the rest of the mailbox from being ingested.
+        pass
+    return parser.text()
+
+
+def mailbox_identity(message: GmailMessage, account_ref: str) -> str:
+    mailbox = message.mailbox_address.strip()
+    if mailbox:
+        return mailbox
+    alias = account_ref.strip()
+    if not alias:
+        raise ValueError("gmail message has neither mailbox address nor account ref")
+    return f"account_ref:{alias}"
+
+
+def readable_message_body(message: GmailMessage, account_ref: str = "") -> str:
+    identity = mailbox_identity(message, account_ref)
+    body = message.body.strip()
+    subject = " ".join(message.subject.split()) or "Без темы"
+    return (
+        f"Почтовый аккаунт: {identity}\nТема: {subject}\n\n"
+        f"{body or 'Письмо без текстового содержимого.'}"
+    )
+
+
+def himalaya_mailbox_addresses(path: str | Path, aliases: tuple[str, ...]) -> dict[str, str]:
+    """Resolve the exact receiving address for each configured Himalaya alias."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ModuleNotFoundError:
+            return {alias: "" for alias in aliases}
+    try:
+        config = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {alias: "" for alias in aliases}
+    accounts = config.get("accounts") or {}
+    result: dict[str, str] = {}
+    for alias in aliases:
+        entry = accounts.get(alias) if isinstance(accounts, dict) else None
+        if not isinstance(entry, dict):
+            result[alias] = ""
+            continue
+        imap = entry.get("imap") or {}
+        imap_user = (((imap.get("sasl") or {}).get("plain") or {}).get("username")
+                     if isinstance(imap, dict) else None)
+        address = str(entry.get("email") or imap_user or "").strip()
+        if parseaddr(address)[1] != address or not re.fullmatch(r"[^\s@]+@[^\s@]+", address):
+            address = ""
+        result[alias] = address
+    return result
 
 
 def _source(account: str) -> str:
@@ -35,10 +173,14 @@ def _source(account: str) -> str:
 
 
 class HimalayaReader:
-    def __init__(self, binary: str, account: str, *, mailbox: str = "Inbox", snapshot_size: int = 500) -> None:
+    def __init__(
+        self, binary: str, account: str, *, mailbox: str = "Inbox",
+        snapshot_size: int = 500, mailbox_address: str = "",
+    ) -> None:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", account):
             raise ValueError("invalid Himalaya account")
         self.binary, self.account, self.mailbox, self.snapshot_size = binary, account, mailbox, snapshot_size
+        self.mailbox_address = mailbox_address
 
     def _run(self, *args: str) -> Any:
         completed = subprocess.run(
@@ -84,7 +226,7 @@ class HimalayaReader:
         if not isinstance(parts, list):
             raise RuntimeError("invalid Himalaya message response")
         body = ""
-        for key in ("html_body", "text_body"):
+        for key in ("text_body", "html_body"):
             indexes = payload.get(key) if isinstance(payload, dict) else None
             if not isinstance(indexes, list):
                 continue
@@ -93,10 +235,21 @@ class HimalayaReader:
                 if not isinstance(index, int) or index < 0 or index >= len(parts) or not isinstance(parts[index], dict):
                     continue
                 value = parts[index].get("body")
+                is_html = key == "html_body"
                 if isinstance(value, dict):
-                    value = value.get("Text") or value.get("Html")
+                    if key == "text_body" and value.get("Text"):
+                        value = value["Text"]
+                    elif value.get("Html"):
+                        value = value["Html"]
+                        is_html = True
+                    else:
+                        value = value.get("Text")
                 if isinstance(value, str) and value.strip():
-                    chunks.append(value.strip())
+                    chunk = value.strip()
+                    if is_html or re.search(r"<!doctype\s+html|<html(?:\s|>)", chunk, re.I):
+                        chunk = html_to_accessible_text(chunk)
+                    if chunk:
+                        chunks.append(chunk)
             if chunks:
                 body = "\n\n".join(chunks)
                 break
@@ -105,4 +258,4 @@ class HimalayaReader:
         if isinstance(senders, list) and senders and isinstance(senders[0], dict):
             sender = str(senders[0].get("email") or senders[0].get("name") or "")
         subject = str(env.get("subject") or "").strip()
-        return GmailMessage(message_id, fetch_id, sender or message_id, body or subject, subject)
+        return GmailMessage(message_id, fetch_id, sender or message_id, body, subject, self.mailbox_address)
