@@ -10,6 +10,7 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 import { telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
+import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -839,6 +840,46 @@ http.createServer(async (req, res) => {
       }
     });
     return;
+  }
+  if (url.pathname === "/login/phone" && req.method === "POST") {
+    if (!loginAuthorized(req.headers, process.env.USERIO_API_TOKEN)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const phone = normalizeLoginPhone(payload.phone);
+      const created = `account-${nextSlot++}`;
+      slots.set(created, { status: "idle", mode: "phone", phone });
+      void startPhone(created);
+      res.writeHead(202, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, slot: created, status: "connecting" }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: (error && error.message) || "invalid phone" }));
+    }
+  }
+  if (url.pathname === "/login/code" && req.method === "POST") {
+    if (!loginAuthorized(req.headers, process.env.USERIO_API_TOKEN)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const slot = String(payload.slot || "").trim();
+      const code = normalizeLoginCode(payload.code);
+      const state = slots.get(slot);
+      if (!state || !state.codeResolve) throw new Error("slot is not waiting for a code");
+      const resolve = state.codeResolve;
+      const { codeResolve, codeViaApp, promptSeq: _promptSeq, ...rest } = state;
+      slots.set(slot, { ...rest, status: "connecting" });
+      resolve(code);
+      res.writeHead(202, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, slot, status: "connecting" }));
+    } catch (error) {
+      res.writeHead(409, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: (error && error.message) || "code rejected" }));
+    }
   }
   if (url.pathname === "/phone" && req.method === "POST") {
     const params = await readBody(req);
