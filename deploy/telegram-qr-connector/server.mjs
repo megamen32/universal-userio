@@ -9,6 +9,7 @@ import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
 import { telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent } from "./agent-deliver.mjs";
+import { publicIngressState } from "./ingress-state.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -443,8 +444,11 @@ function entityLabel(entity) {
   );
 }
 
-async function envelope(chatKey, label, message, client, self) {
-  const audio = await transcribeTelegramAudio(client, message, { apiKey: whisperApiKey });
+async function envelope(chatKey, label, message, client, self, options) {
+  const shouldTranscribe = !options || options.transcribeAudio !== false;
+  const audio = shouldTranscribe
+    ? await transcribeTelegramAudio(client, message, { apiKey: whisperApiKey })
+    : null;
   const normalized = bodyAndAttachments(
     { ...message, message: messageBody(message) },
     audio,
@@ -494,7 +498,11 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
       let posted = 0;
       for (const message of messages) {
         if (!message || message.out) continue;
-        const envelopeMessage = await envelope(chatKey, label, message, client, self);
+        // Backfill must never stall the live listener on a historical media
+        // download. Live arrivals are transcribed; reconciliation is text-only.
+        const envelopeMessage = await envelope(
+          chatKey, label, message, client, self, { transcribeAudio: false },
+        );
         if (!envelopeMessage.body) continue;
         await postInbox(accountId, envelopeMessage);
         posted += 1;
@@ -547,14 +555,18 @@ async function syncAccount(slot) {
       if (!(await client.isUserAuthorized())) throw new Error("session is not authorized");
       const me = await client.getMe();
       const accountId = `telegram:${me.id}`;
+      const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
       liveSlots.set(slot, { client, labelPeers, accountId });
-      const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
+      slots.set(slot, { ...(slots.get(slot) || {}), status: "connected", name: displayName, accountId });
+      // Attach push ingestion before reconciliation. A slow historical media
+      // item must not postpone delivery of genuinely new messages.
       client.addEventHandler(
         (event) => { ingestLive(slot, client, accountId, dialogLabels, me, event).catch((error) => console.error(`sync ${slot} live error:`, (error && error.message) || error)); },
         new NewMessage({}),
       );
+      const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
       // GramJS 2.26 has no runUntilDisconnected; the client keeps itself
@@ -568,7 +580,7 @@ async function syncAccount(slot) {
         if (beat % 5 === 0) {
           await backfillDialogs(slot, client, accountId, dialogLabels, (liveSlots.get(slot) || {}).labelPeers || null, me, 20);
         }
-        setSync(slot, { lastSyncAt: Date.now() });
+        setSync(slot, { status: "live", lastError: "", lastSyncAt: Date.now() });
       }
     } catch (error) {
       setSync(slot, { status: "retrying", lastError: String((error && error.message) || error) });
@@ -677,23 +689,7 @@ async function downloadTelegramMedia(payload) {
 }
 
 function publicState() {
-  return [...slots.entries()].map(([id, item]) => {
-    const sync = syncs.get(id) || {};
-    return {
-      id,
-      status: item.status,
-      name: item.name || "",
-      qr: item.status === "waiting" && item.qr ? item.qr : "",
-      phone: item.phone || "",
-      mode: item.mode || "qr",
-      passwordHint: item.status === "password-required" ? (item.passwordHint || "") : "",
-      codeViaApp: item.status === "code-required" ? !!item.codeViaApp : false,
-      promptSeq: item.promptSeq || 0,
-      sync: sync.running ? (sync.status || "on") : "",
-      syncChats: sync.chats || 0,
-      syncError: sync.status === "retrying" ? (sync.lastError || "") : "",
-    };
-  });
+  return publicIngressState(slots, syncs, liveSlots);
 }
 
 const pageShell = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Connect Telegram</title><style>body{margin:0;font:16px system-ui;background:#111;color:#eee}main{max-width:680px;margin:40px auto;padding:24px}.card{background:#1d1d1d;border-radius:16px;padding:20px;margin:12px 0}button{padding:12px 16px;border:0;border-radius:10px;font-weight:700;cursor:pointer}input{box-sizing:border-box}.qr{width:min(300px,100%);background:#fff;padding:12px;border-radius:12px}form.inline{display:flex;gap:8px;margin:8px 0}form.inline input{flex:1;padding:12px;border:0;border-radius:10px}form.stack input{width:100%;padding:12px;border:0;border-radius:10px;margin:8px 0}</style><main><h1>Connect Telegram <a href="/" style="float:right;font-size:15px">&#8592; back to UserIO</a></h1><form class=inline method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off><button type=submit>Login by phone</button></form><p><a href="__PREFIX__/new"><button>+ Telegram account (QR)</button></a></p><div id=cards></div></main><script>

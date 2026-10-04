@@ -1,6 +1,7 @@
-# Telegram QR connector (`userio-telegram-qr.service`)
+# Telegram ingress worker (`userio-telegram-ingress.service`)
 
-Single Node service with two legs:
+This is a long-lived UserIO ingress worker, not a QR-only sidecar. It has two
+surfaces in one process:
 
 1. **Login leg** — QR / phone login pages that mint GramJS sessions into
    `/var/lib/universal-userio/telegram-qr/sessions/account-N.session` and
@@ -10,8 +11,18 @@ Single Node service with two legs:
    (`POST /v1/messages`, schema `universal.inbox.message.v1`), plus live
    `NewMessage` events and a 5-minute reconciliation backfill.
 
-Deployed copy: `/opt/userio-telegram-qr/server.mjs` (this file is
-the source of truth; copy with `install -m 644`).
+Canonical source: `/opt/universal-userio/deploy/telegram-qr-connector/` on
+server-100. `/opt/userio-telegram-qr/` is only the installed Node runtime and
+dependency directory; it is never a competing source of truth.
+
+The systemd unit is `userio-telegram-ingress.service`; the historical
+`userio-telegram-qr.service` name is retained only as an alias. QR/phone login
+at `/telegram-qr/` is the account-enrollment UI inside the ingress worker.
+
+New-message handlers are attached before any historical reconciliation.
+Backfill is deliberately text-only so a stale voice/media download cannot
+block live ingestion. `/state` exposes the actual `telegram:<id>` account and
+the last successful sync timestamp without exposing session credentials.
 
 ## Constraints worth remembering
 

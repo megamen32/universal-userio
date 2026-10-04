@@ -1,0 +1,39 @@
+[Unit]
+Description=Universal UserIO Telegram ingress and account enrollment
+After=network-online.target universal-userio.service
+Wants=network-online.target
+Requires=universal-userio.service
+
+[Service]
+Type=simple
+User=roomhacker
+WorkingDirectory=/opt/userio-telegram-qr
+Environment=PORT=18095
+Environment=PUBLIC_PREFIX=/telegram-qr
+Environment=UNIVERSAL_USERIO_URL=http://127.0.0.1:18093
+Environment=USERIO_STT_URL=https://whisper.bezrabotnyi.com/v1/audio/transcriptions
+Environment=USERIO_STT_MODEL=whisper-1
+Environment=TELEGRAM_PROXY_IP=
+Environment=TELEGRAM_PROXY_PORT=
+Environment=TELEGRAM_PROXY_SOCKS_TYPE=
+EnvironmentFile=/etc/universal-userio.env
+EnvironmentFile=-/etc/grepmesh-mcp/stt.env
+EnvironmentFile=/etc/universal-userio-agent-deliver.env
+ExecStart=/usr/bin/node /opt/userio-telegram-qr/server.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/universal-userio/telegram-qr
+MemoryHigh=128M
+MemoryMax=256M
+MemorySwapMax=64M
+CPUQuota=100%
+TasksMax=64
+IOWeight=50
+
+[Install]
+WantedBy=multi-user.target
+Alias=userio-telegram-qr.service
