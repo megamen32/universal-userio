@@ -98,6 +98,49 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
+        "userio.workspace.claim",
+        "Atomically lease the oldest available inbound event to this worker.",
+        schema({
+            "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+        }, ["worker_id"]),
+    ),
+    ToolSpec(
+        "userio.workspace.renew",
+        "Renew an active workspace event lease owned by this worker.",
+        schema({
+            "event_seq": {"type": "integer", "minimum": 1},
+            "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "lease_token": {"type": "string"},
+            "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+        }, ["event_seq", "worker_id", "lease_token"]),
+    ),
+    ToolSpec(
+        "userio.workspace.complete",
+        "Mark an owned workspace event lease done after successful processing.",
+        schema({
+            "event_seq": {"type": "integer", "minimum": 1},
+            "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "lease_token": {"type": "string"},
+            "detail": {"type": "string", "maxLength": 2000},
+        }, ["event_seq", "worker_id", "lease_token"]),
+    ),
+    ToolSpec(
+        "userio.workspace.fail",
+        "Record a failed attempt and immediately release the event for another worker.",
+        schema({
+            "event_seq": {"type": "integer", "minimum": 1},
+            "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "lease_token": {"type": "string"},
+            "detail": {"type": "string", "maxLength": 2000},
+        }, ["event_seq", "worker_id", "lease_token"]),
+    ),
+    ToolSpec(
+        "userio.workspace.claim_log",
+        "Read the durable claim status and attempt log for one inbound event.",
+        schema({"event_seq": {"type": "integer", "minimum": 1}}, ["event_seq"]),
+    ),
+    ToolSpec(
         "userio.users.create",
         "Owner only: create a user and return one token once.",
         schema(
@@ -216,6 +259,11 @@ TOOL_CAPABILITIES = {
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
     "userio.workspace.poll": "read",
+    "userio.workspace.claim": "read",
+    "userio.workspace.renew": "read",
+    "userio.workspace.complete": "read",
+    "userio.workspace.fail": "read",
+    "userio.workspace.claim_log": "read",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",

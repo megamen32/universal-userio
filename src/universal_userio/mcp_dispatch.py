@@ -119,6 +119,45 @@ class UserIOToolDispatcher:
                     **page,
                     "events": events,
                 }
+            if name == "userio.workspace.claim":
+                claimed = self._store.claim_workspace_event(
+                    worker_id=self._required(arguments, "worker_id"),
+                    lease_seconds=arguments.get("lease_seconds", 600),
+                    user_id=user_id,
+                )
+                if claimed is None:
+                    return {"ok": True, "claimed": False}
+                claimed["event"] = self._workspace_event(claimed["event"])
+                return {"ok": True, "claimed": True, **claimed}
+            if name == "userio.workspace.renew":
+                claim = self._store.renew_workspace_claim(
+                    event_seq=arguments.get("event_seq"),
+                    worker_id=self._required(arguments, "worker_id"),
+                    lease_token=self._required(arguments, "lease_token"),
+                    lease_seconds=arguments.get("lease_seconds", 600),
+                    user_id=user_id,
+                )
+                return {"ok": True, "claim": claim}
+            if name in {"userio.workspace.complete", "userio.workspace.fail"}:
+                transition = (
+                    self._store.complete_workspace_claim
+                    if name.endswith("complete") else self._store.fail_workspace_claim
+                )
+                claim = transition(
+                    event_seq=arguments.get("event_seq"),
+                    worker_id=self._required(arguments, "worker_id"),
+                    lease_token=self._required(arguments, "lease_token"),
+                    detail=self._optional(arguments, "detail"),
+                    user_id=user_id,
+                )
+                return {"ok": True, "claim": claim}
+            if name == "userio.workspace.claim_log":
+                return {
+                    "ok": True,
+                    **self._store.workspace_claim_log(
+                        event_seq=arguments.get("event_seq"), user_id=user_id,
+                    ),
+                }
             if name == "userio.users.create":
                 if principal.role != "owner":
                     return {"ok": False, "error": "owner_required"}

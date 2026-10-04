@@ -317,6 +317,47 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path == "/v1/workspace/claims":
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"})
+                        return
+                    payload = self._json()
+                    claimed = service._store.claim_workspace_event(
+                        worker_id=payload.get("worker_id"),
+                        lease_seconds=payload.get("lease_seconds", 600),
+                        user_id=user_id,
+                    )
+                    self._reply(200, {"claimed": claimed is not None, **(claimed or {})})
+                    return
+                if path.startswith("/v1/workspace/claims/"):
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"})
+                        return
+                    parts = path.removeprefix("/v1/workspace/claims/").strip("/").split("/")
+                    if len(parts) != 2 or parts[1] not in {"renew", "complete", "fail"}:
+                        self._reply(404, {"error": "not found"})
+                        return
+                    payload = self._json()
+                    kwargs = {
+                        "event_seq": int(parts[0]),
+                        "worker_id": payload.get("worker_id"),
+                        "lease_token": payload.get("lease_token"),
+                        "user_id": user_id,
+                    }
+                    if parts[1] == "renew":
+                        claim = service._store.renew_workspace_claim(
+                            **kwargs, lease_seconds=payload.get("lease_seconds", 600)
+                        )
+                    elif parts[1] == "complete":
+                        claim = service._store.complete_workspace_claim(
+                            **kwargs, detail=payload.get("detail")
+                        )
+                    else:
+                        claim = service._store.fail_workspace_claim(
+                            **kwargs, detail=payload.get("detail")
+                        )
+                    self._reply(200, {"ok": True, "claim": claim})
+                    return
                 if path == "/v1/users":
                     if principal.role != "owner":
                         self._reply(403, {"error": "owner required"})
@@ -610,6 +651,8 @@ def handler(
                 self._reply(409, {"error": str(error), "code": "delivery_unavailable"})
             except (KeyError, ValueError) as error:
                 self._reply(400, {"error": str(error)})
+            except PermissionError as error:
+                self._reply(409, {"error": str(error)})
             except RuntimeError as error:
                 self._reply(502, {"error": str(error)})
 
@@ -738,6 +781,23 @@ def handler(
                     self._reply(400, {"error": "invalid workspace event cursor or limit"})
                     return
                 self._reply(200, {"schema": "universal.workspace-events.v1", **page})
+                return
+            if path.startswith("/v1/workspace/claims/"):
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                suffix = path.removeprefix("/v1/workspace/claims/").strip("/")
+                if not suffix or "/" in suffix:
+                    self._reply(404, {"error": "not found"})
+                    return
+                try:
+                    result = service._store.workspace_claim_log(
+                        event_seq=int(suffix), user_id=user_id
+                    )
+                except (KeyError, ValueError) as error:
+                    self._reply(404 if isinstance(error, KeyError) else 400, {"error": str(error)})
+                    return
+                self._reply(200, result)
                 return
             if path == "/v1/inbox":
                 if not service._store.capability_enabled("read", user_id=user_id):

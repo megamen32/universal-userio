@@ -58,6 +58,29 @@ TOOL_SPECS = (
             "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         }),
     ),
+    ToolSpec("userio.workspace.claim", "Atomically lease the oldest available inbound event to this worker.", _schema({
+        "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+    }, ["worker_id"])),
+    ToolSpec("userio.workspace.renew", "Renew an active workspace event lease owned by this worker.", _schema({
+        "event_seq": {"type": "integer", "minimum": 1},
+        "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "lease_token": {"type": "string"},
+        "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+    }, ["event_seq", "worker_id", "lease_token"])),
+    ToolSpec("userio.workspace.complete", "Mark an owned workspace event lease done after successful processing.", _schema({
+        "event_seq": {"type": "integer", "minimum": 1},
+        "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "lease_token": {"type": "string"}, "detail": {"type": "string", "maxLength": 2000},
+    }, ["event_seq", "worker_id", "lease_token"])),
+    ToolSpec("userio.workspace.fail", "Record a failed attempt and immediately release the event for another worker.", _schema({
+        "event_seq": {"type": "integer", "minimum": 1},
+        "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "lease_token": {"type": "string"}, "detail": {"type": "string", "maxLength": 2000},
+    }, ["event_seq", "worker_id", "lease_token"])),
+    ToolSpec("userio.workspace.claim_log", "Read the durable claim status and attempt log for one inbound event.", _schema({
+        "event_seq": {"type": "integer", "minimum": 1},
+    }, ["event_seq"])),
     ToolSpec("userio.users.create", "Owner only: create a user and return one token once.", _schema({
         "username": {"type": "string"}, "password": {"type": "string"},
     }, ["username", "password"])),
@@ -108,6 +131,11 @@ TOOL_CAPABILITIES = {
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
     "userio.workspace.poll": "read",
+    "userio.workspace.claim": "read",
+    "userio.workspace.renew": "read",
+    "userio.workspace.complete": "read",
+    "userio.workspace.fail": "read",
+    "userio.workspace.claim_log": "read",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
@@ -281,6 +309,42 @@ class UserIOMcpSurface:
                     **page,
                     "events": [self._workspace_event(event) for event in page["events"]],
                 }
+            if name == "userio.workspace.claim":
+                claimed = self._store.claim_workspace_event(
+                    worker_id=self._required(arguments, "worker_id"),
+                    lease_seconds=arguments.get("lease_seconds", 600),
+                    user_id=user_id,
+                )
+                if claimed is None:
+                    return {"ok": True, "claimed": False}
+                claimed["event"] = self._workspace_event(claimed["event"])
+                return {"ok": True, "claimed": True, **claimed}
+            if name == "userio.workspace.renew":
+                claim = self._store.renew_workspace_claim(
+                    event_seq=arguments.get("event_seq"),
+                    worker_id=self._required(arguments, "worker_id"),
+                    lease_token=self._required(arguments, "lease_token"),
+                    lease_seconds=arguments.get("lease_seconds", 600),
+                    user_id=user_id,
+                )
+                return {"ok": True, "claim": claim}
+            if name in {"userio.workspace.complete", "userio.workspace.fail"}:
+                transition = (
+                    self._store.complete_workspace_claim
+                    if name.endswith("complete") else self._store.fail_workspace_claim
+                )
+                claim = transition(
+                    event_seq=arguments.get("event_seq"),
+                    worker_id=self._required(arguments, "worker_id"),
+                    lease_token=self._required(arguments, "lease_token"),
+                    detail=self._optional(arguments, "detail"),
+                    user_id=user_id,
+                )
+                return {"ok": True, "claim": claim}
+            if name == "userio.workspace.claim_log":
+                return {"ok": True, **self._store.workspace_claim_log(
+                    event_seq=arguments.get("event_seq"), user_id=user_id,
+                )}
             if name == "userio.inbox.list_new":
                 ignored_chats = self._ignored_chats(arguments)
                 channel = self._optional(arguments, "channel")

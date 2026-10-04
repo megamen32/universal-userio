@@ -218,6 +218,24 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS workspace_events_user_seq_idx
                 ON workspace_events(user_id,seq);
+            CREATE TABLE IF NOT EXISTS workspace_claims (
+                user_id TEXT NOT NULL,event_seq INTEGER NOT NULL,
+                worker_id TEXT NOT NULL,lease_token_hash TEXT NOT NULL,
+                status TEXT NOT NULL,lease_expires_at REAL NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 1,claimed_at REAL NOT NULL,
+                updated_at REAL NOT NULL,completed_at REAL,last_error TEXT,
+                PRIMARY KEY(user_id,event_seq)
+            );
+            CREATE INDEX IF NOT EXISTS workspace_claims_user_status_idx
+                ON workspace_claims(user_id,status,lease_expires_at,event_seq);
+            CREATE TABLE IF NOT EXISTS workspace_claim_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,event_seq INTEGER NOT NULL,
+                worker_id TEXT NOT NULL,action TEXT NOT NULL,
+                at REAL NOT NULL,detail TEXT
+            );
+            CREATE INDEX IF NOT EXISTS workspace_claim_log_event_idx
+                ON workspace_claim_log(user_id,event_seq,id);
             CREATE TABLE IF NOT EXISTS contact_names (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
                 name TEXT NOT NULL,updated_at REAL NOT NULL,
@@ -1028,6 +1046,21 @@ class SQLiteUserIOStore:
             ).fetchone()
             if exists is None:
                 return False
+            event_rows = self._connection.execute(
+                "SELECT seq FROM workspace_events WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
+            ).fetchall()
+            event_seqs = [int(row["seq"]) for row in event_rows]
+            if event_seqs:
+                placeholders = ",".join("?" for _ in event_seqs)
+                self._connection.execute(
+                    f"DELETE FROM workspace_claim_log WHERE user_id=? AND event_seq IN ({placeholders})",
+                    (user_id, *event_seqs),
+                )
+                self._connection.execute(
+                    f"DELETE FROM workspace_claims WHERE user_id=? AND event_seq IN ({placeholders})",
+                    (user_id, *event_seqs),
+                )
             self._connection.execute(
                 "DELETE FROM workspace_events WHERE user_id=? AND conversation_id=?",
                 (user_id, conversation_id),
@@ -1409,6 +1442,197 @@ class SQLiteUserIOStore:
             "cursor": events[-1]["seq"] if events else after,
             "head": head,
         }
+
+    @staticmethod
+    def _workspace_worker(worker_id: object) -> str:
+        if not isinstance(worker_id, str) or not worker_id.strip():
+            raise ValueError("worker_id is required")
+        worker = worker_id.strip()
+        if len(worker) > 128:
+            raise ValueError("worker_id must be at most 128 characters")
+        return worker
+
+    @staticmethod
+    def _workspace_lease_seconds(value: object) -> int:
+        if type(value) is not int or not 30 <= value <= 3600:
+            raise ValueError("lease_seconds must be between 30 and 3600")
+        return value
+
+    @staticmethod
+    def _workspace_token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def claim_workspace_event(
+        self, *, worker_id: str, lease_seconds: int = 600,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        """Atomically lease the oldest available inbound event to one worker."""
+        worker = self._workspace_worker(worker_id)
+        lease_seconds = self._workspace_lease_seconds(lease_seconds)
+        scoped_user = self._user(user_id)
+        now = time.time()
+        token = "ucl_" + secrets.token_urlsafe(32)
+        token_hash = self._workspace_token_hash(token)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                """
+                SELECT e.seq,e.source,e.message_id,e.conversation_id,
+                       m.sender,m.body,m.received_at,m.direction,
+                       c.route_id,c.account_ref,
+                       wc.status AS claim_status,wc.lease_expires_at,
+                       COALESCE(wc.attempts,0) AS prior_attempts
+                FROM workspace_events AS e
+                JOIN messages AS m ON m.user_id=e.user_id
+                    AND m.source=e.source AND m.message_id=e.message_id
+                JOIN conversations AS c ON c.user_id=e.user_id
+                    AND c.id=e.conversation_id
+                LEFT JOIN workspace_claims AS wc ON wc.user_id=e.user_id
+                    AND wc.event_seq=e.seq
+                WHERE e.user_id=? AND m.direction='incoming'
+                  AND (wc.event_seq IS NULL OR wc.status='failed'
+                       OR (wc.status='claimed' AND wc.lease_expires_at<=?))
+                ORDER BY e.seq LIMIT 1
+                """,
+                (scoped_user, now),
+            ).fetchone()
+            if row is None:
+                return None
+            event = dict(row)
+            prior_status = event.pop("claim_status")
+            event.pop("lease_expires_at")
+            attempts = int(event.pop("prior_attempts")) + 1
+            expires_at = now + lease_seconds
+            self._connection.execute(
+                """
+                INSERT INTO workspace_claims
+                    (user_id,event_seq,worker_id,lease_token_hash,status,
+                     lease_expires_at,attempts,claimed_at,updated_at,
+                     completed_at,last_error)
+                VALUES (?,?,?,?, 'claimed', ?,?,?,?,NULL,NULL)
+                ON CONFLICT(user_id,event_seq) DO UPDATE SET
+                    worker_id=excluded.worker_id,
+                    lease_token_hash=excluded.lease_token_hash,
+                    status='claimed',lease_expires_at=excluded.lease_expires_at,
+                    attempts=excluded.attempts,claimed_at=excluded.claimed_at,
+                    updated_at=excluded.updated_at,completed_at=NULL,last_error=NULL
+                """,
+                (scoped_user, event["seq"], worker, token_hash, expires_at,
+                 attempts, now, now),
+            )
+            action = "claimed" if prior_status is None else "reclaimed"
+            self._connection.execute(
+                """INSERT INTO workspace_claim_log
+                   (user_id,event_seq,worker_id,action,at,detail)
+                   VALUES (?,?,?,?,?,?)""",
+                (scoped_user, event["seq"], worker, action, now,
+                 None if prior_status is None else str(prior_status)),
+            )
+        return {
+            "event": event,
+            "claim": {
+                "event_seq": event["seq"], "worker_id": worker,
+                "lease_token": token, "status": "claimed",
+                "lease_expires_at": expires_at, "attempts": attempts,
+            },
+        }
+
+    def _workspace_claim_transition(
+        self, *, event_seq: int, worker_id: str, lease_token: str,
+        action: str, lease_seconds: int | None = None,
+        detail: str | None = None, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if type(event_seq) is not int or event_seq <= 0:
+            raise ValueError("event_seq must be a positive integer")
+        worker = self._workspace_worker(worker_id)
+        if not isinstance(lease_token, str) or not lease_token.startswith("ucl_"):
+            raise ValueError("valid lease_token is required")
+        if action not in {"renewed", "completed", "failed"}:
+            raise ValueError("unsupported workspace claim action")
+        if action == "renewed":
+            lease_seconds = self._workspace_lease_seconds(
+                600 if lease_seconds is None else lease_seconds
+            )
+        if detail is not None:
+            if not isinstance(detail, str):
+                raise ValueError("detail must be a string")
+            detail = detail.strip()[:2000] or None
+        scoped_user = self._user(user_id)
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT * FROM workspace_claims WHERE user_id=? AND event_seq=?",
+                (scoped_user, event_seq),
+            ).fetchone()
+            if row is None:
+                raise KeyError("workspace claim not found")
+            if str(row["worker_id"]) != worker or not hmac.compare_digest(
+                str(row["lease_token_hash"]), self._workspace_token_hash(lease_token)
+            ):
+                raise PermissionError("workspace claim ownership mismatch")
+            if str(row["status"]) != "claimed":
+                raise ValueError("workspace claim is not active")
+            if float(row["lease_expires_at"]) <= now:
+                raise ValueError("workspace claim lease expired")
+            status = {
+                "renewed": "claimed", "completed": "done", "failed": "failed",
+            }[action]
+            expires_at = now + int(lease_seconds or 0) if action == "renewed" else now
+            completed_at = now if action in {"completed", "failed"} else None
+            self._connection.execute(
+                """
+                UPDATE workspace_claims
+                SET status=?,lease_expires_at=?,updated_at=?,completed_at=?,last_error=?
+                WHERE user_id=? AND event_seq=?
+                """,
+                (status, expires_at, now, completed_at,
+                 detail if action == "failed" else None, scoped_user, event_seq),
+            )
+            self._connection.execute(
+                """INSERT INTO workspace_claim_log
+                   (user_id,event_seq,worker_id,action,at,detail)
+                   VALUES (?,?,?,?,?,?)""",
+                (scoped_user, event_seq, worker, action, now, detail),
+            )
+            attempts = int(row["attempts"])
+        return {
+            "event_seq": event_seq, "worker_id": worker, "status": status,
+            "lease_expires_at": expires_at, "attempts": attempts,
+            "completed_at": completed_at, "detail": detail,
+        }
+
+    def renew_workspace_claim(self, **kwargs: object) -> dict[str, object]:
+        return self._workspace_claim_transition(action="renewed", **kwargs)
+
+    def complete_workspace_claim(self, **kwargs: object) -> dict[str, object]:
+        return self._workspace_claim_transition(action="completed", **kwargs)
+
+    def fail_workspace_claim(self, **kwargs: object) -> dict[str, object]:
+        return self._workspace_claim_transition(action="failed", **kwargs)
+
+    def workspace_claim_log(
+        self, *, event_seq: int, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if type(event_seq) is not int or event_seq <= 0:
+            raise ValueError("event_seq must be a positive integer")
+        scoped_user = self._user(user_id)
+        with self._lock:
+            claim = self._connection.execute(
+                """SELECT event_seq,worker_id,status,lease_expires_at,attempts,
+                          claimed_at,updated_at,completed_at,last_error
+                   FROM workspace_claims WHERE user_id=? AND event_seq=?""",
+                (scoped_user, event_seq),
+            ).fetchone()
+            rows = self._connection.execute(
+                """SELECT id,event_seq,worker_id,action,at,detail
+                   FROM workspace_claim_log WHERE user_id=? AND event_seq=?
+                   ORDER BY id""",
+                (scoped_user, event_seq),
+            ).fetchall()
+        if claim is None:
+            raise KeyError("workspace claim not found")
+        return {"claim": dict(claim), "log": [dict(row) for row in rows]}
 
     @staticmethod
     def _source_filter(source: str | None) -> tuple[str, list[object]]:
