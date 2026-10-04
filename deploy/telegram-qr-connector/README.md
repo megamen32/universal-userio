@@ -24,6 +24,22 @@ Backfill is deliberately text-only so a stale voice/media download cannot
 block live ingestion. `/state` exposes the actual `telegram:<id>` account and
 the last successful sync timestamp without exposing session credentials.
 
+## Operator-assisted code login
+
+The enrollment surface also exposes bearer-protected JSON endpoints for an
+operator who can already read the account's official Telegram service chat
+through an independent authorized client:
+
+- `POST /login/phone` with `{ "phone": "+79990001122" }` starts a new,
+  independent login slot and returns its `account-N` id;
+- `POST /login/code` with `{ "slot": "account-N", "code": "12345" }`
+  completes the Telegram-delivered code prompt.
+
+These endpoints never import or copy another client's auth key. The resulting
+GramJS session is independently minted and stored with mode `0600` under the
+ingress state directory. The browser QR and phone forms remain as a human
+fallback.
+
 ## Constraints worth remembering
 
 - Systemd runs `/usr/bin/node` = **v12**: no `??`, no `?.`, no
