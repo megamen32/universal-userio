@@ -8,6 +8,16 @@
 3. Install `deploy/universal-userio.service`, run `systemctl daemon-reload`, then `systemctl enable --now universal-userio`.
 4. Enable the native UserIO ingress units required for this host (`userio-gmail-ingress`, `userio-matrix-ingress`, `userio-sms-ingress`, or provider sidecars). Universal Inbox is retired and is not a runtime dependency.
 
+For Gmail owner notifications, add the existing project-scoped NoticePlace
+producer credential to `/etc/universal-userio.env` as
+`USERIO_NOTICEPLACE_TOKEN`. Keep the default loopback event URL or set
+`USERIO_NOTICEPLACE_EVENT_URL`; the token must be scoped to project `userio`
+with `notice` severity. Gmail ingress posts one idempotent `notification` event
+per provider message before advancing that account's cursor. If an old provider
+cursor disappears, the worker uses recent durable UserIO message IDs as a safe
+overlap anchor; it never skips ahead without such an anchor, and a broken
+account does not block the other configured mailboxes.
+
 The service is loopback-only by default. Publish the dashboard only through an
 HTTPS reverse proxy; UserIO itself redirects anonymous browsers to `/login`
 and scopes the dashboard session to the authenticated user. Do not copy
