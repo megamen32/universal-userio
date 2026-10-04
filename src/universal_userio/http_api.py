@@ -742,7 +742,8 @@ def handler(
             if path == "/v1/inbox":
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"}); return
-                self._reply(200, {"messages": service._store.new_messages(user_id=user_id)})
+                source = query.get("channel", [None])[0]
+                self._reply(200, {"messages": service._store.new_messages(source=source, user_id=user_id)})
                 return
             if path.startswith("/v1/source-cursors/"):
                 source = unquote(path.removeprefix("/v1/source-cursors/")).strip()
@@ -750,7 +751,13 @@ def handler(
                     self._reply(400, {"error": "source is required"})
                     return
                 cursor = service._store.user_preference(f"source_cursor:{source}", user_id=user_id)
-                self._reply(200, {"source": source, "cursor": cursor})
+                self._reply(200, {
+                    "source": source,
+                    "cursor": cursor,
+                    "recent_message_ids": service._store.recent_message_ids(
+                        source=source, user_id=user_id,
+                    ),
+                })
                 return
             if path == "/v1/preferences/capabilities":
                 self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})

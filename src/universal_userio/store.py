@@ -1338,20 +1338,41 @@ class SQLiteUserIOStore:
             result["attachments"] = attachments
         return result
 
-    def new_messages(self, *, limit: int = 50, user_id: str | None = None) -> list[dict[str, object]]:
+    def new_messages(
+        self, *, source: str | None = None, limit: int = 50, user_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        source_sql, values = self._source_filter(source)
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT m.source,m.message_id,m.sender,m.body,m.received_at,
                        c.id AS conversation_id,c.identity_id
                 FROM messages m JOIN conversations c
                   ON c.user_id=m.user_id AND c.id=m.conversation_id
-                WHERE m.user_id=? AND m.seen_at IS NULL
+                WHERE m.user_id=? AND m.seen_at IS NULL {source_sql}
                 ORDER BY m.received_at DESC LIMIT ?
                 """,
-                (self._user(user_id), limit),
+                [self._user(user_id), *values, limit],
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def recent_message_ids(
+        self, *, source: str, limit: int = 500, user_id: str | None = None,
+    ) -> list[str]:
+        if not 1 <= limit <= 1_000:
+            raise ValueError("recent message limit must be between 1 and 1000")
+        source_sql, values = self._source_filter(source)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT m.message_id FROM messages m JOIN conversations c
+                  ON c.user_id=m.user_id AND c.id=m.conversation_id
+                WHERE m.user_id=? {source_sql}
+                ORDER BY m.received_at DESC LIMIT ?
+                """,
+                [self._user(user_id), *values, limit],
+            ).fetchall()
+        return [str(row["message_id"]) for row in rows]
 
     def workspace_events(
         self, *, after: int = 0, limit: int = 50, user_id: str | None = None,

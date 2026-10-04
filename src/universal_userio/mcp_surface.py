@@ -12,6 +12,9 @@ from .service import UserIOService
 from .store import SQLiteUserIOStore
 
 
+_WORKSPACE_EVENT_BODY_LIMIT = 4096
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
     name: str
@@ -47,6 +50,14 @@ TOOL_SPECS = (
         "chat_id": {"type": "string"}, "text": {"type": "string"},
         "attachments": {"type": "array", "items": {"type": "string"}},
     }, ["chat_id", "text"])),
+    ToolSpec(
+        "userio.workspace.poll",
+        "Poll durable inbound events after a user-scoped cursor without marking messages seen.",
+        _schema({
+            "after": {"type": "integer", "minimum": 0},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        }),
+    ),
     ToolSpec("userio.users.create", "Owner only: create a user and return one token once.", _schema({
         "username": {"type": "string"}, "password": {"type": "string"},
     }, ["username", "password"])),
@@ -96,6 +107,7 @@ TOOL_CAPABILITIES = {
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
+    "userio.workspace.poll": "read",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
@@ -257,16 +269,27 @@ class UserIOMcpSurface:
                     "user": {"id": user.user_id, "username": user.username, "role": user.role},
                     "token": token, "token_returned_once": True,
                 }
+            if name == "userio.workspace.poll":
+                page = self._store.workspace_events(
+                    after=arguments.get("after", 0),
+                    limit=arguments.get("limit", 50),
+                    user_id=user_id,
+                )
+                return {
+                    "ok": True,
+                    "schema": "universal.workspace-events.v1",
+                    **page,
+                    "events": [self._workspace_event(event) for event in page["events"]],
+                }
             if name == "userio.inbox.list_new":
                 ignored_chats = self._ignored_chats(arguments)
                 channel = self._optional(arguments, "channel")
                 messages = self._store.new_messages(
-                    limit=int(arguments.get("limit", 50)), user_id=user_id
+                    source=channel, limit=int(arguments.get("limit", 50)), user_id=user_id
                 )
                 return {"ok": True, "messages": [
                     message for message in messages
                     if str(message["conversation_id"]) not in ignored_chats
-                    and (channel is None or str(message["source"]) == channel)
                 ]}
             if name == "userio.conversation.get":
                 ignored_chats = self._ignored_chats(arguments)
@@ -403,6 +426,15 @@ class UserIOMcpSurface:
         if any(not isinstance(value, str) or not value.strip() for value in values):
             raise ValueError("ignored_chats must contain non-empty chat ids")
         return frozenset(value.strip() for value in values)
+
+    @staticmethod
+    def _workspace_event(event: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(event)
+        body = str(payload.get("body") or "")
+        if len(body) > _WORKSPACE_EVENT_BODY_LIMIT:
+            payload["body"] = body[:_WORKSPACE_EVENT_BODY_LIMIT]
+            payload["body_truncated"] = True
+        return payload
 
     @staticmethod
     def _draft(draft: Any) -> dict[str, str]:

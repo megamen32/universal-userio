@@ -27,6 +27,7 @@ class GmailMessage:
     fetch_id: str
     sender: str
     body: str
+    subject: str = ""
 
 
 def _source(account: str) -> str:
@@ -34,7 +35,7 @@ def _source(account: str) -> str:
 
 
 class HimalayaReader:
-    def __init__(self, binary: str, account: str, *, mailbox: str = "Inbox", snapshot_size: int = 100) -> None:
+    def __init__(self, binary: str, account: str, *, mailbox: str = "Inbox", snapshot_size: int = 500) -> None:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", account):
             raise ValueError("invalid Himalaya account")
         self.binary, self.account, self.mailbox, self.snapshot_size = binary, account, mailbox, snapshot_size
@@ -48,7 +49,10 @@ class HimalayaReader:
             raise RuntimeError(f"himalaya {self.account} failed")
         return json.loads(completed.stdout)
 
-    def poll(self, cursor: str | None, *, limit: int = 100) -> tuple[list[GmailMessage], str | None]:
+    def poll(
+        self, cursor: str | None, *, limit: int = 100,
+        known_message_ids: set[str] | frozenset[str] = frozenset(),
+    ) -> tuple[list[GmailMessage], str | None]:
         payload = self._run("--json", "envelope", "list", "-m", self.mailbox, "-p", "1", "-s", str(max(limit, self.snapshot_size)))
         envelopes = payload.get("envelopes") if isinstance(payload, dict) else None
         if not isinstance(envelopes, list):
@@ -59,7 +63,7 @@ class HimalayaReader:
             if not isinstance(env, dict):
                 continue
             message_id = str(env.get("message-id") or env.get("id") or "").strip()
-            if cursor and message_id == cursor:
+            if cursor and (message_id == cursor or message_id in known_message_ids):
                 found = True
                 break
             if message_id:
@@ -100,4 +104,5 @@ class HimalayaReader:
         sender = ""
         if isinstance(senders, list) and senders and isinstance(senders[0], dict):
             sender = str(senders[0].get("email") or senders[0].get("name") or "")
-        return GmailMessage(message_id, fetch_id, sender or message_id, body or str(env.get("subject") or ""))
+        subject = str(env.get("subject") or "").strip()
+        return GmailMessage(message_id, fetch_id, sender or message_id, body or subject, subject)

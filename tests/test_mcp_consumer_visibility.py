@@ -74,3 +74,25 @@ def test_consumer_exclusion_covers_all_mcp_read_paths(tmp_path) -> None:
     assert {chat["id"] for chat in surface.dispatch(
         "userio.channels.list", {"channel": "telegram"},
     )["chats"]} == {hidden_id, visible_id}
+
+
+def test_mail_unread_filter_is_applied_before_limit(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    mail_id, _ = service.receive(
+        InboxMessage("gmail", "mail-1", "sender@example.test", "important mail", 1.0),
+        route_id="gmail-read-only",
+    )
+    for index in range(60):
+        service.receive(
+            InboxMessage("telegram", f"tg-{index}", f"chat-{index}", "newer", 100.0 + index),
+            route_id="telegram",
+        )
+    surface = UserIOMcpSurface(store, service)
+
+    messages = surface.dispatch(
+        "userio.inbox.list_new", {"channel": "mail", "limit": 1},
+    )["messages"]
+
+    assert [message["conversation_id"] for message in messages] == [mail_id]
+    assert messages[0]["source"] == "gmail"

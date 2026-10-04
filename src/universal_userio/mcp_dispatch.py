@@ -140,7 +140,7 @@ class UserIOToolDispatcher:
                 ignored_chats = self._ignored_chats(arguments)
                 channel = self._optional(arguments, "channel")
                 messages = self._store.new_messages(
-                    limit=int(arguments.get("limit", 50)), user_id=user_id
+                    source=channel, limit=int(arguments.get("limit", 50)), user_id=user_id
                 )
                 return {
                     "ok": True,
@@ -148,10 +148,6 @@ class UserIOToolDispatcher:
                         message
                         for message in messages
                         if str(message["conversation_id"]) not in ignored_chats
-                        and (
-                            channel is None
-                            or str(message["source"]) == channel
-                        )
                     ],
                 }
             if name == "userio.conversation.get":
