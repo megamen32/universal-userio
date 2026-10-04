@@ -124,6 +124,7 @@ class UserIOToolDispatcher:
                     worker_id=self._required(arguments, "worker_id"),
                     lease_seconds=arguments.get("lease_seconds", 600),
                     after=arguments.get("after", 0),
+                    telegram_direct_only=arguments.get("telegram_direct_only", False),
                     user_id=user_id,
                 )
                 if claimed is None:
