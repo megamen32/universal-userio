@@ -27,6 +27,27 @@ def test_descriptor(mime, flags, kind):
     assert result.emoji == ('🙂' if kind == 'sticker' else None)
 
 
+def test_ordinary_document_keeps_provider_reference_metadata():
+    raw = NS(
+        document=NS(
+            id=987654321,
+            mime_type='application/pdf',
+            size=4096,
+            attributes=[NS(file_name='project-85m2.pdf')],
+        ),
+        file=NS(name='project-85m2.pdf', duration=None),
+    )
+
+    result = describe_media(raw)
+
+    assert result is not None
+    assert result.kind == 'document'
+    assert result.mime_type == 'application/pdf'
+    assert result.size_bytes == 4096
+    assert result.file_name == 'project-85m2.pdf'
+    assert result.document_id == '987654321'
+
+
 def test_preview_download_uses_provider_thumbnail():
     raw = NS(id=12, download_media=AsyncMock())
     client = NS(download_media=AsyncMock(return_value=b'\x89PNGpreview'))
