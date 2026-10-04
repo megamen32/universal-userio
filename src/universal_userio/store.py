@@ -1464,11 +1464,14 @@ class SQLiteUserIOStore:
 
     def claim_workspace_event(
         self, *, worker_id: str, lease_seconds: int = 600,
+        after: int = 0,
         user_id: str | None = None,
     ) -> dict[str, object] | None:
         """Atomically lease the oldest available inbound event to one worker."""
         worker = self._workspace_worker(worker_id)
         lease_seconds = self._workspace_lease_seconds(lease_seconds)
+        if type(after) is not int or after < 0 or after >= 2**63:
+            raise ValueError("workspace cursor must be a non-negative integer")
         scoped_user = self._user(user_id)
         now = time.time()
         token = "ucl_" + secrets.token_urlsafe(32)
@@ -1489,12 +1492,12 @@ class SQLiteUserIOStore:
                     AND c.id=e.conversation_id
                 LEFT JOIN workspace_claims AS wc ON wc.user_id=e.user_id
                     AND wc.event_seq=e.seq
-                WHERE e.user_id=? AND m.direction='incoming'
+                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
                   AND (wc.event_seq IS NULL OR wc.status='failed'
                        OR (wc.status='claimed' AND wc.lease_expires_at<=?))
                 ORDER BY e.seq LIMIT 1
                 """,
-                (scoped_user, now),
+                (scoped_user, after, now),
             ).fetchone()
             if row is None:
                 return None

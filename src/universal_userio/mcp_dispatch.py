@@ -123,6 +123,7 @@ class UserIOToolDispatcher:
                 claimed = self._store.claim_workspace_event(
                     worker_id=self._required(arguments, "worker_id"),
                     lease_seconds=arguments.get("lease_seconds", 600),
+                    after=arguments.get("after", 0),
                     user_id=user_id,
                 )
                 if claimed is None:

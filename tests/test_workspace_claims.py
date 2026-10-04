@@ -107,6 +107,20 @@ def test_expired_claim_is_reclaimed_and_stale_token_cannot_complete(tmp_path) ->
         )
 
 
+def test_claim_after_skips_historical_events(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = receive_one(store)
+    head = store.workspace_events()["head"]
+    assert store.claim_workspace_event(worker_id="new-only", after=head) is None
+    service.receive(
+        InboxMessage("gmail:self", "lease-2", "new@example.test", "new event", 2.0),
+        route_id="workspace-claim-test",
+    )
+    claimed = store.claim_workspace_event(worker_id="new-only", after=head)
+    assert claimed is not None
+    assert claimed["event"]["message_id"] == "lease-2"
+
+
 def test_mcp_claim_lifecycle_is_advertised_and_user_scoped(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = receive_one(store)

@@ -325,6 +325,7 @@ def handler(
                     claimed = service._store.claim_workspace_event(
                         worker_id=payload.get("worker_id"),
                         lease_seconds=payload.get("lease_seconds", 600),
+                        after=payload.get("after", 0),
                         user_id=user_id,
                     )
                     self._reply(200, {"claimed": claimed is not None, **(claimed or {})})
