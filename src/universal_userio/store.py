@@ -1464,7 +1464,7 @@ class SQLiteUserIOStore:
 
     def claim_workspace_event(
         self, *, worker_id: str, lease_seconds: int = 600,
-        after: int = 0,
+        after: int = 0, telegram_direct_only: bool = False,
         user_id: str | None = None,
     ) -> dict[str, object] | None:
         """Atomically lease the oldest available inbound event to one worker."""
@@ -1472,6 +1472,8 @@ class SQLiteUserIOStore:
         lease_seconds = self._workspace_lease_seconds(lease_seconds)
         if type(after) is not int or after < 0 or after >= 2**63:
             raise ValueError("workspace cursor must be a non-negative integer")
+        if type(telegram_direct_only) is not bool:
+            raise ValueError("telegram_direct_only must be a boolean")
         scoped_user = self._user(user_id)
         now = time.time()
         token = "ucl_" + secrets.token_urlsafe(32)
@@ -1493,11 +1495,12 @@ class SQLiteUserIOStore:
                 LEFT JOIN workspace_claims AS wc ON wc.user_id=e.user_id
                     AND wc.event_seq=e.seq
                 WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
+                  AND (?=0 OR e.source!='telegram' OR e.message_id NOT LIKE '-%')
                   AND (wc.event_seq IS NULL OR wc.status='failed'
                        OR (wc.status='claimed' AND wc.lease_expires_at<=?))
                 ORDER BY e.seq LIMIT 1
                 """,
-                (scoped_user, after, now),
+                (scoped_user, after, int(telegram_direct_only), now),
             ).fetchone()
             if row is None:
                 return None

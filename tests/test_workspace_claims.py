@@ -121,6 +121,29 @@ def test_claim_after_skips_historical_events(tmp_path) -> None:
     assert claimed["event"]["message_id"] == "lease-2"
 
 
+def test_direct_only_claim_skips_telegram_groups_without_consuming_them(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    service.receive(
+        InboxMessage("telegram", "-100123:10", "busy group", "group noise", 1.0),
+        route_id="telegram",
+    )
+    service.receive(
+        InboxMessage("telegram", "540308572:11", "private user", "direct message", 2.0),
+        route_id="telegram",
+    )
+
+    direct = store.claim_workspace_event(
+        worker_id="hermes", telegram_direct_only=True,
+    )
+    assert direct is not None
+    assert direct["event"]["message_id"] == "540308572:11"
+
+    group = store.claim_workspace_event(worker_id="group-worker")
+    assert group is not None
+    assert group["event"]["message_id"] == "-100123:10"
+
+
 def test_mcp_claim_lifecycle_is_advertised_and_user_scoped(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = receive_one(store)

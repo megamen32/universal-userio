@@ -62,6 +62,7 @@ TOOL_SPECS = (
         "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
         "after": {"type": "integer", "minimum": 0},
+        "telegram_direct_only": {"type": "boolean"},
     }, ["worker_id"])),
     ToolSpec("userio.workspace.renew", "Renew an active workspace event lease owned by this worker.", _schema({
         "event_seq": {"type": "integer", "minimum": 1},
@@ -315,6 +316,7 @@ class UserIOMcpSurface:
                     worker_id=self._required(arguments, "worker_id"),
                     lease_seconds=arguments.get("lease_seconds", 600),
                     after=arguments.get("after", 0),
+                    telegram_direct_only=arguments.get("telegram_direct_only", False),
                     user_id=user_id,
                 )
                 if claimed is None:

@@ -104,6 +104,7 @@ TOOL_SPECS = (
             "worker_id": {"type": "string", "minLength": 1, "maxLength": 128},
             "lease_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
             "after": {"type": "integer", "minimum": 0},
+            "telegram_direct_only": {"type": "boolean"},
         }, ["worker_id"]),
     ),
     ToolSpec(
