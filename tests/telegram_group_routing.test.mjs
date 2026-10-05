@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { telegramGroupRoutingAttachment } from "../deploy/telegram-qr-connector/group-routing.mjs";
+import { telegramConversationKind, telegramGroupRoutingAttachment } from "../deploy/telegram-qr-connector/group-routing.mjs";
+
+test("Telegram bot dialogs are classified separately and disabled by policy", () => {
+  assert.equal(telegramConversationKind({ bot: true, className: "User" }, "777"), "telegram_bot");
+  assert.equal(telegramConversationKind({ className: "User" }, "778"), "direct");
+});
 
 test("private messages have no group routing attachment", async () => {
   assert.equal(await telegramGroupRoutingAttachment({ chatKey: "540308572", message: {} }), null);

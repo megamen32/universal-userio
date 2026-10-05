@@ -281,6 +281,7 @@ def test_mcp_user_capabilities_filter_tools_resources_and_subscribe(tmp_path) ->
     assert "userio.workspace.policy.get" in tools
     assert "userio.workspace.policy.chats.list" in tools
     assert "userio.workspace.policy.set_default" not in tools
+    assert "userio.workspace.policy.telegram_bots.set" not in tools
     assert "userio.workspace.policy.chats.set" not in tools
     assert "userio.workspace.exclusions.add" not in tools
     assert "userio.workspace.exclusions.remove" not in tools
@@ -291,6 +292,7 @@ def test_mcp_user_capabilities_filter_tools_resources_and_subscribe(tmp_path) ->
         ("userio.workspace.policy.set_default", {
             "conversation_kind": "group", "enabled": True,
         }),
+        ("userio.workspace.policy.telegram_bots.set", {"enabled": True}),
         ("userio.workspace.policy.chats.set", {
             "conversation_id": "missing", "action": "ignore",
         }),

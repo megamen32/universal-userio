@@ -51,7 +51,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     if direction not in {"incoming", "outgoing", "system"}:
         raise ValueError("unsupported message direction")
     conversation_kind = str(payload.get("conversation_kind") or "").strip().lower()
-    if conversation_kind and conversation_kind not in {"direct", "group", "channel", "unknown"}:
+    if conversation_kind and conversation_kind not in {"direct", "group", "channel", "unknown", "telegram_bot"}:
         raise ValueError("unsupported conversation_kind")
     peer_id = str(payload.get("peer_id") or "").strip()
     if len(peer_id) > 128:

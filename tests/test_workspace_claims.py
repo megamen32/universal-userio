@@ -309,7 +309,8 @@ def test_policy_defaults_rules_and_no_historical_flood(tmp_path, modular: bool) 
         route_id="telegram", account_ref="telegram:11",
     )
     defaults = dispatch("userio.workspace.policy.get", {})["defaults"]
-    assert defaults == {"direct": True, "group": False, "channel": False, "unknown": False}
+    assert defaults == {"direct": True, "group": False, "channel": False, "unknown": False,
+                        "telegram_bot": False}
     assert [event["message_id"] for event in store.workspace_events()["events"]] == ["telegram:11|21:1"]
     assert {group_id, channel_id, unknown_id, direct_id} == {
         chat["conversation_id"] for chat in dispatch("userio.workspace.policy.chats.list", {})["chats"]}
@@ -458,6 +459,57 @@ def test_provider_group_identity_overrides_contradictory_direct_hint(tmp_path) -
         route_id="whatsapp")
     assert store.evaluate_workspace_chat(conversation_id=telegram_id)["conversation_kind"] == "unknown"
     assert store.evaluate_workspace_chat(conversation_id=whatsapp_id)["conversation_kind"] == "group"
+    assert store.claim_workspace_event(worker_id="worker") is None
+
+
+def test_telegram_bot_notifications_are_off_by_default_and_mcp_toggle_is_future_only(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    surface = UserIOMcpSurface(store, service)
+    assert "userio.workspace.policy.telegram_bots.set" in {
+        tool["name"] for tool in surface.tool_manifest()["tools"]}
+    bot_id, _ = service.receive(
+        InboxMessage("telegram", "7001:1", "Reminder Bot", "old", 1.0,
+                     conversation_kind="telegram_bot", peer_id="7001"),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.evaluate_workspace_chat(conversation_id=bot_id)["allowed"] is False
+    assert store.claim_workspace_event(worker_id="worker") is None
+
+    enabled = surface.dispatch("userio.workspace.policy.telegram_bots.set", {"enabled": True})
+    assert enabled["ok"] and enabled["defaults"]["telegram_bot"] is True
+    assert store.claim_workspace_event(worker_id="worker") is None
+    service.receive(
+        InboxMessage("telegram", "7001:2", "Reminder Bot", "fresh", 2.0,
+                     conversation_kind="telegram_bot", peer_id="7001"),
+        route_id="telegram", account_ref="telegram:11")
+    claimed = store.claim_workspace_event(worker_id="worker")
+    assert claimed["event"]["message_id"] == "telegram:11|7001:2"
+
+    service.receive(
+        InboxMessage("telegram", "7001:3", "Reminder Bot", "queued", 3.0,
+                     conversation_kind="telegram_bot", peer_id="7001"),
+        route_id="telegram", account_ref="telegram:11")
+    disabled = UserIOToolDispatcher(store, service).dispatch(
+        "userio.workspace.policy.telegram_bots.set", {"enabled": False},
+        principal=store.owner())
+    assert disabled["ok"] and disabled["defaults"]["telegram_bot"] is False
+    surface.dispatch("userio.workspace.policy.telegram_bots.set", {"enabled": True})
+    assert store.claim_workspace_event(worker_id="worker-2") is None
+
+
+def test_bot_reclassification_retires_events_previously_treated_as_direct(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(
+        InboxMessage("telegram", "7010:1", "Legacy Bot", "legacy", 1.0,
+                     conversation_kind="direct", peer_id="7010"),
+        route_id="telegram", account_ref="telegram:11")
+    service.receive(
+        InboxMessage("telegram", "7010:2", "Legacy Bot", "reconciled", 2.0,
+                     conversation_kind="telegram_bot", peer_id="7010", reconciliation=True),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.evaluate_workspace_chat(conversation_id=conversation_id)["conversation_kind"] == "telegram_bot"
+    store.set_workspace_default(conversation_kind="telegram_bot", enabled=True)
     assert store.claim_workspace_event(worker_id="worker") is None
 
 

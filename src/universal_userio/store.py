@@ -941,7 +941,7 @@ class SQLiteUserIOStore:
             if peer.endswith("@g.us") and message.conversation_kind == "direct":
                 return "group"
         if message.conversation_kind:
-            if message.conversation_kind not in {"direct", "group", "channel", "unknown"}:
+            if message.conversation_kind not in {"direct", "group", "channel", "unknown", "telegram_bot"}:
                 raise ValueError("unsupported conversation_kind")
             return message.conversation_kind
         if message.source == "telegram":
@@ -960,7 +960,8 @@ class SQLiteUserIOStore:
 
     def workspace_policy(self, *, user_id: str | None = None) -> dict[str, object]:
         user = self._user(user_id)
-        defaults = {"direct": True, "group": False, "channel": False, "unknown": False}
+        defaults = {"direct": True, "group": False, "channel": False, "unknown": False,
+                    "telegram_bot": False}
         with self._lock:
             rows = self._connection.execute(
                 "SELECT conversation_kind,enabled FROM workspace_policy_defaults WHERE user_id=?", (user,)
@@ -991,7 +992,7 @@ class SQLiteUserIOStore:
     def set_workspace_default(
         self, *, conversation_kind: str, enabled: bool, user_id: str | None = None,
     ) -> dict[str, object]:
-        if conversation_kind not in {"direct", "group", "channel", "unknown"}:
+        if conversation_kind not in {"direct", "group", "channel", "unknown", "telegram_bot"}:
             raise ValueError("unsupported conversation_kind")
         if type(enabled) is not bool:
             raise ValueError("enabled must be a boolean")
@@ -1029,7 +1030,7 @@ class SQLiteUserIOStore:
             raise ValueError("limit must be between 1 and 200")
         if type(offset) is not int or not 0 <= offset <= 100_000:
             raise ValueError("offset must be between 0 and 100000")
-        if conversation_kind and conversation_kind not in {"direct", "group", "channel", "unknown"}:
+        if conversation_kind and conversation_kind not in {"direct", "group", "channel", "unknown", "telegram_bot"}:
             raise ValueError("unsupported conversation_kind")
         if action and action not in {"allow", "ignore", "inherit"}:
             raise ValueError("unsupported action")
@@ -1177,9 +1178,17 @@ class SQLiteUserIOStore:
                 ),
             ).rowcount == 1
             if message_kind != "unknown":
-                self._connection.execute("""UPDATE conversations SET conversation_kind=?
-                    WHERE user_id=? AND id=? AND conversation_kind='unknown'""",
-                    (message_kind, user_id, conversation_id))
+                if message_kind == "telegram_bot":
+                    changed_to_bot = self._connection.execute("""UPDATE conversations
+                        SET conversation_kind='telegram_bot'
+                        WHERE user_id=? AND id=? AND conversation_kind!='telegram_bot'""",
+                        (user_id, conversation_id)).rowcount == 1
+                    if changed_to_bot:
+                        self._invalidate_workspace_events_for_chat(user_id, conversation_id)
+                else:
+                    self._connection.execute("""UPDATE conversations SET conversation_kind=?
+                        WHERE user_id=? AND id=? AND conversation_kind='unknown'""",
+                        (message_kind, user_id, conversation_id))
             # Old Telegram rows did not always record the account. Never let a
             # previously ignored peer become allowed merely because the first
             # account-aware arrival receives a new conversation identity. Copy

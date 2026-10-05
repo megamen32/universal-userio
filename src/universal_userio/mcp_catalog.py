@@ -164,13 +164,16 @@ TOOL_SPECS = (
     ),
     ToolSpec("userio.workspace.policy.get", "Read automatic processing defaults and revision.", schema({})),
     ToolSpec("userio.workspace.policy.set_default", "Set the automatic processing default for future arrivals of one kind.", schema({
-        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown"]},
+        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown", "telegram_bot"]},
         "enabled": {"type": "boolean"},
     }, ["conversation_kind", "enabled"])),
+    ToolSpec("userio.workspace.policy.telegram_bots.set", "Enable or disable future Telegram bot-chat notifications.", schema({
+        "enabled": {"type": "boolean"},
+    }, ["enabled"])),
     ToolSpec("userio.workspace.policy.chats.list", "Search known chats by account, peer, title, kind, or rule (at most 200 per page).", schema({
         "source": {"type": "string"}, "account_ref": {"type": "string"},
         "peer_id": {"type": "string"},
-        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown"]},
+        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown", "telegram_bot"]},
         "action": {"type": "string", "enum": ["allow", "ignore", "inherit"]},
         "query": {"type": "string", "maxLength": 128},
         "limit": {"type": "integer", "minimum": 1, "maximum": 200},
@@ -313,6 +316,7 @@ TOOL_CAPABILITIES = {
     "userio.workspace.exclusions.remove": "send",
     "userio.workspace.policy.get": "read",
     "userio.workspace.policy.set_default": "send",
+    "userio.workspace.policy.telegram_bots.set": "send",
     "userio.workspace.policy.chats.list": "read",
     "userio.workspace.policy.chats.set": "send",
     "userio.workspace.policy.evaluate": "read",
