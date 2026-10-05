@@ -93,13 +93,16 @@ TOOL_SPECS = (
     }, ["conversation_id"])),
     ToolSpec("userio.workspace.policy.get", "Read user-scoped automatic processing defaults and revision.", _schema({})),
     ToolSpec("userio.workspace.policy.set_default", "Enable or disable automatic processing for a conversation kind; only future arrivals gain eligibility.", _schema({
-        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown"]},
+        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown", "telegram_bot"]},
         "enabled": {"type": "boolean"},
     }, ["conversation_kind", "enabled"])),
+    ToolSpec("userio.workspace.policy.telegram_bots.set", "Enable or disable future Telegram bot-chat notifications.", _schema({
+        "enabled": {"type": "boolean"},
+    }, ["enabled"])),
     ToolSpec("userio.workspace.policy.chats.list", "Search known chats by account, peer, title, kind, or rule (at most 200 per page).", _schema({
         "source": {"type": "string"}, "account_ref": {"type": "string"},
         "peer_id": {"type": "string"},
-        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown"]},
+        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown", "telegram_bot"]},
         "action": {"type": "string", "enum": ["allow", "ignore", "inherit"]},
         "query": {"type": "string", "maxLength": 128},
         "limit": {"type": "integer", "minimum": 1, "maximum": 200},
@@ -173,6 +176,7 @@ TOOL_CAPABILITIES = {
     "userio.workspace.exclusions.remove": "send",
     "userio.workspace.policy.get": "read",
     "userio.workspace.policy.set_default": "send",
+    "userio.workspace.policy.telegram_bots.set": "send",
     "userio.workspace.policy.chats.list": "read",
     "userio.workspace.policy.chats.set": "send",
     "userio.workspace.policy.evaluate": "read",
@@ -412,6 +416,11 @@ class UserIOMcpSurface:
             if name == "userio.workspace.policy.set_default":
                 return {"ok": True, **self._store.set_workspace_default(
                     conversation_kind=self._required(arguments, "conversation_kind"),
+                    enabled=arguments.get("enabled"), user_id=user_id,
+                )}
+            if name == "userio.workspace.policy.telegram_bots.set":
+                return {"ok": True, **self._store.set_workspace_default(
+                    conversation_kind="telegram_bot",
                     enabled=arguments.get("enabled"), user_id=user_id,
                 )}
             if name == "userio.workspace.policy.chats.list":

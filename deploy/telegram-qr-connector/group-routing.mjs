@@ -43,6 +43,14 @@ function replyMessageId(message) {
   return idString(reply.replyToMsgId || message.replyToMsgId || "");
 }
 
+export function telegramConversationKind(entity, chatKey) {
+  if (entity && entity.bot === true) return "telegram_bot";
+  if (entity && entity.broadcast === true) return "channel";
+  if (entity && (entity.megagroup === true || entity.className === "Chat")) return "group";
+  const peer = String(chatKey || "");
+  return peer.startsWith("-100") ? "unknown" : peer.startsWith("-") ? "group" : "direct";
+}
+
 export async function telegramGroupRoutingAttachment(options) {
   const chatKey = String(options.chatKey || "");
   if (!chatKey.startsWith("-")) return null;

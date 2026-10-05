@@ -7,7 +7,7 @@ import { NewMessage } from "telegram/events/index.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
-import { telegramGroupRoutingAttachment } from "./group-routing.mjs";
+import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
@@ -493,13 +493,11 @@ async function envelope(chatKey, label, message, client, self, options) {
   const attachments = normalized.attachments.slice();
   if (routing) attachments.push(routing);
   if (audio && audio.error) console.warn(`telegram audio ${chatKey}:${message.id}: ${audio.error}`);
-  let chatEntity = message.chat || null;
+  let chatEntity = (options && options.chatEntity) || message.chat || null;
   if (!chatEntity && typeof message.getChat === "function") {
     try { chatEntity = await message.getChat(); } catch (_error) { /* unknown stays disabled */ }
   }
-  const conversationKind = chatEntity && chatEntity.broadcast === true ? "channel"
-    : chatEntity && (chatEntity.megagroup === true || chatEntity.className === "Chat") ? "group"
-    : chatKey.startsWith("-100") ? "unknown" : chatKey.startsWith("-") ? "group" : "direct";
+  const conversationKind = telegramConversationKind(chatEntity, chatKey);
   return {
     schema: "universal.inbox.message.v1",
     source: "telegram",
@@ -534,7 +532,7 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
         // download. Live arrivals are transcribed; reconciliation is text-only.
         const envelopeMessage = await envelope(
           chatKey, label, message, client, self,
-          { transcribeAudio: false, accountId, reconciliation: true },
+          { transcribeAudio: false, accountId, reconciliation: true, chatEntity: dialog.entity },
         );
         if (!envelopeMessage.body) continue;
         await postInbox(accountId, envelopeMessage);

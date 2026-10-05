@@ -194,7 +194,8 @@ user-scoped proposed draft; `userio.draft.approve_send` with exact
 features return `not supported by adapter`.
 
 Automatic workspace processing is user-scoped. Direct chats are enabled by
-default; groups, channels, and unknown Telegram peer types are disabled. Read
+default; groups, channels, unknown Telegram peer types, and Telegram bot
+dialogs are disabled. Read
 the defaults with `userio.workspace.policy.get`, change a category with
 `userio.workspace.policy.set_default`, and inspect known chats with
 `userio.workspace.policy.chats.list`. Each chat lists its connected account,
@@ -202,7 +203,10 @@ immutable Telegram peer ID, current title, and conversation kind. Use
 `userio.workspace.policy.chats.set` with a known `conversation_id` and
 `action: "allow"`, `"ignore"`, or `"inherit"`; `inherit` follows the category
 default. `userio.workspace.policy.evaluate` explains the current decision and
-policy revision. An explicit ignore always denies. Existing
+policy revision. Use `userio.workspace.policy.telegram_bots.set(enabled)` as
+the dedicated user-scoped toggle for future Telegram bot-dialog notifications.
+Re-enabling never replays bot messages received while disabled; an exact chat
+`allow` remains the opt-in exception to this default. An explicit ignore always denies. Existing
 `userio.workspace.exclusions.list/add/remove` tools remain aliases for ignoring
 and then inheriting a chat. These rules affect automatic `workspace.poll`,
 `workspace.claim`, and the Telegram agent-deliver timer. Messages remain in

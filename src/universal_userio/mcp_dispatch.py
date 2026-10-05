@@ -187,6 +187,11 @@ class UserIOToolDispatcher:
                     conversation_kind=self._required(arguments, "conversation_kind"),
                     enabled=arguments.get("enabled"), user_id=user_id,
                 )}
+            if name == "userio.workspace.policy.telegram_bots.set":
+                return {"ok": True, **self._store.set_workspace_default(
+                    conversation_kind="telegram_bot",
+                    enabled=arguments.get("enabled"), user_id=user_id,
+                )}
             if name == "userio.workspace.policy.chats.list":
                 return {"ok": True, "chats": self._store.workspace_chat_rules(
                     user_id=user_id, source=arguments.get("source", ""),
