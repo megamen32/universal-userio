@@ -1,5 +1,19 @@
 import assert from "assert";
-import { buildAgentDeliverEvent } from "./agent-deliver.mjs";
+import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
+
+assert.strictEqual(isNumericTelegramPeerAllowed("-100123", ["-100123"]), true);
+assert.strictEqual(isNumericTelegramPeerAllowed("123", ["-100123"]), false);
+assert.strictEqual(isNumericTelegramPeerAllowed("-100123", ["123"]), false);
+assert.strictEqual(isNumericTelegramPeerAllowed("-100123", ["Group title"]), false);
+const groupEvent = buildAgentDeliverEvent({
+  normalizedChatId: "123", peerId: "-100123", accountId: "telegram:11",
+  envelope: { message_id: "telegram:11|-100123:9" },
+});
+const directEvent = buildAgentDeliverEvent({
+  normalizedChatId: "123", peerId: "123", accountId: "telegram:11",
+  envelope: { message_id: "telegram:11|123:9" },
+});
+assert.notStrictEqual(groupEvent.event_id, directEvent.event_id);
 
 const event = buildAgentDeliverEvent({
   normalizedChatId: "5453051466",

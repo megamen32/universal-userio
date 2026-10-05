@@ -50,6 +50,15 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     direction = str(payload.get("direction") or "incoming").strip().lower()
     if direction not in {"incoming", "outgoing", "system"}:
         raise ValueError("unsupported message direction")
+    conversation_kind = str(payload.get("conversation_kind") or "").strip().lower()
+    if conversation_kind and conversation_kind not in {"direct", "group", "channel", "unknown"}:
+        raise ValueError("unsupported conversation_kind")
+    peer_id = str(payload.get("peer_id") or "").strip()
+    if len(peer_id) > 128:
+        raise ValueError("peer_id must be at most 128 characters")
+    reconciliation = payload.get("reconciliation", False)
+    if type(reconciliation) is not bool:
+        raise ValueError("reconciliation must be a boolean")
     raw_attachments = payload.get("attachments")
     parsed_attachments: list[dict[str, Any]] = []
     if isinstance(raw_attachments, list):
@@ -104,6 +113,9 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         sender_name=sender_name,
         attachments=tuple(parsed_attachments),
         direction=direction,
+        conversation_kind=conversation_kind,
+        peer_id=peer_id,
+        reconciliation=reconciliation,
     )
 
 

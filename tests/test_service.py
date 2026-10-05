@@ -105,9 +105,11 @@ def test_workspace_event_cursor_is_per_user_and_validated(tmp_path) -> None:
     service = UserIOService(store, Generator(), Outbox())
     second_user, _ = store.create_user("workspace-other", "correct horse battery staple")
     store.bind_channel_route(user_id=second_user.user_id, source="matrix", route_id="other")
-    service.receive(InboxMessage("matrix", "owner-1", "owner", "owner body", 1.0), route_id="owner")
+    service.receive(InboxMessage("matrix", "owner-1", "owner", "owner body", 1.0,
+                                 conversation_kind="direct"), route_id="owner")
     other_conv, _ = service.receive(
-        InboxMessage("matrix", "other-1", "other", "other body", 2.0),
+        InboxMessage("matrix", "other-1", "other", "other body", 2.0,
+                     conversation_kind="direct"),
         route_id="other", user_id=second_user.user_id,
     )
     assert [entry["message_id"] for entry in store.workspace_events(after=0, user_id=second_user.user_id)["events"]] == ["other-1"]
@@ -124,8 +126,12 @@ def test_workspace_event_feed_backfills_existing_messages_once(tmp_path) -> None
     database = tmp_path / "userio.sqlite3"
     store = SQLiteUserIOStore(database)
     service = UserIOService(store, Generator(), Outbox())
-    service.receive(InboxMessage("matrix", "historical-1", "owner", "first", 1.0), route_id="matrix")
-    service.receive(InboxMessage("matrix", "historical-2", "owner", "second", 2.0), route_id="matrix")
+    service.receive(InboxMessage(
+        "matrix", "historical-1", "owner", "first", 1.0, conversation_kind="direct",
+    ), route_id="matrix")
+    service.receive(InboxMessage(
+        "matrix", "historical-2", "owner", "second", 2.0, conversation_kind="direct",
+    ), route_id="matrix")
     store.close()
 
     # An older database had messages but not the dedicated sequence journal.
@@ -145,12 +151,17 @@ def test_workspace_event_feed_does_not_retain_deleted_local_conversation(tmp_pat
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
     old_id, _ = service.receive(
-        InboxMessage("matrix", "remove-1", "owner", "private text", 1.0), route_id="matrix"
+        InboxMessage(
+            "matrix", "remove-1", "owner", "private text", 1.0,
+            conversation_kind="direct",
+        ), route_id="matrix"
     )
     old_seq = store.workspace_events(after=0)["events"][0]["seq"]
     assert store.delete_conversation(old_id) is True
     assert store.workspace_events(after=0) == {"events": [], "cursor": 0, "head": 0}
-    service.receive(InboxMessage("matrix", "keep-2", "owner", "new text", 2.0), route_id="matrix")
+    service.receive(InboxMessage(
+        "matrix", "keep-2", "owner", "new text", 2.0, conversation_kind="direct",
+    ), route_id="matrix")
     page = store.workspace_events(after=old_seq)
     assert [item["message_id"] for item in page["events"]] == ["keep-2"]
     assert page["cursor"] > old_seq

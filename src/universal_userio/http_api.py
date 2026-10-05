@@ -317,6 +317,29 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path == "/v1/workspace/policy/evaluate":
+                    payload = self._json()
+                    account_id = str(payload.get("account_id") or "").strip()
+                    if principal.service_account:
+                        user_id = service._store.ingress_user(
+                            source=str(payload.get("source") or ""), account_id=account_id,
+                        ) or user_id
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"})
+                        return
+                    conversation_id = str(payload.get("conversation_id") or "")
+                    chat = service._store.evaluate_workspace_event(
+                        conversation_id=conversation_id,
+                        source=str(payload.get("source") or ""),
+                        message_id=str(payload.get("message_id") or ""), user_id=user_id,
+                    )
+                    if account_id != chat["account_ref"] or str(payload.get("peer_id") or "") != chat["peer_id"]:
+                        self._reply(403, {"error": "account_or_peer_mismatch"})
+                        return
+                    self._reply(200, {"allowed": chat["allowed"],
+                        "eligible_at_ingest": chat["eligible_at_ingest"],
+                        "policy_revision": chat["policy_revision"]})
+                    return
                 if path == "/v1/workspace/claims":
                     if not service._store.capability_enabled("read", user_id=user_id):
                         self._reply(403, {"error": "read_capability_disabled"})
@@ -514,7 +537,8 @@ def handler(
                             source=message.source, account_id=str(payload.get("account_id") or "")
                         ) or user_id
                     conversation_id, accepted = service.receive(
-                        message, route_id=route_id, user_id=target_user_id
+                        message, route_id=route_id, user_id=target_user_id,
+                        account_ref=str(payload.get("account_id") or "").strip(),
                     )
                     account_ref = str(payload.get("account_id") or "").strip()
                     if account_ref:
@@ -527,6 +551,10 @@ def handler(
                     )
                     if (
                         accepted and conversation and conversation["response_mode"] == "auto_send"
+                        and service._store.evaluate_workspace_event(
+                            conversation_id=conversation_id, source=message.source,
+                            message_id=message.message_id, user_id=target_user_id,
+                        )["allowed"]
                         and not service.manual_approval_required(conversation)
                     ):
                         proposed = service.propose(

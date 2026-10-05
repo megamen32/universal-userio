@@ -33,7 +33,8 @@ def test_airlock_can_poll_then_draft_and_exactly_approve_over_mcp(tmp_path) -> N
     service = UserIOService(store, Generator(), outbox)
     conversation_id, _ = service.receive(
         InboxMessage(
-            "telegram", "airlock-http-1", "anna", "Need a reply", 1.0
+                "telegram", "airlock-http-1", "anna", "Need a reply", 1.0,
+                conversation_kind="direct",
         ),
         route_id="telegram",
     )

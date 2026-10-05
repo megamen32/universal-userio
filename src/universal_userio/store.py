@@ -33,6 +33,7 @@ class SQLiteUserIOStore:
             if self._is_legacy() or self._table_exists("legacy_conversations"):
                 self._migrate_legacy()
             self._data_schema()
+            self._workspace_policy_migration()
             message_columns = {
                 str(row["name"])
                 for row in self._connection.execute("PRAGMA table_info(messages)")
@@ -214,6 +215,8 @@ class SQLiteUserIOStore:
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,source TEXT NOT NULL,
                 message_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                eligible INTEGER NOT NULL DEFAULT 0,
+                reconciled INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(user_id,source,message_id)
             );
             CREATE INDEX IF NOT EXISTS workspace_events_user_seq_idx
@@ -244,6 +247,17 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS workspace_exclusions_user_source_idx
                 ON workspace_exclusions(user_id,source,conversation_id);
+            CREATE TABLE IF NOT EXISTS workspace_policy_defaults (
+                user_id TEXT NOT NULL,conversation_kind TEXT NOT NULL,
+                enabled INTEGER NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,conversation_kind)
+            );
+            CREATE TABLE IF NOT EXISTS workspace_chat_rules (
+                user_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                action TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,conversation_id)
+            );
             CREATE TABLE IF NOT EXISTS contact_names (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
                 name TEXT NOT NULL,updated_at REAL NOT NULL,
@@ -310,6 +324,15 @@ class SQLiteUserIOStore:
             self._connection.execute("ALTER TABLE conversations ADD COLUMN account_ref TEXT NOT NULL DEFAULT ''")
         except Exception:  # column already exists
             pass
+        for column in ("conversation_kind TEXT NOT NULL DEFAULT 'unknown'", "peer_id TEXT NOT NULL DEFAULT ''"):
+            try:
+                self._connection.execute(f"ALTER TABLE conversations ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
+        try:
+            self._connection.execute("ALTER TABLE workspace_events ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         # Attachment transcript metadata was added after the original media
         # table. Keep upgrades in-place; old databases must not need a rebuild.
         for column in ("transcript TEXT", "transcription_status TEXT", "transcription_model TEXT"):
@@ -330,14 +353,104 @@ class SQLiteUserIOStore:
             return
         self._connection.execute(
             """
-            INSERT OR IGNORE INTO workspace_events(user_id,source,message_id,conversation_id)
-            SELECT user_id,source,message_id,conversation_id FROM messages
-            WHERE direction='incoming' ORDER BY received_at,rowid
+            INSERT OR IGNORE INTO workspace_events(user_id,source,message_id,conversation_id,eligible)
+            SELECT m.user_id,m.source,m.message_id,m.conversation_id,
+                   CASE
+                     WHEN x.conversation_id IS NOT NULL OR r.action='ignore' THEN 0
+                     WHEN r.action='allow' THEN 1
+                     WHEN COALESCE(d.enabled, CASE WHEN c.conversation_kind='direct' THEN 1 ELSE 0 END)=1 THEN 1
+                     ELSE 0
+                   END
+            FROM messages m
+            JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id
+            LEFT JOIN workspace_exclusions x ON x.user_id=c.user_id AND x.conversation_id=c.id
+            LEFT JOIN workspace_chat_rules r ON r.user_id=c.user_id AND r.conversation_id=c.id
+            LEFT JOIN workspace_policy_defaults d ON d.user_id=c.user_id
+                AND d.conversation_kind=c.conversation_kind
+            WHERE m.direction='incoming' ORDER BY m.received_at,m.rowid
             """
         )
         self._connection.execute(
             "INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (marker, "1")
         )
+
+    def _workspace_policy_migration(self) -> None:
+        columns = {str(row["name"]) for row in self._connection.execute("PRAGMA table_info(workspace_events)")}
+        eligible_added = "eligible" not in columns
+        if eligible_added:
+            self._connection.execute("ALTER TABLE workspace_events ADD COLUMN eligible INTEGER NOT NULL DEFAULT 0")
+        marker = "workspace_conversation_kind_backfilled_v1"
+        if self._connection.execute("SELECT 1 FROM settings WHERE key=?", (marker,)).fetchone():
+            return
+        # A numeric Telegram peer, unlike the display name, is stable. Historical
+        # negative peers can be groups or channels; both stay disabled.
+        self._connection.execute("""UPDATE conversations SET
+            peer_id=substr((SELECT m.message_id FROM messages m WHERE m.user_id=conversations.user_id
+                AND m.conversation_id=conversations.id AND m.source='telegram'
+                ORDER BY m.received_at LIMIT 1),1,
+                instr((SELECT m.message_id FROM messages m WHERE m.user_id=conversations.user_id
+                AND m.conversation_id=conversations.id AND m.source='telegram'
+                ORDER BY m.received_at LIMIT 1),':')-1)
+            WHERE source='telegram' AND peer_id='' AND EXISTS
+                (SELECT 1 FROM messages m WHERE m.user_id=conversations.user_id
+                 AND m.conversation_id=conversations.id AND m.message_id GLOB '*:*')""")
+        self._connection.execute("""UPDATE conversations SET conversation_kind='direct'
+            WHERE source='telegram' AND conversation_kind='unknown'
+              AND peer_id GLOB '[0-9]*' AND peer_id NOT LIKE '-%' AND peer_id!=''""")
+        self._connection.execute("""UPDATE conversations SET conversation_kind='direct'
+            WHERE (source IN ('mail','email','gmail','sms','phone','chatgpt')
+                OR source LIKE 'gmail:%' OR source LIKE 'chatgpt:%')
+              AND conversation_kind='unknown'""")
+        self._connection.execute("""UPDATE conversations SET conversation_kind='group'
+            WHERE source='whatsapp' AND sender LIKE '%@g.us' AND conversation_kind='unknown'""")
+        self._connection.execute("""UPDATE conversations SET conversation_kind='direct'
+            WHERE source='whatsapp' AND (sender LIKE '%@s.whatsapp.net' OR sender LIKE '%@lid')
+              AND conversation_kind='unknown'""")
+        legacy_rows = self._connection.execute("""SELECT user_id,id,account_ref,peer_id,conversation_key
+            FROM conversations WHERE source='telegram' AND account_ref!='' AND peer_id!=''""").fetchall()
+        targets: dict[tuple[str, str], list[str]] = {}
+        for row in legacy_rows:
+            peer = str(row["peer_id"])
+            if not peer.lstrip("-").isdigit():
+                continue
+            key = f"telegram:{row['account_ref']}:{peer}"
+            targets.setdefault((str(row["user_id"]), key), []).append(str(row["id"]))
+        for (user, key), ids in targets.items():
+            occupied = self._connection.execute("""SELECT id FROM conversations
+                WHERE user_id=? AND conversation_key=?""", (user, key)).fetchone()
+            if len(ids) == 1 and (occupied is None or str(occupied["id"]) == ids[0]):
+                self._connection.execute("""UPDATE conversations SET conversation_key=?
+                    WHERE user_id=? AND id=?""", (key, user, ids[0]))
+                continue
+            # Refuse to merge ambiguous historical chats or drop their rules.
+            for conversation_id in set(ids + ([str(occupied["id"])] if occupied else [])):
+                row = self._connection.execute("SELECT source FROM conversations WHERE user_id=? AND id=?",
+                    (user, conversation_id)).fetchone()
+                self._connection.execute("""UPDATE conversations SET conversation_kind='unknown'
+                    WHERE user_id=? AND id=?""", (user, conversation_id))
+                self._connection.execute("""INSERT OR IGNORE INTO workspace_exclusions
+                    (user_id,conversation_id,source,reason,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?)""",
+                    (user, conversation_id, str(row["source"]),
+                     "ambiguous legacy Telegram account and peer", time.time(), time.time()))
+        self._connection.execute("""UPDATE workspace_events SET eligible=0
+            WHERE EXISTS (SELECT 1 FROM conversations c
+                WHERE c.user_id=workspace_events.user_id AND c.id=workspace_events.conversation_id
+                  AND c.conversation_kind!='direct')""")
+        if eligible_added:
+            # Preserve pre-policy direct inbox work, but never make historical
+            # groups, channels, unknown chats or hard-denied chats claimable.
+            self._connection.execute("""UPDATE workspace_events AS e SET eligible=1
+                WHERE EXISTS (SELECT 1 FROM conversations c
+                    LEFT JOIN workspace_chat_rules r ON r.user_id=c.user_id AND r.conversation_id=c.id
+                    LEFT JOIN workspace_exclusions x ON x.user_id=c.user_id AND x.conversation_id=c.id
+                    LEFT JOIN workspace_policy_defaults d ON d.user_id=c.user_id
+                        AND d.conversation_kind=c.conversation_kind
+                    WHERE c.user_id=e.user_id AND c.id=e.conversation_id
+                      AND x.conversation_id IS NULL
+                      AND (r.action='allow' OR (COALESCE(r.action,'inherit')='inherit'
+                        AND COALESCE(d.enabled, CASE WHEN c.conversation_kind='direct' THEN 1 ELSE 0 END)=1)))""")
+        self._connection.execute("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)", (marker, "1"))
 
     @staticmethod
     def _digest(password: str, salt: bytes | None = None, iterations: int = _ITERATIONS) -> tuple[bytes, bytes]:
@@ -814,23 +927,301 @@ class SQLiteUserIOStore:
             ).fetchone()
         return None if row is None else str(row["id"])
 
+    @staticmethod
+    def _message_kind(message: InboxMessage) -> str:
+        # Provider-native peer shapes are stronger evidence than an ingress
+        # hint. Contradictory envelopes must fail closed instead of smuggling a
+        # group through the default-enabled direct policy.
+        if message.source == "telegram":
+            peer = message.peer_id or message.message_id.rsplit("|", 1)[-1].split(":", 1)[0]
+            if peer.startswith("-") and message.conversation_kind == "direct":
+                return "unknown"  # Negative peers can be groups or channels.
+        if message.source == "whatsapp":
+            peer = (message.peer_id or message.sender).lower()
+            if peer.endswith("@g.us") and message.conversation_kind == "direct":
+                return "group"
+        if message.conversation_kind:
+            if message.conversation_kind not in {"direct", "group", "channel", "unknown"}:
+                raise ValueError("unsupported conversation_kind")
+            return message.conversation_kind
+        if message.source == "telegram":
+            peer = message.peer_id or message.message_id.rsplit("|", 1)[-1].split(":", 1)[0]
+            if peer.lstrip("-").isdigit() and peer.startswith("-"):
+                return "unknown"  # Could be a group or channel; both deny by default.
+            return "direct" if peer.isdigit() else "unknown"
+        if message.source == "whatsapp":
+            peer = (message.peer_id or message.sender).lower()
+            return "group" if peer.endswith("@g.us") else (
+                "direct" if peer.endswith("@s.whatsapp.net") or peer.endswith("@lid") else "unknown")
+        if message.source in {"mail", "email", "gmail", "sms", "phone", "chatgpt"} or (
+            message.source.startswith("gmail:") or message.source.startswith("chatgpt:")):
+            return "direct"
+        return "unknown"
+
+    def workspace_policy(self, *, user_id: str | None = None) -> dict[str, object]:
+        user = self._user(user_id)
+        defaults = {"direct": True, "group": False, "channel": False, "unknown": False}
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT conversation_kind,enabled FROM workspace_policy_defaults WHERE user_id=?", (user,)
+            ).fetchall()
+            revision = self.user_preference("workspace_policy_revision", user_id=user, default="0")
+        defaults.update({str(row["conversation_kind"]): bool(row["enabled"]) for row in rows})
+        return {"defaults": defaults, "revision": int(revision or 0)}
+
+    def _bump_workspace_policy(self, user_id: str) -> int:
+        self._connection.execute("""INSERT INTO user_preferences(user_id,key,value,updated_at)
+            VALUES (?,'workspace_policy_revision','1',?)
+            ON CONFLICT(user_id,key) DO UPDATE SET
+                value=CAST(CAST(value AS INTEGER)+1 AS TEXT),updated_at=excluded.updated_at""",
+            (user_id, time.time()))
+        return int(self.user_preference("workspace_policy_revision", user_id=user_id) or 0)
+
+    def _invalidate_workspace_events_for_chat(self, user_id: str, conversation_id: str) -> None:
+        """Irreversibly retire queued work when a chat becomes disabled.
+
+        Policy changes never flip an old event back to eligible; a later allow
+        applies only to messages ingested after that change.
+        """
+        self._connection.execute(
+            "UPDATE workspace_events SET eligible=0 WHERE user_id=? AND conversation_id=?",
+            (user_id, conversation_id),
+        )
+
+    def set_workspace_default(
+        self, *, conversation_kind: str, enabled: bool, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if conversation_kind not in {"direct", "group", "channel", "unknown"}:
+            raise ValueError("unsupported conversation_kind")
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            self._connection.execute("""INSERT INTO workspace_policy_defaults
+                (user_id,conversation_kind,enabled,updated_at) VALUES (?,?,?,?)
+                ON CONFLICT(user_id,conversation_kind) DO UPDATE SET
+                enabled=excluded.enabled,updated_at=excluded.updated_at""",
+                (user, conversation_kind, int(enabled), time.time()))
+            # Keep explicit allows alive, but retire every event whose effective
+            # policy is denied after this change. No later enable reactivates it.
+            self._connection.execute("""UPDATE workspace_events SET eligible=0
+                WHERE user_id=? AND conversation_id IN (
+                    SELECT c.id FROM conversations c
+                    LEFT JOIN workspace_chat_rules r
+                      ON r.user_id=c.user_id AND r.conversation_id=c.id
+                    LEFT JOIN workspace_exclusions x
+                      ON x.user_id=c.user_id AND x.conversation_id=c.id
+                    WHERE c.user_id=? AND c.conversation_kind=?
+                      AND (x.conversation_id IS NOT NULL OR r.action='ignore'
+                        OR (COALESCE(r.action,'inherit')='inherit' AND ?=0))
+                )""", (user, user, conversation_kind, int(enabled)))
+            self._bump_workspace_policy(user)
+        return self.workspace_policy(user_id=user)
+
+    def workspace_chat_rules(
+        self, *, user_id: str | None = None, source: str = "", account_ref: str = "",
+        peer_id: str = "",
+        conversation_kind: str = "", action: str = "", query: str = "",
+        conversation_id: str = "", limit: int = 100, offset: int = 0,
+    ) -> list[dict[str, object]]:
+        user = self._user(user_id)
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if type(offset) is not int or not 0 <= offset <= 100_000:
+            raise ValueError("offset must be between 0 and 100000")
+        if conversation_kind and conversation_kind not in {"direct", "group", "channel", "unknown"}:
+            raise ValueError("unsupported conversation_kind")
+        if action and action not in {"allow", "ignore", "inherit"}:
+            raise ValueError("unsupported action")
+        filters: list[str] = ["c.user_id=?"]
+        values: list[object] = [user]
+        for column, value in (("c.source", source), ("c.account_ref", account_ref),
+                              ("c.peer_id", peer_id),
+                              ("c.conversation_kind", conversation_kind), ("c.id", conversation_id)):
+            if value:
+                filters.append(f"{column}=?")
+                values.append(value)
+        if query:
+            filters.append("(c.sender LIKE ? OR c.peer_id LIKE ?)")
+            pattern = "%" + query[:128] + "%"
+            values.extend((pattern, pattern))
+        if action:
+            filters.append("(CASE WHEN x.conversation_id IS NOT NULL THEN 'ignore' ELSE COALESCE(r.action,'inherit') END)=?")
+            values.append(action)
+        with self._lock:
+            rows = self._connection.execute(f"""SELECT c.id AS conversation_id,c.source,
+                c.account_ref,c.peer_id,c.sender AS chat_name,c.conversation_kind,
+                CASE WHEN x.conversation_id IS NOT NULL THEN 'ignore'
+                    ELSE COALESCE(r.action,'inherit') END AS action,
+                COALESCE(r.reason,x.reason,'') AS reason
+                FROM conversations c LEFT JOIN workspace_chat_rules r
+                  ON r.user_id=c.user_id AND r.conversation_id=c.id
+                LEFT JOIN workspace_exclusions x
+                  ON x.user_id=c.user_id AND x.conversation_id=c.id
+                WHERE {' AND '.join(filters)} ORDER BY c.updated_at DESC,c.id LIMIT ? OFFSET ?""",
+                (*values, limit, offset)).fetchall()
+        defaults = self.workspace_policy(user_id=user)["defaults"]
+        result = []
+        for row in rows:
+            chat = dict(row)
+            chat["allowed"] = chat["action"] == "allow" or (
+                chat["action"] == "inherit" and defaults[chat["conversation_kind"]])
+            chat["effective_action"] = "allow" if chat["allowed"] else "ignore"
+            result.append(chat)
+        return result
+
+    def evaluate_workspace_chat(
+        self, *, conversation_id: str, user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        conversation_id = self._workspace_conversation_id(conversation_id)
+        row = next((r for r in self.workspace_chat_rules(user_id=user, conversation_id=conversation_id)
+                    if r["conversation_id"] == conversation_id), None)
+        if row is None:
+            raise KeyError("conversation not found")
+        defaults = self.workspace_policy(user_id=user)
+        action = row["action"]
+        allowed = action == "allow" or (action == "inherit" and
+            defaults["defaults"][row["conversation_kind"]])
+        # Legacy exclusions remain hard denies even if a new rule was added.
+        with self._lock:
+            excluded = self._connection.execute("""SELECT 1 FROM workspace_exclusions
+                WHERE user_id=? AND conversation_id=?""", (user, conversation_id)).fetchone() is not None
+        return {**row, "allowed": bool(allowed and not excluded),
+                "policy_revision": defaults["revision"]}
+
+    def evaluate_workspace_event(
+        self, *, conversation_id: str, source: str, message_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        chat = self.evaluate_workspace_chat(conversation_id=conversation_id, user_id=user)
+        with self._lock:
+            row = self._connection.execute("""SELECT eligible FROM workspace_events
+                WHERE user_id=? AND conversation_id=? AND source=? AND message_id=?""",
+                (user, conversation_id, source, message_id)).fetchone()
+        eligible = row is not None and bool(row["eligible"])
+        return {**chat, "eligible_at_ingest": eligible,
+                "allowed": bool(chat["allowed"] and eligible)}
+
+    def set_workspace_chat_rule(
+        self, *, conversation_id: str, action: str, reason: str = "",
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        conversation_id = self._workspace_conversation_id(conversation_id)
+        if action not in {"ignore", "allow", "inherit"}:
+            raise ValueError("action must be ignore, allow or inherit")
+        if not isinstance(reason, str) or len(reason) > 500:
+            raise ValueError("reason must be at most 500 characters")
+        with self._lock, self._connection:
+            if self._connection.execute("SELECT 1 FROM conversations WHERE user_id=? AND id=?",
+                    (user, conversation_id)).fetchone() is None:
+                raise KeyError("conversation not found")
+            if action == "inherit":
+                self._connection.execute("DELETE FROM workspace_chat_rules WHERE user_id=? AND conversation_id=?",
+                    (user, conversation_id))
+                self._connection.execute("DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
+                    (user, conversation_id))
+            else:
+                now = time.time()
+                self._connection.execute("""INSERT INTO workspace_chat_rules
+                    (user_id,conversation_id,action,reason,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,conversation_id) DO UPDATE SET
+                    action=excluded.action,reason=excluded.reason,updated_at=excluded.updated_at""",
+                    (user, conversation_id, action, reason.strip(), now, now))
+                if action == "allow":
+                    self._connection.execute("DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
+                        (user, conversation_id))
+                else:
+                    source = self._connection.execute("SELECT source FROM conversations WHERE user_id=? AND id=?",
+                        (user, conversation_id)).fetchone()["source"]
+                    self._connection.execute("""INSERT INTO workspace_exclusions
+                        (user_id,conversation_id,source,reason,created_at,updated_at)
+                        VALUES (?,?,?,?,?,?) ON CONFLICT(user_id,conversation_id) DO UPDATE SET
+                        reason=excluded.reason,updated_at=excluded.updated_at""",
+                        (user, conversation_id, source, reason.strip(), now, now))
+            if action == "ignore":
+                self._invalidate_workspace_events_for_chat(user, conversation_id)
+            elif action == "inherit":
+                kind = str(self._connection.execute(
+                    "SELECT conversation_kind FROM conversations WHERE user_id=? AND id=?",
+                    (user, conversation_id),
+                ).fetchone()["conversation_kind"])
+                if not bool(self.workspace_policy(user_id=user)["defaults"][kind]):
+                    self._invalidate_workspace_events_for_chat(user, conversation_id)
+            self._bump_workspace_policy(user)
+        return self.evaluate_workspace_chat(conversation_id=conversation_id, user_id=user)
+
     def ingest(
         self, message: InboxMessage, *, conversation_id: str, policy: ConversationPolicy,
-        user_id: str | None = None,
+        user_id: str | None = None, conversation_key: str | None = None,
+        account_ref: str = "",
     ) -> bool:
         user_id, now = self._user(user_id), time.time()
+        message_kind = self._message_kind(message)
         with self._lock, self._connection:
-            self._connection.execute(
+            conversation_inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO conversations
-                (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at,
+                 conversation_kind,peer_id,account_ref)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
-                    user_id, conversation_id, message.conversation_key, policy.route_id,
+                    user_id, conversation_id, conversation_key or message.conversation_key, policy.route_id,
                     message.source, message.sender, policy.identity_id, policy.mode, now,
+                    message_kind, message.peer_id or (
+                        message.message_id.split(":", 1)[0] if message.source == "telegram" else ""),
+                    account_ref,
                 ),
-            )
+            ).rowcount == 1
+            if message_kind != "unknown":
+                self._connection.execute("""UPDATE conversations SET conversation_kind=?
+                    WHERE user_id=? AND id=? AND conversation_kind='unknown'""",
+                    (message_kind, user_id, conversation_id))
+            # Old Telegram rows did not always record the account. Never let a
+            # previously ignored peer become allowed merely because the first
+            # account-aware arrival receives a new conversation identity. Copy
+            # only a deny, only when creating that account-scoped chat; an
+            # explicit later allow on the new chat remains authoritative.
+            if (conversation_inserted and message.source == "telegram" and account_ref
+                    and message.peer_id):
+                legacy_deny = self._connection.execute("""SELECT
+                        COALESCE(x.reason,r.reason,'legacy Telegram ignore') AS reason
+                    FROM conversations c
+                    LEFT JOIN workspace_exclusions x
+                      ON x.user_id=c.user_id AND x.conversation_id=c.id
+                    LEFT JOIN workspace_chat_rules r
+                      ON r.user_id=c.user_id AND r.conversation_id=c.id
+                    WHERE c.user_id=? AND c.source='telegram' AND c.account_ref=''
+                      AND c.peer_id=? AND c.id!=?
+                      AND (x.conversation_id IS NOT NULL OR r.action='ignore')
+                    ORDER BY c.updated_at DESC LIMIT 1""",
+                    (user_id, message.peer_id, conversation_id)).fetchone()
+                if legacy_deny is not None:
+                    reason = str(legacy_deny["reason"] or "legacy Telegram ignore")
+                    self._connection.execute("""INSERT OR IGNORE INTO workspace_exclusions
+                        (user_id,conversation_id,source,reason,created_at,updated_at)
+                        VALUES (?,?,'telegram',?,?,?)""",
+                        (user_id, conversation_id, reason, now, now))
+                    self._connection.execute("""INSERT OR IGNORE INTO workspace_chat_rules
+                        (user_id,conversation_id,action,reason,created_at,updated_at)
+                        VALUES (?,?,'ignore',?,?,?)""",
+                        (user_id, conversation_id, reason, now, now))
+            # The connector's account-scoped ID replaces the old peer:message
+            # format. A reconciliation replay of an existing legacy message in
+            # this exact conversation is the same message, not a new arrival.
+            if message.source == "telegram" and account_ref and message.message_id.startswith(
+                f"{account_ref}|"
+            ):
+                legacy_id = message.message_id[len(account_ref) + 1:]
+                legacy = self._connection.execute("""SELECT 1 FROM messages
+                    WHERE user_id=? AND source='telegram' AND message_id=?
+                      AND conversation_id=?""",
+                    (user_id, legacy_id, conversation_id)).fetchone()
+                if legacy is not None:
+                    return False
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
@@ -843,13 +1234,29 @@ class SQLiteUserIOStore:
                 ),
             ).rowcount == 1
             if inserted and message.direction == "incoming":
+                eligible = (not message.reconciliation) and self.evaluate_workspace_chat(
+                    conversation_id=conversation_id, user_id=user_id)["allowed"]
                 self._connection.execute(
                     """
-                    INSERT INTO workspace_events(user_id,source,message_id,conversation_id)
-                    VALUES (?,?,?,?)
+                    INSERT INTO workspace_events(user_id,source,message_id,conversation_id,eligible,reconciled)
+                    VALUES (?,?,?,?,?,?)
                     """,
-                    (user_id, message.source, message.message_id, conversation_id),
+                    (user_id, message.source, message.message_id, conversation_id,
+                     int(eligible), int(message.reconciliation)),
                 )
+            elif not inserted and message.direction == "incoming" and not message.reconciliation:
+                # The live listener can race startup reconciliation. Only a
+                # record created by reconciliation may become a live event here.
+                pending = self._connection.execute("""SELECT reconciled FROM workspace_events
+                    WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
+                    (user_id, message.source, message.message_id, conversation_id)).fetchone()
+                if pending is not None and pending["reconciled"]:
+                    eligible = self.evaluate_workspace_chat(
+                        conversation_id=conversation_id, user_id=user_id)["allowed"]
+                    self._connection.execute("""UPDATE workspace_events
+                        SET eligible=?,reconciled=0 WHERE user_id=? AND source=?
+                          AND message_id=? AND conversation_id=? AND reconciled=1""",
+                        (int(eligible), user_id, message.source, message.message_id, conversation_id))
             if getattr(message, "sender_name", ""):
                 self._connection.execute(
                     """
@@ -863,6 +1270,13 @@ class SQLiteUserIOStore:
                     source=message.source, message_id=message.message_id, attachment=att,
                     user_id=user_id,
                 )
+            # A title is presentation metadata, never policy identity. Keep the
+            # latest display label while the account+peer conversation key and
+            # its rules remain stable across Telegram renames.
+            self._connection.execute(
+                "UPDATE conversations SET sender=? WHERE user_id=? AND id=?",
+                (message.sender, user_id, conversation_id),
+            )
             if inserted:
                 self._connection.execute(
                     "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
@@ -1081,6 +1495,10 @@ class SQLiteUserIOStore:
             )
             self._connection.execute(
                 "DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
+            )
+            self._connection.execute(
+                "DELETE FROM workspace_chat_rules WHERE user_id=? AND conversation_id=?",
                 (user_id, conversation_id),
             )
             self._connection.execute(
@@ -1437,13 +1855,21 @@ class SQLiteUserIOStore:
                 """
                 SELECT e.seq,e.source,e.message_id,e.conversation_id,
                        m.sender,m.body,m.received_at,m.direction,
-                       c.route_id,c.account_ref
+                       c.route_id,c.account_ref,c.peer_id,c.conversation_kind
                 FROM workspace_events AS e
                 JOIN messages AS m ON m.user_id=e.user_id
                     AND m.source=e.source AND m.message_id=e.message_id
                 JOIN conversations AS c ON c.user_id=e.user_id
                     AND c.id=e.conversation_id
-                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
+                LEFT JOIN workspace_chat_rules AS wr ON wr.user_id=e.user_id
+                    AND wr.conversation_id=e.conversation_id
+                LEFT JOIN workspace_policy_defaults AS wd ON wd.user_id=e.user_id
+                    AND wd.conversation_kind=c.conversation_kind
+                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming' AND e.eligible=1
+                  AND NOT EXISTS (SELECT 1 FROM workspace_exclusions wx
+                    WHERE wx.user_id=e.user_id AND wx.conversation_id=e.conversation_id)
+                  AND (wr.action='allow' OR (wr.action IS NULL AND
+                    COALESCE(wd.enabled,CASE WHEN c.conversation_kind='direct' THEN 1 ELSE 0 END)=1))
                 ORDER BY e.seq LIMIT ?
                 """,
                 (scoped_user, after, limit),
@@ -1531,6 +1957,13 @@ class SQLiteUserIOStore:
                 """,
                 (scoped_user, conversation_id, str(conversation["source"]), reason, now, now),
             )
+            self._connection.execute("""INSERT INTO workspace_chat_rules
+                (user_id,conversation_id,action,reason,created_at,updated_at)
+                VALUES (?,?,'ignore',?,?,?) ON CONFLICT(user_id,conversation_id) DO UPDATE SET
+                action='ignore',reason=excluded.reason,updated_at=excluded.updated_at""",
+                (scoped_user, conversation_id, reason, now, now))
+            self._invalidate_workspace_events_for_chat(scoped_user, conversation_id)
+            self._bump_workspace_policy(scoped_user)
         return next(
             item for item in self.workspace_exclusions(user_id=scoped_user)
             if item["conversation_id"] == conversation_id
@@ -1539,7 +1972,7 @@ class SQLiteUserIOStore:
     def remove_workspace_exclusion(
         self, *, conversation_id: str, user_id: str | None = None,
     ) -> bool:
-        """Allow a previously excluded chat to be claimed again."""
+        """Remove the hard deny and return a chat to its category default."""
         scoped_user = self._user(user_id)
         conversation_id = self._workspace_conversation_id(conversation_id)
         with self._lock, self._connection:
@@ -1547,6 +1980,11 @@ class SQLiteUserIOStore:
                 "DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
                 (scoped_user, conversation_id),
             )
+            self._connection.execute("""DELETE FROM workspace_chat_rules
+                WHERE user_id=? AND conversation_id=? AND action='ignore'""",
+                (scoped_user, conversation_id))
+            if cursor.rowcount:
+                self._bump_workspace_policy(scoped_user)
         return cursor.rowcount > 0
 
     def claim_workspace_event(
@@ -1571,7 +2009,7 @@ class SQLiteUserIOStore:
                 """
                 SELECT e.seq,e.source,e.message_id,e.conversation_id,
                        m.sender,m.body,m.received_at,m.direction,
-                       c.route_id,c.account_ref,
+                       c.route_id,c.account_ref,c.peer_id,c.conversation_kind,
                        wc.status AS claim_status,wc.lease_expires_at,
                        COALESCE(wc.attempts,0) AS prior_attempts
                 FROM workspace_events AS e
@@ -1581,12 +2019,18 @@ class SQLiteUserIOStore:
                     AND c.id=e.conversation_id
                 LEFT JOIN workspace_claims AS wc ON wc.user_id=e.user_id
                     AND wc.event_seq=e.seq
-                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming'
-                  AND (?=0 OR e.source!='telegram' OR e.message_id NOT LIKE '-%')
+                LEFT JOIN workspace_chat_rules AS wr ON wr.user_id=e.user_id
+                    AND wr.conversation_id=e.conversation_id
+                LEFT JOIN workspace_policy_defaults AS wd ON wd.user_id=e.user_id
+                    AND wd.conversation_kind=c.conversation_kind
+                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming' AND e.eligible=1
+                  AND (?=0 OR e.source!='telegram' OR c.conversation_kind='direct')
                   AND NOT EXISTS (
                       SELECT 1 FROM workspace_exclusions AS wx
                       WHERE wx.user_id=e.user_id AND wx.conversation_id=e.conversation_id
                   )
+                  AND (wr.action='allow' OR (wr.action IS NULL AND
+                    COALESCE(wd.enabled,CASE WHEN c.conversation_kind='direct' THEN 1 ELSE 0 END)=1))
                   AND (wc.event_seq IS NULL OR wc.status='failed'
                        OR (wc.status='claimed' AND wc.lease_expires_at<=?))
                 ORDER BY e.seq LIMIT 1

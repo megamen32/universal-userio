@@ -193,12 +193,27 @@ user-scoped proposed draft; `userio.draft.approve_send` with exact
 `confirm: true` remains the sole delivery authority. Unsupported provider
 features return `not supported by adapter`.
 
-Automatic workers share a durable owner-scoped exclusion list. Use
-`userio.workspace.exclusions.add` with a known `conversation_id` and optional
-reason, inspect it with `userio.workspace.exclusions.list`, and re-enable a chat
-with `userio.workspace.exclusions.remove`. Exclusion suppresses future
-`userio.workspace.claim` leases for that chat; it does not delete history or
-change the source application.
+Automatic workspace processing is user-scoped. Direct chats are enabled by
+default; groups, channels, and unknown Telegram peer types are disabled. Read
+the defaults with `userio.workspace.policy.get`, change a category with
+`userio.workspace.policy.set_default`, and inspect known chats with
+`userio.workspace.policy.chats.list`. Each chat lists its connected account,
+immutable Telegram peer ID, current title, and conversation kind. Use
+`userio.workspace.policy.chats.set` with a known `conversation_id` and
+`action: "allow"`, `"ignore"`, or `"inherit"`; `inherit` follows the category
+default. `userio.workspace.policy.evaluate` explains the current decision and
+policy revision. An explicit ignore always denies. Existing
+`userio.workspace.exclusions.list/add/remove` tools remain aliases for ignoring
+and then inheriting a chat. These rules affect automatic `workspace.poll`,
+`workspace.claim`, and the Telegram agent-deliver timer. Messages remain in
+the local archive. Enabling a category or chat applies only to future arrivals;
+historical disabled events do not flood workers. The optional
+`telegram_direct_only` claim flag is a further restriction, not the main
+policy. Telegram account plus numeric peer ID identify an inbound chat;
+display names are never used as policy keys. A connector's configured
+agent-deliver chat IDs may narrow delivery further and must be full signed
+Telegram peer IDs (for example `-100123`, not `123`); startup reconciliation
+stores old messages without creating claimable workspace work.
 
 ### ChatGPT CDP adapter
 

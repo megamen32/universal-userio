@@ -16,6 +16,9 @@ class InboxMessage:
     sender_name: str = ""
     attachments: tuple[dict[str, Any], ...] = ()
     direction: str = "incoming"
+    conversation_kind: str = ""
+    peer_id: str = ""
+    reconciliation: bool = False
 
     @property
     def conversation_key(self) -> str:

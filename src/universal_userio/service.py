@@ -8,6 +8,7 @@ import os
 import threading
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from functools import partial
 
 from .contracts import DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
@@ -52,18 +53,31 @@ class UserIOService:
         key = f"{user_id}\0{message.conversation_key}" if user_id else message.conversation_key
         return "conv_" + hashlib.sha256(key.encode()).hexdigest()[:24]
 
-    def receive(self, message: InboxMessage, *, route_id: str, user_id: str | None = None) -> tuple[str, bool]:
+    def receive(self, message: InboxMessage, *, route_id: str, user_id: str | None = None,
+                account_ref: str = "") -> tuple[str, bool]:
         user_id = self._store.default_user_id if user_id is None else user_id
+        conversation_key = message.conversation_key
+        if message.source == "telegram":
+            raw_ref = message.message_id.rsplit("|", 1)[-1]
+            peer_id = message.peer_id or raw_ref.split(":", 1)[0]
+            if account_ref:
+                if not message.message_id.startswith(f"{account_ref}|"):
+                    message = replace(message, message_id=f"{account_ref}|{message.message_id}")
+                if not message.peer_id:
+                    message = replace(message, peer_id=peer_id)
+            if peer_id.lstrip("-").isdigit() and account_ref:
+                conversation_key = f"telegram:{account_ref}:{peer_id}"
         conversation_id = self._store.conversation_id_for_key(
-            message.conversation_key, user_id=user_id
-        ) or self.conversation_id(message, user_id=user_id)
+            conversation_key, user_id=user_id
+        ) or "conv_" + hashlib.sha256(f"{user_id}\0{conversation_key}".encode()).hexdigest()[:24]
         policy = self._store.policy_for(message, fallback_route_id=route_id, user_id=user_id)
         if not self._store.route_allowed(
             user_id=user_id, source=message.source, route_id=policy.route_id
         ):
             raise ValueError("route is not assigned to user")
         accepted = self._store.ingest(
-            message, conversation_id=conversation_id, policy=policy, user_id=user_id
+            message, conversation_id=conversation_id, policy=policy, user_id=user_id,
+            conversation_key=conversation_key, account_ref=account_ref,
         )
         if accepted:
             for listener in tuple(self._inbound_listeners):
@@ -326,7 +340,7 @@ class UserIOService:
             send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
         elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
             messages = list(conversation["messages"])
-            chat_id = str(messages[-1]["message_id"]).partition(":")[0] if messages else ""
+            chat_id = str(conversation.get("peer_id") or "")
             send = partial(self.telegram_outbox.send_reply,
                 chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
                 account_ref=str(conversation.get("account_ref") or ""),

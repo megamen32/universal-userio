@@ -141,9 +141,7 @@ def test_direct_only_claim_skips_telegram_groups_without_consuming_them(tmp_path
     assert direct is not None
     assert direct["event"]["message_id"] == "540308572:11"
 
-    group = store.claim_workspace_event(worker_id="group-worker")
-    assert group is not None
-    assert group["event"]["message_id"] == "-100123:10"
+    assert store.claim_workspace_event(worker_id="group-worker") is None
 
 
 def test_durable_chat_exclusion_skips_claims_and_can_be_removed(tmp_path) -> None:
@@ -182,22 +180,23 @@ def test_durable_chat_exclusion_skips_claims_and_can_be_removed(tmp_path) -> Non
     assert store.claim_workspace_event(worker_id="hermes") is None
 
     assert store.remove_workspace_exclusion(conversation_id=excluded_id) is True
-    group = store.claim_workspace_event(worker_id="group-worker")
-    assert group is not None
-    assert group["event"]["message_id"] == "-100123:10"
+    # Removing an exclusion does not enable a group or replay old arrivals.
+    assert store.claim_workspace_event(worker_id="group-worker") is None
 
 
 def test_exclusions_are_user_scoped_and_removed_with_local_chat(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
     owner_id, _ = service.receive(
-        InboxMessage("telegram", "same-message", "owner chat", "owner text", 1.0),
+        InboxMessage("telegram", "same-message", "owner chat", "owner text", 1.0,
+                     conversation_kind="direct"),
         route_id="telegram",
     )
     user, _ = store.create_user("other_user", "other-password")
     store.bind_channel_route(user_id=user.user_id, source="telegram", route_id="telegram")
     other_id, _ = service.receive(
-        InboxMessage("telegram", "same-message", "other chat", "other text", 2.0),
+        InboxMessage("telegram", "same-message", "other chat", "other text", 2.0,
+                     conversation_kind="direct"),
         route_id="telegram", user_id=user.user_id,
     )
     assert owner_id != other_id
@@ -218,7 +217,7 @@ def test_mcp_exclusion_tools_filter_claims_for_each_surface(tmp_path, modular: b
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
     conversation_id, _ = service.receive(
-        InboxMessage("telegram", "group:1", "quiet chat", "noise", 1.0),
+        InboxMessage("telegram", "42:1", "quiet chat", "noise", 1.0),
         route_id="telegram",
     )
     owner = store.owner()
@@ -246,6 +245,13 @@ def test_mcp_exclusion_tools_filter_claims_for_each_surface(tmp_path, modular: b
     assert dispatch("userio.workspace.exclusions.remove", {
         "conversation_id": conversation_id,
     }) == {"ok": True, "removed": True}
+    assert dispatch("userio.workspace.claim", {"worker_id": "automatic"}) == {
+        "ok": True, "claimed": False,
+    }
+    service.receive(
+        InboxMessage("telegram", "42:2", "quiet chat", "fresh", 2.0),
+        route_id="telegram",
+    )
     assert dispatch("userio.workspace.claim", {"worker_id": "automatic"})["claimed"] is True
 
 
@@ -269,6 +275,305 @@ def test_mcp_claim_lifecycle_is_advertised_and_user_scoped(tmp_path) -> None:
         "lease_token": claimed["claim"]["lease_token"], "detail": "done",
     })
     assert completed["claim"]["status"] == "done"
+
+
+@pytest.mark.parametrize("modular", [False, True])
+def test_policy_defaults_rules_and_no_historical_flood(tmp_path, modular: bool) -> None:
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    owner = store.owner()
+    if modular:
+        dispatch = lambda name, args: UserIOToolDispatcher(store, service).dispatch(
+            name, args, principal=owner)
+    else:
+        surface = UserIOMcpSurface(store, service)
+        dispatch = lambda name, args: surface.dispatch(name, args, principal=owner)
+    group_id, _ = service.receive(
+        InboxMessage("telegram", "-1007:1", "Project", "old group", 1.0,
+                     conversation_kind="group", peer_id="-1007"),
+        route_id="telegram", account_ref="telegram:11",
+    )
+    channel_id, _ = service.receive(
+        InboxMessage("telegram", "-1008:1", "News", "old channel", 2.0,
+                     conversation_kind="channel", peer_id="-1008"),
+        route_id="telegram", account_ref="telegram:11",
+    )
+    unknown_id, _ = service.receive(
+        InboxMessage("telegram", "opaque:1", "Mystery", "old unknown", 3.0),
+        route_id="telegram", account_ref="telegram:11",
+    )
+    direct_id, _ = service.receive(
+        InboxMessage("telegram", "21:1", "Alice", "old direct", 4.0,
+                     conversation_kind="direct", peer_id="21"),
+        route_id="telegram", account_ref="telegram:11",
+    )
+    defaults = dispatch("userio.workspace.policy.get", {})["defaults"]
+    assert defaults == {"direct": True, "group": False, "channel": False, "unknown": False}
+    assert [event["message_id"] for event in store.workspace_events()["events"]] == ["telegram:11|21:1"]
+    assert {group_id, channel_id, unknown_id, direct_id} == {
+        chat["conversation_id"] for chat in dispatch("userio.workspace.policy.chats.list", {})["chats"]}
+
+    dispatch("userio.workspace.policy.set_default", {"conversation_kind": "group", "enabled": True})
+    assert store.claim_workspace_event(worker_id="worker")["event"]["message_id"] == "telegram:11|21:1"
+    assert store.claim_workspace_event(worker_id="worker") is None
+    service.receive(
+        InboxMessage("telegram", "-1007:2", "Renamed Project", "new group", 5.0,
+                     conversation_kind="group", peer_id="-1007"),
+        route_id="telegram", account_ref="telegram:11",
+    )
+    assert store.claim_workspace_event(worker_id="worker")["event"]["message_id"] == "telegram:11|-1007:2"
+    assert dispatch("userio.workspace.policy.evaluate", {"conversation_id": group_id})["chat"]["allowed"]
+    assert dispatch("userio.workspace.policy.chats.list", {
+        "account_ref": "telegram:11", "peer_id": "-1007",
+    })["chats"][0]["chat_name"] == "Renamed Project"
+
+    dispatch("userio.workspace.policy.chats.set", {
+        "conversation_id": direct_id, "action": "ignore", "reason": "noise"})
+    assert not dispatch("userio.workspace.policy.evaluate", {"conversation_id": direct_id})["chat"]["allowed"]
+    dispatch("userio.workspace.policy.chats.set", {"conversation_id": channel_id, "action": "allow"})
+    assert store.claim_workspace_event(worker_id="worker") is None
+    service.receive(
+        InboxMessage("telegram", "-1008:2", "News", "new channel", 6.0,
+                     conversation_kind="channel", peer_id="-1008"),
+        route_id="telegram", account_ref="telegram:11",
+    )
+    assert store.claim_workspace_event(worker_id="worker")["event"]["message_id"] == "telegram:11|-1008:2"
+    assert dispatch("userio.workspace.policy.chats.set", {
+        "conversation_id": channel_id, "action": "inherit"})["chat"]["allowed"] is False
+    assert store.claim_workspace_event(worker_id="worker") is None
+    store.close()
+    reopened = SQLiteUserIOStore(database)
+    assert reopened.workspace_policy()["defaults"]["group"] is True
+    assert reopened.evaluate_workspace_chat(conversation_id=direct_id)["action"] == "ignore"
+
+
+def test_telegram_identity_is_account_and_peer_scoped(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    first, _ = service.receive(
+        InboxMessage("telegram", "51:1", "Same Title", "first", 1.0, peer_id="51"),
+        route_id="telegram", account_ref="telegram:11")
+    second, _ = service.receive(
+        InboxMessage("telegram", "52:1", "Same Title", "second", 2.0, peer_id="52"),
+        route_id="telegram", account_ref="telegram:11")
+    third, _ = service.receive(
+        InboxMessage("telegram", "51:1", "Same Title", "third", 3.0, peer_id="51"),
+        route_id="telegram", account_ref="telegram:22")
+    assert len({first, second, third}) == 3
+    assert {chat["account_ref"] for chat in store.workspace_chat_rules()} == {
+        "telegram:11", "telegram:22"}
+    store.set_workspace_chat_rule(conversation_id=first, action="ignore")
+    assert store.evaluate_workspace_chat(conversation_id=second)["allowed"]
+    assert store.evaluate_workspace_chat(conversation_id=third)["allowed"]
+    assert store.message("telegram:11|51:1", source="telegram")["body"] == "first"
+    assert store.message("telegram:22|51:1", source="telegram")["body"] == "third"
+    listed = UserIOMcpSurface(store, service).dispatch("userio.workspace.policy.chats.list", {
+        "source": "telegram", "account_ref": "telegram:22", "peer_id": "51", "limit": 10,
+    })["chats"]
+    assert [(row["conversation_id"], row["peer_id"], row["chat_name"])
+            for row in listed] == [(third, "51", "Same Title")]
+
+
+def test_legacy_telegram_exclusion_survives_account_peer_rekey(tmp_path) -> None:
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    legacy_id, _ = service.receive(
+        InboxMessage("telegram", "-10099:1", "Old Name", "old", 1.0),
+        route_id="telegram")
+    store.set_conversation_account(legacy_id, "telegram:11")
+    store.add_workspace_exclusion(conversation_id=legacy_id, reason="old exclusion")
+    with store._lock, store._connection:
+        store._connection.execute("DELETE FROM settings WHERE key='workspace_conversation_kind_backfilled_v1'")
+    store.close()
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    renamed_id, _ = service.receive(
+        InboxMessage("telegram", "-10099:2", "New Name", "new", 2.0,
+                     conversation_kind="group", peer_id="-10099"),
+        route_id="telegram", account_ref="telegram:11")
+    assert renamed_id == legacy_id
+    assert store.evaluate_workspace_chat(conversation_id=legacy_id)["action"] == "ignore"
+    assert store.claim_workspace_event(worker_id="worker") is None
+
+
+def test_legacy_telegram_ignore_is_copied_to_new_account_scoped_chat(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    legacy_id, _ = service.receive(
+        InboxMessage("telegram", "-10077:1", "Legacy", "old", 1.0,
+                     peer_id="-10077", conversation_kind="group"),
+        route_id="telegram")
+    store.add_workspace_exclusion(conversation_id=legacy_id, reason="owner ignored legacy peer")
+
+    scoped_id, _ = service.receive(
+        InboxMessage("telegram", "-10077:2", "Current", "new", 2.0,
+                     peer_id="-10077", conversation_kind="group"),
+        route_id="telegram", account_ref="telegram:11")
+    assert scoped_id != legacy_id
+    scoped = store.evaluate_workspace_chat(conversation_id=scoped_id)
+    assert scoped["account_ref"] == "telegram:11"
+    assert scoped["action"] == "ignore"
+    assert scoped["reason"] == "owner ignored legacy peer"
+    assert store.claim_workspace_event(worker_id="worker") is None
+
+    # Once the account-scoped chat is explicitly allowed, the legacy row does
+    # not overwrite that decision on every subsequent arrival.
+    store.set_workspace_chat_rule(conversation_id=scoped_id, action="allow")
+    service.receive(
+        InboxMessage("telegram", "-10077:3", "Current", "fresh", 3.0,
+                     peer_id="-10077", conversation_kind="group"),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.evaluate_workspace_chat(conversation_id=scoped_id)["action"] == "allow"
+    assert store.claim_workspace_event(worker_id="worker")["event"]["message_id"] == "telegram:11|-10077:3"
+
+
+def test_whatsapp_group_and_unclassified_vk_are_disabled_by_default(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    group_id, _ = service.receive(
+        InboxMessage("whatsapp", "g1", "123@g.us", "group", 1.0), route_id="whatsapp")
+    vk_id, _ = service.receive(
+        InboxMessage("vk", "v1", "peer", "unknown", 2.0), route_id="vk")
+    assert store.evaluate_workspace_chat(conversation_id=group_id)["conversation_kind"] == "group"
+    assert store.evaluate_workspace_chat(conversation_id=vk_id)["conversation_kind"] == "unknown"
+    assert store.workspace_events()["events"] == []
+    store.set_workspace_chat_rule(conversation_id=group_id, action="allow")
+    assert store.claim_workspace_event(worker_id="worker") is None
+    service.receive(InboxMessage("whatsapp", "g2", "123@g.us", "new", 3.0), route_id="whatsapp")
+    assert store.claim_workspace_event(worker_id="worker")["event"]["message_id"] == "g2"
+
+
+def test_provider_group_identity_overrides_contradictory_direct_hint(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    telegram_id, _ = service.receive(
+        InboxMessage("telegram", "-10088:1", "Telegram group", "noise", 1.0,
+                     conversation_kind="direct", peer_id="-10088"),
+        route_id="telegram", account_ref="telegram:11")
+    whatsapp_id, _ = service.receive(
+        InboxMessage("whatsapp", "w1", "123@g.us", "noise", 2.0,
+                     conversation_kind="direct", peer_id="123@g.us"),
+        route_id="whatsapp")
+    assert store.evaluate_workspace_chat(conversation_id=telegram_id)["conversation_kind"] == "unknown"
+    assert store.evaluate_workspace_chat(conversation_id=whatsapp_id)["conversation_kind"] == "group"
+    assert store.claim_workspace_event(worker_id="worker") is None
+
+
+def test_policy_disable_irreversibly_retires_pending_events(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    store.set_workspace_default(conversation_kind="group", enabled=True)
+    group_id, _ = service.receive(
+        InboxMessage("telegram", "-10071:1", "Group", "queued", 1.0,
+                     conversation_kind="group", peer_id="-10071"),
+        route_id="telegram", account_ref="telegram:11")
+
+    store.set_workspace_default(conversation_kind="group", enabled=False)
+    store.set_workspace_default(conversation_kind="group", enabled=True)
+    assert store.claim_workspace_event(worker_id="worker") is None
+
+    service.receive(
+        InboxMessage("telegram", "-10071:2", "Group", "fresh", 2.0,
+                     conversation_kind="group", peer_id="-10071"),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.claim_workspace_event(worker_id="worker")["event"]["message_id"] == "telegram:11|-10071:2"
+
+    direct_id, _ = service.receive(
+        InboxMessage("telegram", "72:1", "Direct", "queued direct", 3.0,
+                     conversation_kind="direct", peer_id="72"),
+        route_id="telegram", account_ref="telegram:11")
+    store.set_workspace_chat_rule(conversation_id=direct_id, action="ignore")
+    store.set_workspace_chat_rule(conversation_id=direct_id, action="allow")
+    # The old direct event cannot reappear after ignore -> allow.
+    assert store.claim_workspace_event(worker_id="worker-2") is None
+
+    service.receive(
+        InboxMessage("telegram", "72:2", "Direct", "fresh direct", 4.0,
+                     conversation_kind="direct", peer_id="72"),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.claim_workspace_event(worker_id="worker-2")["event"]["message_id"] == "telegram:11|72:2"
+
+
+def test_policy_migration_does_not_enable_historical_group_or_unknown_events(tmp_path) -> None:
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, Generator(), Outbox())
+    direct_id, _ = service.receive(
+        InboxMessage("email", "d1", "owner@example.test", "direct", 1.0), route_id="email")
+    group_id, _ = service.receive(
+        InboxMessage("whatsapp", "g1", "123@g.us", "group", 2.0), route_id="whatsapp")
+    unknown_id, _ = service.receive(
+        InboxMessage("vk", "u1", "peer", "unknown", 3.0), route_id="vk")
+    with store._lock, store._connection:
+        store._connection.execute("ALTER TABLE workspace_events RENAME TO old_workspace_events")
+        store._connection.execute("""CREATE TABLE workspace_events (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,user_id TEXT NOT NULL,source TEXT NOT NULL,
+            message_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+            UNIQUE(user_id,source,message_id))""")
+        store._connection.execute("""INSERT INTO workspace_events(user_id,source,message_id,conversation_id)
+            SELECT user_id,source,message_id,conversation_id FROM old_workspace_events""")
+        store._connection.execute("DROP TABLE old_workspace_events")
+        store._connection.execute(
+            "DELETE FROM settings WHERE key='workspace_conversation_kind_backfilled_v1'")
+    store.close()
+
+    reopened = SQLiteUserIOStore(database)
+    events = {row["conversation_id"]: row for row in reopened._connection.execute(
+        "SELECT conversation_id,eligible FROM workspace_events")}
+    assert events[direct_id]["eligible"] == 1
+    assert events[group_id]["eligible"] == 0
+    assert events[unknown_id]["eligible"] == 0
+
+
+def test_http_policy_gate_checks_ingest_eligibility_account_and_peer(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    store.register_account(
+        account_id="telegram:11", provider="telegram", display_name="Policy test",
+        can_read=True, can_reply=False, credential_ref="telegram-qr:account-11",
+    )
+    store.register_account(
+        account_id="telegram:22", provider="telegram", display_name="Other account",
+        can_read=True, can_reply=False, credential_ref="telegram-qr:account-22",
+    )
+    conversation_id, _ = service.receive(
+        InboxMessage("telegram", "-1007:1", "Group", "old", 1.0,
+                     conversation_kind="group", peer_id="-1007"),
+        route_id="telegram", account_ref="telegram:11")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="owner-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    def evaluate(message_id: str, *, account_id: str = "telegram:11", peer_id: str = "-1007") -> tuple[int, dict]:
+        body = {"source": "telegram", "conversation_id": conversation_id,
+                "message_id": message_id, "account_id": account_id, "peer_id": peer_id}
+        request = Request(base + "/v1/workspace/policy/evaluate", data=json.dumps(body).encode(),
+                          method="POST", headers={"Authorization": "Bearer owner-token",
+                                                   "Content-Type": "application/json"})
+        try:
+            with urlopen(request) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    try:
+        assert evaluate("telegram:11|-1007:1")[1]["allowed"] is False
+        store.set_workspace_chat_rule(conversation_id=conversation_id, action="allow")
+        # The pre-allow event never becomes eligible retroactively.
+        assert evaluate("telegram:11|-1007:1")[1]["allowed"] is False
+        service.receive(InboxMessage("telegram", "-1007:2", "Group", "new", 2.0,
+                                     conversation_kind="group", peer_id="-1007"),
+                        route_id="telegram", account_ref="telegram:11")
+        assert evaluate("telegram:11|-1007:2")[1]["allowed"] is True
+        assert evaluate("telegram:11|-1007:2", account_id="telegram:22")[0] == 403
+        assert evaluate("telegram:11|-1007:2", peer_id="-1008")[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_http_claim_lifecycle_requires_auth_and_exposes_log(tmp_path) -> None:

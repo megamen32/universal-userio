@@ -8,7 +8,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
 import { telegramGroupRoutingAttachment } from "./group-routing.mjs";
-import { buildAgentDeliverEvent } from "./agent-deliver.mjs";
+import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 
@@ -122,12 +122,25 @@ function normalizeChatLabel(value) {
 
 function agentDeliverEnabledFor(chatKey, label) {
   if (!agentDeliverUrl || !agentDeliverSecret || agentDeliverChats.length === 0) return false;
-  const id = normalizeTelegramChatId(chatKey);
-  const normalizedLabel = normalizeChatLabel(label);
-  return agentDeliverChats.some((target) => {
-    const normalizedTargetId = normalizeTelegramChatId(target);
-    return (/^-?\d+$/.test(target) && normalizedTargetId === id)
-      || normalizeChatLabel(target) === normalizedLabel;
+  return isNumericTelegramPeerAllowed(chatKey, agentDeliverChats);
+}
+
+function userIoEventAllowed({ accountId, chatKey, conversationId, envelope }) {
+  const body = JSON.stringify({ source: "telegram", account_id: accountId,
+    peer_id: chatKey, conversation_id: conversationId, message_id: envelope.message_id });
+  return new Promise((resolve, reject) => {
+    const target = new URL("/v1/workspace/policy/evaluate", userIoUrl);
+    const request = http.request(target, { method: "POST", headers: {
+      "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body),
+      Authorization: `Bearer ${process.env.USERIO_API_TOKEN || ""}`,
+    }}, (response) => {
+      let data = ""; response.on("data", (chunk) => { data += chunk; });
+      response.on("end", () => {
+        if (response.statusCode !== 200) return reject(new Error(`UserIO policy HTTP ${response.statusCode}`));
+        try { resolve(JSON.parse(data).allowed === true); } catch (error) { reject(error); }
+      });
+    });
+    request.once("error", reject); request.setTimeout(10000, () => request.destroy(new Error("UserIO policy timeout"))); request.end(body);
   });
 }
 
@@ -141,7 +154,8 @@ function postAgentDeliver(chatKey, label, envelope, messageCount = 1) {
   if (!agentDeliverEnabledFor(chatKey, label)) return Promise.resolve(null);
   const normalizedChatId = normalizeTelegramChatId(chatKey);
   const event = buildAgentDeliverEvent({
-    normalizedChatId, label, envelope, messageCount,
+    normalizedChatId, peerId: chatKey, label, envelope, messageCount,
+    accountId: envelope.account_id || "",
     quietSeconds: Math.round(agentDeliverDebounceMs / 1000),
     agentName: agentDeliverName, agentCwd: agentDeliverCwd,
     hermesSessionId: agentDeliverHermesSessionId,
@@ -184,7 +198,9 @@ function scheduleAgentDeliverTimer(key) {
       return;
     }
     try {
-      await postAgentDeliver(current.chatKey, current.label, current.envelope, current.messageCount);
+      if (await userIoEventAllowed(current)) {
+        await postAgentDeliver(current.chatKey, current.label, current.envelope, current.messageCount);
+      }
       agentDeliverDebounce.delete(key);
       persistAgentDeliverDebounce();
       console.log(`agent-deliver quiet ${current.label}: ${current.messageCount} message(s), last ${current.envelope.message_id}`);
@@ -199,15 +215,18 @@ function scheduleAgentDeliverTimer(key) {
   agentDeliverTimers.set(key, timer);
 }
 
-function debounceAgentDeliver(chatKey, label, envelope) {
+function debounceAgentDeliver(chatKey, label, envelope, accountId, conversationId) {
   if (!agentDeliverEnabledFor(chatKey, label)) return;
-  const key = `${normalizeTelegramChatId(chatKey)}:${normalizeChatLabel(label)}`;
+  const key = `${accountId}:${chatKey}`;
   const previous = agentDeliverDebounce.get(key);
   agentDeliverDebounce.set(key, {
     chatKey,
     label,
+    accountId,
+    conversationId,
     envelope: {
       message_id: envelope.message_id,
+      account_id: accountId,
       attachments: (envelope.attachments || []).filter((item) => item.kind === "telegram_routing"),
     },
     messageCount: ((previous && previous.messageCount) || 0) + 1,
@@ -221,7 +240,8 @@ function restoreAgentDeliverDebounce() {
   try {
     const raw = JSON.parse(readFileSync(agentDeliverDebouncePath, "utf8"));
     for (const [key, value] of Object.entries(raw || {})) {
-      if (!value || !value.chatKey || !value.label || !(value.envelope && value.envelope.message_id)) continue;
+      if (!value || !value.chatKey || !value.accountId || !value.conversationId ||
+          !(value.envelope && value.envelope.message_id)) continue;
       agentDeliverDebounce.set(key, value);
       scheduleAgentDeliverTimer(key);
     }
@@ -255,7 +275,7 @@ function postInbox(accountId, envelope) {
       let data = "";
       response.on("data", (chunk) => { data += chunk; });
       response.on("end", () => response.statusCode === 202
-        ? resolve(true)
+        ? resolve(JSON.parse(data))
         : reject(new Error(`UserIO returned HTTP ${response.statusCode}: ${data.slice(0, 200)}`)));
     });
     request.once("error", reject);
@@ -473,11 +493,22 @@ async function envelope(chatKey, label, message, client, self, options) {
   const attachments = normalized.attachments.slice();
   if (routing) attachments.push(routing);
   if (audio && audio.error) console.warn(`telegram audio ${chatKey}:${message.id}: ${audio.error}`);
+  let chatEntity = message.chat || null;
+  if (!chatEntity && typeof message.getChat === "function") {
+    try { chatEntity = await message.getChat(); } catch (_error) { /* unknown stays disabled */ }
+  }
+  const conversationKind = chatEntity && chatEntity.broadcast === true ? "channel"
+    : chatEntity && (chatEntity.megagroup === true || chatEntity.className === "Chat") ? "group"
+    : chatKey.startsWith("-100") ? "unknown" : chatKey.startsWith("-") ? "group" : "direct";
   return {
     schema: "universal.inbox.message.v1",
     source: "telegram",
-    message_id: `${chatKey}:${message.id}`,
+    message_id: options && options.accountId
+      ? `${options.accountId}|${chatKey}:${message.id}` : `${chatKey}:${message.id}`,
     sender: label,
+    peer_id: chatKey,
+    conversation_kind: conversationKind,
+    ...(options && options.reconciliation ? { reconciliation: true } : {}),
     body: normalized.body.slice(0, 8000),
     ...(attachments.length ? { attachments } : {}),
   };
@@ -502,7 +533,8 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
         // Backfill must never stall the live listener on a historical media
         // download. Live arrivals are transcribed; reconciliation is text-only.
         const envelopeMessage = await envelope(
-          chatKey, label, message, client, self, { transcribeAudio: false },
+          chatKey, label, message, client, self,
+          { transcribeAudio: false, accountId, reconciliation: true },
         );
         if (!envelopeMessage.body) continue;
         await postInbox(accountId, envelopeMessage);
@@ -534,10 +566,10 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event) {
     live.labelPeers.labelPeers.set(label, message.chat);
     live.labelPeers.idPeers.set(chatKey, message.chat);
   }
-  const inboxMessage = await envelope(chatKey, label, message, client, self);
+  const inboxMessage = await envelope(chatKey, label, message, client, self, { accountId });
   if (!inboxMessage.body) return;
-  await postInbox(accountId, inboxMessage);
-  debounceAgentDeliver(chatKey, label, inboxMessage);
+  const posted = await postInbox(accountId, inboxMessage);
+  debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: live ${label} msg ${message.id}`);
 }
@@ -656,12 +688,15 @@ function telegramMessageLocator(payload) {
     messageId = Number(ref);
   }
   if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new Error("valid message_id is required");
+  const accountSplit = chatKey.lastIndexOf("|");
+  const scopedAccountId = accountSplit >= 0 ? chatKey.slice(0, accountSplit) : "";
+  if (accountSplit >= 0) chatKey = chatKey.slice(accountSplit + 1);
   return {
     chatKey,
     messageId,
     chat: String((payload && payload.chat) || "").trim(),
     chatId: String((payload && payload.chat_id) || "").trim(),
-    accountId: String((payload && payload.account_id) || "").trim(),
+    accountId: scopedAccountId || String((payload && payload.account_id) || "").trim(),
   };
 }
 
