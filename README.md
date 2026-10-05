@@ -220,6 +220,27 @@ agent-deliver chat IDs may narrow delivery further and must be full signed
 Telegram peer IDs (for example `-100123`, not `123`); startup reconciliation
 stores old messages without creating claimable workspace work.
 
+Importance triage is enabled per user by default with `threshold=0.75` and
+`min_confidence=0.65`. `userio.workspace.triage.get/set` manages those values;
+disabling triage restores legacy notify-all behavior while reply delivery still
+requires a durable selected draft. The service-only
+`POST /v1/workspace/triage` classifies one eligible event in one bounded JSON
+model call using at most the last 20 messages. Results and zero to two suggested
+reply snapshots are durable and idempotent by `(event_seq, request_id)`.
+
+Only `decision=notify` is intended for an immediate operator card. Ordinary
+model errors remain `pending` and retryable without a notification; after the
+third failed model attempt they become terminal `review` work for a digest or
+manual inspection. Narrow
+local safety/VIP signals may fail open as a notify card without reply drafts;
+the card can still offer deeper analysis and importance feedback. Sending one
+returned draft uses `POST /v1/workspace/triage/<seq>/send` with the exact
+`request_id`, `draft_id`, `actor`, and `confirm:true`. UserIO rechecks the live
+chat policy and stored draft snapshot before provider I/O; an uncertain
+provider outcome is never retried. The sibling `/deep` and `/feedback` routes
+record operator actions, and `userio.workspace.triage.feedback` exposes
+`important`, `not_important`, and `ignore_chat` through MCP.
+
 ### ChatGPT CDP adapter
 
 `chatgpt` is a read-only channel backed by [chatgpt-cdp-mcp](https://github.com/megamen32/chatgpt-cdp-mcp). Install that project and its **local, authorized** CDP driver separately, then configure the UserIO service with:
