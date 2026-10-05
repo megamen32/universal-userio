@@ -96,7 +96,7 @@ TOOL_SPECS = (
         "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown", "telegram_bot"]},
         "enabled": {"type": "boolean"},
     }, ["conversation_kind", "enabled"])),
-    ToolSpec("userio.workspace.policy.telegram_bots.set", "Enable or disable future Telegram bot-chat notifications.", _schema({
+    ToolSpec("userio.workspace.policy.telegram_bots.set", "Enable or disable future Telegram bot-authored notifications, including bot dialogs and allowed groups.", _schema({
         "enabled": {"type": "boolean"},
     }, ["enabled"])),
     ToolSpec("userio.workspace.policy.chats.list", "Search known chats by account, peer, title, kind, or rule (at most 200 per page).", _schema({
