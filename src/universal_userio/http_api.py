@@ -317,6 +317,55 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path == "/v1/workspace/triage" or path.startswith("/v1/workspace/triage/"):
+                    if not principal.service_account:
+                        self._reply(403, {"error": "service account required"})
+                        return
+                    payload = self._json()
+                    if path == "/v1/workspace/triage":
+                        if not service._store.capability_enabled("read", user_id=user_id):
+                            self._reply(403, {"error": "read_capability_disabled"})
+                            return
+                        result = service.triage_workspace_event(
+                            event_seq=payload.get("event_seq"),
+                            request_id=str(payload.get("request_id") or ""),
+                            max_drafts=payload.get("max_drafts", 2), user_id=user_id,
+                        )
+                        self._reply(200, {"ok": True, **result})
+                        return
+                    suffix = path.removeprefix("/v1/workspace/triage/").strip("/")
+                    parts = suffix.split("/")
+                    if len(parts) != 2 or parts[1] not in {"send", "deep", "feedback"}:
+                        self._reply(404, {"error": "not found"})
+                        return
+                    event_seq = int(parts[0])
+                    request_id = str(payload.get("request_id") or "")
+                    actor = str(payload.get("actor") or "")
+                    if parts[1] == "send":
+                        if not service._store.capability_enabled("send", user_id=user_id):
+                            self._reply(403, {"error": "send_capability_disabled"})
+                            return
+                        result = service.send_workspace_triage(
+                            event_seq=event_seq, request_id=request_id,
+                            draft_id=str(payload.get("draft_id") or ""), actor=actor,
+                            confirm=payload.get("confirm"), user_id=user_id,
+                        )
+                    elif parts[1] == "deep":
+                        result = service.deep_workspace_triage(
+                            event_seq=event_seq, request_id=request_id, actor=actor,
+                            user_id=user_id,
+                        )
+                    else:
+                        if not service._store.capability_enabled("send", user_id=user_id):
+                            self._reply(403, {"error": "send_capability_disabled"})
+                            return
+                        result = service.feedback_workspace_triage(
+                            event_seq=event_seq, request_id=request_id,
+                            label=str(payload.get("label") or ""), actor=actor,
+                            user_id=user_id,
+                        )
+                    self._reply(200, {"ok": True, **result})
+                    return
                 if path == "/v1/workspace/policy/evaluate":
                     payload = self._json()
                     account_id = str(payload.get("account_id") or "").strip()

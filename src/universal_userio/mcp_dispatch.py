@@ -211,6 +211,20 @@ class UserIOToolDispatcher:
                 return {"ok": True, "chat": self._store.evaluate_workspace_chat(
                     conversation_id=self._required(arguments, "conversation_id"), user_id=user_id,
                 )}
+            if name == "userio.workspace.triage.get":
+                return {"ok": True, "settings": self._store.workspace_triage_settings(user_id=user_id)}
+            if name == "userio.workspace.triage.set":
+                return {"ok": True, "settings": self._store.set_workspace_triage_settings(
+                    enabled=arguments.get("enabled"), threshold=arguments.get("threshold"),
+                    min_confidence=arguments.get("min_confidence"), user_id=user_id,
+                )}
+            if name == "userio.workspace.triage.feedback":
+                return self._service.feedback_workspace_triage(
+                    event_seq=arguments.get("event_seq"),
+                    request_id=self._required(arguments, "request_id"),
+                    label=self._required(arguments, "label"),
+                    actor=f"mcp:{principal.username}", user_id=user_id,
+                )
             if name == "userio.users.create":
                 if principal.role != "owner":
                     return {"ok": False, "error": "owner_required"}

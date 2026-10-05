@@ -187,6 +187,17 @@ TOOL_SPECS = (
     ToolSpec("userio.workspace.policy.evaluate", "Explain automatic processing for one known chat.", schema({
         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
     }, ["conversation_id"])),
+    ToolSpec("userio.workspace.triage.get", "Read this user's importance-triage thresholds.", schema({})),
+    ToolSpec("userio.workspace.triage.set", "Set user-scoped importance-triage thresholds.", schema({
+        "enabled": {"type": "boolean"},
+        "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    })),
+    ToolSpec("userio.workspace.triage.feedback", "Record importance feedback for one completed triage.", schema({
+        "event_seq": {"type": "integer", "minimum": 1},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "label": {"type": "string", "enum": ["important", "not_important", "ignore_chat"]},
+    }, ["event_seq", "request_id", "label"])),
     ToolSpec(
         "userio.users.create",
         "Owner only: create a user and return one token once.",
@@ -320,6 +331,9 @@ TOOL_CAPABILITIES = {
     "userio.workspace.policy.chats.list": "read",
     "userio.workspace.policy.chats.set": "send",
     "userio.workspace.policy.evaluate": "read",
+    "userio.workspace.triage.get": "read",
+    "userio.workspace.triage.set": "send",
+    "userio.workspace.triage.feedback": "send",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",

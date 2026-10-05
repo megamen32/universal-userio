@@ -116,6 +116,17 @@ TOOL_SPECS = (
     ToolSpec("userio.workspace.policy.evaluate", "Explain the current automatic processing decision for one known chat.", _schema({
         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
     }, ["conversation_id"])),
+    ToolSpec("userio.workspace.triage.get", "Read this user's importance-triage thresholds.", _schema({})),
+    ToolSpec("userio.workspace.triage.set", "Set user-scoped importance-triage thresholds.", _schema({
+        "enabled": {"type": "boolean"},
+        "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "min_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    })),
+    ToolSpec("userio.workspace.triage.feedback", "Record importance feedback for one completed triage.", _schema({
+        "event_seq": {"type": "integer", "minimum": 1},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "label": {"type": "string", "enum": ["important", "not_important", "ignore_chat"]},
+    }, ["event_seq", "request_id", "label"])),
     ToolSpec("userio.users.create", "Owner only: create a user and return one token once.", _schema({
         "username": {"type": "string"}, "password": {"type": "string"},
     }, ["username", "password"])),
@@ -180,6 +191,9 @@ TOOL_CAPABILITIES = {
     "userio.workspace.policy.chats.list": "read",
     "userio.workspace.policy.chats.set": "send",
     "userio.workspace.policy.evaluate": "read",
+    "userio.workspace.triage.get": "read",
+    "userio.workspace.triage.set": "send",
+    "userio.workspace.triage.feedback": "send",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
@@ -442,6 +456,20 @@ class UserIOMcpSurface:
                 return {"ok": True, "chat": self._store.evaluate_workspace_chat(
                     conversation_id=self._required(arguments, "conversation_id"), user_id=user_id,
                 )}
+            if name == "userio.workspace.triage.get":
+                return {"ok": True, "settings": self._store.workspace_triage_settings(user_id=user_id)}
+            if name == "userio.workspace.triage.set":
+                return {"ok": True, "settings": self._store.set_workspace_triage_settings(
+                    enabled=arguments.get("enabled"), threshold=arguments.get("threshold"),
+                    min_confidence=arguments.get("min_confidence"), user_id=user_id,
+                )}
+            if name == "userio.workspace.triage.feedback":
+                return self._service.feedback_workspace_triage(
+                    event_seq=arguments.get("event_seq"),
+                    request_id=self._required(arguments, "request_id"),
+                    label=self._required(arguments, "label"),
+                    actor=f"mcp:{principal.username}", user_id=user_id,
+                )
             if name == "userio.inbox.list_new":
                 ignored_chats = self._ignored_chats(arguments)
                 channel = self._optional(arguments, "channel")

@@ -244,6 +244,24 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS workspace_claim_log_event_idx
                 ON workspace_claim_log(user_id,event_seq,id);
+            CREATE TABLE IF NOT EXISTS workspace_triage_settings (
+                user_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 1,
+                threshold REAL NOT NULL DEFAULT 0.75,
+                min_confidence REAL NOT NULL DEFAULT 0.65,
+                revision INTEGER NOT NULL DEFAULT 1,updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS workspace_triage (
+                user_id TEXT NOT NULL,event_seq INTEGER NOT NULL,request_id TEXT NOT NULL,
+                status TEXT NOT NULL,result_json TEXT,draft_ids_json TEXT NOT NULL DEFAULT '[]',
+                attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,
+                send_state TEXT NOT NULL DEFAULT 'none',selected_draft_id TEXT,
+                send_actor TEXT,send_receipt TEXT,deep_actor TEXT,deep_requested_at REAL,
+                feedback_label TEXT,feedback_actor TEXT,feedback_at REAL,
+                created_at REAL NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,event_seq),UNIQUE(user_id,request_id)
+            );
+            CREATE INDEX IF NOT EXISTS workspace_triage_status_idx
+                ON workspace_triage(user_id,status,event_seq);
             CREATE TABLE IF NOT EXISTS workspace_exclusions (
                 user_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 source TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',
@@ -983,6 +1001,57 @@ class SQLiteUserIOStore:
             (user_id, time.time()))
         return int(self.user_preference("workspace_policy_revision", user_id=user_id) or 0)
 
+    def workspace_triage_settings(self, *, user_id: str | None = None) -> dict[str, object]:
+        user = self._user(user_id)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT enabled,threshold,min_confidence,revision,updated_at "
+                "FROM workspace_triage_settings WHERE user_id=?", (user,),
+            ).fetchone()
+        if row is None:
+            return {
+                "enabled": True, "threshold": 0.75, "min_confidence": 0.65,
+                "revision": 1, "policy_version": "workspace-triage-v1:r1",
+            }
+        result = dict(row)
+        result["enabled"] = bool(result["enabled"])
+        result["policy_version"] = f"workspace-triage-v1:r{int(result['revision'])}"
+        return result
+
+    def set_workspace_triage_settings(
+        self, *, enabled: bool | None = None, threshold: float | None = None,
+        min_confidence: float | None = None, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if enabled is None and threshold is None and min_confidence is None:
+            raise ValueError("at least one triage setting is required")
+        if enabled is not None and type(enabled) is not bool:
+            raise ValueError("enabled must be a boolean")
+        for name, value in (("threshold", threshold), ("min_confidence", min_confidence)):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 1
+            ):
+                raise ValueError(f"{name} must be between 0 and 1")
+        user = self._user(user_id)
+        current = self.workspace_triage_settings(user_id=user)
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute(
+                """INSERT INTO workspace_triage_settings
+                   (user_id,enabled,threshold,min_confidence,revision,updated_at)
+                   VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+                   enabled=excluded.enabled,threshold=excluded.threshold,
+                   min_confidence=excluded.min_confidence,
+                   revision=workspace_triage_settings.revision+1,
+                   updated_at=excluded.updated_at""",
+                (
+                    user, int(current["enabled"] if enabled is None else enabled),
+                    float(current["threshold"] if threshold is None else threshold),
+                    float(current["min_confidence"] if min_confidence is None else min_confidence),
+                    int(current["revision"]) + 1, now,
+                ),
+            )
+        return self.workspace_triage_settings(user_id=user)
+
     def _invalidate_workspace_events_for_chat(self, user_id: str, conversation_id: str) -> None:
         """Irreversibly retire queued work when a chat becomes disabled.
 
@@ -1510,6 +1579,10 @@ class SQLiteUserIOStore:
             if event_seqs:
                 placeholders = ",".join("?" for _ in event_seqs)
                 self._connection.execute(
+                    f"DELETE FROM workspace_triage WHERE user_id=? AND event_seq IN ({placeholders})",
+                    (user_id, *event_seqs),
+                )
+                self._connection.execute(
                     f"DELETE FROM workspace_claim_log WHERE user_id=? AND event_seq IN ({placeholders})",
                     (user_id, *event_seqs),
                 )
@@ -1914,6 +1987,297 @@ class SQLiteUserIOStore:
             "cursor": events[-1]["seq"] if events else after,
             "head": head,
         }
+
+    def workspace_event(
+        self, event_seq: int, *, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if type(event_seq) is not int or event_seq <= 0:
+            raise ValueError("event_seq must be a positive integer")
+        user = self._user(user_id)
+        with self._lock:
+            row = self._connection.execute(
+                """SELECT e.seq,e.source,e.message_id,e.conversation_id,e.eligible,e.reconciled,
+                          m.sender,m.body,m.received_at,m.direction,m.sender_is_bot,
+                          c.route_id,c.account_ref,c.peer_id,c.conversation_kind
+                   FROM workspace_events e
+                   JOIN messages m ON m.user_id=e.user_id AND m.source=e.source
+                     AND m.message_id=e.message_id
+                   JOIN conversations c ON c.user_id=e.user_id AND c.id=e.conversation_id
+                   WHERE e.user_id=? AND e.seq=?""",
+                (user, event_seq),
+            ).fetchone()
+        if row is None:
+            raise KeyError("workspace event not found")
+        return dict(row)
+
+    @staticmethod
+    def _triage_request_id(value: object) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value.strip()):
+            raise ValueError("request_id must be 1-128 safe characters")
+        return value.strip()
+
+    @staticmethod
+    def _triage_actor(value: object) -> str:
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > 128:
+            raise ValueError("actor must be 1-128 characters")
+        return value.strip()
+
+    def _workspace_triage_record(self, row: sqlite3.Row) -> dict[str, object]:
+        result: dict[str, object] = {
+            "event_seq": int(row["event_seq"]), "request_id": str(row["request_id"]),
+            "status": str(row["status"]), "attempts": int(row["attempts"]),
+            "drafts": [], "retryable": str(row["status"]) == "pending",
+            "send_state": str(row["send_state"]),
+        }
+        if row["result_json"]:
+            result["triage"] = json.loads(str(row["result_json"]))
+        draft_ids = json.loads(str(row["draft_ids_json"] or "[]"))
+        result["drafts"] = [
+            {
+                "id": draft.id, "body": draft.body, "status": draft.status,
+                **({"receipt": draft.receipt} if draft.receipt else {}),
+            }
+            for draft_id in draft_ids
+            for draft in [self.draft(str(draft_id), user_id=str(row["user_id"]))]
+        ]
+        if row["last_error"]:
+            result["last_error"] = str(row["last_error"])
+        if row["selected_draft_id"]:
+            result["selected_draft_id"] = str(row["selected_draft_id"])
+        if row["send_receipt"]:
+            result["receipt"] = str(row["send_receipt"])
+        if row["feedback_label"]:
+            result["feedback"] = {
+                "label": str(row["feedback_label"]),
+                "actor": str(row["feedback_actor"] or ""),
+                "at": float(row["feedback_at"]),
+            }
+        return result
+
+    def workspace_triage(
+        self, *, event_seq: int, request_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        if type(event_seq) is not int or event_seq <= 0:
+            raise ValueError("event_seq must be a positive integer")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM workspace_triage WHERE user_id=? AND event_seq=?",
+                (user, event_seq),
+            ).fetchone()
+            if row is None:
+                raise KeyError("workspace triage not found")
+            if request_id is not None and str(row["request_id"]) != self._triage_request_id(request_id):
+                raise ValueError("triage_request_conflict")
+            return self._workspace_triage_record(row)
+
+    def begin_workspace_triage(
+        self, *, event_seq: int, request_id: str, user_id: str | None = None,
+    ) -> tuple[dict[str, object], bool]:
+        user = self._user(user_id)
+        request_id = self._triage_request_id(request_id)
+        self.workspace_event(event_seq, user_id=user)
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            request_row = self._connection.execute(
+                "SELECT event_seq FROM workspace_triage WHERE user_id=? AND request_id=?",
+                (user, request_id),
+            ).fetchone()
+            if request_row is not None and int(request_row["event_seq"]) != event_seq:
+                raise ValueError("triage_request_conflict")
+            row = self._connection.execute(
+                "SELECT * FROM workspace_triage WHERE user_id=? AND event_seq=?",
+                (user, event_seq),
+            ).fetchone()
+            if row is None:
+                self._connection.execute(
+                    """INSERT INTO workspace_triage
+                       (user_id,event_seq,request_id,status,attempts,created_at,updated_at)
+                       VALUES (?,?,?,'running',1,?,?)""",
+                    (user, event_seq, request_id, now, now),
+                )
+                active = True
+            else:
+                if str(row["request_id"]) != request_id:
+                    raise ValueError("triage_request_conflict")
+                status = str(row["status"])
+                if status in {"completed", "review"}:
+                    return self._workspace_triage_record(row), False
+                if status == "running" and now - float(row["updated_at"]) < 120:
+                    return self._workspace_triage_record(row), False
+                self._connection.execute(
+                    """UPDATE workspace_triage SET status='running',attempts=attempts+1,
+                       last_error=NULL,updated_at=? WHERE user_id=? AND event_seq=?""",
+                    (now, user, event_seq),
+                )
+                active = True
+            row = self._connection.execute(
+                "SELECT * FROM workspace_triage WHERE user_id=? AND event_seq=?", (user, event_seq),
+            ).fetchone()
+        assert row is not None
+        return self._workspace_triage_record(row), active
+
+    def complete_workspace_triage(
+        self, *, event_seq: int, request_id: str, result: dict[str, object],
+        draft_bodies: list[str], user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        request_id = self._triage_request_id(request_id)
+        event = self.workspace_event(event_seq, user_id=user)
+        if len(draft_bodies) > 2 or any(not body.strip() or len(body.strip()) > 2000 for body in draft_bodies):
+            raise ValueError("triage drafts must contain at most two bounded bodies")
+        now = time.time()
+        draft_ids = [
+            "draft_triage_" + hashlib.sha256(
+                f"{user}\0{event_seq}\0{request_id}\0{index}\0{body.strip()}".encode()
+            ).hexdigest()[:24]
+            for index, body in enumerate(draft_bodies)
+        ]
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT request_id,status FROM workspace_triage WHERE user_id=? AND event_seq=?",
+                (user, event_seq),
+            ).fetchone()
+            if row is None or str(row["request_id"]) != request_id:
+                raise ValueError("triage_request_conflict")
+            if str(row["status"]) == "completed":
+                return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+            for draft_id, body in zip(draft_ids, draft_bodies):
+                self._connection.execute(
+                    """INSERT OR IGNORE INTO drafts
+                       (user_id,id,conversation_id,body,status,created_at)
+                       VALUES (?,?,?,?, 'proposed', ?)""",
+                    (user, draft_id, str(event["conversation_id"]), body.strip(), now),
+                )
+            self._connection.execute(
+                """UPDATE workspace_triage SET status='completed',result_json=?,draft_ids_json=?,
+                   last_error=NULL,updated_at=? WHERE user_id=? AND event_seq=?""",
+                (
+                    json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(draft_ids, separators=(",", ":")), now, user, event_seq,
+                ),
+            )
+        return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+
+    def fail_workspace_triage(
+        self, *, event_seq: int, request_id: str, error: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        request_id = self._triage_request_id(request_id)
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                """SELECT attempts FROM workspace_triage
+                   WHERE user_id=? AND event_seq=? AND request_id=? AND status='running'""",
+                (user, event_seq, request_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("triage is not running")
+            status = "pending" if int(row["attempts"]) < 3 else "review"
+            changed = self._connection.execute(
+                """UPDATE workspace_triage SET status=?,last_error=?,updated_at=?
+                   WHERE user_id=? AND event_seq=? AND request_id=? AND status='running'""",
+                (status, str(error)[:500], time.time(), user, event_seq, request_id),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("triage is not running")
+        return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+
+    def claim_workspace_triage_send(
+        self, *, event_seq: int, request_id: str, draft_id: str, actor: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        request_id, actor = self._triage_request_id(request_id), self._triage_actor(actor)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT * FROM workspace_triage WHERE user_id=? AND event_seq=?",
+                (user, event_seq),
+            ).fetchone()
+            if row is None or str(row["request_id"]) != request_id:
+                raise ValueError("triage_request_conflict")
+            if str(row["status"]) != "completed":
+                raise ValueError("triage is not completed")
+            result = json.loads(str(row["result_json"] or "{}"))
+            if result.get("decision") != "notify":
+                raise ValueError("triage is not notifyable")
+            if draft_id not in json.loads(str(row["draft_ids_json"] or "[]")):
+                raise ValueError("triage_draft_mismatch")
+            selected = str(row["selected_draft_id"] or "")
+            if selected and selected != draft_id:
+                raise ValueError("triage_choice_conflict")
+            state = str(row["send_state"])
+            if state == "sent":
+                return self._workspace_triage_record(row)
+            if state == "sending":
+                raise ValueError("delivery_outcome_uncertain")
+            self._connection.execute(
+                """UPDATE workspace_triage SET send_state='sending',selected_draft_id=?,
+                   send_actor=?,updated_at=? WHERE user_id=? AND event_seq=?""",
+                (draft_id, actor, time.time(), user, event_seq),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM workspace_triage WHERE user_id=? AND event_seq=?", (user, event_seq),
+            ).fetchone()
+        assert row is not None
+        return self._workspace_triage_record(row)
+
+    def complete_workspace_triage_send(
+        self, *, event_seq: int, request_id: str, draft_id: str, receipt: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        request_id = self._triage_request_id(request_id)
+        with self._lock, self._connection:
+            changed = self._connection.execute(
+                """UPDATE workspace_triage SET send_state='sent',send_receipt=?,updated_at=?
+                   WHERE user_id=? AND event_seq=? AND request_id=?
+                     AND selected_draft_id=? AND send_state='sending'""",
+                (str(receipt)[:2000], time.time(), user, event_seq, request_id, draft_id),
+            ).rowcount
+        if changed != 1:
+            current = self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+            if current.get("send_state") != "sent":
+                raise ValueError("triage send state conflict")
+        return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+
+    def mark_workspace_triage_deep(
+        self, *, event_seq: int, request_id: str, actor: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        request_id, actor = self._triage_request_id(request_id), self._triage_actor(actor)
+        with self._lock, self._connection:
+            changed = self._connection.execute(
+                """UPDATE workspace_triage SET deep_actor=?,deep_requested_at=COALESCE(deep_requested_at,?),
+                   updated_at=? WHERE user_id=? AND event_seq=? AND request_id=? AND status='completed'""",
+                (actor, time.time(), time.time(), user, event_seq, request_id),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("completed triage not found")
+        return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+
+    def record_workspace_triage_feedback(
+        self, *, event_seq: int, request_id: str, label: str, actor: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        if label not in {"important", "not_important", "ignore_chat"}:
+            raise ValueError("unsupported triage feedback")
+        user = self._user(user_id)
+        request_id, actor = self._triage_request_id(request_id), self._triage_actor(actor)
+        with self._lock, self._connection:
+            changed = self._connection.execute(
+                """UPDATE workspace_triage SET feedback_label=?,feedback_actor=?,feedback_at=?,updated_at=?
+                   WHERE user_id=? AND event_seq=? AND request_id=? AND status='completed'""",
+                (label, actor, time.time(), time.time(), user, event_seq, request_id),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("completed triage not found")
+        return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
 
     @staticmethod
     def _workspace_worker(worker_id: object) -> str:

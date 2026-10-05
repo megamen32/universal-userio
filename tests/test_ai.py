@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from universal_userio.ai import OpenAICompatibleDraftGenerator
 from universal_userio.contracts import InboxMessage
 
@@ -57,3 +59,69 @@ def test_duplicate_variants_are_not_repeated() -> None:
         history=[], limit=3,
     )
     assert drafts == ["same answer"]
+
+
+def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() -> None:
+    requests = []
+    content = json.dumps({
+        "decision": "notify",
+        "importance": 0.91,
+        "urgency": "high",
+        "confidence": 0.88,
+        "reason_codes": ["explicit_question"],
+        "reason_ru": "Нужен ответ сегодня.",
+        "action_required": True,
+        "action_summary": "Ответить на вопрос.",
+        "deadline_at": None,
+        "suggested_replies": [
+            {"body": "Да, отвечу сегодня."},
+            {"body": "Принял, вернусь с ответом позже."},
+        ],
+        "safety_override": False,
+        "policy_version": "model-value-is-replaced",
+    })
+
+    def runner(request, *, timeout):
+        requests.append((request, timeout))
+        return _response(content)
+
+    generator = OpenAICompatibleDraftGenerator(
+        endpoint="https://ai.example/v1", token="secret", model="triage-model", runner=runner,
+    )
+    result = generator.triage_with_context(
+        conversation_id="conv_1",
+        latest_message=InboxMessage("telegram", "25", "anna", "latest", 25.0),
+        history=[{"sender": "anna", "body": f"message-{index}"} for index in range(25)],
+        max_drafts=2,
+    )
+
+    assert len(requests) == 1
+    payload = json.loads(requests[0][0].data)
+    prompt = payload["messages"][1]["content"]
+    assert "message-4" not in prompt
+    assert "message-5" in prompt and "message-24" in prompt
+    assert result["importance"] == 0.91
+    assert result["suggested_replies"] == [
+        {"body": "Да, отвечу сегодня."},
+        {"body": "Принял, вернусь с ответом позже."},
+    ]
+
+
+def test_importance_triage_parser_rejects_unbounded_or_extra_output() -> None:
+    invalid = {
+        "decision": "notify", "importance": 0.9, "urgency": "high", "confidence": 0.9,
+        "reason_codes": ["question"], "reason_ru": "reason", "action_required": True,
+        "action_summary": "act", "deadline_at": None,
+        "suggested_replies": [{"body": "x" * 2001}], "safety_override": False,
+        "policy_version": "v1", "unexpected": True,
+    }
+    generator = OpenAICompatibleDraftGenerator(
+        endpoint="https://ai.example/v1", token="secret", model="m",
+        runner=lambda *_args, **_kwargs: _response(json.dumps(invalid)),
+    )
+
+    with pytest.raises(ValueError, match="triage JSON"):
+        generator.triage_with_context(
+            conversation_id="conv_1", latest_message=InboxMessage("vk", "1", "a", "b", 1.0),
+            history=[], max_drafts=2,
+        )

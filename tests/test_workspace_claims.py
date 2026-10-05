@@ -23,8 +23,32 @@ class Generator:
 
 
 class Outbox:
+    def __init__(self):
+        self.calls = []
+
     def send_reply(self, **_kwargs):
-        return "unused"
+        self.calls.append(_kwargs)
+        return "triage-receipt"
+
+
+class TriageGenerator(Generator):
+    def __init__(self, result: dict | None = None, *, fail_once: bool = False):
+        self.calls = []
+        self.result = result or {
+            "decision": "notify", "importance": 0.9, "urgency": "high", "confidence": 0.9,
+            "reason_codes": ["explicit_question"], "reason_ru": "Нужен ответ.",
+            "action_required": True, "action_summary": "Ответить.", "deadline_at": None,
+            "suggested_replies": [{"body": "Первый ответ"}, {"body": "Второй ответ"}],
+            "safety_override": False, "policy_version": "model-v1",
+        }
+        self.fail_once = fail_once
+
+    def triage_with_context(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fail_once:
+            self.fail_once = False
+            raise RuntimeError("model unavailable")
+        return dict(self.result)
 
 
 def receive_one(store: SQLiteUserIOStore) -> UserIOService:
@@ -641,6 +665,329 @@ def test_http_policy_gate_checks_ingest_eligibility_account_and_peer(tmp_path) -
         assert evaluate("telegram:11|-1007:2")[1]["allowed"] is True
         assert evaluate("telegram:11|-1007:2", account_id="telegram:22")[0] == 403
         assert evaluate("telegram:11|-1007:2", peer_id="-1008")[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_importance_triage_is_durable_idempotent_and_silent_items_have_no_drafts(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    generator = TriageGenerator()
+    service = UserIOService(store, generator, Outbox())
+    service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Вопрос", 1.0, conversation_kind="direct"),
+        route_id="telegram",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+
+    first = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-1", max_drafts=2,
+    )
+    repeated = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-1", max_drafts=2,
+    )
+
+    assert first["status"] == "completed"
+    assert first["triage"]["decision"] == "notify"
+    assert first["triage"]["policy_version"].startswith("workspace-triage-v1:r")
+    assert [draft["body"] for draft in first["drafts"]] == ["Первый ответ", "Второй ответ"]
+    assert repeated["drafts"] == first["drafts"]
+    assert len(generator.calls) == 1
+
+    silent_generator = TriageGenerator({
+        **generator.result,
+        "decision": "silent", "importance": 0.2, "confidence": 0.95,
+        "suggested_replies": [{"body": "Не должно сохраниться"}],
+    })
+    service._generator = silent_generator
+    service.receive(
+        InboxMessage("telegram", "42:2", "anna", "Спасибо", 2.0, conversation_kind="direct"),
+        route_id="telegram",
+    )
+    second_seq = store.workspace_events()["events"][-1]["seq"]
+    with pytest.raises(ValueError, match="triage_request_conflict"):
+        service.triage_workspace_event(
+            event_seq=second_seq, request_id="triage-1", max_drafts=2,
+        )
+    silent = service.triage_workspace_event(
+        event_seq=second_seq, request_id="triage-2", max_drafts=2,
+    )
+    assert silent["triage"]["decision"] == "silent"
+    assert silent["drafts"] == []
+
+
+def test_importance_triage_model_failure_stays_pending_then_retries(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    generator = TriageGenerator(fail_once=True)
+    service = UserIOService(store, generator, Outbox())
+    service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Обычное сообщение", 1.0,
+                     conversation_kind="direct"),
+        route_id="telegram",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+
+    pending = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-retry", max_drafts=2,
+    )
+    assert pending["status"] == "pending"
+    assert pending["retryable"] is True
+    assert pending["drafts"] == []
+    assert "triage" not in pending
+
+    completed = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-retry", max_drafts=2,
+    )
+    assert completed["status"] == "completed"
+    assert len(generator.calls) == 2
+
+
+def test_importance_triage_stops_retrying_after_three_model_failures(tmp_path) -> None:
+    class AlwaysFails(Generator):
+        def __init__(self):
+            self.calls = 0
+
+        def triage_with_context(self, **_kwargs):
+            self.calls += 1
+            raise RuntimeError("model unavailable")
+
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    generator = AlwaysFails()
+    service = UserIOService(store, generator, Outbox())
+    service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Обычное сообщение", 1.0,
+                     conversation_kind="direct"),
+        route_id="telegram",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+
+    first = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-bounded", max_drafts=2,
+    )
+    second = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-bounded", max_drafts=2,
+    )
+    third = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-bounded", max_drafts=2,
+    )
+    terminal = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-bounded", max_drafts=2,
+    )
+
+    assert first["status"] == second["status"] == "pending"
+    assert third["status"] == terminal["status"] == "review"
+    assert third["retryable"] is False and third["drafts"] == []
+    assert generator.calls == 3
+
+
+def test_triage_disabled_is_legacy_notify_all_and_safety_override_fails_open(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    low = TriageGenerator({
+        **TriageGenerator().result,
+        "decision": "silent", "importance": 0.05, "confidence": 0.99,
+        "suggested_replies": [{"body": "Один допустимый вариант"}],
+    })
+    service = UserIOService(store, low, Outbox())
+    store.set_workspace_triage_settings(enabled=False)
+    service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Низкая важность", 1.0,
+                     conversation_kind="direct"),
+        route_id="telegram",
+    )
+    first_seq = store.workspace_events()["events"][0]["seq"]
+    legacy = service.triage_workspace_event(
+        event_seq=first_seq, request_id="triage-disabled", max_drafts=2,
+    )
+    assert legacy["triage"]["decision"] == "notify"
+    assert legacy["triage"]["reason_codes"][0] == "triage_disabled"
+    assert len(legacy["drafts"]) == 1
+
+    store.set_workspace_triage_settings(enabled=True)
+    service._generator = TriageGenerator(fail_once=True)
+    service.receive(
+        InboxMessage("telegram", "42:2", "anna", "Срочно: подозрение на взлом", 2.0,
+                     conversation_kind="direct"),
+        route_id="telegram",
+    )
+    second_seq = store.workspace_events()["events"][-1]["seq"]
+    safety = service.triage_workspace_event(
+        event_seq=second_seq, request_id="triage-safety", max_drafts=2,
+    )
+    assert safety["status"] == "completed"
+    assert safety["triage"]["decision"] == "notify"
+    assert safety["triage"]["safety_override"] is True
+    assert safety["drafts"] == []
+
+
+def test_triage_send_rechecks_policy_is_idempotent_and_rejects_conflicting_choice(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    outbox = Outbox()
+    service = UserIOService(store, TriageGenerator(), outbox)
+    conversation_id, _ = service.receive(
+        InboxMessage("matrix", "1", "anna", "Нужен ответ", 1.0, conversation_kind="direct"),
+        route_id="matrix",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+    result = service.triage_workspace_event(
+        event_seq=event_seq, request_id="triage-send", max_drafts=2,
+    )
+    first_id, second_id = [item["id"] for item in result["drafts"]]
+
+    sent = service.send_workspace_triage(
+        event_seq=event_seq, request_id="triage-send", draft_id=first_id,
+        actor="telegram:42", confirm=True,
+    )
+    repeated = service.send_workspace_triage(
+        event_seq=event_seq, request_id="triage-send", draft_id=first_id,
+        actor="telegram:42", confirm=True,
+    )
+    assert sent["sent"] is True and repeated["receipt"] == "triage-receipt"
+    assert len(outbox.calls) == 1
+    with pytest.raises(ValueError, match="triage_choice_conflict"):
+        service.send_workspace_triage(
+            event_seq=event_seq, request_id="triage-send", draft_id=second_id,
+            actor="telegram:42", confirm=True,
+        )
+
+    service.receive(
+        InboxMessage("matrix", "2", "anna", "Ещё вопрос", 2.0, conversation_kind="direct"),
+        route_id="matrix",
+    )
+    next_seq = store.workspace_events()["events"][-1]["seq"]
+    next_result = service.triage_workspace_event(
+        event_seq=next_seq, request_id="triage-policy-flip", max_drafts=2,
+    )
+    store.set_workspace_chat_rule(
+        conversation_id=conversation_id, action="ignore", reason="owner feedback",
+    )
+    after_policy_flip = service.send_workspace_triage(
+        event_seq=event_seq, request_id="triage-send", draft_id=first_id,
+        actor="telegram:42", confirm=True,
+    )
+    assert after_policy_flip["idempotent"] is True
+    with pytest.raises(PermissionError, match="workspace policy"):
+        service.send_workspace_triage(
+            event_seq=next_seq, request_id="triage-policy-flip",
+            draft_id=next_result["drafts"][0]["id"], actor="telegram:42", confirm=True,
+        )
+
+
+def test_triage_feedback_deep_and_user_settings_are_durable(tmp_path) -> None:
+    database = tmp_path / "userio.sqlite3"
+    store = SQLiteUserIOStore(database)
+    service = UserIOService(store, TriageGenerator(), Outbox())
+    conversation_id, _ = service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Вопрос", 1.0, conversation_kind="direct"),
+        route_id="telegram",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+    service.triage_workspace_event(event_seq=event_seq, request_id="triage-actions", max_drafts=2)
+
+    changed = store.set_workspace_triage_settings(enabled=True, threshold=0.8, min_confidence=0.7)
+    assert changed["threshold"] == 0.8 and changed["min_confidence"] == 0.7
+    deep = service.deep_workspace_triage(
+        event_seq=event_seq, request_id="triage-actions", actor="telegram:42",
+    )
+    assert deep["event"]["conversation_id"] == conversation_id
+    assert deep["message"]["body"] == "Вопрос"
+    feedback = service.feedback_workspace_triage(
+        event_seq=event_seq, request_id="triage-actions", label="ignore_chat",
+        actor="telegram:42",
+    )
+    assert feedback["feedback"]["label"] == "ignore_chat"
+    assert store.evaluate_workspace_chat(conversation_id=conversation_id)["allowed"] is False
+    with pytest.raises(PermissionError, match="workspace policy"):
+        service.deep_workspace_triage(
+            event_seq=event_seq, request_id="triage-actions", actor="telegram:42",
+        )
+    assert store.delete_conversation(conversation_id) is True
+    assert store._connection.execute(
+        "SELECT COUNT(*) FROM workspace_triage WHERE event_seq=?", (event_seq,),
+    ).fetchone()[0] == 0
+    store.close()
+    reopened = SQLiteUserIOStore(database)
+    assert reopened.workspace_triage_settings()["threshold"] == 0.8
+
+
+@pytest.mark.parametrize("modular", [False, True])
+def test_triage_settings_and_feedback_are_exposed_by_both_mcp_surfaces(tmp_path, modular) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, TriageGenerator(), Outbox())
+    service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Вопрос", 1.0, conversation_kind="direct"),
+        route_id="telegram",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+    service.triage_workspace_event(event_seq=event_seq, request_id="triage-mcp", max_drafts=2)
+    owner = store.owner()
+    if modular:
+        dispatcher = UserIOToolDispatcher(store, service)
+        dispatch = lambda name, args: dispatcher.dispatch(name, args, principal=owner)
+        names = {spec.name for spec in MODULAR_TOOL_SPECS}
+    else:
+        surface = UserIOMcpSurface(store, service)
+        dispatch = lambda name, args: surface.dispatch(name, args, principal=owner)
+        names = {item["name"] for item in surface.tool_manifest()["tools"]}
+    assert {"userio.workspace.triage.get", "userio.workspace.triage.set",
+            "userio.workspace.triage.feedback"} <= names
+    assert dispatch("userio.workspace.triage.set", {
+        "enabled": True, "threshold": 0.82, "min_confidence": 0.72,
+    })["settings"]["threshold"] == 0.82
+    assert dispatch("userio.workspace.triage.feedback", {
+        "event_seq": event_seq, "request_id": "triage-mcp", "label": "not_important",
+    })["feedback"]["label"] == "not_important"
+
+
+def test_http_triage_contract_is_service_only_and_returns_stable_draft_ids(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, TriageGenerator(), Outbox())
+    service.receive(
+        InboxMessage("telegram", "42:1", "anna", "Вопрос", 1.0, conversation_kind="direct"),
+        route_id="telegram",
+    )
+    event_seq = store.workspace_events()["events"][0]["seq"]
+    with store._lock, store._connection:
+        personal_token = store._issue_token(store.default_user_id)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="service-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    def post(path: str, payload: dict, auth: str) -> tuple[int, dict]:
+        request = Request(
+            base + path, data=json.dumps(payload).encode(), method="POST",
+            headers={"Authorization": f"Bearer {auth}", "Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(request) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    try:
+        denied = post("/v1/workspace/triage", {
+            "event_seq": event_seq, "request_id": "http-triage", "max_drafts": 2,
+        }, personal_token)
+        assert denied == (403, {"error": "service account required"})
+        status, triage = post("/v1/workspace/triage", {
+            "event_seq": event_seq, "request_id": "http-triage", "max_drafts": 2,
+        }, "service-token")
+        assert status == 200 and triage["status"] == "completed"
+        assert [draft["body"] for draft in triage["drafts"]] == ["Первый ответ", "Второй ответ"]
+        send_status, sent = post(f"/v1/workspace/triage/{event_seq}/send", {
+            "request_id": "http-triage", "draft_id": triage["drafts"][0]["id"],
+            "actor": "telegram:42", "confirm": True,
+        }, "service-token")
+        assert send_status == 200 and sent["sent"] is True
+        deep_status, deep = post(f"/v1/workspace/triage/{event_seq}/deep", {
+            "request_id": "http-triage", "actor": "telegram:42",
+        }, "service-token")
+        assert deep_status == 200 and deep["message"]["body"] == "Вопрос"
+        feedback_status, feedback = post(f"/v1/workspace/triage/{event_seq}/feedback", {
+            "request_id": "http-triage", "actor": "telegram:42", "label": "not_important",
+        }, "service-token")
+        assert feedback_status == 200 and feedback["feedback"]["label"] == "not_important"
     finally:
         server.shutdown()
         server.server_close()

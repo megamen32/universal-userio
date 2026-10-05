@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import threading
 import uuid
 from collections.abc import Sequence
@@ -95,6 +96,260 @@ class UserIOService:
 
     def add_inbound_listener(self, listener: object) -> None:
         self._inbound_listeners.append(listener)
+
+    @staticmethod
+    def _deterministic_triage_override(
+        event: dict[str, object], chat: dict[str, object],
+    ) -> str | None:
+        reason = str(chat.get("reason") or "").casefold()
+        if any(marker in reason for marker in ("vip", "важный контакт", "приоритетный контакт")):
+            return "vip_chat"
+        body = str(event.get("body") or "").casefold()
+        safety_patterns = (
+            r"\b(?:срочно|немедленно|экстренно|urgent|emergency)\b",
+            r"\b(?:взлом|утечк\w*|мошеннич\w*|fraud|breach|hacked)\b",
+            r"\b(?:суд|полици\w*|скорую|пожар|угроз\w*)\b",
+            r"\b(?:оплат\w*|плат[её]ж\w*|долг\w*)\b.{0,80}\b(?:сегодня|до конца дня|просроч\w*)\b",
+        )
+        if any(re.search(pattern, body, re.IGNORECASE) for pattern in safety_patterns):
+            return "deterministic_safety_signal"
+        return None
+
+    def triage_workspace_event(
+        self, *, event_seq: int, request_id: str, max_drafts: int = 2,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        if type(max_drafts) is not int or not 0 <= max_drafts <= 2:
+            raise ValueError("max_drafts must be between 0 and 2")
+        resolved_user = self._store._user(user_id)
+        current, should_run = self._store.begin_workspace_triage(
+            event_seq=event_seq, request_id=request_id, user_id=resolved_user,
+        )
+        if not should_run:
+            if current["status"] == "running":
+                return {
+                    "event_seq": event_seq, "request_id": request_id,
+                    "status": "pending", "retryable": True, "drafts": [],
+                }
+            return current
+        event = self._store.workspace_event(event_seq, user_id=resolved_user)
+        chat = self._store.evaluate_workspace_event(
+            conversation_id=str(event["conversation_id"]), source=str(event["source"]),
+            message_id=str(event["message_id"]), user_id=resolved_user,
+        )
+        settings = self._store.workspace_triage_settings(user_id=resolved_user)
+        override = self._deterministic_triage_override(event, chat)
+        if not chat["allowed"]:
+            result = {
+                "decision": "silent", "importance": 0.0, "urgency": "none", "confidence": 1.0,
+                "reason_codes": ["workspace_policy_denied"],
+                "reason_ru": "Чат отключён текущей политикой обработки.",
+                "action_required": False, "action_summary": "", "deadline_at": None,
+                "suggested_replies": [], "safety_override": False,
+                "policy_version": settings["policy_version"],
+            }
+            return self._store.complete_workspace_triage(
+                event_seq=event_seq, request_id=request_id, result=result,
+                draft_bodies=[], user_id=resolved_user,
+            )
+        conversation = self._store.conversation(str(event["conversation_id"]), user_id=resolved_user)
+        history = [] if conversation is None else list(conversation["messages"])[-20:]
+        message = InboxMessage(
+            source=str(event["source"]), message_id=str(event["message_id"]),
+            sender=str(event["sender"]), body=str(event["body"]),
+            received_at=float(event["received_at"]), direction=str(event["direction"]),
+            conversation_kind=str(event["conversation_kind"]), peer_id=str(event["peer_id"]),
+            sender_is_bot=bool(event["sender_is_bot"]),
+        )
+        generator = self._generator_for(resolved_user)
+        triage = getattr(generator, "triage_with_context", None)
+        try:
+            if not callable(triage):
+                raise RuntimeError("configured AI generator does not support importance triage")
+            generated = triage(
+                conversation_id=str(event["conversation_id"]), latest_message=message,
+                history=history, max_drafts=max_drafts,
+            )
+            if not isinstance(generated, dict):
+                raise ValueError("AI triage result must be an object")
+            importance = float(generated["importance"])
+            confidence = float(generated["confidence"])
+            if not 0 <= importance <= 1 or not 0 <= confidence <= 1:
+                raise ValueError("AI triage scores must be between 0 and 1")
+            if not settings["enabled"]:
+                decision = "notify"
+            elif override:
+                decision = "notify"
+            elif confidence < float(settings["min_confidence"]):
+                decision = "review"
+            elif importance >= float(settings["threshold"]):
+                decision = "notify"
+            else:
+                decision = "silent"
+            replies = generated.get("suggested_replies")
+            if not isinstance(replies, list):
+                raise ValueError("AI triage suggested_replies must be an array")
+            draft_bodies = [
+                str(item.get("body") or "").strip()
+                for item in replies[:max_drafts] if isinstance(item, dict)
+                and str(item.get("body") or "").strip()
+            ] if decision == "notify" else []
+            if any(len(body) > 2000 for body in draft_bodies):
+                raise ValueError("AI triage draft exceeds limit")
+            codes = generated.get("reason_codes")
+            if not isinstance(codes, list) or any(not isinstance(code, str) for code in codes):
+                raise ValueError("AI triage reason_codes must be strings")
+            result = {
+                "decision": decision, "importance": importance,
+                "urgency": str(generated.get("urgency") or "none"), "confidence": confidence,
+                "reason_codes": (
+                    (["triage_disabled"] if not settings["enabled"] else [])
+                    + ([override] if override else []) + [str(code)[:64] for code in codes[:8]]
+                )[:8],
+                "reason_ru": str(generated.get("reason_ru") or "")[:500],
+                "action_required": bool(generated.get("action_required")),
+                "action_summary": str(generated.get("action_summary") or "")[:500],
+                "deadline_at": generated.get("deadline_at"),
+                "suggested_replies": [{"body": body} for body in draft_bodies],
+                "safety_override": bool(override),
+                "policy_version": settings["policy_version"],
+            }
+        except Exception as error:
+            if override:
+                result = {
+                    "decision": "notify", "importance": 1.0, "urgency": "high", "confidence": 1.0,
+                    "reason_codes": [override],
+                    "reason_ru": "Сработало локальное правило безопасности или важного контакта.",
+                    "action_required": True, "action_summary": "Проверить сообщение вручную.",
+                    "deadline_at": None, "suggested_replies": [], "safety_override": True,
+                    "policy_version": settings["policy_version"],
+                }
+                return self._store.complete_workspace_triage(
+                    event_seq=event_seq, request_id=request_id, result=result,
+                    draft_bodies=[], user_id=resolved_user,
+                )
+            return self._store.fail_workspace_triage(
+                event_seq=event_seq, request_id=request_id,
+                error=f"{type(error).__name__}: triage generation failed", user_id=resolved_user,
+            )
+        return self._store.complete_workspace_triage(
+            event_seq=event_seq, request_id=request_id, result=result,
+            draft_bodies=draft_bodies, user_id=resolved_user,
+        )
+
+    def send_workspace_triage(
+        self, *, event_seq: int, request_id: str, draft_id: str, actor: str,
+        confirm: bool, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if confirm is not True:
+            raise ValueError("exact_confirmation_required")
+        resolved_user = self._store._user(user_id)
+        event = self._store.workspace_event(event_seq, user_id=resolved_user)
+        triage = self._store.workspace_triage(
+            event_seq=event_seq, request_id=request_id, user_id=resolved_user,
+        )
+        selected = str(triage.get("selected_draft_id") or "")
+        if selected and selected != draft_id:
+            raise ValueError("triage_choice_conflict")
+        if triage.get("send_state") == "sent":
+            return {
+                "event_seq": event_seq, "request_id": request_id, "sent": True,
+                "draft_id": draft_id, "receipt": triage.get("receipt"), "idempotent": True,
+            }
+        if triage.get("send_state") == "sending":
+            raise ValueError("delivery_outcome_uncertain")
+        policy = self._store.evaluate_workspace_event(
+            conversation_id=str(event["conversation_id"]), source=str(event["source"]),
+            message_id=str(event["message_id"]), user_id=resolved_user,
+        )
+        if not policy["allowed"]:
+            raise PermissionError("workspace policy no longer allows this chat")
+        drafts = {str(item["id"]): item for item in triage.get("drafts", [])}
+        if draft_id not in drafts:
+            raise ValueError("triage_draft_mismatch")
+        snapshot = {
+            "expected_text": str(drafts[draft_id]["body"]),
+            "expected_chat_id": str(event["conversation_id"]),
+            "expected_attachments": [],
+        }
+        draft = self._store.claim_draft_send(
+            draft_id, user_id=resolved_user, expected_snapshot=snapshot,
+        )
+        try:
+            send = self._prepare_claimed_draft(draft, user_id=resolved_user)
+        except Exception:
+            self._store.release_draft_send(draft_id, user_id=resolved_user)
+            raise
+        try:
+            self._store.claim_workspace_triage_send(
+                event_seq=event_seq, request_id=request_id, draft_id=draft_id,
+                actor=actor, user_id=resolved_user,
+            )
+        except Exception:
+            self._store.release_draft_send(draft_id, user_id=resolved_user)
+            raise
+        receipt = send()
+        approved = self._store.approve(draft_id, receipt, user_id=resolved_user)
+        self._store.complete_workspace_triage_send(
+            event_seq=event_seq, request_id=request_id, draft_id=draft_id,
+            receipt=receipt, user_id=resolved_user,
+        )
+        return {
+            "event_seq": event_seq, "request_id": request_id, "sent": True,
+            "draft_id": approved.id, "receipt": approved.receipt, "idempotent": False,
+        }
+
+    def deep_workspace_triage(
+        self, *, event_seq: int, request_id: str, actor: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        resolved_user = self._store._user(user_id)
+        event = self._store.workspace_event(event_seq, user_id=resolved_user)
+        policy = self._store.evaluate_workspace_event(
+            conversation_id=str(event["conversation_id"]), source=str(event["source"]),
+            message_id=str(event["message_id"]), user_id=resolved_user,
+        )
+        if not policy["allowed"]:
+            raise PermissionError("workspace policy no longer allows this chat")
+        triage = self._store.mark_workspace_triage_deep(
+            event_seq=event_seq, request_id=request_id, actor=actor, user_id=resolved_user,
+        )
+        conversation = self._store.conversation(str(event["conversation_id"]), user_id=resolved_user) or {}
+        message = {
+            "source": event["source"], "message_id": event["message_id"],
+            "sender": event["sender"], "body": event["body"],
+            "received_at": event["received_at"],
+        }
+        return {
+            "ok": True,
+            "event": {key: event[key] for key in (
+                "seq", "source", "message_id", "conversation_id", "account_ref", "peer_id",
+            )},
+            "message": message,
+            "input": {
+                "request_id": request_id, "actor": actor,
+                "triage": triage.get("triage"),
+                "recent_context": list(conversation.get("messages") or [])[-20:],
+            },
+        }
+
+    def feedback_workspace_triage(
+        self, *, event_seq: int, request_id: str, label: str, actor: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        resolved_user = self._store._user(user_id)
+        recorded = self._store.record_workspace_triage_feedback(
+            event_seq=event_seq, request_id=request_id, label=label, actor=actor,
+            user_id=resolved_user,
+        )
+        if label == "ignore_chat":
+            event = self._store.workspace_event(event_seq, user_id=resolved_user)
+            self._store.set_workspace_chat_rule(
+                conversation_id=str(event["conversation_id"]), action="ignore",
+                reason="importance triage feedback", user_id=resolved_user,
+            )
+        return {"ok": True, "event_seq": event_seq, "request_id": request_id,
+                "feedback": recorded["feedback"]}
 
     def _notify_drafts_if_still_proposed(
         self, draft_ids: Sequence[str], *, user_id: str | None = None,
