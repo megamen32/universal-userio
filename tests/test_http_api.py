@@ -84,7 +84,8 @@ def test_workspace_events_http_is_authenticated_user_scoped_and_read_only(tmp_pa
     )
     store.set_conversation_account(owner_conversation, "gmail-self")
     service.receive(
-        InboxMessage("matrix", "other-message", "other", "private other", 2.0),
+        InboxMessage("matrix", "other-message", "other", "private other", 2.0,
+                     conversation_kind="direct"),
         route_id="workspace-other", user_id=other.user_id,
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="owner-token"))
@@ -193,7 +194,7 @@ def test_http_control_plane_applies_identity_rule_and_lists_new_messages(tmp_pat
             assert json.loads(response.read())["accounts"][0]["capabilities"] == ["read", "reply"]
         assert post("/v1/identities", {"source": "vk", "external_id": "anna-vk", "identity_id": "person_anna", "display_name": "Anna"})["accepted"] is True
         assert post("/v1/reply-rules", {"identity_id": "person_anna", "source": "vk", "route_id": "vip-vk", "mode": "auto_send"})["accepted"] is True
-        received = post("/v1/messages", {"route_id": "ordinary-vk", "message": {"schema": "universal.inbox.message.v1", "source": "vk", "message_id": "1", "sender": "anna-vk", "body": "help"}})
+        received = post("/v1/messages", {"route_id": "ordinary-vk", "message": {"schema": "universal.inbox.message.v1", "source": "vk", "message_id": "1", "sender": "anna-vk", "body": "help", "conversation_kind": "direct"}})
 
         assert received["draft"]["status"] == "approved"
         assert outbox.calls[0]["route_id"] == "vip-vk"

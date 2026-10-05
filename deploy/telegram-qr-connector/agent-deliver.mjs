@@ -9,11 +9,20 @@ function routingMetadata(envelope) {
   return {};
 }
 
+export function isNumericTelegramPeerAllowed(chatKey, targets) {
+  const peer = String(chatKey || "").trim();
+  return /^-?\d+$/.test(peer) && (targets || []).some(
+    (target) => String(target || "").trim() === peer,
+  );
+}
+
 export function buildAgentDeliverEvent(options) {
   const envelope = options.envelope || {};
   const parts = String(envelope.message_id || "").split(":");
   const messageId = parts.length ? parts[parts.length - 1] : "";
   const normalizedChatId = String(options.normalizedChatId || "");
+  const peerId = String(options.peerId || normalizedChatId);
+  const accountId = String(options.accountId || "");
   const chatLabel = String(options.label || normalizedChatId || "Telegram");
   const routing = routingMetadata(envelope);
   const authorName = String(routing.author_name || "").trim();
@@ -22,7 +31,9 @@ export function buildAgentDeliverEvent(options) {
     (options.ignoredChats || []).map((value) => String(value).trim()).filter(Boolean),
   ));
   const hermesSessionId = String(options.hermesSessionId || "").trim();
-  const eventId = `telegram-quiet:${normalizedChatId}:${messageId}`;
+  const eventId = accountId
+    ? `telegram-quiet:${accountId}:${peerId}:${messageId}`
+    : `telegram-quiet:${peerId}:${messageId}`;
 
   return {
     schema: "gptadmin.agent-deliver.v1",
@@ -40,6 +51,7 @@ export function buildAgentDeliverEvent(options) {
     subject: `Telegram · ${chatLabel}${authorName ? ` · последнее от ${authorName}` : ""}`,
     payload: {
       chat_id: normalizedChatId,
+      account_id: accountId,
       chat_label: chatLabel,
       last_message_id: envelope.message_id,
       last_author: { id: authorId, name: authorName },

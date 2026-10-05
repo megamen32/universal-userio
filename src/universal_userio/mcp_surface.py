@@ -91,6 +91,28 @@ TOOL_SPECS = (
     ToolSpec("userio.workspace.exclusions.remove", "Remove a chat from the automatic-claim exclusion list.", _schema({
         "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
     }, ["conversation_id"])),
+    ToolSpec("userio.workspace.policy.get", "Read user-scoped automatic processing defaults and revision.", _schema({})),
+    ToolSpec("userio.workspace.policy.set_default", "Enable or disable automatic processing for a conversation kind; only future arrivals gain eligibility.", _schema({
+        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown"]},
+        "enabled": {"type": "boolean"},
+    }, ["conversation_kind", "enabled"])),
+    ToolSpec("userio.workspace.policy.chats.list", "Search known chats by account, peer, title, kind, or rule (at most 200 per page).", _schema({
+        "source": {"type": "string"}, "account_ref": {"type": "string"},
+        "peer_id": {"type": "string"},
+        "conversation_kind": {"type": "string", "enum": ["direct", "group", "channel", "unknown"]},
+        "action": {"type": "string", "enum": ["allow", "ignore", "inherit"]},
+        "query": {"type": "string", "maxLength": 128},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+        "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
+    })),
+    ToolSpec("userio.workspace.policy.chats.set", "Set a known chat to allow, ignore, or inherit its kind default.", _schema({
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "action": {"type": "string", "enum": ["allow", "ignore", "inherit"]},
+        "reason": {"type": "string", "maxLength": 500},
+    }, ["conversation_id", "action"])),
+    ToolSpec("userio.workspace.policy.evaluate", "Explain the current automatic processing decision for one known chat.", _schema({
+        "conversation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    }, ["conversation_id"])),
     ToolSpec("userio.users.create", "Owner only: create a user and return one token once.", _schema({
         "username": {"type": "string"}, "password": {"type": "string"},
     }, ["username", "password"])),
@@ -147,8 +169,13 @@ TOOL_CAPABILITIES = {
     "userio.workspace.fail": "read",
     "userio.workspace.claim_log": "read",
     "userio.workspace.exclusions.list": "read",
-    "userio.workspace.exclusions.add": "read",
-    "userio.workspace.exclusions.remove": "read",
+    "userio.workspace.exclusions.add": "send",
+    "userio.workspace.exclusions.remove": "send",
+    "userio.workspace.policy.get": "read",
+    "userio.workspace.policy.set_default": "send",
+    "userio.workspace.policy.chats.list": "read",
+    "userio.workspace.policy.chats.set": "send",
+    "userio.workspace.policy.evaluate": "read",
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
@@ -380,6 +407,32 @@ class UserIOMcpSurface:
                         user_id=user_id,
                     ),
                 }
+            if name == "userio.workspace.policy.get":
+                return {"ok": True, **self._store.workspace_policy(user_id=user_id)}
+            if name == "userio.workspace.policy.set_default":
+                return {"ok": True, **self._store.set_workspace_default(
+                    conversation_kind=self._required(arguments, "conversation_kind"),
+                    enabled=arguments.get("enabled"), user_id=user_id,
+                )}
+            if name == "userio.workspace.policy.chats.list":
+                return {"ok": True, "chats": self._store.workspace_chat_rules(
+                    user_id=user_id, source=arguments.get("source", ""),
+                    account_ref=arguments.get("account_ref", ""),
+                    peer_id=arguments.get("peer_id", ""),
+                    conversation_kind=arguments.get("conversation_kind", ""),
+                    action=arguments.get("action", ""), query=arguments.get("query", ""),
+                    limit=arguments.get("limit", 100), offset=arguments.get("offset", 0)),
+                        "revision": self._store.workspace_policy(user_id=user_id)["revision"]}
+            if name == "userio.workspace.policy.chats.set":
+                return {"ok": True, "chat": self._store.set_workspace_chat_rule(
+                    conversation_id=self._required(arguments, "conversation_id"),
+                    action=self._required(arguments, "action"),
+                    reason=self._optional(arguments, "reason") or "", user_id=user_id,
+                )}
+            if name == "userio.workspace.policy.evaluate":
+                return {"ok": True, "chat": self._store.evaluate_workspace_chat(
+                    conversation_id=self._required(arguments, "conversation_id"), user_id=user_id,
+                )}
             if name == "userio.inbox.list_new":
                 ignored_chats = self._ignored_chats(arguments)
                 channel = self._optional(arguments, "channel")

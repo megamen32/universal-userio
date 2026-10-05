@@ -278,6 +278,29 @@ def test_mcp_user_capabilities_filter_tools_resources_and_subscribe(tmp_path) ->
     assert "userio.channels.download" not in tools
     assert "userio.draft.approve_send" not in tools
     assert "userio.draft.create" not in tools
+    assert "userio.workspace.policy.get" in tools
+    assert "userio.workspace.policy.chats.list" in tools
+    assert "userio.workspace.policy.set_default" not in tools
+    assert "userio.workspace.policy.chats.set" not in tools
+    assert "userio.workspace.exclusions.add" not in tools
+    assert "userio.workspace.exclusions.remove" not in tools
+
+    from universal_userio.mcp_dispatch import UserIOToolDispatcher
+    modular = UserIOToolDispatcher(store, service)
+    for name, arguments in (
+        ("userio.workspace.policy.set_default", {
+            "conversation_kind": "group", "enabled": True,
+        }),
+        ("userio.workspace.policy.chats.set", {
+            "conversation_id": "missing", "action": "ignore",
+        }),
+        ("userio.workspace.exclusions.add", {
+            "conversation_id": "missing",
+        }),
+    ):
+        assert modular.dispatch(name, arguments, principal=user) == {
+            "ok": False, "error": "send_capability_disabled",
+        }
 
     store.set_user_capability("subscribe", False, user_id=user.user_id)
     init = json_rpc_response(surface, {
@@ -352,7 +375,8 @@ def test_workspace_poll_is_durable_user_scoped_and_does_not_mark_seen(tmp_path) 
     surface = UserIOMcpSurface(store, service)
     reader, _ = store.create_user("airlock_reader", "reader-password")
     conversation_id, accepted = service.receive(
-        InboxMessage("telegram", "airlock-event-1", "anna", "hello", 1.0),
+        InboxMessage("telegram", "airlock-event-1", "anna", "hello", 1.0,
+                     conversation_kind="direct"),
         route_id="telegram",
     )
 
@@ -379,6 +403,8 @@ def test_workspace_poll_is_durable_user_scoped_and_does_not_mark_seen(tmp_path) 
         "direction": "incoming",
         "route_id": "telegram",
         "account_ref": "",
+        "peer_id": "airlock-event-1",
+        "conversation_kind": "direct",
     }]
     assert first["head"] == first["cursor"]
     assert repeated["events"] == []

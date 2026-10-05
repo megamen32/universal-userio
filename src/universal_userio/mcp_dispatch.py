@@ -180,6 +180,32 @@ class UserIOToolDispatcher:
                         user_id=user_id,
                     ),
                 }
+            if name == "userio.workspace.policy.get":
+                return {"ok": True, **self._store.workspace_policy(user_id=user_id)}
+            if name == "userio.workspace.policy.set_default":
+                return {"ok": True, **self._store.set_workspace_default(
+                    conversation_kind=self._required(arguments, "conversation_kind"),
+                    enabled=arguments.get("enabled"), user_id=user_id,
+                )}
+            if name == "userio.workspace.policy.chats.list":
+                return {"ok": True, "chats": self._store.workspace_chat_rules(
+                    user_id=user_id, source=arguments.get("source", ""),
+                    account_ref=arguments.get("account_ref", ""),
+                    peer_id=arguments.get("peer_id", ""),
+                    conversation_kind=arguments.get("conversation_kind", ""),
+                    action=arguments.get("action", ""), query=arguments.get("query", ""),
+                    limit=arguments.get("limit", 100), offset=arguments.get("offset", 0)),
+                        "revision": self._store.workspace_policy(user_id=user_id)["revision"]}
+            if name == "userio.workspace.policy.chats.set":
+                return {"ok": True, "chat": self._store.set_workspace_chat_rule(
+                    conversation_id=self._required(arguments, "conversation_id"),
+                    action=self._required(arguments, "action"),
+                    reason=self._optional(arguments, "reason") or "", user_id=user_id,
+                )}
+            if name == "userio.workspace.policy.evaluate":
+                return {"ok": True, "chat": self._store.evaluate_workspace_chat(
+                    conversation_id=self._required(arguments, "conversation_id"), user_id=user_id,
+                )}
             if name == "userio.users.create":
                 if principal.role != "owner":
                     return {"ok": False, "error": "owner_required"}
