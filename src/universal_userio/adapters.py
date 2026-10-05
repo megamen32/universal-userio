@@ -59,6 +59,9 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     reconciliation = payload.get("reconciliation", False)
     if type(reconciliation) is not bool:
         raise ValueError("reconciliation must be a boolean")
+    sender_is_bot = payload.get("sender_is_bot", False)
+    if type(sender_is_bot) is not bool:
+        raise ValueError("sender_is_bot must be a boolean")
     raw_attachments = payload.get("attachments")
     parsed_attachments: list[dict[str, Any]] = []
     if isinstance(raw_attachments, list):
@@ -116,6 +119,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         conversation_kind=conversation_kind,
         peer_id=peer_id,
         reconciliation=reconciliation,
+        sender_is_bot=sender_is_bot,
     )
 
 

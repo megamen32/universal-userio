@@ -403,6 +403,7 @@ def test_workspace_poll_is_durable_user_scoped_and_does_not_mark_seen(tmp_path) 
         "body": "hello",
         "received_at": 1.0,
         "direction": "incoming",
+        "sender_is_bot": 0,
         "route_id": "telegram",
         "account_ref": "",
         "peer_id": "airlock-event-1",

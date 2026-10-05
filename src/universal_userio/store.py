@@ -42,6 +42,10 @@ class SQLiteUserIOStore:
                 self._connection.execute(
                     "ALTER TABLE messages ADD COLUMN direction TEXT NOT NULL DEFAULT 'incoming'"
                 )
+            if "sender_is_bot" not in message_columns:
+                self._connection.execute(
+                    "ALTER TABLE messages ADD COLUMN sender_is_bot INTEGER NOT NULL DEFAULT 0"
+                )
             self._backfill_workspace_events()
 
     @property
@@ -207,6 +211,7 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,sender TEXT NOT NULL,body TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'incoming',received_at REAL NOT NULL,seen_at REAL,
+                sender_is_bot INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(user_id,source,message_id)
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
@@ -1016,6 +1021,13 @@ class SQLiteUserIOStore:
                       AND (x.conversation_id IS NOT NULL OR r.action='ignore'
                         OR (COALESCE(r.action,'inherit')='inherit' AND ?=0))
                 )""", (user, user, conversation_kind, int(enabled)))
+            if conversation_kind == "telegram_bot" and not enabled:
+                self._connection.execute("""UPDATE workspace_events SET eligible=0
+                    WHERE user_id=? AND EXISTS (SELECT 1 FROM messages m
+                        WHERE m.user_id=workspace_events.user_id
+                          AND m.source=workspace_events.source
+                          AND m.message_id=workspace_events.message_id
+                          AND m.sender_is_bot=1)""", (user,))
             self._bump_workspace_policy(user)
         return self.workspace_policy(user_id=user)
 
@@ -1230,21 +1242,32 @@ class SQLiteUserIOStore:
                       AND conversation_id=?""",
                     (user_id, legacy_id, conversation_id)).fetchone()
                 if legacy is not None:
+                    if message.sender_is_bot:
+                        self._connection.execute("""UPDATE messages SET sender_is_bot=1
+                            WHERE user_id=? AND source='telegram' AND message_id=?""",
+                            (user_id, legacy_id))
+                        self._connection.execute("""UPDATE workspace_events SET eligible=0
+                            WHERE user_id=? AND source='telegram' AND message_id=?""",
+                            (user_id, legacy_id))
                     return False
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                (user_id,source,message_id,conversation_id,sender,body,direction,received_at)
-                VALUES (?,?,?,?,?,?,?,?)
+                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot)
+                VALUES (?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, message.source, message.message_id, conversation_id,
                     message.sender, message.body, message.direction, message.received_at,
+                    int(message.sender_is_bot),
                 ),
             ).rowcount == 1
             if inserted and message.direction == "incoming":
-                eligible = (not message.reconciliation) and self.evaluate_workspace_chat(
-                    conversation_id=conversation_id, user_id=user_id)["allowed"]
+                bot_enabled = bool(self.workspace_policy(user_id=user_id)["defaults"]["telegram_bot"])
+                eligible = ((not message.reconciliation)
+                    and (not message.sender_is_bot or bot_enabled)
+                    and self.evaluate_workspace_chat(
+                        conversation_id=conversation_id, user_id=user_id)["allowed"])
                 self._connection.execute(
                     """
                     INSERT INTO workspace_events(user_id,source,message_id,conversation_id,eligible,reconciled)
@@ -1260,8 +1283,10 @@ class SQLiteUserIOStore:
                     WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                     (user_id, message.source, message.message_id, conversation_id)).fetchone()
                 if pending is not None and pending["reconciled"]:
-                    eligible = self.evaluate_workspace_chat(
-                        conversation_id=conversation_id, user_id=user_id)["allowed"]
+                    bot_enabled = bool(self.workspace_policy(user_id=user_id)["defaults"]["telegram_bot"])
+                    eligible = ((not message.sender_is_bot or bot_enabled)
+                        and self.evaluate_workspace_chat(
+                            conversation_id=conversation_id, user_id=user_id)["allowed"])
                     self._connection.execute("""UPDATE workspace_events
                         SET eligible=?,reconciled=0 WHERE user_id=? AND source=?
                           AND message_id=? AND conversation_id=? AND reconciled=1""",
@@ -1863,7 +1888,7 @@ class SQLiteUserIOStore:
             rows = self._connection.execute(
                 """
                 SELECT e.seq,e.source,e.message_id,e.conversation_id,
-                       m.sender,m.body,m.received_at,m.direction,
+                       m.sender,m.body,m.received_at,m.direction,m.sender_is_bot,
                        c.route_id,c.account_ref,c.peer_id,c.conversation_kind
                 FROM workspace_events AS e
                 JOIN messages AS m ON m.user_id=e.user_id
@@ -2017,7 +2042,7 @@ class SQLiteUserIOStore:
             row = self._connection.execute(
                 """
                 SELECT e.seq,e.source,e.message_id,e.conversation_id,
-                       m.sender,m.body,m.received_at,m.direction,
+                       m.sender,m.body,m.received_at,m.direction,m.sender_is_bot,
                        c.route_id,c.account_ref,c.peer_id,c.conversation_kind,
                        wc.status AS claim_status,wc.lease_expires_at,
                        COALESCE(wc.attempts,0) AS prior_attempts

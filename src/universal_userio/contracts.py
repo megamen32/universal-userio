@@ -19,6 +19,7 @@ class InboxMessage:
     conversation_kind: str = ""
     peer_id: str = ""
     reconciliation: bool = False
+    sender_is_bot: bool = False
 
     @property
     def conversation_key(self) -> str:

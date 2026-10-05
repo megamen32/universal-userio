@@ -205,8 +205,9 @@ immutable Telegram peer ID, current title, and conversation kind. Use
 default. `userio.workspace.policy.evaluate` explains the current decision and
 policy revision. Use `userio.workspace.policy.telegram_bots.set(enabled)` as
 the dedicated user-scoped toggle for future Telegram bot-dialog notifications.
-Re-enabling never replays bot messages received while disabled; an exact chat
-`allow` remains the opt-in exception to this default. An explicit ignore always denies. Existing
+Re-enabling never replays bot messages received while disabled. While the bot
+toggle is off it also suppresses bot-authored messages inside otherwise allowed
+groups. An explicit ignore always denies. Existing
 `userio.workspace.exclusions.list/add/remove` tools remain aliases for ignoring
 and then inheriting a chat. These rules affect automatic `workspace.poll`,
 `workspace.claim`, and the Telegram agent-deliver timer. Messages remain in

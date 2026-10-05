@@ -466,6 +466,7 @@ function entityLabel(entity) {
 }
 
 async function envelope(chatKey, label, message, client, self, options) {
+  let senderEntity = message.sender || null;
   const shouldTranscribe = !options || options.transcribeAudio !== false;
   const audio = shouldTranscribe
     ? await transcribeTelegramAudio(client, message, { apiKey: whisperApiKey })
@@ -478,11 +479,10 @@ async function envelope(chatKey, label, message, client, self, options) {
     chatKey, groupName: label, message,
     selfId: self && self.id, selfUsername: self && self.username,
     resolveSender: async () => {
-      let entity = message.sender || null;
-      if (!entity && typeof message.getSender === "function") entity = await message.getSender();
+      if (!senderEntity && typeof message.getSender === "function") senderEntity = await message.getSender();
       let id = "";
-      try { id = String(await client.getPeerId(entity || message.fromId, true)); } catch (_error) {}
-      return { id, name: entity ? entityLabel(entity) : String(message.postAuthor || "") };
+      try { id = String(await client.getPeerId(senderEntity || message.fromId, true)); } catch (_error) {}
+      return { id, name: senderEntity ? entityLabel(senderEntity) : String(message.postAuthor || "") };
     },
     resolveReply: async (replyTo) => {
       const values = await client.getMessages(message.peerId, { ids: [Number(replyTo)] });
@@ -498,6 +498,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     try { chatEntity = await message.getChat(); } catch (_error) { /* unknown stays disabled */ }
   }
   const conversationKind = telegramConversationKind(chatEntity, chatKey);
+  const senderIsBot = conversationKind === "telegram_bot" || !!(senderEntity && senderEntity.bot === true);
   return {
     schema: "universal.inbox.message.v1",
     source: "telegram",
@@ -506,6 +507,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     sender: label,
     peer_id: chatKey,
     conversation_kind: conversationKind,
+    sender_is_bot: senderIsBot,
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     body: normalized.body.slice(0, 8000),
     ...(attachments.length ? { attachments } : {}),

@@ -470,7 +470,7 @@ def test_telegram_bot_notifications_are_off_by_default_and_mcp_toggle_is_future_
         tool["name"] for tool in surface.tool_manifest()["tools"]}
     bot_id, _ = service.receive(
         InboxMessage("telegram", "7001:1", "Reminder Bot", "old", 1.0,
-                     conversation_kind="telegram_bot", peer_id="7001"),
+                     conversation_kind="telegram_bot", peer_id="7001", sender_is_bot=True),
         route_id="telegram", account_ref="telegram:11")
     assert store.evaluate_workspace_chat(conversation_id=bot_id)["allowed"] is False
     assert store.claim_workspace_event(worker_id="worker") is None
@@ -480,14 +480,14 @@ def test_telegram_bot_notifications_are_off_by_default_and_mcp_toggle_is_future_
     assert store.claim_workspace_event(worker_id="worker") is None
     service.receive(
         InboxMessage("telegram", "7001:2", "Reminder Bot", "fresh", 2.0,
-                     conversation_kind="telegram_bot", peer_id="7001"),
+                     conversation_kind="telegram_bot", peer_id="7001", sender_is_bot=True),
         route_id="telegram", account_ref="telegram:11")
     claimed = store.claim_workspace_event(worker_id="worker")
     assert claimed["event"]["message_id"] == "telegram:11|7001:2"
 
     service.receive(
         InboxMessage("telegram", "7001:3", "Reminder Bot", "queued", 3.0,
-                     conversation_kind="telegram_bot", peer_id="7001"),
+                     conversation_kind="telegram_bot", peer_id="7001", sender_is_bot=True),
         route_id="telegram", account_ref="telegram:11")
     disabled = UserIOToolDispatcher(store, service).dispatch(
         "userio.workspace.policy.telegram_bots.set", {"enabled": False},
@@ -506,11 +506,30 @@ def test_bot_reclassification_retires_events_previously_treated_as_direct(tmp_pa
         route_id="telegram", account_ref="telegram:11")
     service.receive(
         InboxMessage("telegram", "7010:2", "Legacy Bot", "reconciled", 2.0,
-                     conversation_kind="telegram_bot", peer_id="7010", reconciliation=True),
+                     conversation_kind="telegram_bot", peer_id="7010", reconciliation=True,
+                     sender_is_bot=True),
         route_id="telegram", account_ref="telegram:11")
     assert store.evaluate_workspace_chat(conversation_id=conversation_id)["conversation_kind"] == "telegram_bot"
     store.set_workspace_default(conversation_kind="telegram_bot", enabled=True)
     assert store.claim_workspace_event(worker_id="worker") is None
+
+
+def test_bot_authors_in_allowed_groups_follow_the_bot_toggle(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    store.set_workspace_default(conversation_kind="group", enabled=True)
+    service.receive(
+        InboxMessage("telegram", "-10072:1", "Allowed Group", "bot post", 1.0,
+                     conversation_kind="group", peer_id="-10072", sender_is_bot=True),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.claim_workspace_event(worker_id="worker") is None
+    store.set_workspace_default(conversation_kind="telegram_bot", enabled=True)
+    assert store.claim_workspace_event(worker_id="worker") is None
+    service.receive(
+        InboxMessage("telegram", "-10072:2", "Allowed Group", "fresh bot post", 2.0,
+                     conversation_kind="group", peer_id="-10072", sender_is_bot=True),
+        route_id="telegram", account_ref="telegram:11")
+    assert store.claim_workspace_event(worker_id="worker")["event"]["sender_is_bot"] == 1
 
 
 def test_policy_disable_irreversibly_retires_pending_events(tmp_path) -> None:
