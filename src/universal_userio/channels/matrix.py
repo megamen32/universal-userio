@@ -31,6 +31,18 @@ class MatrixReader:
             for ev in timeline.get('events',[]):
                 if not isinstance(ev,dict) or ev.get('type')!='m.room.message' or ev.get('sender')==self.own_user_id: continue
                 c=ev.get('content') or {}
+                relates=c.get('m.relates_to') or {}
+                if relates.get('rel_type')=='m.replace':
+                    # An edit is a new event replacing an older one. Deliver it
+                    # under the ORIGINAL event id so the mirror rewrites that
+                    # message in place instead of appending "* edited" noise.
+                    new_content=c.get('m.new_content') or {}
+                    body=new_content.get('body'); original=relates.get('event_id')
+                    if not (isinstance(body,str) and body and isinstance(original,str) and original):
+                        continue
+                    if len(out)>=limit: raise RuntimeError('Matrix batch exceeds limit')
+                    out.append(MatrixMessage(room_id,original,str(ev.get('sender') or ''),body))
+                    continue
                 if c.get('msgtype')!='m.text' or not isinstance(c.get('body'),str): continue
                 if len(out)>=limit: raise RuntimeError('Matrix batch exceeds limit')
                 out.append(MatrixMessage(room_id,str(ev.get('event_id') or ''),str(ev.get('sender') or ''),c['body']))

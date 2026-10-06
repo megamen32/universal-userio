@@ -20,6 +20,9 @@ class InboxMessage:
     peer_id: str = ""
     reconciliation: bool = False
     sender_is_bot: bool = False
+    # Provider-side edit timestamp (unix seconds). Zero means the sender never
+    # reported an edit; re-delivery of an unchanged message must not set it.
+    edited_at: float = 0.0
 
     @property
     def conversation_key(self) -> str:

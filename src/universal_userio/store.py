@@ -211,7 +211,7 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,sender TEXT NOT NULL,body TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'incoming',received_at REAL NOT NULL,seen_at REAL,
-                sender_is_bot INTEGER NOT NULL DEFAULT 0,
+                sender_is_bot INTEGER NOT NULL DEFAULT 0,edited_at REAL,
                 PRIMARY KEY(user_id,source,message_id)
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
@@ -363,6 +363,12 @@ class SQLiteUserIOStore:
                 self._connection.execute(f"ALTER TABLE message_attachments ADD COLUMN {column}")
             except sqlite3.OperationalError:  # column already exists
                 pass
+        # Provider-side edit timestamps arrived after the original messages
+        # table. Old databases upgrade in-place; absent means "never edited".
+        try:
+            self._connection.execute("ALTER TABLE messages ADD COLUMN edited_at REAL")
+        except sqlite3.OperationalError:  # column already exists
+            pass
         try:
             self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
         except sqlite3.OperationalError:  # column already exists
@@ -1395,6 +1401,11 @@ class SQLiteUserIOStore:
                     (now, user_id, conversation_id),
                 )
             else:
+                # The same (user_id, source, message_id) arrived again. That is
+                # either an unchanged replay or a provider-side edit (Telegram
+                # bot status texts, Matrix m.replace, transcript enrichment).
+                # A genuine edit must overwrite the stale mirror body without
+                # becoming a new arrival: no workspace event, no triage.
                 existing = self._connection.execute(
                     "SELECT body FROM messages WHERE user_id=? AND source=? AND message_id=?",
                     (user_id, message.source, message.message_id),
@@ -1409,6 +1420,17 @@ class SQLiteUserIOStore:
                     self._connection.execute(
                         "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
                         (new_body, user_id, message.source, message.message_id),
+                    )
+                    self._connection.execute(
+                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                        (now, user_id, conversation_id),
+                    )
+                elif new_is_text and new_body != old_body:
+                    edited_at = float(message.edited_at or 0.0) or now
+                    self._connection.execute(
+                        """UPDATE messages SET body=?,edited_at=?
+                           WHERE user_id=? AND source=? AND message_id=?""",
+                        (new_body, edited_at, user_id, message.source, message.message_id),
                     )
                     self._connection.execute(
                         "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
@@ -1766,7 +1788,8 @@ class SQLiteUserIOStore:
             messages = self._connection.execute(
                 """
                 SELECT * FROM (
-                    SELECT source,message_id,sender,body,direction,received_at,seen_at FROM messages
+                    SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at
+                    FROM messages
                     WHERE user_id=? AND conversation_id=? ORDER BY received_at DESC LIMIT 200
                 ) ORDER BY received_at
                 """,
