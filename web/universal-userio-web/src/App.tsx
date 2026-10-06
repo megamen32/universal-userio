@@ -212,7 +212,10 @@ export function App() {
   const [byokOpen, setByokOpen] = useState(false)
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
-  const [userCapabilities, setUserCapabilities] = useState<UserCapabilities>({ read: true, subscribe: true, download: true, send: true })
+  // Wait for the real per-user capability response before loading the large
+  // conversation list. This keeps account metadata from being starved behind
+  // duplicate initial list queries in React StrictMode.
+  const [userCapabilities, setUserCapabilities] = useState<UserCapabilities>({ read: false, subscribe: false, download: false, send: false })
   const [runsOpen, setRunsOpen] = useState(false)
   const [aiRuns, setAiRuns] = useState<ByokLedgerRecord[]>([])
   const [aiTotals, setAiTotals] = useState<ByokLedgerTotals | null>(null)
