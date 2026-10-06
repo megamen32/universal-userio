@@ -16,6 +16,17 @@ five tasks. Its enforced budget is:
   namespace;
 - GPU: none.
 
+The Gmail ingress is a single polling Python process. Its canonical unit keeps
+the provider worker within a separate smaller budget: 64/128 MiB RAM
+soft/hard, 32 MiB swap, 25% of one CPU, 16 tasks, `IOWeight=25`, and no GPU.
+These limits cover mailbox polling and HTTP ingestion without multiplying the
+core service allowance.
+
+The Matrix ingress is also a single polling Python process. Its canonical unit
+uses 64/128 MiB RAM soft/hard, 32 MiB swap, 50% of one CPU, 32 tasks,
+`IOWeight=25`, and no GPU. The higher CPU/task headroom covers Matrix sync JSON
+processing while remaining inside the reviewed project budget.
+
 Broad tests must run one suite at a time. The initial bounded validation scope
 uses at most 768 MiB RAM, 256 MiB swap, two CPUs, and 128 tasks. Increase these
 limits only after measuring a legitimate failing workload, documenting the

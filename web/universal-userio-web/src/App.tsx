@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
-type Account = { id: string; provider: string; display_name: string; capabilities: string[]; last_synced_at?: number }
+type Account = { id: string; provider: string; display_name: string; capabilities: string[]; credential_ref?: string; last_synced_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
 type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; attachment_url?: string }
@@ -29,8 +29,8 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source.startsWith("chatgpt") ? "chatgpt" : source
 const sourceForAccount = (account: Account) => {
   if (account.provider === "gmail") {
-    const alias = account.id.match(/^gmail-(.+)$/i)?.[1]
-    return alias ? `gmail:${alias}` : account.provider
+    const alias = account.credential_ref?.match(/^himalaya:(.+)$/i)?.[1] || account.id.match(/^gmail-(.+)$/i)?.[1]
+    return alias === "gmail" ? "gmail" : alias ? `gmail:${alias}` : account.provider
   }
   if (account.provider === "chatgpt") {
     const slug = account.id.match(/^chatgpt:(.+)$/)?.[1]

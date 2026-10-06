@@ -1,0 +1,31 @@
+[Unit]
+Description=Universal UserIO Matrix ingress
+After=network-online.target universal-userio.service
+Wants=network-online.target
+Requires=universal-userio.service
+PartOf=universal-userio.service
+
+[Service]
+Type=simple
+User=roomhacker
+WorkingDirectory=/opt/universal-userio
+EnvironmentFile=/etc/universal-userio.env
+EnvironmentFile=/etc/userio-matrix-ingress.env
+Environment=PYTHONPATH=/opt/universal-userio/src
+Environment=USERIO_INGRESS_URL=http://127.0.0.1:18093
+ExecStart=/usr/bin/python3 -m universal_userio.matrix_ingress
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+MemoryHigh=64M
+MemoryMax=128M
+MemorySwapMax=32M
+CPUQuota=50%
+TasksMax=32
+IOWeight=25
+
+[Install]
+WantedBy=universal-userio.service

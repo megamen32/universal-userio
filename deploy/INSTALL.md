@@ -6,7 +6,7 @@
    `.env.owner-seed` with `USERIO_SEED_USERNAME` and
    `USERIO_SEED_PASSWORD`, or point `USERIO_OWNER_SEED_FILE` at it.
 3. Install `deploy/universal-userio.service`, run `systemctl daemon-reload`, then `systemctl enable --now universal-userio`.
-4. Enable the native UserIO ingress units required for this host (`userio-gmail-ingress`, `userio-matrix-ingress`, `userio-sms-ingress`, or provider sidecars). Universal Inbox is retired and is not a runtime dependency.
+4. Install and enable the native UserIO ingress units required for this host (`userio-gmail-ingress`, `userio-matrix-ingress`, `userio-sms-ingress`, or provider sidecars). Gmail and Matrix are enabled with `systemctl reenable`; their `WantedBy` and `PartOf` relationships make them start and restart with `universal-userio.service`. Universal Inbox is retired and is not a runtime dependency.
 
 For Gmail owner notifications, add the existing project-scoped NoticePlace
 producer credential to `/etc/universal-userio.env` as
