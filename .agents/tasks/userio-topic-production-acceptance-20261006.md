@@ -1,7 +1,8 @@
 # UserIO topic production acceptance — 2026-10-06
 
-Status: blocked on the coordinated Notice Place deployment window owned by
-Codex session `01a1106f-30c3-79f0-9260-ca4810dc1f2a`.
+Status: mail/Matrix and no-send browser acceptance passed on runtime 3849f83.
+Notice route 5764 and dispatcher 4567622 are deployed. Ordinary canaries were
+correctly silent; final priority-topic acceptance follows the scoped actor-context release.
 
 ## Mail, Matrix, browser and AI-reply investigation
 
@@ -78,3 +79,25 @@ Nikita (`540308572`) canary and require all of:
 If the fresh message correctly classifies as `silent`, use a separate clearly
 important test message; do not weaken the importance threshold or fabricate a
 notification from an ordinary message.
+
+## Final identity-context repair
+
+- Events 39332 and 39367 completed as silent (importance 0.2/0.3); no
+  HumanRequest/HTTP notification was created. They are terminal and are not replayed.
+- Receiver account telegram:540308572 and private peer 8810909089 were correct,
+  but a stale contact label resembled the receiver. The AI context had no trusted
+  account-qualified sender identity and included a self-request reason.
+- The service now resolves distinct registered accounts within the same user
+  for incoming direct Telegram messages only. The actual model request contains
+  Secretary/Nikita IDs/names and preserves the raw contact label as supporting
+  data. Groups, foreign users, unknown peers and outgoing messages remain
+  unqualified. Identity does not force notify or lower policy thresholds.
+- Scoped service/transport/claim tests: 41 passed. Reviewer found only a test
+  assertion key mismatch, corrected before publication.
+- Browser acceptance on deployed 3849f83: exact-source Gmail rows only; Katya
+  selected with 12 existing AI drafts, enabled Edit/Send and Предложить ответ.
+  No proposal generation, approval or external reply was performed. Privacy-safe
+  screenshots/probe are in the current thread artifact folder.
+- Next controlled priority message is explicitly a technical test, without
+  fictitious incident or phone action. Its safety-direct receipt proves topic
+  transport separately from ordinary AI importance decisions.
