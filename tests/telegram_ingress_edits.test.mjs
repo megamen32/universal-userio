@@ -10,10 +10,16 @@ const source = readFileSync(
   "utf8",
 );
 
-test("EditedMessage event builder is imported with NewMessage", () => {
+test("EditedMessage event builder is imported from its own module", () => {
+  // events/index.js in GramJS 2.26 exports only Raw/NewMessage; importing
+  // EditedMessage from there crashes the connector with a SyntaxError.
   assert.match(
     source,
-    /import \{ EditedMessage, NewMessage \} from "telegram\/events\/index\.js";/,
+    /import \{ NewMessage \} from "telegram\/events\/index\.js";/,
+  );
+  assert.match(
+    source,
+    /import \{ EditedMessage \} from "telegram\/events\/EditedMessage\.js";/,
   );
 });
 
