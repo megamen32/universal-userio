@@ -964,7 +964,10 @@ def handler(
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"}); return
                 source = query.get("source", [""])[0].strip().lower() or None
-                conversations = service._store.conversations(source=source, user_id=user_id)
+                exact_source = query.get("exact_source", [""])[0].strip().lower() in {"1", "true", "yes"}
+                conversations = service._store.conversations(
+                    source=source, exact_source=exact_source, user_id=user_id,
+                )
                 # If the latest message in a conversation is an attachment
                 # placeholder ([image], [document] …) replace it with the most
                 # recent text body so the chat list and the search box always
