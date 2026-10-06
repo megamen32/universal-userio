@@ -26,6 +26,51 @@ class Outbox:
         return "event_1"
 
 
+def test_context_preferences_http_are_authenticated_and_user_scoped(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    _other, other_token = store.create_user(
+        "context-http-user", "correct horse battery staple",
+    )
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), handler(service, token="owner-token")
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+
+    def request(method: str, bearer: str, payload: dict | None = None):
+        data = None if payload is None else json.dumps(payload).encode()
+        raw = Request(
+            base + "/v1/preferences/context", data=data, method=method,
+            headers={
+                "Authorization": f"Bearer {bearer}",
+                **({"Content-Type": "application/json"} if data else {}),
+            },
+        )
+        try:
+            with urlopen(raw) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    try:
+        assert request("GET", "")[0] == 401
+        assert request("GET", "owner-token") == (
+            200, {"context": {"message_count": 3, "token_budget": 1000}},
+        )
+        assert request("POST", other_token, {
+            "message_count": 7, "token_budget": 2400,
+        }) == (200, {"context": {"message_count": 7, "token_budget": 2400}})
+        assert request("GET", "owner-token")[1]["context"]["message_count"] == 3
+        assert request("POST", other_token, {
+            "message_count": 21, "token_budget": 2400,
+        })[0] == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_v1_runtime_identity_is_bearer_protected_and_allowlisted(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     _, user_token = service._store.create_user("runtime-reader", "correct horse battery staple")

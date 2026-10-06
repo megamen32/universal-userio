@@ -364,7 +364,7 @@ def test_context_aware_ai_receives_prior_messages(tmp_path) -> None:
 
     service.propose(conversation_id, second)
 
-    assert [entry["body"] for entry in generator.history] == ["first", "second"]
+    assert [entry["body"] for entry in generator.history] == ["first"]
 
 
 def test_account_registry_exposes_capabilities_not_browser_session(tmp_path) -> None:

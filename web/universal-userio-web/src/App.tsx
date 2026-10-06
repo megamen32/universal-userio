@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Phone, Plus, Send, Sparkles, Video, X } from "lucide-react"
+import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Phone, Plus, Send, SlidersHorizontal, Sparkles, Video, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +13,7 @@ type Conversation = { id: string; source: string; sender: string; identity_id?: 
 type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
+type ContextSettings = { message_count: number; token_budget: number }
 
 import { defineByokPresetPicker } from "./vendor/byok-ui"
 import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type ByokLedgerTotals } from "./vendor/byok-runs-ui"
@@ -213,6 +214,8 @@ export function App() {
   const [byokOpen, setByokOpen] = useState(false)
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
+  const [contextForm, setContextForm] = useState<ContextSettings>({ message_count: 3, token_budget: 1000 })
   // Wait for the real per-user capability response before loading the large
   // conversation list. This keeps account metadata from being starved behind
   // duplicate initial list queries in React StrictMode.
@@ -238,14 +241,14 @@ export function App() {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       if (drawerOpen) { setDrawerOpen(false); return }
-      if (byokOpen || newChatOpen || runsOpen || expandedHtml || attachmentPreview) return
+      if (byokOpen || contextOpen || newChatOpen || runsOpen || expandedHtml || attachmentPreview) return
       const target = event.target as HTMLElement | null
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return
       if (selectedChat) { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [attachmentPreview, byokOpen, drawerOpen, expandedHtml, newChatOpen, runsOpen, selectedChat])
+  }, [attachmentPreview, byokOpen, contextOpen, drawerOpen, expandedHtml, newChatOpen, runsOpen, selectedChat])
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const conversationAccount = conversation && accounts.find((item) => item.id === (item.provider === "gmail" && conversation.source.startsWith("gmail:") ? conversation.source.replace(/^gmail:/, "gmail-") : conversation.source))
@@ -468,6 +471,26 @@ export function App() {
       setByokForm({ endpoint: data.endpoint, model: data.model, token: "" })
     } catch { /* server default is fine */ }
   }
+  const loadContextSettings = async () => {
+    try {
+      const data = await api<{ context: ContextSettings }>("/v1/preferences/context")
+      setContextForm(data.context)
+    } catch (error) {
+      notify(`Не удалось загрузить настройки контекста: ${(error as Error).message}`)
+    }
+  }
+  const saveContextSettings = async () => {
+    try {
+      const data = await api<{ context: ContextSettings }>("/v1/preferences/context", {
+        method: "POST", body: JSON.stringify(contextForm),
+      })
+      setContextForm(data.context)
+      setContextOpen(false)
+      notify("Настройки контекста сохранены")
+    } catch (error) {
+      notify(`Не удалось сохранить настройки контекста: ${(error as Error).message}`)
+    }
+  }
   useEffect(() => {
     const host = byokPickerRef.current
     if (!byokOpen || !host || byokPresets.length === 0) return
@@ -609,6 +632,7 @@ export function App() {
     <div className="space-y-1 border-t p-2">
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон / кошелёк</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
+      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadContextSettings(); setContextOpen(true) }}><SlidersHorizontal className="size-4" /> Контекст ИИ</Button>
       <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
       <form method="post" action="/auth/logout"><Button type="submit" className="w-full justify-start" variant="ghost" size="sm"><LogOut /> Выйти</Button></form>
     </div>
@@ -672,6 +696,14 @@ export function App() {
         <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]"><div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5"><Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} /><Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button><Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик"><Send /></Button></div><p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? "Отправка только после явного подтверждения черновика." : "Только чтение."}</p></div></footer>
       </> : <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Открываю диалог…</div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
+      {contextOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setContextOpen(false)}><div className="w-full max-w-sm rounded-lg border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+          <h2 className="font-semibold">Контекст ИИ</h2>
+          <div className="mt-4 space-y-3">
+            <label className="block text-sm"><span className="mb-1 block text-muted-foreground">Предыдущих сообщений</span><Input type="number" min={0} max={20} step={1} value={contextForm.message_count} onChange={(event) => setContextForm({ ...contextForm, message_count: Number(event.target.value) })} /></label>
+            <label className="block text-sm"><span className="mb-1 block text-muted-foreground">Токен-бюджет</span><Input type="number" min={0} max={8000} step={100} value={contextForm.token_budget} onChange={(event) => setContextForm({ ...contextForm, token_budget: Number(event.target.value) })} /></label>
+          </div>
+          <div className="mt-5 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setContextOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void saveContextSettings()}>Сохранить</Button></div>
+        </div></div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
           <h2 className="font-semibold">Свой ИИ (BYOK)</h2>
           <div ref={byokPickerRef} className="mt-3 max-h-44 overflow-y-auto" />

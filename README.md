@@ -225,8 +225,15 @@ Importance triage is enabled per user by default with `threshold=0.75` and
 disabling triage restores legacy notify-all behavior while reply delivery still
 requires a durable selected draft. The service-only
 `POST /v1/workspace/triage` classifies one eligible event in one bounded JSON
-model call using at most the last 20 messages. Results and zero to two suggested
-reply snapshots are durable and idempotent by `(event_seq, request_id)`.
+model call. Conversation context limits are owned per user by UserIO: defaults
+are three preceding messages and a conservative 1,000-token budget, and the
+authenticated `GET/POST /v1/preferences/context` surface plus the `Контекст ИИ`
+web setting update them. UserIO excludes the current message, retains preceding
+messages chronologically, and applies the same bounded context to importance
+triage, reply drafts, workspace claims, and deep analysis. Downstream agents
+consume the formed `recent_context` without a second limit or context store.
+Results and zero to two suggested reply snapshots are durable and idempotent by
+`(event_seq, request_id)`.
 
 Only `decision=notify` is intended for an immediate operator card. Ordinary
 model errors remain `pending` and retryable without a notification; after the
