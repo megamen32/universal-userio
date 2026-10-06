@@ -9,6 +9,7 @@ _ADAPTERS = {
     'sms': ('sms', 'AndroidSmsChannel'),
     'whatsapp': ('whatsapp', 'WhatsAppChannel'),
     'vk': ('vk', 'VkChannel'),
+    'max': ('max', 'MaxChannel'),
 }
 
 

@@ -125,6 +125,20 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     gateway = AndroidSmsGatewayClient(sms_url, sms_token) if sms_url else None
     sms_user_id = environment.get("USERIO_SMS_USER_ID", store.default_user_id).strip()
     sms_manual_approve = environment.get("USERIO_SMS_MANUAL_APPROVE_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
+    max_client = None
+    max_token = environment.get("USERIO_MAX_TOKEN", "").strip()
+    if max_token:
+        from .channels.max_client import MaxClient
+
+        max_socks = environment.get("USERIO_MAX_SOCKS", "").strip()
+        max_socks_host, max_socks_port = "", 0
+        if max_socks:
+            host, _, port = max_socks.rpartition(":")
+            max_socks_host, max_socks_port = host, int(port or 1080)
+        max_client = MaxClient(
+            max_token, environment.get("USERIO_MAX_DEVICE_ID", "").strip(),
+            socks_host=max_socks_host, socks_port=max_socks_port,
+        )
     telegram_outbox = telegram_outbox_from_env(environment)
     whatsapp_bridge_url = environment.get("USERIO_WHATSAPP_BRIDGE_URL", "").strip()
     whatsapp_outbox = WhatsAppBridgeClient(whatsapp_bridge_url) if whatsapp_bridge_url else None
@@ -147,6 +161,10 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
         store, generator, DirectProviderOutbox(), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
         sms_manual_approve=sms_manual_approve,
+        max_client=max_client,
+        max_user_id=environment.get("USERIO_MAX_USER_ID", store.default_user_id).strip() or store.default_user_id,
+        max_route_id=environment.get("USERIO_MAX_ROUTE_ID", "max").strip() or "max",
+        max_manual_approve=environment.get("USERIO_MAX_MANUAL_APPROVE_ONLY", "").strip().lower() in {"1", "true", "yes", "on"},
         gmail_outbox=HimalayaGmailOutbox(),
         chatgpt_outbox=ChatGPTWebOutbox(),
         telegram_outbox=telegram_outbox, whatsapp_outbox=whatsapp_outbox,

@@ -1,0 +1,21 @@
+[Unit]
+Description=Universal UserIO MAX (oneme.ru) ingress
+After=network-online.target universal-userio.service
+Wants=network-online.target
+Requires=universal-userio.service
+
+[Service]
+Type=simple
+User=roomhacker
+WorkingDirectory=/opt/universal-userio
+EnvironmentFile=/etc/universal-userio.env
+Environment=PYTHONPATH=/opt/universal-userio/src
+Environment=USERIO_INGRESS_URL=http://127.0.0.1:18093
+ExecStart=/usr/bin/python3 -m universal_userio.max_ingress --backfill 10
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

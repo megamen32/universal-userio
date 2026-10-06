@@ -28,6 +28,8 @@ class UserIOService:
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
         *, sms_gateway: object | None = None, sms_user_id: str = "", sms_route_id: str = "sms",
         sms_manual_approve: bool = False,
+        max_client: object | None = None, max_user_id: str = "", max_route_id: str = "max",
+        max_manual_approve: bool = False,
         gmail_outbox: object | None = None,
         chatgpt_outbox: object | None = None,
         telegram_outbox: object | None = None,
@@ -41,6 +43,8 @@ class UserIOService:
         self._user_generators: dict[str, object] = {}
         self.sms_gateway, self.sms_user_id, self.sms_route_id = sms_gateway, sms_user_id, sms_route_id
         self.sms_manual_approve = bool(sms_manual_approve)
+        self.max_client, self.max_user_id, self.max_route_id = max_client, max_user_id, max_route_id
+        self.max_manual_approve = bool(max_manual_approve)
         self.gmail_outbox = gmail_outbox
         self.chatgpt_outbox = chatgpt_outbox
         self.telegram_outbox = telegram_outbox
@@ -437,7 +441,9 @@ class UserIOService:
         conversation whose response_mode is auto_send stays a proposed draft until a
         human explicitly approves it.
         """
-        return self.sms_manual_approve and str(conversation.get("source") or "") == "sms"
+        if self.sms_manual_approve and str(conversation.get("source") or "") == "sms":
+            return True
+        return self.max_manual_approve and str(conversation.get("source") or "") == "max"
 
     def receive_and_plan(
         self, message: InboxMessage, *, route_id: str, user_id: str | None = None
@@ -627,6 +633,18 @@ class UserIOService:
             if self.sms_gateway is None or user_id != self.sms_user_id:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")
             send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
+        elif conversation["source"] == "max":
+            if self.max_client is None or user_id != self.max_user_id:
+                raise ValueError("MAX adapter is not configured for this UserIO user")
+            chat_id = str(conversation.get("peer_id") or conversation.get("sender") or "")
+
+            def _send_max(client=self.max_client, chat_id=chat_id, body=draft.body) -> str:
+                receipt = client.send(chat_id=chat_id, text=body)
+                if isinstance(receipt, dict):
+                    return str(receipt.get("message_id") or receipt.get("receipt") or "max-sent")
+                return str(receipt)
+
+            send = _send_max
         elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
             messages = list(conversation["messages"])
             chat_id = str(conversation.get("peer_id") or "")

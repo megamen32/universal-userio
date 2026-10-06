@@ -451,7 +451,7 @@ class SQLiteUserIOStore:
             WHERE source='telegram' AND conversation_kind='unknown'
               AND peer_id GLOB '[0-9]*' AND peer_id NOT LIKE '-%' AND peer_id!=''""")
         self._connection.execute("""UPDATE conversations SET conversation_kind='direct'
-            WHERE (source IN ('mail','email','gmail','sms','phone','chatgpt')
+            WHERE (source IN ('mail','email','gmail','sms','phone','chatgpt','max')
                 OR source LIKE 'gmail:%' OR source LIKE 'chatgpt:%')
               AND conversation_kind='unknown'""")
         self._connection.execute("""UPDATE conversations SET conversation_kind='group'
@@ -1015,7 +1015,7 @@ class SQLiteUserIOStore:
             peer = (message.peer_id or message.sender).lower()
             return "group" if peer.endswith("@g.us") else (
                 "direct" if peer.endswith("@s.whatsapp.net") or peer.endswith("@lid") else "unknown")
-        if message.source in {"mail", "email", "gmail", "sms", "phone", "chatgpt"} or (
+        if message.source in {"mail", "email", "gmail", "sms", "phone", "chatgpt", "max"} or (
             message.source.startswith("gmail:") or message.source.startswith("chatgpt:")):
             return "direct"
         return "unknown"

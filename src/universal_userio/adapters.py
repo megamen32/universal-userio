@@ -635,6 +635,22 @@ class AndroidSmsChannelAdapter(StoredChannelAdapter):
         )
 
 
+class MaxChannelAdapter(StoredChannelAdapter):
+    """Canonical MAX (oneme.ru) conversations.
+
+    Ingest runs in the dedicated userio-max-ingress service (WebSocket DISPATCH
+    -> ingress HTTP); approved drafts deliver through the service-owned
+    MaxClient (MSG_SEND). This adapter only exposes the stored view.
+    """
+
+    channel = "max"
+
+    def download(self, *, file_ref: str) -> ChannelFile:
+        raise AdapterNotSupported(
+            "MAX adapter does not deliver attachments yet; media remains in the MAX app.",
+        )
+
+
 def _download_via_bridge(
     *, channel: str, message: dict[str, object] | None, file_ref: str,
     bridge_url: str, token_env: str,
@@ -1277,6 +1293,7 @@ class UnifiedChannels(StoredChannelAdapter):
         "matrix": MatrixChannelAdapter,
         "vk": VKChannelAdapter,
         "sms": AndroidSmsChannelAdapter,
+        "max": MaxChannelAdapter,
         "chatgpt": ChatGPTCDPChannelAdapter,
     }
 
