@@ -233,6 +233,26 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         return f"telegram-qr:{data.get('slot', '?')}:{data.get('message_id', 'sent')}:{draft_id}"
 
+    def react(self, *, chat: str, chat_id: str, account_ref: str, message_id: str, emoji: str) -> dict[str, object]:
+        if not (chat or chat_id) or not message_id or not emoji:
+            raise ValueError("Telegram reaction requires chat or chat_id, message id and emoji")
+        payload = json.dumps({
+            "chat": chat, "chat_id": chat_id, "account_id": account_ref,
+            "message_id": message_id, "emoji": emoji,
+        }).encode()
+        request = urllib.request.Request(  # noqa: S310
+            f"{self._base_url}/react", data=payload, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                return json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode()[:200]
+            raise RuntimeError(f"telegram-qr reaction failed: HTTP {error.code} {detail}") from error
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError("telegram-qr connector is unreachable") from error
+
 
 class HimalayaGmailOutbox:
     """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""

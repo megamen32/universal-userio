@@ -495,6 +495,19 @@ def handler(
                     )
                     self._reply(200 if updated else 404, {"updated": updated})
                     return
+                if path == "/v1/react":
+                    if not service._store.capability_enabled("send", user_id=user_id):
+                        self._reply(403, {"error": "send_capability_disabled"})
+                        return
+                    payload = self._json()
+                    result = service.react_to_message(
+                        conversation_id=str(payload.get("conversation_id") or "").strip(),
+                        message_id=str(payload.get("message_id") or "").strip(),
+                        emoji=str(payload.get("emoji") or "").strip(),
+                        confirm=payload.get("confirm") is True, user_id=user_id,
+                    )
+                    self._reply(200, result)
+                    return
                 if path == "/v1/ai-settings":
                     payload = self._json()
                     settings = service._store.ai_settings(user_id=user_id)

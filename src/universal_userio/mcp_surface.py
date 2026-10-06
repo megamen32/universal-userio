@@ -142,6 +142,10 @@ TOOL_SPECS = (
     ToolSpec("userio.message.mark_seen", "Mark one user-owned message as seen.", _schema({
         "source": {"type": "string"}, "message_id": {"type": "string"},
     }, ["source", "message_id"])),
+    ToolSpec("userio.messages.react", "Set an emoji reaction on a stored message; visible to the peer.", _schema({
+        "conversation_id": {"type": "string"}, "message_id": {"type": "string"},
+        "emoji": {"type": "string", "maxLength": 16}, "confirm": {"type": "boolean"},
+    }, ["conversation_id", "message_id", "emoji", "confirm"])),
     ToolSpec("userio.draft.create", "Create a reply draft; does not send.", _schema({
         "conversation_id": {"type": "string"}, "body": {"type": "string"},
     }, ["conversation_id", "body"])),
@@ -197,6 +201,7 @@ TOOL_CAPABILITIES = {
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
+    "userio.messages.react": "send",
     "userio.draft.create": "send",
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
@@ -493,6 +498,15 @@ class UserIOMcpSurface:
                     source=self._required(arguments, "source"),
                     message_id=self._required(arguments, "message_id"), user_id=user_id,
                 )}
+            if name == "userio.messages.react":
+                if not self._store.send_enabled(user_id=principal.user_id):
+                    return {"ok": False, "error": "outbound_delivery_disabled"}
+                return self._service.react_to_message(
+                    conversation_id=self._required(arguments, "conversation_id"),
+                    message_id=self._required(arguments, "message_id"),
+                    emoji=self._required(arguments, "emoji"),
+                    confirm=arguments.get("confirm") is True, user_id=user_id,
+                )
             if name == "userio.draft.create":
                 draft = self._service.create_manual_draft(
                     self._required(arguments, "conversation_id"),
