@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
@@ -24,6 +25,10 @@ from typing import Any
 
 class ReleaseError(RuntimeError):
     """A release precondition or verification failed."""
+
+
+class _CanaryUnavailable(ReleaseError):
+    """The HTTP service is not ready to accept the canary yet."""
 
 
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -624,8 +629,29 @@ def _http_json(
             if not isinstance(value, dict):
                 raise ReleaseError("UserIO returned a non-object response")
             return response.status, value
+    except urllib.error.HTTPError as error:
+        raise ReleaseError(f"UserIO HTTP canary returned status {error.code}") from error
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        if isinstance(error, (urllib.error.URLError, TimeoutError)):
+            raise _CanaryUnavailable("UserIO HTTP canary is not ready") from error
         raise ReleaseError("UserIO HTTP canary failed") from error
+
+
+def _runtime_identity_when_ready(
+    base_url: str,
+    token: str,
+    *,
+    attempts: int = 20,
+    delay_seconds: float = 0.25,
+) -> tuple[int, dict[str, Any]]:
+    for attempt in range(attempts):
+        try:
+            return _http_json(base_url + "/v1/runtime", token)
+        except _CanaryUnavailable:
+            if attempt + 1 == attempts:
+                raise
+            time.sleep(delay_seconds)
+    raise AssertionError("unreachable")
 
 
 def run_canary(
@@ -644,7 +670,7 @@ def run_canary(
     base_url = configured.rstrip("/") if configured else f"http://127.0.0.1:{port}"
     unique_id = message_id or f"phase7-canary-{int(time.time())}-{uuid.uuid4().hex[:12]}"
     body = f"UserIO Phase 7 runtime canary {unique_id}"
-    status, identity = _http_json(base_url + "/v1/runtime", token)
+    status, identity = _runtime_identity_when_ready(base_url, token)
     if status != 200 or identity.get("verified") is not True:
         raise ReleaseError("runtime identity is not verified")
     status, accepted = _http_json(
