@@ -504,6 +504,15 @@ def handler(
                         "has_key": settings is not None,
                     })
                     return
+                if path == "/v1/preferences/context":
+                    payload = self._json()
+                    settings = service._store.set_context_settings(
+                        message_count=payload.get("message_count"),
+                        token_budget=payload.get("token_budget"),
+                        user_id=user_id,
+                    )
+                    self._reply(200, {"context": settings})
+                    return
                 if path == "/v1/ai-runs":
                     bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
                     bridge_token = os.environ.get("USERIO_BYOK_BRIDGE_TOKEN", "")
@@ -917,6 +926,9 @@ def handler(
                 return
             if path == "/v1/preferences/send":
                 self._reply(200, {"send_enabled": service._store.send_enabled(user_id=user_id)})
+                return
+            if path == "/v1/preferences/context":
+                self._reply(200, {"context": service._store.context_settings(user_id=user_id)})
                 return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)

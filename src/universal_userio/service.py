@@ -177,8 +177,11 @@ class UserIOService:
                 event_seq=event_seq, request_id=request_id, result=result,
                 draft_bodies=[], user_id=resolved_user,
             )
-        conversation = self._store.conversation(str(event["conversation_id"]), user_id=resolved_user)
-        history = [] if conversation is None else list(conversation["messages"])[-20:]
+        history = self._store.bounded_conversation_context(
+            str(event["conversation_id"]),
+            current_message_id=str(event["message_id"]),
+            user_id=resolved_user,
+        )
         message = InboxMessage(
             source=str(event["source"]), message_id=str(event["message_id"]),
             sender=str(event["sender"]), body=str(event["body"]),
@@ -340,7 +343,6 @@ class UserIOService:
         triage = self._store.mark_workspace_triage_deep(
             event_seq=event_seq, request_id=request_id, actor=actor, user_id=resolved_user,
         )
-        conversation = self._store.conversation(str(event["conversation_id"]), user_id=resolved_user) or {}
         message = {
             "source": event["source"], "message_id": event["message_id"],
             "sender": event["sender"], "body": event["body"],
@@ -355,7 +357,11 @@ class UserIOService:
             "input": {
                 "request_id": request_id, "actor": actor,
                 "triage": triage.get("triage"),
-                "recent_context": list(conversation.get("messages") or [])[-20:],
+                "recent_context": self._store.bounded_conversation_context(
+                    str(event["conversation_id"]),
+                    current_message_id=str(event["message_id"]),
+                    user_id=resolved_user,
+                ),
             },
         }
 
@@ -532,8 +538,10 @@ class UserIOService:
         suggest_variants = getattr(generator, "suggest_variants", None)
         suggest_with_context = getattr(generator, "suggest_with_context", None)
         generated: Sequence[str]
-        record = self._store.conversation(conversation_id, user_id=user_id)
-        history = [] if record is None else list(record["messages"])
+        history = self._store.bounded_conversation_context(
+            conversation_id, current_message_id=message.message_id,
+            user_id=user_id,
+        )
         if callable(suggest_with_context):
             generated = suggest_with_context(conversation_id=conversation_id, latest_message=message, history=history, limit=limit)
         elif callable(suggest_variants):

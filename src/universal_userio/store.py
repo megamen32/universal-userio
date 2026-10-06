@@ -19,6 +19,30 @@ from .contracts import ConversationPolicy, InboxMessage, ReplyDraft, UserPrincip
 _ITERATIONS = 310_000
 _USERNAME = re.compile(r"[A-Za-z0-9_.@+-]{3,64}")
 _DATA_TABLES = ("conversations", "messages", "drafts", "identities", "reply_rules", "provider_accounts")
+CONTEXT_MESSAGE_COUNT_DEFAULT = 3
+CONTEXT_MESSAGE_COUNT_MAX = 20
+CONTEXT_TOKEN_BUDGET_DEFAULT = 1000
+CONTEXT_TOKEN_BUDGET_MAX = 8_000
+
+
+def _estimated_tokens(value: str) -> int:
+    """Conservative model-neutral estimate for mixed Cyrillic/ASCII text."""
+    ascii_chars = sum(1 for char in value if ord(char) < 128)
+    return (ascii_chars + 2) // 3 + (len(value) - ascii_chars)
+
+
+def _prefix_for_tokens(value: object, token_limit: int) -> str:
+    text = str(value or "").strip()
+    if token_limit <= 0 or not text:
+        return ""
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if _estimated_tokens(text[:middle]) <= token_limit:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low]
 
 
 class SQLiteUserIOStore:
@@ -1855,6 +1879,122 @@ class SQLiteUserIOStore:
                 (self._user(user_id), key, str(value), time.time()),
             )
 
+    def context_settings(self, *, user_id: str | None = None) -> dict[str, int]:
+        user = self._user(user_id)
+
+        def value(key: str, default: int, maximum: int) -> int:
+            raw = self.user_preference(key, user_id=user, default=str(default))
+            try:
+                return max(0, min(int(str(raw)), maximum))
+            except ValueError:
+                return default
+
+        return {
+            "message_count": value(
+                "context_message_count", CONTEXT_MESSAGE_COUNT_DEFAULT,
+                CONTEXT_MESSAGE_COUNT_MAX,
+            ),
+            "token_budget": value(
+                "context_token_budget", CONTEXT_TOKEN_BUDGET_DEFAULT,
+                CONTEXT_TOKEN_BUDGET_MAX,
+            ),
+        }
+
+    def set_context_settings(
+        self, *, message_count: int, token_budget: int,
+        user_id: str | None = None,
+    ) -> dict[str, int]:
+        for name, setting, maximum in (
+            ("message_count", message_count, CONTEXT_MESSAGE_COUNT_MAX),
+            ("token_budget", token_budget, CONTEXT_TOKEN_BUDGET_MAX),
+        ):
+            if type(setting) is not int or not 0 <= setting <= maximum:
+                raise ValueError(f"{name} must be between 0 and {maximum}")
+        user = self._user(user_id)
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.executemany(
+                "INSERT OR REPLACE INTO user_preferences(user_id,key,value,updated_at) VALUES (?,?,?,?)",
+                (
+                    (user, "context_message_count", str(message_count), now),
+                    (user, "context_token_budget", str(token_budget), now),
+                ),
+            )
+        return self.context_settings(user_id=user)
+
+    def bounded_conversation_context(
+        self, conversation_id: str, *, current_message_id: str = "",
+        user_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        settings = self.context_settings(user_id=user_id)
+        message_limit = settings["message_count"]
+        token_limit = settings["token_budget"]
+        if message_limit <= 0 or token_limit <= 0:
+            return []
+        conversation = self.conversation(conversation_id, user_id=user_id)
+        if conversation is None:
+            raise KeyError("conversation not found")
+        candidates: list[dict[str, object]] = []
+        for raw in conversation.get("messages") or []:
+            if not isinstance(raw, dict):
+                continue
+            message_id = str(raw.get("message_id") or "").strip()[:256]
+            if current_message_id and message_id == current_message_id:
+                break
+            body = str(raw.get("body") or "").strip()
+            if not body:
+                continue
+            candidates.append({
+                "source": str(raw.get("source") or "").strip()[:128],
+                "message_id": message_id,
+                "sender": " ".join(str(raw.get("sender") or "").split())[:320],
+                "direction": " ".join(str(raw.get("direction") or "").split())[:32],
+                "received_at": raw.get("received_at"),
+                "body": body,
+            })
+        candidates = candidates[-message_limit:]
+        metadata_tokens = [
+            _estimated_tokens(json.dumps(
+                item | {"body": "", "body_truncated": False},
+                ensure_ascii=False, separators=(",", ":"),
+            ))
+            for item in candidates
+        ]
+        def list_tokens() -> int:
+            return _estimated_tokens("[" + "," * max(0, len(candidates) - 1) + "]")
+
+        while candidates and sum(metadata_tokens) + list_tokens() >= token_limit:
+            candidates.pop(0)
+            metadata_tokens.pop(0)
+        if not candidates:
+            return []
+        available = token_limit - sum(metadata_tokens) - list_tokens()
+        needs = [_estimated_tokens(str(item["body"])) for item in candidates]
+        allocations = [0] * len(candidates)
+        pending = set(range(len(candidates)))
+        while pending and available > 0:
+            share = max(1, available // len(pending))
+            satisfied: list[int] = []
+            for index in sorted(pending):
+                grant = min(share, needs[index] - allocations[index], available)
+                allocations[index] += grant
+                available -= grant
+                if allocations[index] >= needs[index]:
+                    satisfied.append(index)
+                if available <= 0:
+                    break
+            for index in satisfied:
+                pending.discard(index)
+            if not satisfied and available < len(pending):
+                break
+        return [
+            item | {
+                "body": _prefix_for_tokens(item["body"], allocation),
+                "body_truncated": allocation < need,
+            }
+            for item, allocation, need in zip(candidates, allocations, needs)
+        ]
+
     USER_CAPABILITIES = ("read", "subscribe", "download", "send")
 
     def capability_enabled(self, capability: str, *, user_id: str | None = None) -> bool:
@@ -2501,7 +2641,14 @@ class SQLiteUserIOStore:
                  None if prior_status is None else str(prior_status)),
             )
         return {
-            "event": event,
+            "event": event | {
+                "recent_context": self.bounded_conversation_context(
+                    str(event["conversation_id"]),
+                    current_message_id=str(event["message_id"]),
+                    user_id=scoped_user,
+                ),
+                "context_policy": self.context_settings(user_id=scoped_user),
+            },
             "claim": {
                 "event_seq": event["seq"], "worker_id": worker,
                 "lease_token": token, "status": "claimed",
