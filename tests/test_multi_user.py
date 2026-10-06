@@ -448,8 +448,18 @@ def test_dashboard_requires_login_and_uses_user_scoped_session(tmp_path) -> None
     roomhacker, _ = store.create_user("roomhacker", "dashboard-password")
     other, _ = store.create_user("other-user", "other-password")
     store.register_account(
-        account_id="gmail-roomhacker", provider="gmail", display_name="roomhacker@gmail.com",
-        can_read=True, can_reply=False, credential_ref="himalaya:roomhacker",
+        account_id="gmail-megamen932", provider="gmail", display_name="roomhacker@gmail.com",
+        can_read=True, can_reply=False, credential_ref="himalaya:gmail",
+        user_id=roomhacker.user_id,
+    )
+    store.register_account(
+        account_id="chatgpt:work", provider="chatgpt", display_name="ChatGPT Work",
+        can_read=True, can_reply=False, credential_ref="chatgpt-session:work",
+        user_id=roomhacker.user_id,
+    )
+    store.register_account(
+        account_id="gmail-personal", provider="gmail", display_name="Personal Gmail",
+        can_read=True, can_reply=False, credential_ref="legacy:personal",
         user_id=roomhacker.user_id,
     )
     store.register_account(
@@ -457,6 +467,13 @@ def test_dashboard_requires_login_and_uses_user_scoped_session(tmp_path) -> None
         can_read=True, can_reply=False, credential_ref="himalaya:other", user_id=other.user_id,
     )
     service = UserIOService(store, Generator(), Outbox())
+    store.bind_channel_route(
+        user_id=roomhacker.user_id, source="mail", route_id="gmail-read-only",
+    )
+    service.receive(
+        InboxMessage("gmail", "mail-1", "sender@example.test", "hello", 123.0),
+        route_id="gmail-read-only", user_id=roomhacker.user_id,
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="service-token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -485,7 +502,14 @@ def test_dashboard_requires_login_and_uses_user_scoped_session(tmp_path) -> None
 
         with urlopen(Request(base + "/v1/accounts", headers={"Cookie": cookie})) as response:
             accounts = json.loads(response.read())["accounts"]
-        assert [account["display_name"] for account in accounts] == ["roomhacker@gmail.com"]
+        assert [account["display_name"] for account in accounts] == [
+            "ChatGPT Work", "roomhacker@gmail.com", "Personal Gmail",
+        ]
+        assert accounts[0]["source"] == "chatgpt:work"
+        assert accounts[1]["source"] == "gmail"
+        assert accounts[1]["last_message_at"] == 123.0
+        assert accounts[2]["source"] == "gmail:personal"
+        assert all("credential_ref" not in account for account in accounts)
     finally:
         server.shutdown()
         server.server_close()
