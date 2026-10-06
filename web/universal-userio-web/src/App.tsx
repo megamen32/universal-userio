@@ -16,6 +16,7 @@ type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; 
 
 import { defineByokPresetPicker } from "./vendor/byok-ui"
 import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type ByokLedgerTotals } from "./vendor/byok-runs-ui"
+import { LatestRequest } from "./latest-request"
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } })
@@ -225,6 +226,7 @@ export function App() {
   const [byokPresets, setByokPresets] = useState<{ id: string; label: string; description: string; apiFormat: string; baseUrl: string; modelId: string; priceLabel: string }[]>([])
   const byokPickerRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<number | undefined>(undefined)
+  const chatsRequest = useRef(new LatestRequest())
   const notify = (message: string) => {
     setToast(message)
     window.clearTimeout(toastTimer.current)
@@ -254,9 +256,14 @@ export function App() {
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
   const refreshChats = useCallback(async () => {
+    const request = chatsRequest.current.begin()
     const sourceFilter = account ? sourceForAccount(account) : activeChannel
-    const suffix = sourceFilter ? `?source=${encodeURIComponent(sourceFilter)}` : ""
+    const params = new URLSearchParams()
+    if (sourceFilter) params.set("source", sourceFilter)
+    if (account) params.set("exact_source", "1")
+    const suffix = params.size ? `?${params.toString()}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
+    if (!chatsRequest.current.isCurrent(request)) return
     setChats(data.conversations)
     setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : "")
   }, [account, activeChannel])
@@ -313,7 +320,7 @@ export function App() {
   useEffect(() => { void loadByok() }, [])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { if (userCapabilities.read) void refreshChats(); else { setChats([]); setSelectedChat(""); setConversation(null) } }, [refreshChats, userCapabilities.read])
+  useEffect(() => { if (userCapabilities.read) void refreshChats(); else { chatsRequest.current.begin(); setChats([]); setSelectedChat(""); setConversation(null) } }, [refreshChats, userCapabilities.read])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedChat && userCapabilities.read) void loadConversation(selectedChat) }, [loadConversation, selectedChat, userCapabilities.read])

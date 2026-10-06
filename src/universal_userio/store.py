@@ -2591,9 +2591,13 @@ class SQLiteUserIOStore:
         return " AND c.source=?", [source]
 
     def conversations(
-        self, *, source: str | None = None, limit: int = 100, user_id: str | None = None
+        self, *, source: str | None = None, exact_source: bool = False,
+        limit: int = 100, user_id: str | None = None,
     ) -> list[dict[str, object]]:
-        source_sql, values = self._source_filter(source)
+        if source and exact_source:
+            source_sql, values = " AND c.source=?", [source]
+        else:
+            source_sql, values = self._source_filter(source)
         # Sort strictly by the latest message timestamp so the UI's "fresh on top"
         # rule never drifts because of bookkeeping fields like updated_at.
         # `preview` is the latest body; if that happens to be an attachment

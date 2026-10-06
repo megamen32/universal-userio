@@ -262,6 +262,27 @@ def test_conversations_list_bounds_preview_without_truncating_stored_message(tmp
         server.server_close()
 
 
+def test_exact_gmail_source_keeps_selected_account_separate_from_platform_view(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    service.receive(InboxMessage("gmail", "main-1", "a@example.test", "main", 100.0), route_id="gmail-read-only")
+    service.receive(InboxMessage("gmail:other", "other-1", "b@example.test", "other", 200.0), route_id="gmail-read-only")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    headers = {"Authorization": "Bearer test-token"}
+    try:
+        with urlopen(Request(base + "/v1/conversations?source=gmail", headers=headers)) as response:
+            grouped = json.loads(response.read())["conversations"]
+        with urlopen(Request(base + "/v1/conversations?source=gmail&exact_source=1", headers=headers)) as response:
+            exact = json.loads(response.read())["conversations"]
+        assert {item["source"] for item in grouped} == {"gmail", "gmail:other"}
+        assert {item["source"] for item in exact} == {"gmail"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_conversations_are_sorted_by_latest_message_not_conversation_updated_at(tmp_path) -> None:
     """An older conversation that just received a fresh message must rank above
     a conversation that was merely re-tagged without new activity."""
