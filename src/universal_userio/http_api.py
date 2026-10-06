@@ -50,6 +50,20 @@ _PLACEHOLDER_RE = re.compile(
 )
 
 
+def _public_account_source(account: Mapping[str, object], credential_ref: str) -> str:
+    provider = str(account.get("provider") or "")
+    account_id = str(account.get("id") or "")
+    if provider == "gmail":
+        alias = credential_ref.removeprefix("himalaya:") if credential_ref.startswith("himalaya:") else ""
+        if not alias:
+            match = re.fullmatch(r"gmail-(.+)", account_id, re.IGNORECASE)
+            alias = match.group(1) if match else ""
+        return "gmail" if alias == "gmail" else f"gmail:{alias}" if alias else provider
+    if provider == "chatgpt" and account_id.startswith("chatgpt:"):
+        return account_id
+    return provider
+
+
 def handler(
     service: UserIOService, *, token: str, vkid_app_id: str = "",
     trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
@@ -908,6 +922,12 @@ def handler(
                 accounts = service._store.accounts(user_id=user_id)
                 caps = service._store.user_capabilities(user_id=user_id)
                 for account in accounts:
+                    credential_ref = str(account.pop("credential_ref", ""))
+                    source = _public_account_source(account, credential_ref)
+                    account["source"] = source
+                    account["last_message_at"] = service._store.latest_message_at(
+                        source, user_id=user_id,
+                    )
                     visible = list(account.get("capabilities", []))
                     if not caps["read"]:
                         visible = [cap for cap in visible if cap != "read"]

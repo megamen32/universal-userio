@@ -902,6 +902,15 @@ class SQLiteUserIOStore:
             ).fetchone()
         return None if row is None else bool(row["can_reply"])
 
+    def latest_message_at(self, source: str, *, user_id: str | None = None) -> float | None:
+        """Return message freshness for one exact provider source."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT MAX(received_at) AS latest FROM messages WHERE user_id=? AND source=?",
+                (self._user(user_id), source),
+            ).fetchone()
+        return None if row is None or row["latest"] is None else float(row["latest"])
+
     def delete_account(self, account_id: str, *, user_id: str | None = None) -> bool:
         with self._lock, self._connection:
             return self._connection.execute(

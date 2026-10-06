@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
-type Account = { id: string; provider: string; display_name: string; capabilities: string[]; credential_ref?: string; last_synced_at?: number }
+type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
 type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; attachment_url?: string }
@@ -28,9 +28,10 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
 
 const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source.startsWith("chatgpt") ? "chatgpt" : source
 const sourceForAccount = (account: Account) => {
+  if (account.source) return account.source
   if (account.provider === "gmail") {
-    const alias = account.credential_ref?.match(/^himalaya:(.+)$/i)?.[1] || account.id.match(/^gmail-(.+)$/i)?.[1]
-    return alias === "gmail" ? "gmail" : alias ? `gmail:${alias}` : account.provider
+    const alias = account.id.match(/^gmail-(.+)$/i)?.[1]
+    return alias ? `gmail:${alias}` : account.provider
   }
   if (account.provider === "chatgpt") {
     const slug = account.id.match(/^chatgpt:(.+)$/)?.[1]
@@ -107,21 +108,18 @@ const initials = (value: string) => {
   return parts.join("") || value[0]?.toUpperCase() || ""
 }
 
-// Health dot for an account row. <5 min = green (alive), 5-60 min = amber
-// (sluggish), >60 min or read-only = rose (silent or read-only).
-const accountHealth = (account: Account, lastSyncedAt?: number) => {
-  if (!account.capabilities.includes("read")) return "rose"
-  if (!lastSyncedAt) return "rose"
-  const minutes = (Date.now() / 1000 - lastSyncedAt) / 60
-  if (minutes <= 5) return "emerald"
-  if (minutes <= 60) return "amber"
-  return "rose"
+// Message freshness is not a provider-health check. Only a missing read
+// capability means the account itself is unavailable to this user.
+const accountActivity = (account: Account) => {
+  if (!account.capabilities.includes("read")) return "blocked"
+  if (!account.last_message_at) return "empty"
+  return (Date.now() / 1000 - account.last_message_at) / 60 <= 60 ? "fresh" : "stale"
 }
 const HEALTH_CLASS: Record<string, string> = {
-  emerald: "bg-emerald-500", amber: "bg-amber-500", rose: "bg-rose-500",
+  fresh: "bg-emerald-500", stale: "bg-slate-400", empty: "bg-slate-300", blocked: "bg-rose-500",
 }
 const HEALTH_TITLE: Record<string, string> = {
-  emerald: "Аккаунт активен", amber: "Аккаунт молчит >5 мин", rose: "Аккаунт недоступен",
+  fresh: "Свежие сообщения", stale: "Нет новых сообщений", empty: "Нет сообщений", blocked: "Чтение недоступно",
 }
 
 // Telegram-style timestamps: HH:MM in bubbles, "вчера"/"12 сент" in the chat list,
@@ -582,8 +580,7 @@ export function App() {
           <div role="button" tabIndex={0} onClick={() => { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { setSelectedChannel(platform); setSelectedAccount("all"); setDrawerOpen(false) } }} title={`Показать все: ${displayChannel(platform)}`} className={`group mb-1 flex h-9 cursor-pointer select-none items-center gap-2 rounded-lg px-2 text-sm font-medium ${selectedChannel === platform && selectedAccount === "all" ? "bg-secondary text-secondary-foreground" : "text-foreground/80 hover:bg-muted/70"} ${hiddenPlatforms.includes(platform) ? "opacity-50" : ""}`}><span className="text-foreground/70">{channelIcon(platform)}</span>{displayChannel(platform)}{platformUnread > 0 && <Badge className="ml-auto rounded-full bg-[#2f80ed] px-1.5 text-[10px] text-white">{platformUnread}</Badge>}<input className="size-3.5 shrink-0 opacity-40 hover:opacity-100 group-hover:opacity-90" aria-label={`Показывать ${displayChannel(platform)} в общей ленте`} title="Показывать платформу в общей ленте" type="checkbox" checked={!hiddenPlatforms.includes(platform)} onClick={(event) => event.stopPropagation()} onChange={(event) => togglePlatformVisible(platform, event.target.checked)} /></div>
           {platformAccounts.map((item) => {
             const visible = !hiddenAccounts.includes(item.id)
-            const last = chats.filter((chat) => chat.source === sourceForAccount(item)).reduce((acc, chat) => Math.max(acc, chat.account_last_at ?? 0), 0)
-            const health = accountHealth(item, last || item.last_synced_at)
+            const health = accountActivity(item)
             return <div key={item.id} className="group mb-1 flex items-center gap-1">
               <Button className="min-w-0 flex-1 justify-start rounded-lg px-2" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}>
                 <Avatar className="size-7"><AvatarFallback className="text-[10px]">{initials(item.display_name)}</AvatarFallback></Avatar>
