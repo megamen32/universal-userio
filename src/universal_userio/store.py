@@ -1924,8 +1924,10 @@ class SQLiteUserIOStore:
 
     def bounded_conversation_context(
         self, conversation_id: str, *, current_message_id: str = "",
-        user_id: str | None = None,
+        before_message_id: str = "", user_id: str | None = None,
     ) -> list[dict[str, object]]:
+        if before_message_id:
+            current_message_id = before_message_id
         settings = self.context_settings(user_id=user_id)
         message_limit = settings["message_count"]
         token_limit = settings["token_budget"]
@@ -1935,11 +1937,13 @@ class SQLiteUserIOStore:
         if conversation is None:
             raise KeyError("conversation not found")
         candidates: list[dict[str, object]] = []
+        anchor_found = False
         for raw in conversation.get("messages") or []:
             if not isinstance(raw, dict):
                 continue
             message_id = str(raw.get("message_id") or "").strip()[:256]
             if current_message_id and message_id == current_message_id:
+                anchor_found = True
                 break
             body = str(raw.get("body") or "").strip()
             if not body:
@@ -1952,6 +1956,10 @@ class SQLiteUserIOStore:
                 "received_at": raw.get("received_at"),
                 "body": body,
             })
+        if before_message_id and not anchor_found:
+            # A paging anchor outside this conversation must not fall back to
+            # the newest window: report "nothing older" instead of duplicating.
+            return []
         candidates = candidates[-message_limit:]
         metadata_tokens = [
             _estimated_tokens(json.dumps(
@@ -2375,7 +2383,7 @@ class SQLiteUserIOStore:
             if str(row["status"]) != "completed":
                 raise ValueError("triage is not completed")
             result = json.loads(str(row["result_json"] or "{}"))
-            if result.get("decision") != "notify":
+            if result.get("decision") not in {"notify", "review"}:
                 raise ValueError("triage is not notifyable")
             if draft_id not in json.loads(str(row["draft_ids_json"] or "[]")):
                 raise ValueError("triage_draft_mismatch")

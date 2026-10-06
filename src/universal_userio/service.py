@@ -193,15 +193,27 @@ class UserIOService:
             conversation_kind=str(event["conversation_kind"]), peer_id=str(event["peer_id"]),
             sender_is_bot=bool(event["sender_is_bot"]),
         )
+        anchor_conversation_id = str(event["conversation_id"])
+        anchor_message_id = str(event["message_id"])
+
+        def _older_context(before_message_id: str) -> list[dict[str, object]]:
+            anchor = before_message_id.strip() or anchor_message_id
+            if not anchor:
+                return []
+            return self._store.bounded_conversation_context(
+                anchor_conversation_id, current_message_id=anchor, user_id=resolved_user,
+            )
+
         generator = self._generator_for(resolved_user)
         triage = getattr(generator, "triage_with_context", None)
         try:
             if not callable(triage):
                 raise RuntimeError("configured AI generator does not support importance triage")
             generated = triage(
-                conversation_id=str(event["conversation_id"]), latest_message=message,
+                conversation_id=anchor_conversation_id, latest_message=message,
                 history=history, max_drafts=max_drafts,
                 actor_context=self._triage_actor_context(event, resolved_user),
+                history_reader=_older_context,
             )
             if not isinstance(generated, dict):
                 raise ValueError("AI triage result must be an object")
@@ -226,9 +238,11 @@ class UserIOService:
                 str(item.get("body") or "").strip()
                 for item in replies[:max_drafts] if isinstance(item, dict)
                 and str(item.get("body") or "").strip()
-            ] if decision == "notify" else []
+            ]
             if any(len(body) > 2000 for body in draft_bodies):
                 raise ValueError("AI triage draft exceeds limit")
+            if decision == "silent":
+                draft_bodies = []
             codes = generated.get("reason_codes")
             if not isinstance(codes, list) or any(not isinstance(code, str) for code in codes):
                 raise ValueError("AI triage reason_codes must be strings")
@@ -263,7 +277,10 @@ class UserIOService:
                 )
             return self._store.fail_workspace_triage(
                 event_seq=event_seq, request_id=request_id,
-                error=f"{type(error).__name__}: triage generation failed", user_id=resolved_user,
+                error=(
+                    f"{type(error).__name__}: "
+                    f"{str(error).strip()[:280] or 'triage generation failed'}"
+                ), user_id=resolved_user,
             )
         return self._store.complete_workspace_triage(
             event_seq=event_seq, request_id=request_id, result=result,
@@ -331,6 +348,37 @@ class UserIOService:
             "event_seq": event_seq, "request_id": request_id, "sent": True,
             "draft_id": approved.id, "receipt": approved.receipt, "idempotent": False,
         }
+
+    def react_to_message(
+        self, *, conversation_id: str, message_id: str, emoji: str,
+        confirm: bool, user_id: str | None = None,
+    ) -> dict[str, object]:
+        if confirm is not True:
+            return {"ok": False, "error": "exact_confirmation_required"}
+        emoji = str(emoji or "").strip()
+        message_id = str(message_id or "").strip()
+        if not message_id:
+            return {"ok": False, "error": "message_id_required"}
+        if not emoji or len(emoji) > 16:
+            return {"ok": False, "error": "invalid_emoji"}
+        resolved_user = self._store._user(user_id)
+        conversation = self._store.conversation(conversation_id, user_id=resolved_user)
+        if conversation is None:
+            return {"ok": False, "error": "conversation_not_found"}
+        source = str(conversation.get("source") or "")
+        outbox_react = (
+            getattr(self.telegram_outbox, "react", None)
+            if self.telegram_outbox is not None else None
+        )
+        if source != "telegram" or not callable(outbox_react):
+            return {"ok": False, "error": "reaction_not_supported_for_source"}
+        receipt = outbox_react(
+            chat=str(conversation.get("sender") or ""),
+            chat_id=str(conversation.get("peer_id") or ""),
+            account_ref=str(conversation.get("account_ref") or ""),
+            message_id=message_id, emoji=emoji,
+        )
+        return {"ok": True, "reacted": True, "source": source, "receipt": receipt}
 
     def deep_workspace_triage(
         self, *, event_seq: int, request_id: str, actor: str,

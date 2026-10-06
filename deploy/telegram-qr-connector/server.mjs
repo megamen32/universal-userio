@@ -888,6 +888,72 @@ http.createServer(async (req, res) => {
     });
     return;
   }
+  if (url.pathname === "/react" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(raw || "{}");
+        const chat = String(payload.chat || "").trim();
+        const chatId = String(payload.chat_id || "").trim();
+        const wantAccount = String(payload.account_id || "").trim();
+        // Stored UserIO telegram ids look like "account|chatKey:msgId" or
+        // "chatKey:msgId"; a bare numeric id is accepted beside chat/chat_id.
+        const scoped = String(payload.message_id || "").includes("|")
+          ? String(payload.message_id).slice(String(payload.message_id).indexOf("|") + 1)
+          : String(payload.message_id || "");
+        let targetChatId = chatId;
+        let messageId = scoped.trim();
+        if (messageId.includes(":")) {
+          const cut = messageId.lastIndexOf(":");
+          targetChatId = messageId.slice(0, cut) || targetChatId;
+          messageId = messageId.slice(cut + 1);
+        }
+        const emoji = String(payload.emoji || "").trim();
+        const msgId = Number(messageId);
+        if ((!chat && !targetChatId) || !Number.isSafeInteger(msgId) || msgId <= 0 || !emoji || emoji.length > 16) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "chat (or chat_id), valid message_id and emoji are required" }));
+        }
+        // Account-bound reactions never fall back to another slot, matching /send.
+        const tryReact = async (slot, item) => {
+          const peers = item.labelPeers;
+          const peer = (chat && peers.labelPeers.get(chat)) || (targetChatId && peers.idPeers.get(targetChatId)) || null;
+          if (!peer || !item.client) return false;
+          await item.client.invoke(
+            new Api.messages.SendReaction({ peer, msgId, reaction: [new Api.ReactionEmoji({ emoticon: emoji })] }),
+          );
+          console.log(`react ${slot}: "${chat || targetChatId}" msg ${msgId} ${emoji}`);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, reacted: true }));
+          return true;
+        };
+        if (wantAccount) {
+          const chosen = [...liveSlots].find(([, item]) => item.accountId === wantAccount);
+          if (chosen && await tryReact(chosen[0], chosen[1])) return;
+          res.writeHead(404, { "content-type": "application/json" });
+          return res.end(JSON.stringify({
+            error: `account ${wantAccount} does not know chat "${chat || targetChatId}"`,
+          }));
+        }
+        for (const [slot, item] of [...liveSlots]) {
+          if (await tryReact(slot, item)) return;
+        }
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: `no connected account knows chat "${chat || targetChatId}"` }));
+      } catch (error) {
+        console.error("react error:", (error && error.message) || error);
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: (error && error.message) || "react failed" }));
+      }
+    });
+    return;
+  }
   if (url.pathname === "/login/phone" && req.method === "POST") {
     if (!loginAuthorized(req.headers, process.env.USERIO_API_TOKEN)) {
       res.writeHead(401, { "content-type": "application/json" });
