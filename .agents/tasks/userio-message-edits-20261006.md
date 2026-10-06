@@ -1,6 +1,32 @@
 # UserIO message-edit delivery — 2026-10-06
 
-Status: implemented, focused + full suites green, committed on `main`.
+Status: implemented, tested, and **deployed to production** (2026-10-06
+~22:40 MSK). Real API-level canary passed; canary rows removed.
+
+## Production deployment record
+
+- `/opt/userio-telegram-qr/server.mjs` refreshed from repo
+  `deploy/telegram-qr-connector/server.mjs` (root:root 0644; previous file
+  kept as `server.mjs.pre-edits-20261006`); `userio-telegram-ingress.service`
+  restarted. Connector healthy: `live`, 20 chats, no errors.
+- The Python store fix was already running: the `/opt/universal-userio`
+  working-tree overlay (core restarted 21:56 MSK by the runtime-coordination
+  slice) already carried the edited_at changes; no core restart was needed.
+- **Incident during rollout:** the first restart crashed the worker with
+  `SyntaxError: Named export 'EditedMessage' not found` — GramJS 2.26
+  `events/index.js` exports only `Raw`/`NewMessage`/`NewMessageEvent`.
+  Fixed in `e598304` by importing the builder from
+  `telegram/events/EditedMessage.js` directly; reinstall + restart recovered
+  in ~2 minutes (the gap was covered by reconciliation backfill; no canary
+  was in flight).
+- **Canary (production, then removed):** posted
+  `...|canary-edits-20261006:777000` as «Начинаю проверку...», re-posted the
+  same message id as «Найдено в топе: 3 (canary)» with `edited_at`. Result:
+  first delivery `accepted=true`, edit `accepted=false`; ONE message row with
+  the edited body and non-null `edited_at`; exactly one workspace event
+  (`eligible=0` — new synthetic chat is policy-denied, so no triage, no
+  drafts, no dispatcher activity). Canary rows deleted from
+  `userio.sqlite3` afterwards.
 
 ## Reported defect
 
