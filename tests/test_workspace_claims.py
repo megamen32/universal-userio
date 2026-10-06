@@ -779,6 +779,20 @@ def test_importance_triage_stops_retrying_after_three_model_failures(tmp_path) -
     assert third["status"] == terminal["status"] == "review"
     assert third["retryable"] is False and third["drafts"] == []
     assert generator.calls == 3
+    deep = service.deep_workspace_triage(
+        event_seq=event_seq, request_id="triage-bounded", actor="telegram:42",
+    )
+    assert deep["message"]["body"] == "Обычное сообщение"
+    recorded = store.workspace_triage(
+        event_seq=event_seq, request_id="triage-bounded",
+    )
+    assert recorded["status"] == "review"
+    assert recorded["send_state"] == "none"
+    assert generator.calls == 3
+    actor = store._connection.execute(
+        "SELECT deep_actor FROM workspace_triage WHERE event_seq=?", (event_seq,),
+    ).fetchone()[0]
+    assert actor == "telegram:42"
 
 
 def test_triage_disabled_is_legacy_notify_all_and_safety_override_fails_open(tmp_path) -> None:
