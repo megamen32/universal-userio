@@ -9,7 +9,9 @@ surfaces in one process:
 2. **Ingest leg** — one connected client per saved session: backfills the
    recent top dialogs and pushes incoming messages into the UserIO inbox
    (`POST /v1/messages`, schema `universal.inbox.message.v1`), plus live
-   `NewMessage` events and a 5-minute reconciliation backfill.
+   `NewMessage` and `EditedMessage` events and a 5-minute reconciliation
+   backfill. Edited messages are re-posted under the same message id with the
+   provider `editDate`, and never reschedule agent delivery.
 
 Canonical source: `/opt/universal-userio/deploy/telegram-qr-connector/` on
 server-100. `/opt/userio-telegram-qr/` is only the installed Node runtime and
