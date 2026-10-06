@@ -64,8 +64,9 @@ Codex session `01a1106f-30c3-79f0-9260-ca4810dc1f2a`.
 Do not replay terminal event `39204`. After Agent Herder's API is ready, the
 Notice owner must perform one combined Notice Place upgrade containing
 `287933f`, verify both Notice services, then restart
-`userio-hermes-dispatcher.service` and deploy `universal-userio` `73f4167`
-through its supported release path. Send one fresh Secretary (`8810909089`) to
+`userio-hermes-dispatcher.service`. UserIO's forced-tool fix is already live;
+the final browser release uses current clean main containing `f02410f` through
+the supported release path. Send one fresh Secretary (`8810909089`) to
 Nikita (`540308572`) canary and require all of:
 
 1. exact receiver message ID and UserIO event ID;
