@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import { EditedMessage, NewMessage } from "telegram/events/index.js";
+import { NewMessage } from "telegram/events/index.js";
+// GramJS 2.26 events/index.js exports only Raw/NewMessage(NewEvent); the
+// EditedMessage builder must come straight from its own CommonJS module.
+import { EditedMessage } from "telegram/events/EditedMessage.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
