@@ -240,6 +240,28 @@ def test_conversations_preview_falls_back_to_last_text_when_latest_is_attachment
         server.server_close()
 
 
+def test_conversations_list_bounds_preview_without_truncating_stored_message(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
+    body = "x" * 10_000
+    conversation_id, _ = service.receive(
+        InboxMessage("gmail", "large-1", "sender@example.test", body, 100.0),
+        route_id="gmail-read-only",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        request = Request(base + "/v1/conversations?source=gmail", headers={"Authorization": "Bearer test-token"})
+        with urlopen(request) as response:
+            conversation = json.loads(response.read())["conversations"][0]
+        assert len(conversation["preview"]) == 4096
+        assert service._store.conversation(conversation_id)["messages"][0]["body"] == body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_conversations_are_sorted_by_latest_message_not_conversation_updated_at(tmp_path) -> None:
     """An older conversation that just received a fresh message must rank above
     a conversation that was merely re-tagged without new activity."""
