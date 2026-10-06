@@ -2286,7 +2286,8 @@ class SQLiteUserIOStore:
         with self._lock, self._connection:
             changed = self._connection.execute(
                 """UPDATE workspace_triage SET deep_actor=?,deep_requested_at=COALESCE(deep_requested_at,?),
-                   updated_at=? WHERE user_id=? AND event_seq=? AND request_id=? AND status='completed'""",
+                   updated_at=? WHERE user_id=? AND event_seq=? AND request_id=?
+                     AND status IN ('completed','review')""",
                 (actor, time.time(), time.time(), user, event_seq, request_id),
             ).rowcount
         if changed != 1:
