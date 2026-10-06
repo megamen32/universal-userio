@@ -115,6 +115,10 @@ def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() 
         latest_message=InboxMessage("telegram", "25", "anna", "latest", 25.0),
         history=[{"sender": "anna", "body": f"message-{index}"} for index in range(25)],
         max_drafts=2,
+        actor_context={
+            "sender_account_id": "telegram:200", "sender_display_name": "Секретарь",
+            "receiver_account_id": "telegram:100", "receiver_display_name": "Никита",
+        },
     )
 
     assert len(requests) == 1
@@ -122,6 +126,11 @@ def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() 
     assert payload["tool_choice"]["function"]["name"] == "submit_triage"
     assert payload["tools"][0]["function"]["parameters"]["additionalProperties"] is False
     prompt = payload["messages"][1]["content"]
+    context = json.loads(prompt.splitlines()[-1])
+    assert context["sender"] == "Секретарь"
+    assert context["raw_sender_label"] == "anna"
+    assert context["actor_context"]["receiver_account_id"] == "telegram:100"
+    assert context["direction"] == "incoming"
     assert "message-4" not in prompt
     assert "message-5" in prompt and "message-24" in prompt
     assert result["importance"] == 0.91

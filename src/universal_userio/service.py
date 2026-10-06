@@ -115,6 +115,31 @@ class UserIOService:
             return "deterministic_safety_signal"
         return None
 
+    def _triage_actor_context(self, event: dict[str, object], user_id: str) -> dict[str, str] | None:
+        """Resolve a direct peer only from this user's registered account IDs."""
+        if (event.get("source") != "telegram" or event.get("direction") != "incoming"
+                or event.get("conversation_kind") != "direct"):
+            return None
+        peer_id = str(event.get("peer_id") or "")
+        receiver_id = str(event.get("account_ref") or "")
+        if not re.fullmatch(r"[1-9][0-9]{0,19}", peer_id):
+            return None
+        sender_id = f"telegram:{peer_id}"
+        if sender_id == receiver_id:
+            return None
+        accounts = {str(item["id"]): item for item in self._store.accounts(user_id=user_id)
+                    if item.get("provider") == "telegram"}
+        sender = accounts.get(sender_id)
+        receiver = accounts.get(receiver_id)
+        if sender is None or receiver is None:
+            return None
+        return {
+            "sender_account_id": sender_id,
+            "sender_display_name": str(sender["display_name"])[:320],
+            "receiver_account_id": receiver_id,
+            "receiver_display_name": str(receiver["display_name"])[:320],
+        }
+
     def triage_workspace_event(
         self, *, event_seq: int, request_id: str, max_drafts: int = 2,
         user_id: str | None = None,
@@ -169,6 +194,7 @@ class UserIOService:
             generated = triage(
                 conversation_id=str(event["conversation_id"]), latest_message=message,
                 history=history, max_drafts=max_drafts,
+                actor_context=self._triage_actor_context(event, resolved_user),
             )
             if not isinstance(generated, dict):
                 raise ValueError("AI triage result must be an object")
