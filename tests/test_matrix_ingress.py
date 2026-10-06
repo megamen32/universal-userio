@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from universal_userio.matrix_ingress import MatrixMessage,poll_once
 class Reader:
  def poll(self,cursor,*,limit): assert cursor=='c1'; return [MatrixMessage('!r','$e','@a','hi')],'c2'
@@ -8,3 +10,10 @@ class Sink:
  def send_message(self,**kw): self.sent.append((kw["source"],kw["message_id"],kw["sender"],kw["body"]))
 def test_matrix_ingress_uses_userio_cursor_and_ingress():
  s=Sink(); assert poll_once(s,Reader())==1; assert s.c['matrix']=='c2'; assert s.sent==[('matrix','!r:$e','@a','hi')]
+
+
+def test_matrix_ingress_follows_main_service_lifecycle():
+ unit = (Path(__file__).parents[1] / "deploy/userio-matrix-ingress.service").read_text()
+ assert "PartOf=universal-userio.service" in unit
+ assert "WantedBy=universal-userio.service" in unit
+ assert "Restart=always" in unit

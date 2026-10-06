@@ -31,6 +31,8 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SERVICE_PATHS = {
     "deploy/universal-userio.service",
     "deploy/userio-agentcall-ingress.service",
+    "deploy/userio-gmail-ingress.service",
+    "deploy/userio-matrix-ingress.service",
 }
 _REQUIRED_PATHS = {"pyproject.toml", *_SERVICE_PATHS}
 _OBSOLETE_RUNTIME_PATHS = {"src/universal_userio/email.py"}
@@ -577,6 +579,8 @@ def _default_runner(argv: list[str]) -> None:
 
 def activate_services(*, runner: Callable[[list[str]], None] = _default_runner) -> None:
     runner(["systemctl", "daemon-reload"])
+    runner(["systemctl", "reenable", "userio-gmail-ingress.service"])
+    runner(["systemctl", "reenable", "userio-matrix-ingress.service"])
     runner(["systemctl", "restart", "universal-userio.service"])
     runner(["systemctl", "restart", "userio-agentcall-ingress.service"])
 
