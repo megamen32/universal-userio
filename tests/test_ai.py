@@ -25,6 +25,28 @@ def _response(content: str):
     return Response()
 
 
+def _tool_response(arguments: object, *, name: str = "submit_triage"):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        @staticmethod
+        def read() -> bytes:
+            return json.dumps({"choices": [{"message": {"content": "ignored", "tool_calls": [{
+                "type": "function", "function": {
+                    "name": name,
+                    "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
+                },
+            }]}}]}).encode()
+
+    return Response()
+
+
 def test_variants_are_separate_calls_with_context_and_auth() -> None:
     requests = []
     replies = iter(["<think>reasoning</think>\ndraft one", "draft two"])
@@ -83,7 +105,7 @@ def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() 
 
     def runner(request, *, timeout):
         requests.append((request, timeout))
-        return _response(content)
+        return _tool_response(content)
 
     generator = OpenAICompatibleDraftGenerator(
         endpoint="https://ai.example/v1", token="secret", model="triage-model", runner=runner,
@@ -97,6 +119,8 @@ def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() 
 
     assert len(requests) == 1
     payload = json.loads(requests[0][0].data)
+    assert payload["tool_choice"]["function"]["name"] == "submit_triage"
+    assert payload["tools"][0]["function"]["parameters"]["additionalProperties"] is False
     prompt = payload["messages"][1]["content"]
     assert "message-4" not in prompt
     assert "message-5" in prompt and "message-24" in prompt
@@ -117,10 +141,28 @@ def test_importance_triage_parser_rejects_unbounded_or_extra_output() -> None:
     }
     generator = OpenAICompatibleDraftGenerator(
         endpoint="https://ai.example/v1", token="secret", model="m",
-        runner=lambda *_args, **_kwargs: _response(json.dumps(invalid)),
+        runner=lambda *_args, **_kwargs: _tool_response(invalid),
     )
 
     with pytest.raises(ValueError, match="triage JSON"):
+        generator.triage_with_context(
+            conversation_id="conv_1", latest_message=InboxMessage("vk", "1", "a", "b", 1.0),
+            history=[], max_drafts=2,
+        )
+
+
+@pytest.mark.parametrize("response", [
+    _response('{"messages": []}'),
+    _tool_response({}, name="another_tool"),
+    _tool_response("not-json"),
+])
+def test_importance_triage_rejects_content_wrappers_wrong_tools_and_invalid_arguments(response) -> None:
+    generator = OpenAICompatibleDraftGenerator(
+        endpoint="https://ai.example/v1", token="secret", model="m",
+        runner=lambda *_args, **_kwargs: response,
+    )
+
+    with pytest.raises(ValueError, match="triage"):
         generator.triage_with_context(
             conversation_id="conv_1", latest_message=InboxMessage("vk", "1", "a", "b", 1.0),
             history=[], max_drafts=2,
