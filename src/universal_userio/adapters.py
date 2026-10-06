@@ -62,6 +62,14 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     sender_is_bot = payload.get("sender_is_bot", False)
     if type(sender_is_bot) is not bool:
         raise ValueError("sender_is_bot must be a boolean")
+    edited_at = payload.get("edited_at", 0.0)
+    if edited_at in (None, ""):
+        edited_at = 0.0
+    if type(edited_at) not in (int, float) or type(edited_at) is bool:
+        raise ValueError("edited_at must be a unix timestamp number")
+    edited_at = float(edited_at)
+    if edited_at < 0:
+        raise ValueError("edited_at must not be negative")
     raw_attachments = payload.get("attachments")
     parsed_attachments: list[dict[str, Any]] = []
     if isinstance(raw_attachments, list):
@@ -120,6 +128,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         peer_id=peer_id,
         reconciliation=reconciliation,
         sender_is_bot=sender_is_bot,
+        edited_at=edited_at,
     )
 
 

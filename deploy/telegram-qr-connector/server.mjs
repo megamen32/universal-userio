@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import { NewMessage } from "telegram/events/index.js";
+import { EditedMessage, NewMessage } from "telegram/events/index.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
@@ -508,6 +508,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     peer_id: chatKey,
     conversation_kind: conversationKind,
     sender_is_bot: senderIsBot,
+    ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     body: normalized.body.slice(0, 8000),
     ...(attachments.length ? { attachments } : {}),
@@ -551,7 +552,7 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
   return chats;
 }
 
-async function ingestLive(slot, client, accountId, dialogLabels, self, event) {
+async function ingestLive(slot, client, accountId, dialogLabels, self, event, isEdit = false) {
   const message = event.message;
   if (!message || message.out) return;
   let chatKey = "";
@@ -569,9 +570,11 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event) {
   const inboxMessage = await envelope(chatKey, label, message, client, self, { accountId });
   if (!inboxMessage.body) return;
   const posted = await postInbox(accountId, inboxMessage);
-  debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
+  // An edit rewrites an existing mirror message; it is not a new arrival and
+  // must not reschedule agent delivery for the chat.
+  if (!isEdit) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
-  console.log(`sync ${slot}: live ${label} msg ${message.id}`);
+  console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
 }
 
 async function syncAccount(slot) {
@@ -598,6 +601,12 @@ async function syncAccount(slot) {
       client.addEventHandler(
         (event) => { ingestLive(slot, client, accountId, dialogLabels, me, event).catch((error) => console.error(`sync ${slot} live error:`, (error && error.message) || error)); },
         new NewMessage({}),
+      );
+      // Edited messages never fire NewMessage; without this handler a bot
+      // editing its own status text stays stale in the mirror forever.
+      client.addEventHandler(
+        (event) => { ingestLive(slot, client, accountId, dialogLabels, me, event, true).catch((error) => console.error(`sync ${slot} live edit error:`, (error && error.message) || error)); },
+        new EditedMessage({}),
       );
       const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
