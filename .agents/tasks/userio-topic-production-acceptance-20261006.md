@@ -1,8 +1,8 @@
 # UserIO topic production acceptance — 2026-10-06
 
-Status: mail/Matrix and no-send browser acceptance passed on runtime 3849f83.
-Notice route 5764 and dispatcher 4567622 are deployed. Ordinary canaries were
-correctly silent; final priority-topic acceptance follows the scoped actor-context release.
+Status: requested mail/Matrix/UI and Telegram topic paths accepted live.
+Additional terminal-review deep-analysis transition fixed in 5c5a365; final
+source/runtime synchronization and canonical endpoint acceptance follows.
 
 ## Mail, Matrix, browser and AI-reply investigation
 
@@ -60,25 +60,31 @@ correctly silent; final priority-topic acceptance follows the scoped actor-conte
 - Focused checks: UserIO `39 passed`; dispatcher `27 passed`; Notice Place
   HumanRequest/topic `19 passed`.
 
-## External dependency and smallest next action
+## Production delivery acceptance
 
-Do not replay terminal event `39204`. After Agent Herder's API is ready, the
-Notice owner must perform one combined Notice Place upgrade containing
-`287933f`, verify both Notice services, then restart
-`userio-hermes-dispatcher.service`. UserIO's forced-tool fix is already live;
-the final browser release uses current clean main containing `f02410f` through
-the supported release path. Send one fresh Secretary (`8810909089`) to
-Nikita (`540308572`) canary and require all of:
-
-1. exact receiver message ID and UserIO event ID;
-2. successful structured triage receipt;
-3. durable Notice Place HumanRequest receipt when the decision is `notify` or
-   terminal `review`;
-4. visible delivery in chat `-1004322359393`, topic `5764`.
-
-If the fresh message correctly classifies as `silent`, use a separate clearly
-important test message; do not weaken the importance threshold or fabricate a
-notification from an ordinary message.
+- Notice route 287933f is live in reviewed d236108; project UserIO retains
+  chat -1004322359393 / topic 5764 and unchanged thresholds/tokens.
+- Normal test event 39507 completed silent, importance 0.1, and correctly did
+  not create a HumanRequest. Terminal 39204/39332/39367 were not replayed.
+- Clearly labeled priority technical test (no actual incident/call) matched
+  the existing safety-direct rule: Secretary UID8810909089 sender2304 →
+  Nikita UID540308572 receiver1981441 → event39515 eligible1/reconciled0 →
+  completed notify/safety_override true (importance0.35) → durable
+  HumanRequest userio-39515 → Telegram5849 at12:41:07UTC.
+- Receiver Careviolan read actual message body and keyboard. Native Telegram
+  thread link is https://t.me/c/4322359393/5764/5849, proving exact topic5764.
+  Buttons were only inspected, never clicked; no external replies or calls.
+- This proves priority transport, separately from AI-selected importance.
+  The AI understood the registered Secretary identity and correctly recognized
+  ordinary tests as low priority.
+- UserIO runtime ddb92cd / core3820661 exact manifest
+  5558d5954a757484fca4879d8c11c08e89bb0ba1ed65a716c5bd12c576b1be2c
+  passed supported release verification and no-delivery readback canary.
+- Final headed browser on that runtime: exact-source Gmail100 rows with only
+  source gmail; existing Katya12 drafts,12 enabled Edit/Send controls and
+  Предложить ответ. No generation/approval/send/delete action. Screenshots
+  hide message text before capture and were inspected.
+- Safe final structured evidence: current thread userio-delivery-final.json.
 
 ## Final identity-context repair
 
@@ -101,3 +107,18 @@ notification from an ordinary message.
 - Next controlled priority message is explicitly a technical test, without
   fictitious incident or phone action. Its safety-direct receipt proves topic
   transport separately from ordinary AI importance decisions.
+
+## Terminal review manual choice repair
+
+- Live old userio-39389 was resolved to deep_analysis with authenticated actor;
+  UserIO status review/attempts3/send_state none. A completed-only store guard
+  rejected the canonical deep preparation endpoint, producing repeated HTTP400.
+- Dispatcher 407f158 retains explicit notify/review mode, plus a narrow legacy
+  dismissal recovery requiring the actual completed-triage-not-found error.
+  Genuine legacy no-draft notify feedback remains enabled;30 tests passed.
+- UserIO 5c5a365 lets exact authenticated deep preparation accept completed or
+  terminal review, preserving current policy/user/event/request and no-send
+  fences. Pending/running still reject. Regression shows no reclassification,
+  no draft send and no replay; focused tests passed.
+- Original event is harmless social text; previously authenticated human choice
+  authorizes the existing read-only analysis route, not a new fabricated choice.
