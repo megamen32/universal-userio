@@ -1,7 +1,29 @@
 # UserIO message-edit delivery — 2026-10-06
 
-Status: implemented, tested, and **deployed to production** (2026-10-06
-~22:40 MSK). Real API-level canary passed; canary rows removed.
+Status: implemented, tested, **deployed to production** (2026-10-06 ~22:40
+MSK), and verified with a REAL end-to-end Telegram edit (23:02 MSK).
+Canary rows removed; connector healthy.
+
+## Real Telegram end-to-end proof (2026-10-06 23:02 MSK)
+
+NoticePlace bot (`SecretNotifyBot`, token from
+`/etc/notification-center.env`) sent a DM to the connected account
+(`540308572`, «Начинаю проверку... (edit-e2e)») and then edited it via real
+`editMessageText` to «Найдено в топе: 5 (edit-e2e)»:
+
+- ingress journal: `23:01:57 live SecretNotifyBot msg 1981887` →
+  `23:02:00 live edit SecretNotifyBot msg 1981887` (EditedMessage handler
+  fired; other production chats delivered edits the same minute: НОС Chat
+  607661, ИИ-Консьерж 1768).
+- mirror: exactly ONE message row
+  `telegram:540308572|8612415098:1981887` with the EDITED body and non-null
+  `edited_at` — the edit rewrote the message in place, no duplicate, no extra
+  workspace event.
+- Note: Bot API reports the DM message as id 10338 while the MTProto session
+  sees 1981887 (different id sequences for the same message) — don't join
+  on the Bot API id.
+- Cleanup: bot `deleteMessage` (Telegram) + mirror rows removed; connector
+  `live`, last sync within seconds.
 
 ## Production deployment record
 
