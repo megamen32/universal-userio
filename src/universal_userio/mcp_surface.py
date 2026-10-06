@@ -34,12 +34,12 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 TOOL_SPECS = (
     ToolSpec("userio.channels.list", "List this user's chats across connected channels.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
@@ -132,7 +132,7 @@ TOOL_SPECS = (
     }, ["username", "password"])),
     ToolSpec("userio.inbox.list_new", "Compatibility alias: list this user's unread messages.", _schema({
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.conversation.get", "Compatibility alias: read a conversation.", _schema({
@@ -560,6 +560,8 @@ class UserIOMcpSurface:
         source = str(conversation.get("source") or "")
         if source == "sms":
             return "Android gateway accepted the SMS; carrier delivery is not guaranteed."
+        if source == "max":
+            return "Sent through the MAX (oneme.ru) session; server accepted the message."
         if source.startswith("gmail:"):
             return "Sent through the Gmail account."
         if source.startswith("chatgpt"):

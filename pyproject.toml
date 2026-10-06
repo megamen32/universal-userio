@@ -15,6 +15,7 @@ universal-userio = "universal_userio.runtime:main"
 [project.optional-dependencies]
 telegram = ["telethon>=1.42,<2", "pydantic>=2", "qrcode>=7,<9"]
 chatgpt = ["curl-cffi>=0.5"]
+max = ["websocket-client>=1.6"]
 test = ["pytest>=8,<9"]
 
 [tool.pytest.ini_options]

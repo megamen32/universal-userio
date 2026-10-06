@@ -477,7 +477,7 @@ def handler(
                     payload = self._json()
                     source = str(payload.get("source") or "").strip().lower()
                     sender = str(payload.get("sender") or "").strip()
-                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail"} and not source.startswith("gmail:"):
+                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "max", "email", "gmail"} and not source.startswith("gmail:"):
                         raise ValueError("unsupported conversation source")
                     if not sender:
                         raise ValueError("sender is required")
@@ -1230,6 +1230,7 @@ def _adapter_for_message(service, message: dict[str, object], user_id: str):
         WhatsAppChannelAdapter,
         VKChannelAdapter,
         AndroidSmsChannelAdapter,
+        MaxChannelAdapter,
     )
     source = str(message.get("source") or "")
     table = {
@@ -1240,6 +1241,7 @@ def _adapter_for_message(service, message: dict[str, object], user_id: str):
         "whatsapp": WhatsAppChannelAdapter,
         "vk": VKChannelAdapter,
         "sms": AndroidSmsChannelAdapter,
+        "max": MaxChannelAdapter,
     }
     key = source.split(":", 1)[0] if ":" in source else source
     adapter_type = table.get(key)

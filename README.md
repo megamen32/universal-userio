@@ -81,6 +81,26 @@ localhost, add its normal API token to UserIO's private environment file, then
 restart UserIO. Do not put either token in a route map, browser extension, or
 MCP call.
 
+### MAX (oneme.ru) adapter
+
+MAX personal accounts have no official API, so the `max` channel speaks the
+same JSON WebSocket protocol (`wss://ws-api.oneme.ru/websocket`, protocol ver
+11) that web.max.ru itself uses, with a dedicated session token minted by the
+phone-number SMS login (protocol reference: community reverse-engineering
+docs). Set `USERIO_MAX_TOKEN` plus a stable `USERIO_MAX_DEVICE_ID` (a saved
+UUID identifies the UserIO device session across restarts); optionally point
+`USERIO_MAX_SOCKS` at a `host:port` SOCKS5 proxy to egress from the phone's
+mobile IP. The `userio-max-ingress` service keeps one logged-in session,
+imports recent history once (`--backfill N`), streams new DISPATCH events into
+normal UserIO conversations, and heartbeats/reconnects on its own.
+`userio.channels.send_draft` still only creates a draft; only
+`userio.draft.approve_send` sends the exact text through MSG_SEND, and the
+client reports server acceptance, not the peer's device delivery. Bind the
+channel to the owner by default; set `USERIO_MAX_USER_ID` to another user's id
+only after binding that user's `max` channel route. Keep the session token in
+UserIO's private environment file only. Install with the `max` extra
+(`websocket-client`).
+
 ## Universal channel adapters library (`universal_userio.channels`)
 
 One adapter codebase for Telegram, email (SMTP/IMAP), WhatsApp (Baileys
