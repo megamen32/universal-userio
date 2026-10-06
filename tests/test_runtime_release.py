@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+import scripts.runtime_release as runtime_release
+
 from scripts.runtime_release import (
     ReleaseError,
     activate_services,
@@ -236,3 +238,47 @@ def test_canary_reads_env_without_echo_and_never_calls_provider(tmp_path: Path) 
     assert receipt["canary_kind"] == "phase7-runtime"
     assert outbox.calls == []
     assert "canary-secret" not in encoded
+
+
+def test_canary_waits_for_http_service_readiness(tmp_path: Path, monkeypatch) -> None:
+    env_file = tmp_path / "userio.env"
+    env_file.write_text(
+        "USERIO_API_TOKEN=canary-secret\nUSERIO_URL=http://userio.invalid\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o600)
+    responses = iter(
+        [
+            runtime_release._CanaryUnavailable("not ready"),
+            (200, {"verified": True}),
+            (202, {"accepted": True, "draft": None, "conversation_id": "conv_test"}),
+            (
+                200,
+                {
+                    "messages": [
+                        {
+                            "message_id": "phase7-canary-retry",
+                            "body": "UserIO Phase 7 runtime canary phase7-canary-retry",
+                            "source": "matrix",
+                            "conversation_id": "conv_test",
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    sleeps: list[float] = []
+
+    def fake_http_json(*args, **kwargs):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(runtime_release, "_http_json", fake_http_json)
+    monkeypatch.setattr(runtime_release.time, "sleep", sleeps.append)
+
+    receipt = run_canary(env_file, message_id="phase7-canary-retry")
+
+    assert receipt["status"] == "passed"
+    assert sleeps == [0.25]
