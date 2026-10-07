@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .contracts import ConversationPolicy, InboxMessage, ReplyDraft, UserPrincipal
 
@@ -319,6 +320,20 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS workspace_triage_status_idx
                 ON workspace_triage(user_id,status,event_seq);
+            CREATE TABLE IF NOT EXISTS conversation_secretary_jobs (
+                user_id TEXT NOT NULL,job_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,event_seq INTEGER NOT NULL,
+                triage_request_id TEXT NOT NULL,actor TEXT NOT NULL,
+                source TEXT NOT NULL,account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'accepted',worker_id TEXT,
+                session_id TEXT,session_url TEXT,result_text TEXT,last_error TEXT,
+                created_at REAL NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,job_id),
+                UNIQUE(user_id,conversation_id,event_seq,attempt)
+            );
+            CREATE INDEX IF NOT EXISTS conversation_secretary_jobs_status_idx
+                ON conversation_secretary_jobs(user_id,status,created_at);
             CREATE TABLE IF NOT EXISTS workspace_exclusions (
                 user_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 source TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',
@@ -1695,6 +1710,10 @@ class SQLiteUserIOStore:
             if event_seqs:
                 placeholders = ",".join("?" for _ in event_seqs)
                 self._connection.execute(
+                    f"DELETE FROM conversation_secretary_jobs WHERE user_id=? AND event_seq IN ({placeholders})",
+                    (user_id, *event_seqs),
+                )
+                self._connection.execute(
                     f"DELETE FROM workspace_triage WHERE user_id=? AND event_seq IN ({placeholders})",
                     (user_id, *event_seqs),
                 )
@@ -2932,6 +2951,272 @@ class SQLiteUserIOStore:
         if changed != 1:
             raise ValueError("completed triage not found")
         return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+
+    @staticmethod
+    def _secretary_session_url(value: object) -> str:
+        url = str(value or "").strip()
+        if not url:
+            return ""
+        if len(url) > 1024 or any(ord(char) <= 32 for char in url):
+            raise ValueError("invalid Agent Herder session URL")
+        parsed = urlsplit(url)
+        session_key = parsed.fragment.removeprefix("/session/")
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "agent.bezrabotnyi.com"
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or not parsed.fragment.startswith("/session/")
+            or not re.fullmatch(r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2}){1,768}", session_key)
+        ):
+            raise ValueError("invalid Agent Herder session URL")
+        return url
+
+    def conversation_secretary(
+        self, conversation_id: str, *, user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Return owner-facing triage and deep-analysis state for one exact chat."""
+        user = self._user(user_id)
+        with self._lock:
+            conversation = self._connection.execute(
+                """SELECT id,source,account_ref,peer_id,conversation_kind
+                   FROM conversations WHERE user_id=? AND id=?""",
+                (user, conversation_id),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError("conversation not found")
+            event = self._connection.execute(
+                """SELECT e.seq,e.message_id,e.source,m.received_at
+                   FROM workspace_events e
+                   JOIN messages m ON m.user_id=e.user_id AND m.source=e.source
+                     AND m.message_id=e.message_id
+                   WHERE e.user_id=? AND e.conversation_id=? AND m.direction='incoming'
+                   ORDER BY e.seq DESC LIMIT 1""",
+                (user, conversation_id),
+            ).fetchone()
+            triage_row = None
+            job_row = None
+            if event is not None:
+                triage_row = self._connection.execute(
+                    """SELECT wt.* FROM workspace_triage wt
+                       JOIN workspace_events we ON we.user_id=wt.user_id
+                         AND we.seq=wt.event_seq
+                       WHERE wt.user_id=? AND we.conversation_id=?
+                       ORDER BY wt.event_seq DESC LIMIT 1""",
+                    (user, conversation_id),
+                ).fetchone()
+                job_row = self._connection.execute(
+                    """SELECT * FROM conversation_secretary_jobs
+                       WHERE user_id=? AND conversation_id=?
+                       ORDER BY created_at DESC,attempt DESC LIMIT 1""",
+                    (user, conversation_id),
+                ).fetchone()
+        summary = None
+        if event is not None:
+            summary = self.conversation_summary(
+                conversation_id, through_message_id=str(event["message_id"]),
+                through_message_source=str(event["source"]), user_id=user,
+            )
+        triage = self._workspace_triage_record(triage_row) if triage_row is not None else None
+        job = self._secretary_job_record(job_row) if job_row is not None else None
+        return {
+            "conversation": {
+                "id": str(conversation["id"]),
+                "source": str(conversation["source"]),
+                "account_ref": str(conversation["account_ref"] or ""),
+                "peer_id": str(conversation["peer_id"] or ""),
+                "conversation_kind": str(conversation["conversation_kind"] or "unknown"),
+                **({
+                    "event_seq": int(event["seq"]),
+                    "message_id": str(event["message_id"]),
+                    "message_source": str(event["source"]),
+                    "received_at": float(event["received_at"]),
+                } if event is not None else {}),
+            },
+            "triage": triage,
+            "summary": str((summary or {}).get("summary") or ""),
+            "deep": job,
+        }
+
+    @staticmethod
+    def _secretary_job_record(row: sqlite3.Row) -> dict[str, object]:
+        result: dict[str, object] = {
+            "job_id": str(row["job_id"]),
+            "conversation_id": str(row["conversation_id"]),
+            "event_seq": int(row["event_seq"]),
+            "triage_request_id": str(row["triage_request_id"]),
+            "actor": str(row["actor"]),
+            "status": str(row["status"]),
+            "source": str(row["source"]),
+            "account_ref": str(row["account_ref"]),
+            "peer_id": str(row["peer_id"]),
+            "attempt": int(row["attempt"]),
+            "created_at": float(row["created_at"]),
+            "updated_at": float(row["updated_at"]),
+        }
+        for source, target in (
+            ("session_id", "session_id"), ("session_url", "session_url"),
+            ("result_text", "result"), ("last_error", "error"),
+            ("worker_id", "worker_id"),
+        ):
+            value = row[source]
+            if value:
+                result[target] = str(value)
+        return result
+
+    def create_conversation_secretary_job(
+        self, *, conversation_id: str, event_seq: int, triage_request_id: str,
+        actor: str, retry: bool = False, identity: dict[str, object] | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        request_id = self._triage_request_id(triage_request_id)
+        actor = self._triage_actor(actor)
+        if type(retry) is not bool:
+            raise ValueError("retry must be boolean")
+        event = self.workspace_event(event_seq, user_id=user)
+        if str(event["conversation_id"]) != conversation_id:
+            raise ValueError("conversation event mismatch")
+        snapshot = identity if identity is not None else event
+        if str(snapshot.get("source") or "") != str(event["source"]):
+            raise ValueError("conversation source mismatch")
+        self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            previous = self._connection.execute(
+                """SELECT * FROM conversation_secretary_jobs
+                   WHERE user_id=? AND conversation_id=? AND event_seq=?
+                   ORDER BY attempt DESC LIMIT 1""",
+                (user, conversation_id, event_seq),
+            ).fetchone()
+            if previous is not None and (not retry or previous["status"] != "failed"):
+                return self._secretary_job_record(previous)
+            attempt = int(previous["attempt"]) + 1 if previous is not None else 1
+            now = time.time()
+            job_id = "secretary-" + uuid.uuid4().hex
+            self._connection.execute(
+                """INSERT INTO conversation_secretary_jobs
+                   (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
+                    source,account_ref,peer_id,attempt,status,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,'accepted',?,?)""",
+                (user, job_id, conversation_id, event_seq, request_id, actor,
+                 str(snapshot.get("source") or ""), str(snapshot.get("account_ref") or ""),
+                 str(snapshot.get("peer_id") or ""), attempt, now, now),
+            )
+            row = self._connection.execute(
+                "SELECT * FROM conversation_secretary_jobs WHERE user_id=? AND job_id=?",
+                (user, job_id),
+            ).fetchone()
+        assert row is not None
+        return self._secretary_job_record(row)
+
+    def conversation_secretary_jobs(
+        self, *, status: str = "accepted", limit: int = 20,
+        user_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        user = self._user(user_id)
+        if status not in {"accepted", "running", "completed", "failed"}:
+            raise ValueError("unsupported secretary job status")
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("secretary job limit must be between 1 and 100")
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT * FROM conversation_secretary_jobs
+                   WHERE user_id=? AND status=? ORDER BY created_at LIMIT ?""",
+                (user, status, limit),
+            ).fetchall()
+        return [self._secretary_job_record(row) for row in rows]
+
+    def update_conversation_secretary_job(
+        self, *, job_id: str, phase: str, worker_id: str = "",
+        session_id: str = "", session_url: str = "", result: str = "",
+        error: str = "", user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        if not isinstance(job_id, str) or not re.fullmatch(r"secretary-[a-f0-9]{32}", job_id):
+            raise ValueError("invalid secretary job id")
+        if phase not in {"accepted", "running", "completed", "failed"}:
+            raise ValueError("unsupported secretary job phase")
+        worker = str(worker_id or "").strip()
+        if not worker or len(worker) > 128:
+            raise ValueError("worker_id must be 1-128 characters")
+        clean_session_id = str(session_id or "").strip()
+        if len(clean_session_id) > 512 or any(ord(char) < 32 for char in clean_session_id):
+            raise ValueError("invalid Agent Herder session id")
+        clean_url = self._secretary_session_url(session_url)
+        clean_result = str(result or "").strip()
+        clean_error = str(error or "").strip()
+        if len(clean_result) > 20_000 or len(clean_error) > 2_000:
+            raise ValueError("secretary job result is too large")
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT * FROM conversation_secretary_jobs WHERE user_id=? AND job_id=?",
+                (user, job_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("secretary job not found")
+            current = str(row["status"])
+            allowed = {
+                "accepted": {"accepted", "running", "completed", "failed"},
+                "running": {"running", "completed", "failed"},
+                "completed": {"completed"},
+                "failed": {"failed"},
+            }
+            if phase not in allowed[current]:
+                raise ValueError("secretary job phase regression")
+            previous_worker = str(row["worker_id"] or "")
+            if not previous_worker and phase != "accepted":
+                raise ValueError("secretary job must be claimed before progress")
+            if previous_worker and worker and previous_worker != worker:
+                raise ValueError("secretary job worker binding is immutable")
+            previous_session_id = str(row["session_id"] or "")
+            previous_url = str(row["session_url"] or "")
+            if previous_session_id and clean_session_id and previous_session_id != clean_session_id:
+                raise ValueError("Agent Herder session binding is immutable")
+            if previous_url and clean_url and previous_url != clean_url:
+                raise ValueError("Agent Herder session URL is immutable")
+            final_session_id = previous_session_id or clean_session_id
+            final_url = previous_url or clean_url
+            previous_result = str(row["result_text"] or "")
+            previous_error = str(row["last_error"] or "")
+            if previous_result and clean_result and previous_result != clean_result:
+                raise ValueError("secretary job result is immutable")
+            if previous_error and clean_error and previous_error != clean_error:
+                raise ValueError("secretary job error is immutable")
+            final_result = previous_result or clean_result
+            final_error = previous_error or clean_error
+            if phase == "accepted":
+                if clean_session_id or clean_url or clean_result or clean_error:
+                    raise ValueError("secretary job claim accepts only worker_id")
+            elif phase == "running":
+                if not clean_session_id or not clean_url:
+                    raise ValueError("running secretary job requires session_id and session_url")
+                if clean_result or clean_error:
+                    raise ValueError("running secretary job cannot include a terminal result")
+            elif phase == "completed":
+                if not previous_session_id or not previous_url:
+                    raise ValueError("completed secretary job requires an earlier running session")
+                if not final_result or clean_error:
+                    raise ValueError("completed secretary job requires a result only")
+            elif not final_error or clean_result:
+                raise ValueError("failed secretary job requires an error only")
+            if phase == "failed" and bool(clean_session_id) != bool(clean_url):
+                raise ValueError("failed secretary job session binding must include id and URL")
+            self._connection.execute(
+                """UPDATE conversation_secretary_jobs
+                   SET status=?,worker_id=?,
+                       session_id=?,session_url=?,result_text=?,last_error=?,updated_at=?
+                   WHERE user_id=? AND job_id=?""",
+                (phase, previous_worker or worker, final_session_id, final_url, final_result, final_error,
+                 time.time(), user, job_id),
+            )
+            updated = self._connection.execute(
+                "SELECT * FROM conversation_secretary_jobs WHERE user_id=? AND job_id=?",
+                (user, job_id),
+            ).fetchone()
+        assert updated is not None
+        return self._secretary_job_record(updated)
 
     @staticmethod
     def _workspace_worker(worker_id: object) -> str:
