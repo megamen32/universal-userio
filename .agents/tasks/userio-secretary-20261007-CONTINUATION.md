@@ -239,3 +239,17 @@ Mac availability and task-source preservation/sync are no longer blockers.
 After publishing this handoff, perform a final light clean ff-sync to its
 remote-main commit. Seven backend tests, dispatcher selection, UI tests/typecheck/
 build and coordinated runtime/live proof remain gated by server100 reserve.
+
+The separate Mac dispatcher checkout also had three late task changes beyond
+the manifest. Full source was saved and merged in dispatcher3d2080e, retaining
+cached summaries, exact event identity and retry sessions. Its added delivery
+guards require exact durable progress receipts and the same native session,
+and preserve both late restart/admission regressions. AST/diff passed; semantic
+checks have not run. Native Mac original README/script/test are preserved in
+private `.tmp/mac-source-preserved-20261007T203219Z`; clean ff-sync reached
+dispatcherb9dd7ab on Mac/server100. Archive SHA256
+faffac58efa0df566202408d5c7ac7aa29894dc3cc4c9191e87b9ead1014e56a.
+UserIO Mac/server100 reached clean6b17e93 including the first preservation
+handoff. Herder owner independently confirmed both its copies clean0681005.
+Final light ff-sync includes these latest handoff commits. No test/build,
+provider prompt, runtime install or restart was performed during this recovery.
