@@ -149,3 +149,39 @@ Adjacent chat refresh race fixed in owned App.tsx: an old action's refresh
 cannot invalidate or replace a newly selected chat; read revocation cancels
 its generation. Uses the existing LatestRequest primitive and an active-chat
 ref; no provider/action semantics changed. Final UI proof remains pending.
+
+## Exact remaining blockers, 2026-10-07 18:42 UTC / server-100
+
+Current published source: UserIOd7749bf21f79028560955dd0ea3694c738b63ed9;
+dispatcher2a6a900. No own source dirt. UserIO's three neighbor-owned validator
+files remain untracked and preserved.
+
+Correct UID gate is closed: memory full avg10 36.43%, avg60 30.54%, current
+36,895,985,664 bytes against high38,654,705,664. No additional test/node/build/
+browser/provider workload was started. The final seven backend regressions,
+dispatcher selection, UI request tests/typecheck and static rebuild still need
+one serialized bounded slot. Source AST/diff-check alone is not acceptance.
+
+Mac source sync did NOT execute: canonical127.0.0.1:2222 refused TCP; documented
+LAN recovery192.168.2.8:22 returned No route to host; fresh GPTAdmin discovery
+reports shell:MacBook-Pro-User.local and its AgentBrowser/GrepMesh offline.
+All11 dirty Mac source/generated files remain untouched. Late source bytes,
+hashes and diffs were already saved in server100 ignored .tmp/mac-late-sources.
+Prepared .tmp/mac-source-sync.py verifies exact11 hashes and baseline26344fa,
+creates a private archive, reverse-applies only saved task changes, moves
+owned untracked artifacts into the ignored backup, and only then pulls ff.
+It rejects new dirt and active synchronization hooks. Run only after the
+canonical bridge returns and revalidate its expected snapshot first.
+
+Existing mac100 bridge watchdog failed at21:40:30MSK; audit last exited0 at
+21:00MSK. Both advertise unbounded MemoryMax/CPUQuota/TasksMax, so no manual
+start or budget mutation was performed under the user's no-limit-change rule.
+Infra/root owns safe bridge recovery. Never change fleet-codex-watch or restart
+native chats/daemon. Mac identity alias is user-confirmed; availability is the
+blocker, not hostname.
+
+Production UserIO and dispatcher still have PIDs3672069/3672766, NRestarts0,
+start timestamps2026-10-06 23:15:59/23:16:03MSK. No deploy/restart performed.
+After guarded checks: coordinated clean install preserving /opt foreign work,
+exact release verification, final same-card accepted→link→result canary, then
+Mac cleanup/sync and clean-main audit. Delivery is incomplete until these pass.
