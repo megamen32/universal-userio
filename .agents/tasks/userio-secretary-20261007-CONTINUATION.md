@@ -208,3 +208,34 @@ Smallest next action is the current seven-test secretary file under the
 corrected existing shared gate, followed sequentially by the dispatcher
 selection and UI checks. Root44 must restore usable reserve and Mac transport;
 no independent source fix or safe deploy remains pending before those proofs.
+
+## Mac restored and task checkout synchronized, 2026-10-07 20:18 UTC
+
+The user reported Mac available. Reverse2222 still refused and LAN192.168.2.8
+still returned No route, but fresh GPTAdmin discovery and an executed native
+shell proved the canonical M1 online. Identity: MacBook-Pro-User.local,
+LocalHostName MacBook-Pro-User, arm64, MacBookPro18,2. No transport configuration,
+watchdog, native chat or shared daemon was changed.
+
+All11 source/generated file hashes and baseline26344fa matched the saved
+snapshot exactly. Before removing their task delta, a private ignored backup
+preserved all files plus binary tracked diff, manifest, archive and sync receipt:
+`.tmp/mac-source-preserved-20261007T201815Z` inside the Mac task checkout.
+Archive SHA256a7788621ea632177c3e4b63f69c4c7a6724dc30d6e9ab80c1b00a01eab5fc484.
+Only the exact verified task patch was reverse-applied; owned untracked
+artifacts were moved into that backup. Full-history main then fast-forwarded
+to published d597141 and was clean, matching server100/origin/main. Late source
+semantics were already integrated; no saved work was discarded or published
+as generated secret-pattern assets.
+
+This was a light synchronization, not a test/build moved around the closed
+server100 gate: source1,136,225 bytes, observed Mac Python peak RSS17,088,512
+bytes, CPU cap30seconds, file cap16MiB, one native command with65second timeout.
+An initial optional RLIMIT_AS cap was rejected by macOS before any file action;
+the synchronization used supported CPU/file limits and exact bounded inputs.
+Local receipt: ignored `.tmp/mac-sync-result-20261007.json`.
+
+Mac availability and task-source preservation/sync are no longer blockers.
+After publishing this handoff, perform a final light clean ff-sync to its
+remote-main commit. Seven backend tests, dispatcher selection, UI tests/typecheck/
+build and coordinated runtime/live proof remain gated by server100 reserve.
