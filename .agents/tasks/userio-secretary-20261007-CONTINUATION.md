@@ -144,3 +144,8 @@ pytest/node/build/browser/deploy/provider workload has started. Before Mac
 cleanup, publish this late slice, prove its baseline/reachability, preserve all
 11 dirty source/generated files with hashes in a private ignored backup, and
 then ff-sync without overwriting any unowned path.
+
+Adjacent chat refresh race fixed in owned App.tsx: an old action's refresh
+cannot invalidate or replace a newly selected chat; read revocation cancels
+its generation. Uses the existing LatestRequest primitive and an active-chat
+ref; no provider/action semantics changed. Final UI proof remains pending.

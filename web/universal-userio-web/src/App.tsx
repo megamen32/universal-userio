@@ -241,6 +241,8 @@ export function App() {
   const byokPickerRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const chatsRequest = useRef(new LatestRequest())
+  const conversationRequest = useRef(new LatestRequest())
+  const activeConversation = useRef("")
   const secretaryRequest = useRef(new SecretaryRequests())
   const notify = (message: string) => {
     setToast(message)
@@ -299,7 +301,12 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [search, account, activeChannel, userCapabilities.read])
 
-  const loadConversation = useCallback(async (id: string) => setConversation(await api<Conversation>(`/v1/conversations/${id}`)), [])
+  const loadConversation = useCallback(async (id: string) => {
+    if (activeConversation.current !== id) return
+    const request = conversationRequest.current.begin()
+    const result = await api<Conversation>(`/v1/conversations/${encodeURIComponent(id)}`)
+    if (conversationRequest.current.isCurrent(request) && activeConversation.current === id) setConversation(result)
+  }, [])
   const loadSecretary = useCallback(async (id: string) => {
     const gate = secretaryRequest.current
     const request = gate.beginRead()
@@ -353,6 +360,11 @@ export function App() {
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (userCapabilities.read) void refreshChats(); else { chatsRequest.current.begin(); setChats([]); setSelectedChat(""); setConversation(null) } }, [refreshChats, userCapabilities.read])
+  useEffect(() => {
+    activeConversation.current = userCapabilities.read ? selectedChat : ""
+    conversationRequest.current.begin()
+    return () => { activeConversation.current = ""; conversationRequest.current.begin() }
+  }, [selectedChat, userCapabilities.read])
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedChat && userCapabilities.read) void loadConversation(selectedChat) }, [loadConversation, selectedChat, userCapabilities.read])
