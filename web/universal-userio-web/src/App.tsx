@@ -199,6 +199,7 @@ export function App() {
   const [secretaryBusy, setSecretaryBusy] = useState(false)
   const [secretaryError, setSecretaryError] = useState("")
   const [secretaryLoading, setSecretaryLoading] = useState(false)
+  const currentSecretaryDeep = secretary?.deep?.event_seq === secretary?.conversation.event_seq ? secretary?.deep : null
   const [selectedAccount, setSelectedAccount] = useState<string>("all")
   const [selectedChannel, setSelectedChannel] = useState<string>("all")
   const [selectedChat, setSelectedChat] = useState<string>("")
@@ -646,12 +647,12 @@ export function App() {
     setSecretaryBusy(true)
     try {
       const result = await api<Secretary>(`/v1/conversations/${encodeURIComponent(conversation.id)}/secretary/deep`, {
-        method: "POST", body: JSON.stringify({ retry: secretary?.deep?.status === "failed" }),
+        method: "POST", body: JSON.stringify(currentSecretaryDeep?.status === "failed" ? { retry_of_job_id: currentSecretaryDeep.job_id } : {}),
       })
       if (secretaryRequest.current.isCurrentAction(request)) {
         setSecretary(result)
         setSecretaryError("")
-        notify("Глубокий разбор принят")
+        notify(result.deep?.status === "completed" ? "Глубокий разбор уже готов" : result.deep?.status === "failed" ? "Попытка завершилась ошибкой; можно повторить её ещё раз" : "Глубокий разбор принят")
       }
     } catch (error) {
       if (secretaryRequest.current.isCurrentAction(request)) notify(`Не удалось запустить глубокий разбор: ${(error as Error).message}`)
@@ -789,7 +790,7 @@ export function App() {
               {secretary?.deep?.result && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm">{secretary.deep.result}</p>}
               {secretary?.deep?.error && <p className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{secretary.deep.error}</p>}
             </div>
-            <div className="flex shrink-0 flex-wrap gap-2">{secretaryError && <Button variant="outline" size="sm" disabled={secretaryBusy || secretaryLoading} onClick={() => void loadSecretary(conversation.id)}>Повторить загрузку</Button>}<Button variant="outline" size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq} onClick={() => void analyseWithSecretary()}>{secretaryBusy ? "Подождите…" : "Разобрать"}</Button><Button size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq || ["accepted", "running"].includes(secretary?.deep?.status || "")} onClick={() => void startDeepSecretaryAnalysis()}>{secretary?.deep?.status === "failed" ? "Повторить глубокий разбор" : "Глубокий разбор"}</Button>{secretary?.deep?.session_url && <Button asChild variant="outline" size="sm"><a href={secretary.deep.session_url} target="_blank" rel="noreferrer">Agent Herder ↗</a></Button>}</div>
+            <div className="flex shrink-0 flex-wrap gap-2">{secretaryError && <Button variant="outline" size="sm" disabled={secretaryBusy || secretaryLoading} onClick={() => void loadSecretary(conversation.id)}>Повторить загрузку</Button>}<Button variant="outline" size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq} onClick={() => void analyseWithSecretary()}>{secretaryBusy ? "Подождите…" : "Разобрать"}</Button><Button size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq || ["accepted", "running", "completed"].includes(currentSecretaryDeep?.status || "")} onClick={() => void startDeepSecretaryAnalysis()}>{currentSecretaryDeep?.status === "completed" ? "Готово" : currentSecretaryDeep?.status === "failed" ? "Повторить глубокий разбор" : "Глубокий разбор"}</Button>{secretary?.deep?.session_url && <Button asChild variant="outline" size="sm"><a href={secretary.deep.session_url} target="_blank" rel="noreferrer">Agent Herder ↗</a></Button>}</div>
           </div>
         </div>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">

@@ -90,6 +90,7 @@ class SQLiteUserIOStore:
             if self._is_legacy() or self._table_exists("legacy_conversations"):
                 self._migrate_legacy()
             self._data_schema()
+            self._conversation_secretary_jobs_migration()
             self._workspace_policy_migration()
             message_columns = {
                 str(row["name"])
@@ -324,12 +325,14 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,job_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,event_seq INTEGER NOT NULL,
                 triage_request_id TEXT NOT NULL,actor TEXT NOT NULL,
-                source TEXT NOT NULL,account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL DEFAULT 1,
+                source TEXT NOT NULL,account_ref TEXT NOT NULL,
+                peer_id TEXT NOT NULL,message_id TEXT NOT NULL,
+                parent_job_id TEXT,attempt INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'accepted',worker_id TEXT,
                 session_id TEXT,session_url TEXT,result_text TEXT,last_error TEXT,
                 created_at REAL NOT NULL,updated_at REAL NOT NULL,
                 PRIMARY KEY(user_id,job_id),
+                UNIQUE(user_id,parent_job_id),
                 UNIQUE(user_id,conversation_id,event_seq,attempt)
             );
             CREATE INDEX IF NOT EXISTS conversation_secretary_jobs_status_idx
@@ -457,6 +460,107 @@ class SQLiteUserIOStore:
             self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
         except sqlite3.OperationalError:  # column already exists
             pass
+        for column in (
+            "source TEXT NOT NULL DEFAULT ''",
+            "account_ref TEXT NOT NULL DEFAULT ''",
+            "peer_id TEXT NOT NULL DEFAULT ''",
+            "message_id TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                self._connection.execute(
+                    f"ALTER TABLE conversation_secretary_jobs ADD COLUMN {column}"
+                )
+            except sqlite3.OperationalError:  # column already exists
+                pass
+
+    def _conversation_secretary_jobs_migration(self) -> None:
+        """Replace the pre-retry table whose event uniqueness erased attempt history."""
+        columns = {
+            str(row["name"])
+            for row in self._connection.execute(
+                "PRAGMA table_info(conversation_secretary_jobs)"
+            )
+        }
+        unique_indexes = []
+        for index in self._connection.execute(
+            "PRAGMA index_list(conversation_secretary_jobs)"
+        ).fetchall():
+            if not int(index["unique"]) or int(index["partial"]):
+                continue
+            names = tuple(
+                str(row["name"])
+                for row in self._connection.execute(
+                    f"PRAGMA index_info({index['name']})"
+                ).fetchall()
+            )
+            unique_indexes.append(names)
+        old_event_unique = ("user_id", "conversation_id", "event_seq") in unique_indexes
+        if {"parent_job_id", "attempt"}.issubset(columns) and not old_event_unique:
+            self._connection.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS conversation_secretary_jobs_root_idx
+                   ON conversation_secretary_jobs(user_id,conversation_id,event_seq)
+                   WHERE parent_job_id IS NULL"""
+            )
+            return
+        self._connection.execute("DROP INDEX IF EXISTS conversation_secretary_jobs_status_idx")
+        self._connection.execute("DROP INDEX IF EXISTS conversation_secretary_jobs_root_idx")
+        self._connection.execute(
+            "ALTER TABLE conversation_secretary_jobs RENAME TO legacy_conversation_secretary_jobs"
+        )
+        self._connection.execute(
+            """CREATE TABLE conversation_secretary_jobs (
+                user_id TEXT NOT NULL,job_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,event_seq INTEGER NOT NULL,
+                triage_request_id TEXT NOT NULL,actor TEXT NOT NULL,
+                source TEXT NOT NULL,account_ref TEXT NOT NULL,
+                peer_id TEXT NOT NULL,message_id TEXT NOT NULL,
+                parent_job_id TEXT,attempt INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'accepted',worker_id TEXT,
+                session_id TEXT,session_url TEXT,result_text TEXT,last_error TEXT,
+                created_at REAL NOT NULL,updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,job_id),
+                UNIQUE(user_id,parent_job_id),
+                UNIQUE(user_id,conversation_id,event_seq,attempt)
+            )"""
+        )
+        legacy_columns = {
+            str(row["name"])
+            for row in self._connection.execute(
+                "PRAGMA table_info(legacy_conversation_secretary_jobs)"
+            )
+        }
+        def source(name: str, default: str) -> str:
+            return "l." + name if name in legacy_columns else default
+        parent = source("parent_job_id", "NULL")
+        if "parent_job_id" not in legacy_columns and "attempt" in legacy_columns:
+            parent = """(SELECT p.job_id FROM legacy_conversation_secretary_jobs p
+                WHERE p.user_id=l.user_id AND p.conversation_id=l.conversation_id
+                  AND p.event_seq=l.event_seq AND p.attempt=l.attempt-1)"""
+        message = source("message_id", "''")
+        message = f"""COALESCE(NULLIF({message},''),(SELECT e.message_id
+            FROM workspace_events e WHERE e.user_id=l.user_id AND e.seq=l.event_seq),'')"""
+        self._connection.execute(
+            f"""INSERT INTO conversation_secretary_jobs
+                (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
+                 source,account_ref,peer_id,message_id,parent_job_id,attempt,status,
+                 worker_id,session_id,session_url,result_text,last_error,created_at,updated_at)
+                SELECT user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
+                 {source('source', "''")},{source('account_ref', "''")},
+                 {source('peer_id', "''")},{message},
+                 {parent},{source('attempt', '1')},status,
+                 worker_id,session_id,session_url,result_text,last_error,created_at,updated_at
+                FROM legacy_conversation_secretary_jobs l"""
+        )
+        self._connection.execute("DROP TABLE legacy_conversation_secretary_jobs")
+        self._connection.execute(
+            """CREATE INDEX conversation_secretary_jobs_status_idx
+               ON conversation_secretary_jobs(user_id,status,created_at)"""
+        )
+        self._connection.execute(
+            """CREATE UNIQUE INDEX conversation_secretary_jobs_root_idx
+               ON conversation_secretary_jobs(user_id,conversation_id,event_seq)
+               WHERE parent_job_id IS NULL"""
+        )
 
     def _backfill_workspace_events(self) -> None:
         marker = "workspace_events_backfilled_v1"
@@ -3008,7 +3112,7 @@ class SQLiteUserIOStore:
                 job_row = self._connection.execute(
                     """SELECT * FROM conversation_secretary_jobs
                        WHERE user_id=? AND conversation_id=?
-                       ORDER BY created_at DESC,attempt DESC LIMIT 1""",
+                       ORDER BY created_at DESC,event_seq DESC,attempt DESC LIMIT 1""",
                     (user, conversation_id),
                 ).fetchone()
         summary = None
@@ -3046,15 +3150,17 @@ class SQLiteUserIOStore:
             "event_seq": int(row["event_seq"]),
             "triage_request_id": str(row["triage_request_id"]),
             "actor": str(row["actor"]),
-            "status": str(row["status"]),
             "source": str(row["source"]),
             "account_ref": str(row["account_ref"]),
             "peer_id": str(row["peer_id"]),
+            "message_id": str(row["message_id"]),
             "attempt": int(row["attempt"]),
+            "status": str(row["status"]),
             "created_at": float(row["created_at"]),
             "updated_at": float(row["updated_at"]),
         }
         for source, target in (
+            ("parent_job_id", "parent_job_id"),
             ("session_id", "session_id"), ("session_url", "session_url"),
             ("result_text", "result"), ("last_error", "error"),
             ("worker_id", "worker_id"),
@@ -3066,14 +3172,12 @@ class SQLiteUserIOStore:
 
     def create_conversation_secretary_job(
         self, *, conversation_id: str, event_seq: int, triage_request_id: str,
-        actor: str, retry: bool = False, identity: dict[str, object] | None = None,
+        actor: str, identity: dict[str, object] | None = None,
         user_id: str | None = None,
     ) -> dict[str, object]:
         user = self._user(user_id)
         request_id = self._triage_request_id(triage_request_id)
         actor = self._triage_actor(actor)
-        if type(retry) is not bool:
-            raise ValueError("retry must be boolean")
         event = self.workspace_event(event_seq, user_id=user)
         if str(event["conversation_id"]) != conversation_id:
             raise ValueError("conversation event mismatch")
@@ -3081,34 +3185,90 @@ class SQLiteUserIOStore:
         if str(snapshot.get("source") or "") != str(event["source"]):
             raise ValueError("conversation source mismatch")
         self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+        now = time.time()
+        job_id = "secretary-" + uuid.uuid4().hex
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
-            previous = self._connection.execute(
+            self._connection.execute(
+                """INSERT OR IGNORE INTO conversation_secretary_jobs
+                   (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
+                    source,account_ref,peer_id,message_id,status,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,'accepted',?,?)""",
+                (
+                    user, job_id, conversation_id, event_seq, request_id, actor,
+                    str(snapshot["source"]), str(snapshot["account_ref"] or ""),
+                    str(snapshot["peer_id"] or ""), str(snapshot["message_id"]), now, now,
+                ),
+            )
+            row = self._connection.execute(
                 """SELECT * FROM conversation_secretary_jobs
                    WHERE user_id=? AND conversation_id=? AND event_seq=?
-                   ORDER BY attempt DESC LIMIT 1""",
+                     AND parent_job_id IS NULL""",
                 (user, conversation_id, event_seq),
             ).fetchone()
-            if previous is not None and (not retry or previous["status"] != "failed"):
-                return self._secretary_job_record(previous)
-            attempt = int(previous["attempt"]) + 1 if previous is not None else 1
-            now = time.time()
-            job_id = "secretary-" + uuid.uuid4().hex
-            self._connection.execute(
-                """INSERT INTO conversation_secretary_jobs
-                   (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
-                    source,account_ref,peer_id,attempt,status,created_at,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,'accepted',?,?)""",
-                (user, job_id, conversation_id, event_seq, request_id, actor,
-                 str(snapshot.get("source") or ""), str(snapshot.get("account_ref") or ""),
-                 str(snapshot.get("peer_id") or ""), attempt, now, now),
-            )
+        assert row is not None
+        return self._secretary_job_record(row)
+
+    def conversation_secretary_job(
+        self, job_id: str, *, user_id: str | None = None,
+    ) -> dict[str, object]:
+        user = self._user(user_id)
+        if not isinstance(job_id, str) or not re.fullmatch(r"secretary-[a-f0-9]{32}", job_id):
+            raise ValueError("invalid secretary job id")
+        with self._lock:
             row = self._connection.execute(
                 "SELECT * FROM conversation_secretary_jobs WHERE user_id=? AND job_id=?",
                 (user, job_id),
             ).fetchone()
-        assert row is not None
+        if row is None:
+            raise KeyError("secretary job not found")
         return self._secretary_job_record(row)
+
+    def retry_conversation_secretary_job(
+        self, *, job_id: str, actor: str, conversation_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Create or reuse one immutable successor for a failed attempt."""
+        user = self._user(user_id)
+        if not isinstance(job_id, str) or not re.fullmatch(r"secretary-[a-f0-9]{32}", job_id):
+            raise ValueError("invalid secretary retry job id")
+        actor = self._triage_actor(actor)
+        now = time.time()
+        successor_id = "secretary-" + uuid.uuid4().hex
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            parent = self._connection.execute(
+                """SELECT * FROM conversation_secretary_jobs
+                   WHERE user_id=? AND job_id=?""",
+                (user, job_id),
+            ).fetchone()
+            if parent is None:
+                raise KeyError("secretary retry job not found")
+            if str(parent["conversation_id"]) != conversation_id:
+                raise ValueError("secretary retry conversation mismatch")
+            if str(parent["status"]) != "failed":
+                raise ValueError("only a failed secretary job can be retried")
+            self._connection.execute(
+                """INSERT OR IGNORE INTO conversation_secretary_jobs
+                   (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
+                    source,account_ref,peer_id,message_id,parent_job_id,attempt,
+                    status,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 'accepted',?,?)""",
+                (
+                    user, successor_id, conversation_id, int(parent["event_seq"]),
+                    str(parent["triage_request_id"]), actor, str(parent["source"]),
+                    str(parent["account_ref"]), str(parent["peer_id"]),
+                    str(parent["message_id"]), job_id, int(parent["attempt"]) + 1,
+                    now, now,
+                ),
+            )
+            successor = self._connection.execute(
+                """SELECT * FROM conversation_secretary_jobs
+                   WHERE user_id=? AND parent_job_id=?""",
+                (user, job_id),
+            ).fetchone()
+        assert successor is not None
+        return self._secretary_job_record(successor)
 
     def conversation_secretary_jobs(
         self, *, status: str = "accepted", limit: int = 20,

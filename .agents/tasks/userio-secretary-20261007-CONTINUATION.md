@@ -119,3 +119,28 @@ untracked validator/contract files, no own dirt. Compiled UI assets, semantic
 dispatcher/UI checks, deploy, final business canary and Mac cleanup remain
 required and are blocked by corrected UID reserve gate. Fresh UID memory
 38,152,409,088 bytes, full PSI avg10 16.18/avg60 16.73: gate closed.
+
+## Late Mac context beyond the staged manifest
+
+Fresh read-only Mac source comparison found late http/service/store/App changes
+and one request-gate test after the manifest capture. All snapshots/diffs are
+saved in ignored .tmp/mac-late-sources and .tmp/mac-late-*.diff. The existing
+late request-gate test was preserved in published79018ed. Exact failed-job
+retry_of_job_id, immutable message_id, parent_job_id history and predecessor
+migration are now merged with the server snapshot/claim/UI fixes. Two migration
+regressions were added; the current seven-test backend file has NOT run after
+this semantic delta. The previous five-test result does not verify it.
+
+Reviewed corrections to the late migration: root partial index is created only
+after parent_job_id exists; partial indexes do not look like old event-only
+uniqueness; intermediate attempt history gets exact predecessor links and its
+immutable journal message ID. Reopen must leave schema_version unchanged.
+Retry rechecks UserIO policy for the exact failed event before creating a child.
+The UI sends the precise failed job and keeps done/active state scoped to the
+latest message, so completed old work does not disable a new incoming message.
+
+Source AST/diff-check pass only. Resource gate remains closed; no further
+pytest/node/build/browser/deploy/provider workload has started. Before Mac
+cleanup, publish this late slice, prove its baseline/reachability, preserve all
+11 dirty source/generated files with hashes in a private ignored backup, and
+then ff-sync without overwriting any unowned path.

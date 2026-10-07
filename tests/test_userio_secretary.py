@@ -296,18 +296,32 @@ def test_secretary_failed_retry_gets_new_job_and_preserves_old_result(tmp_path) 
         conversation_id=conversation_id, actor="userio-web:owner",
     )["deep"] == failed
     retry = service.request_conversation_secretary_deep(
-        conversation_id=conversation_id, actor="userio-web:owner", retry=True,
+        conversation_id=conversation_id, actor="userio-web:owner", retry_of_job_id=first["job_id"],
     )["deep"]
     assert retry["job_id"] != first["job_id"]
     assert retry["attempt"] == 2
     assert service.request_conversation_secretary_deep(
-        conversation_id=conversation_id, actor="userio-web:owner", retry=True,
+        conversation_id=conversation_id, actor="userio-web:owner", retry_of_job_id=first["job_id"],
     )["deep"]["job_id"] == retry["job_id"]
     assert store.conversation_secretary_jobs(status="failed") == [failed]
     store.update_conversation_secretary_job(
         job_id=first["job_id"], phase="failed", worker_id="worker-1", error="Provider unavailable",
     )
     assert store.conversation_secretary(conversation_id)["deep"]["job_id"] == retry["job_id"]
+    store.update_conversation_secretary_job(
+        job_id=retry["job_id"], phase="accepted", worker_id="worker-2",
+    )
+    store.update_conversation_secretary_job(
+        job_id=retry["job_id"], phase="failed", worker_id="worker-2", error="Second failure",
+    )
+    replay = service.request_conversation_secretary_deep(
+        conversation_id=conversation_id, actor="userio-web:owner", retry_of_job_id=first["job_id"],
+    )["deep"]
+    assert replay["job_id"] == retry["job_id"] and replay["status"] == "failed"
+    third = service.request_conversation_secretary_deep(
+        conversation_id=conversation_id, actor="userio-web:owner", retry_of_job_id=retry["job_id"],
+    )["deep"]
+    assert third["attempt"] == 3 and third["parent_job_id"] == retry["job_id"]
     store.set_conversation_account(conversation_id, "telegram:changed")
     assert store.conversation_secretary_jobs()[0]["account_ref"] == "telegram:owner"
 
@@ -338,3 +352,74 @@ def test_secretary_claim_is_exclusive_across_store_connections(tmp_path) -> None
     assert all(not worker.is_alive() for worker in workers)
     assert len(outcomes) == 2
     assert sum("worker binding is immutable" in item for item in outcomes) == 1
+
+
+def test_secretary_migrates_pre_retry_schema_without_rebuilding_on_reopen(tmp_path) -> None:
+    service, conversation_id = _service(tmp_path)
+    store = service._store
+    job = service.request_conversation_secretary_deep(
+        conversation_id=conversation_id, actor="userio-web:owner",
+    )["deep"]
+    user = store.owner().user_id
+    with store._connection:
+        store._connection.execute("DROP TABLE conversation_secretary_jobs")
+        store._connection.execute("""CREATE TABLE conversation_secretary_jobs (
+            user_id TEXT NOT NULL,job_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+            event_seq INTEGER NOT NULL,triage_request_id TEXT NOT NULL,actor TEXT NOT NULL,
+            status TEXT NOT NULL,worker_id TEXT,session_id TEXT,session_url TEXT,
+            result_text TEXT,last_error TEXT,created_at REAL NOT NULL,updated_at REAL NOT NULL,
+            PRIMARY KEY(user_id,job_id),UNIQUE(user_id,conversation_id,event_seq))""")
+        store._connection.execute("""INSERT INTO conversation_secretary_jobs
+            (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,status,
+             worker_id,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,'failed',?,?,?,?)""",
+            (user,job["job_id"],conversation_id,job["event_seq"],job["triage_request_id"],
+             job["actor"],"legacy-worker","Legacy error",job["created_at"],job["updated_at"]))
+    store._connection.close()
+    migrated = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    preserved = migrated.conversation_secretary_job(job["job_id"])
+    assert preserved["status"] == "failed" and preserved["error"] == "Legacy error"
+    assert preserved["worker_id"] == "legacy-worker" and preserved["attempt"] == 1
+    assert preserved["account_ref"] == ""  # Never invent historical account provenance.
+    assert preserved["message_id"] == "540308572:44"
+    version = migrated._connection.execute("PRAGMA schema_version").fetchone()[0]
+    migrated._connection.close()
+    reopened = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    assert reopened._connection.execute("PRAGMA schema_version").fetchone()[0] == version
+    assert reopened.conversation_secretary_job(job["job_id"]) == preserved
+
+
+def test_secretary_migration_preserves_intermediate_attempt_history(tmp_path) -> None:
+    service, conversation_id = _service(tmp_path)
+    store = service._store
+    job = service.request_conversation_secretary_deep(
+        conversation_id=conversation_id, actor="userio-web:owner",
+    )["deep"]
+    user = store.owner().user_id
+    child_id = "secretary-" + "b" * 32
+    with store._connection:
+        store._connection.execute("DROP TABLE conversation_secretary_jobs")
+        store._connection.execute("""CREATE TABLE conversation_secretary_jobs (
+            user_id TEXT NOT NULL,job_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+            event_seq INTEGER NOT NULL,triage_request_id TEXT NOT NULL,actor TEXT NOT NULL,
+            source TEXT NOT NULL,account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,
+            attempt INTEGER NOT NULL,status TEXT NOT NULL,worker_id TEXT,session_id TEXT,
+            session_url TEXT,result_text TEXT,last_error TEXT,created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,PRIMARY KEY(user_id,job_id),
+            UNIQUE(user_id,conversation_id,event_seq,attempt))""")
+        for attempt, identity in [(1, job["job_id"]), (2, child_id)]:
+            store._connection.execute("""INSERT INTO conversation_secretary_jobs
+                (user_id,job_id,conversation_id,event_seq,triage_request_id,actor,
+                 source,account_ref,peer_id,attempt,status,worker_id,last_error,created_at,updated_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,'failed','legacy-worker',?,?,?)""",
+                (user,identity,conversation_id,job["event_seq"],job["triage_request_id"],job["actor"],
+                 job["source"],job["account_ref"],job["peer_id"],attempt,"Legacy error",float(attempt),float(attempt)))
+    store._connection.close()
+    migrated = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    assert migrated.conversation_secretary_job(job["job_id"])["attempt"] == 1
+    child = migrated.conversation_secretary_job(child_id)
+    assert child["parent_job_id"] == job["job_id"] and child["attempt"] == 2
+    assert child["account_ref"] == job["account_ref"] and child["error"] == "Legacy error"
+    successor = migrated.retry_conversation_secretary_job(
+        job_id=child_id, actor="userio-web:owner", conversation_id=conversation_id,
+    )
+    assert successor["attempt"] == 3 and successor["parent_job_id"] == child_id
