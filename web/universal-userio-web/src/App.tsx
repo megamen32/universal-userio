@@ -14,10 +14,14 @@ type Conversation = { id: string; source: string; sender: string; identity_id?: 
 type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
+type SecretaryTriage = { event_seq: number; status: string; request_id: string; triage?: { decision?: string; importance?: number; urgency?: string; confidence?: number; reason_ru?: string; action_summary?: string; action_required?: boolean } }
+type SecretaryDeep = { job_id: string; event_seq: number; status: "accepted" | "running" | "completed" | "failed"; session_id?: string; session_url?: string; result?: string; error?: string }
+type Secretary = { conversation: { id: string; event_seq?: number; message_id?: string; source: string; account_ref: string; peer_id: string }; triage: SecretaryTriage | null; summary: string; deep: SecretaryDeep | null }
 import { defineByokPresetPicker } from "./vendor/byok-ui"
 import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type ByokLedgerTotals } from "./vendor/byok-runs-ui"
 import { beginContextSettingsLoad, completeContextSettingsLoad, confirmContextSettingsSave, contextSettingsPayload, contextSettingsValidationError, createContextSettingsSession, failContextSettingsLoad } from "./context-settings"
 import { LatestRequest } from "./latest-request"
+import { SecretaryRequests } from "./secretary-requests"
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } })
@@ -191,6 +195,10 @@ export function App() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [chats, setChats] = useState<Chat[]>([])
   const [conversation, setConversation] = useState<Conversation | null>(null)
+  const [secretary, setSecretary] = useState<Secretary | null>(null)
+  const [secretaryBusy, setSecretaryBusy] = useState(false)
+  const [secretaryError, setSecretaryError] = useState("")
+  const [secretaryLoading, setSecretaryLoading] = useState(false)
   const [selectedAccount, setSelectedAccount] = useState<string>("all")
   const [selectedChannel, setSelectedChannel] = useState<string>("all")
   const [selectedChat, setSelectedChat] = useState<string>("")
@@ -232,6 +240,7 @@ export function App() {
   const byokPickerRef = useRef<HTMLDivElement>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const chatsRequest = useRef(new LatestRequest())
+  const secretaryRequest = useRef(new SecretaryRequests())
   const notify = (message: string) => {
     setToast(message)
     window.clearTimeout(toastTimer.current)
@@ -290,6 +299,23 @@ export function App() {
   }, [search, account, activeChannel, userCapabilities.read])
 
   const loadConversation = useCallback(async (id: string) => setConversation(await api<Conversation>(`/v1/conversations/${id}`)), [])
+  const loadSecretary = useCallback(async (id: string) => {
+    const gate = secretaryRequest.current
+    const request = gate.beginRead()
+    if (request === null) return
+    setSecretaryLoading(true)
+    try {
+      const result = await api<Secretary>(`/v1/conversations/${encodeURIComponent(id)}/secretary`)
+      if (gate.isCurrentRead(request)) {
+        setSecretary(result)
+        setSecretaryError("")
+      }
+    } catch (error) {
+      if (gate.isCurrentRead(request)) setSecretaryError(`Не удалось загрузить разбор: ${(error as Error).message}`)
+    } finally {
+      if (gate.isCurrentRead(request)) setSecretaryLoading(false)
+    }
+  }, [])
   const bottomRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" })
@@ -329,6 +355,23 @@ export function App() {
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedChat && userCapabilities.read) void loadConversation(selectedChat) }, [loadConversation, selectedChat, userCapabilities.read])
+  useEffect(() => {
+    const requestGate = secretaryRequest.current
+    requestGate.reset()
+    setSecretary(null)
+    setSecretaryBusy(false)
+    setSecretaryError("")
+    setSecretaryLoading(false)
+    if (selectedChat && userCapabilities.read) void loadSecretary(selectedChat)
+    return () => { requestGate.reset() }
+  }, [loadSecretary, selectedChat, userCapabilities.read])
+  useEffect(() => {
+    if (!selectedChat || secretaryBusy || secretaryLoading || !secretary?.deep || !["accepted", "running"].includes(secretary.deep.status)) return
+    const timer = window.setInterval(() => {
+      void loadSecretary(selectedChat)
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [loadSecretary, secretary?.deep, secretaryBusy, secretaryLoading, selectedChat])
   useEffect(() => {
     const host = runsHost.current
     if (!runsOpen || !host) return
@@ -574,6 +617,48 @@ export function App() {
       notify(`ИИ недоступен: ${(error as Error).message}`)
     }
   }
+  const analyseWithSecretary = async () => {
+    if (!conversation || secretaryBusy) return
+    const request = secretaryRequest.current.beginAction()
+    if (request === null) return
+    setSecretaryLoading(false)
+    setSecretaryBusy(true)
+    try {
+      const result = await api<Secretary>(`/v1/conversations/${encodeURIComponent(conversation.id)}/secretary/triage`, {
+        method: "POST", body: "{}",
+      })
+      if (secretaryRequest.current.isCurrentAction(request)) {
+        setSecretary(result)
+        setSecretaryError("")
+        notify("Секретарь разобрал последнее сообщение")
+      }
+    } catch (error) {
+      if (secretaryRequest.current.isCurrentAction(request)) notify(`Разбор не удался: ${(error as Error).message}`)
+    } finally {
+      if (secretaryRequest.current.finishAction(request)) setSecretaryBusy(false)
+    }
+  }
+  const startDeepSecretaryAnalysis = async () => {
+    if (!conversation || secretaryBusy) return
+    const request = secretaryRequest.current.beginAction()
+    if (request === null) return
+    setSecretaryLoading(false)
+    setSecretaryBusy(true)
+    try {
+      const result = await api<Secretary>(`/v1/conversations/${encodeURIComponent(conversation.id)}/secretary/deep`, {
+        method: "POST", body: JSON.stringify({ retry: secretary?.deep?.status === "failed" }),
+      })
+      if (secretaryRequest.current.isCurrentAction(request)) {
+        setSecretary(result)
+        setSecretaryError("")
+        notify("Глубокий разбор принят")
+      }
+    } catch (error) {
+      if (secretaryRequest.current.isCurrentAction(request)) notify(`Не удалось запустить глубокий разбор: ${(error as Error).message}`)
+    } finally {
+      if (secretaryRequest.current.finishAction(request)) setSecretaryBusy(false)
+    }
+  }
   const approve = async (id: string) => {
     if (!canReply) return
     try {
@@ -692,6 +777,21 @@ export function App() {
     <section className={`min-h-0 min-w-0 flex-1 flex-col bg-[#eef2f6] dark:bg-[#0e1621] ${mobilePane === "chat" ? "flex" : "hidden"} ${selectedChat ? "md:flex" : "md:hidden"}`}>
       {conversation && conversation.id === selectedChat ? <>
         <header className="flex items-center gap-3 border-b bg-card/90 px-3 py-3 backdrop-blur md:px-5"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobilePane("chats")} title="Назад"><ArrowLeft /></Button><Avatar><AvatarFallback className={`${avatarColor(conversation.sender)} font-medium text-white`}>{initials(titleOf(conversation))}</AvatarFallback></Avatar><div className="min-w-0"><h2 className="truncate font-semibold">{titleOf(conversation)}</h2><p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground"><span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5">{channelIcon(conversation.source)} {displayChannel(conversation.source)}</span><span className="truncate">{prettySender(conversation.sender)}</span></p>{(() => { const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === providerForSource(conversation.source)); const senderAccount = platformAccounts.find((item) => item.id === conversation.account_ref); if (platformAccounts.length === 0) return null; return <p className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">отправка от:{platformAccounts.length > 1 ? <select className="max-w-[180px] rounded border bg-transparent px-1 py-0.5 text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={(event) => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select> : <span className="truncate text-foreground/80">{senderAccount ? senderAccount.display_name : platformAccounts[0].display_name}</span>}</p> })()}</div><div className="ml-auto flex items-center gap-1"><Button className="hidden md:inline-flex" variant="ghost" size="icon" onClick={closeChat} title="Закрыть диалог"><X /></Button><Button variant="outline" size="sm" onClick={markSeen} title="Отметить прочитанным"><Check /> <span className="hidden sm:inline">Прочитано</span></Button></div></header>
+        <div className="border-b bg-card/80 px-3 py-3 md:px-6">
+          <div className="mx-auto flex max-w-[920px] flex-col gap-3 rounded-xl border bg-background/80 p-3 shadow-sm sm:flex-row sm:items-start">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1 text-sm font-semibold"><Sparkles className="size-4 text-[#2f80ed]" /> Секретарь</span>{secretary?.triage?.triage && <Badge variant="secondary">{(() => { const score = secretary.triage?.triage?.importance ?? 0; return score >= .75 ? "Высокий приоритет" : score >= .45 ? "Средний приоритет" : "Низкий приоритет" })()}</Badge>}{secretary?.deep && <Badge variant="outline">{secretary.deep.status === "accepted" ? "Принято" : secretary.deep.status === "running" ? "Глубокий разбор идёт" : secretary.deep.status === "completed" ? "Готово" : "Ошибка"}</Badge>}</div>
+              {secretaryError && <p className="mt-1 text-xs text-destructive" role="alert">{secretaryError}</p>}
+              {secretaryLoading && !secretary && <p className="mt-1 text-xs text-muted-foreground">Загружаю состояние секретаря…</p>}
+              {secretary?.triage && secretary.triage.event_seq !== secretary.conversation.event_seq && <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">Показан разбор предыдущего сообщения. Запустите новый разбор для последнего входящего.</p>}
+              {secretary?.triage?.triage ? <><p className="mt-1 text-sm">{secretary.triage.triage.reason_ru || "Сообщение разобрано."}</p>{secretary.triage.triage.action_summary && <p className="mt-1 text-xs text-muted-foreground">{secretary.triage.triage.action_summary}</p>}</> : <p className="mt-1 text-xs text-muted-foreground">Разбор последнего входящего сообщения ещё не запускался.</p>}
+              {secretary?.deep && secretary.deep.event_seq !== secretary.conversation.event_seq && <p className="mt-1 text-[11px] text-muted-foreground">Глубокий разбор относится к предыдущему входящему сообщению.</p>}
+              {secretary?.deep?.result && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm">{secretary.deep.result}</p>}
+              {secretary?.deep?.error && <p className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{secretary.deep.error}</p>}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">{secretaryError && <Button variant="outline" size="sm" disabled={secretaryBusy || secretaryLoading} onClick={() => void loadSecretary(conversation.id)}>Повторить загрузку</Button>}<Button variant="outline" size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq} onClick={() => void analyseWithSecretary()}>{secretaryBusy ? "Подождите…" : "Разобрать"}</Button><Button size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq || ["accepted", "running"].includes(secretary?.deep?.status || "")} onClick={() => void startDeepSecretaryAnalysis()}>{secretary?.deep?.status === "failed" ? "Повторить глубокий разбор" : "Глубокий разбор"}</Button>{secretary?.deep?.session_url && <Button asChild variant="outline" size="sm"><a href={secretary.deep.session_url} target="_blank" rel="noreferrer">Agent Herder ↗</a></Button>}</div>
+          </div>
+        </div>
         <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
