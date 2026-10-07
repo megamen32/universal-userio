@@ -87,9 +87,10 @@ bytes, memory full avg10 0.98%, IO full0%). Five secretary tests passed in
 3.39seconds: exact identity, owner/service HTTP scope and read deny, new-message
 snapshot race, explicit retry history, cross-connection exclusive claim.
 Address-space ceiling384MiB, CPU30seconds, two CPU affinity slots enforced.
-The ru_maxrss report includes pre-exec historical process high-water and is
-not used as a workload peak measurement; subsequent wrapper records /proc
-VmHWM/VmRSS directly. Dispatcher check was gated out before pytest when PSI
+The ru_maxrss report (852,860 KiB) is inconsistent with the configured
+384MiB address-space cap; its cause is unverified and it is not used as a
+workload peak measurement. Subsequent wrapper records /proc VmHWM/VmRSS
+and the resolved limit directly; verify the peak on the next allowed run. Dispatcher check was gated out before pytest when PSI
 returned to2.47%; no broad suite ran. UI test/type/build remain pending.
 
 ## Resource gate correction
@@ -110,3 +111,11 @@ configuration changed. Remaining UI and dispatcher sources are reviewed but
 not behavior/type/build verified and not deployed. Final delivery is incomplete
 until those checks, coordinated clean runtime install, Herder readiness, same
 card live canary and Mac source synchronization pass.
+
+Source publication confirmed: UserIOdb6c30b2999daeef110d6b57f333a4613bcace00
+and dispatcher aa0f669eea7936233b714da6862d44da8c3b534e equal origin/main.
+Dispatcher checkout is clean. UserIO has exactly three neighbor-owned
+untracked validator/contract files, no own dirt. Compiled UI assets, semantic
+dispatcher/UI checks, deploy, final business canary and Mac cleanup remain
+required and are blocked by corrected UID reserve gate. Fresh UID memory
+38,152,409,088 bytes, full PSI avg10 16.18/avg60 16.73: gate closed.
