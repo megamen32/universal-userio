@@ -639,6 +639,67 @@ class UserIOService:
             },
         }
 
+    def triage_conversation_secretary(
+        self, *, conversation_id: str, actor: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Run or reuse the canonical triage for UserIO's selected chat."""
+        resolved_user = self._store._user(user_id)
+        overview = self._store.conversation_secretary(
+            conversation_id, user_id=resolved_user,
+        )
+        event_seq = overview["conversation"].get("event_seq")
+        if type(event_seq) is not int:
+            raise ValueError("conversation has no incoming message to analyse")
+        current = overview.get("triage")
+        request_id = (
+            str(current.get("request_id") or "")
+            if isinstance(current, dict) and current.get("event_seq") == event_seq
+            else f"userio-web-triage-{event_seq}"
+        )
+        if not request_id:
+            request_id = f"userio-web-triage-{event_seq}"
+        result = self.triage_workspace_event(
+            event_seq=event_seq, request_id=request_id, max_drafts=2,
+            user_id=resolved_user,
+        )
+        return {
+            **overview,
+            "triage": result,
+            "actor": str(actor or "")[:128],
+        }
+
+    def request_conversation_secretary_deep(
+        self, *, conversation_id: str, actor: str, retry: bool = False,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Persist one idempotent deep-analysis request for the exact selected chat."""
+        resolved_user = self._store._user(user_id)
+        overview = self.triage_conversation_secretary(
+            conversation_id=conversation_id, actor=actor, user_id=resolved_user,
+        )
+        triage = overview.get("triage")
+        if not isinstance(triage, dict) or str(triage.get("status") or "") not in {
+            "completed", "review",
+        }:
+            raise RuntimeError("secretary triage is not ready for deep analysis")
+        event_seq = int(triage["event_seq"])
+        request_id = str(triage["request_id"])
+        self.deep_workspace_triage(
+            event_seq=event_seq, request_id=request_id, actor=actor,
+            user_id=resolved_user,
+        )
+        job = self._store.create_conversation_secretary_job(
+            conversation_id=conversation_id, event_seq=event_seq,
+            triage_request_id=request_id, actor=actor, retry=retry,
+            identity=overview["conversation"], user_id=resolved_user,
+        )
+        return {
+            **overview,
+            "triage": triage,
+            "deep": job,
+        }
+
     def feedback_workspace_triage(
         self, *, event_seq: int, request_id: str, label: str, actor: str,
         user_id: str | None = None,

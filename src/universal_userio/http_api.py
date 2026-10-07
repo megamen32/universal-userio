@@ -342,6 +342,25 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path.startswith("/v1/workspace/secretary/deep-jobs/") and path.endswith("/progress"):
+                    if not principal.service_account:
+                        self._reply(403, {"error": "service account required"})
+                        return
+                    job_id = unquote(
+                        path.removeprefix("/v1/workspace/secretary/deep-jobs/")
+                        .removesuffix("/progress").strip("/")
+                    )
+                    payload = self._json()
+                    result = service._store.update_conversation_secretary_job(
+                        job_id=job_id, phase=str(payload.get("phase") or ""),
+                        worker_id=str(payload.get("worker_id") or ""),
+                        session_id=str(payload.get("session_id") or ""),
+                        session_url=str(payload.get("session_url") or ""),
+                        result=str(payload.get("result") or ""),
+                        error=str(payload.get("error") or ""), user_id=user_id,
+                    )
+                    self._reply(200, {"ok": True, "job": result})
+                    return
                 if path == "/v1/workspace/triage" or path.startswith("/v1/workspace/triage/"):
                     if not principal.service_account:
                         self._reply(403, {"error": "service account required"})
@@ -390,6 +409,45 @@ def handler(
                             user_id=user_id,
                         )
                     self._reply(200, {"ok": True, **result})
+                    return
+                if path.startswith("/v1/conversations/") and path.endswith("/secretary/triage"):
+                    if principal.role != "owner":
+                        self._reply(403, {"error": "owner required"})
+                        return
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"})
+                        return
+                    conversation_id = unquote(
+                        path.removeprefix("/v1/conversations/")
+                        .removesuffix("/secretary/triage").strip("/")
+                    )
+                    result = service.triage_conversation_secretary(
+                        conversation_id=conversation_id,
+                        actor=f"userio-web:{principal.username}", user_id=user_id,
+                    )
+                    self._reply(200, {"ok": True, **result})
+                    return
+                if path.startswith("/v1/conversations/") and path.endswith("/secretary/deep"):
+                    if principal.role != "owner":
+                        self._reply(403, {"error": "owner required"})
+                        return
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"})
+                        return
+                    conversation_id = unquote(
+                        path.removeprefix("/v1/conversations/")
+                        .removesuffix("/secretary/deep").strip("/")
+                    )
+                    payload = self._json()
+                    retry = payload.get("retry", False)
+                    if type(retry) is not bool:
+                        self._reply(400, {"error": "retry must be boolean"})
+                        return
+                    result = service.request_conversation_secretary_deep(
+                        conversation_id=conversation_id,
+                        actor=f"userio-web:{principal.username}", retry=retry, user_id=user_id,
+                    )
+                    self._reply(202, {"ok": True, **result})
                     return
                 if path == "/v1/workspace/policy/evaluate":
                     payload = self._json()
@@ -896,6 +954,26 @@ def handler(
             if path == "/v1/runtime":
                 self._reply(200, public_runtime_identity)
                 return
+            if path == "/v1/workspace/secretary/deep-jobs":
+                if not principal.service_account:
+                    self._reply(403, {"error": "service account required"})
+                    return
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                if any(key not in {"status", "limit"} or len(values) != 1 for key, values in query.items()):
+                    self._reply(400, {"error": "invalid secretary job query"})
+                    return
+                try:
+                    jobs = service._store.conversation_secretary_jobs(
+                        status=query.get("status", ["accepted"])[0],
+                        limit=int(query.get("limit", ["20"])[0]), user_id=user_id,
+                    )
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
+                    return
+                self._reply(200, {"jobs": jobs})
+                return
             if path == "/v1/workspace/events":
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"})
@@ -1085,6 +1163,25 @@ def handler(
                     self._reply(404, {"error": str(error.args[0])})
                     return
                 self._reply(200, record)
+                return
+            if path.startswith("/v1/conversations/") and path.endswith("/secretary"):
+                if principal.role != "owner":
+                    self._reply(403, {"error": "owner required"})
+                    return
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                conversation_id = unquote(
+                    path.removeprefix("/v1/conversations/").removesuffix("/secretary").strip("/")
+                )
+                try:
+                    result = service._store.conversation_secretary(
+                        conversation_id, user_id=user_id,
+                    )
+                except KeyError as error:
+                    self._reply(404, {"error": str(error)})
+                    return
+                self._reply(200, result)
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
