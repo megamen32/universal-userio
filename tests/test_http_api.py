@@ -56,12 +56,36 @@ def test_context_preferences_http_are_authenticated_and_user_scoped(tmp_path) ->
 
     try:
         assert request("GET", "")[0] == 401
-        assert request("GET", "owner-token") == (
-            200, {"context": {"message_count": 3, "token_budget": 1000}},
-        )
+        owner_status, owner_payload = request("GET", "owner-token")
+        assert owner_status == 200
+        assert owner_payload["context"]["message_count"] == 3
+        assert owner_payload["context"]["max_message_count"] == 150
+        assert owner_payload["context"]["token_budget"] == 1000
+        assert owner_payload["context"]["max_token_budget"] == 48_000
+        assert owner_payload["context"]["cache_channels"]["telegram"] is True
+        assert owner_payload["context"]["cache_channels"]["gmail"] is False
+        assert owner_payload["context"]["models"] == {
+            "text": "MiniMax-M2.7", "image": "MiniMax-M3",
+        }
         assert request("POST", other_token, {
-            "message_count": 7, "token_budget": 2400,
-        }) == (200, {"context": {"message_count": 7, "token_budget": 2400}})
+            "message_count": 7, "max_message_count": 80,
+            "token_budget": 2400, "max_token_budget": 24_000,
+            "summary_token_budget": 800, "summary_retention_days": 45,
+            "cache_channels": {"telegram": True, "gmail": True},
+            "cache_conversation_kinds": {"direct": True, "group": False},
+        }) == (200, {"context": {
+            "message_count": 7, "max_message_count": 80,
+            "token_budget": 2400, "max_token_budget": 24_000,
+            "summary_token_budget": 800, "summary_retention_days": 45,
+            "cache_channels": {
+                "telegram": True, "gmail": True, "whatsapp": False,
+                "max": False, "sms": False, "chatgpt": False, "vk": False,
+            },
+            "cache_conversation_kinds": {
+                "direct": True, "group": False, "channel": False, "unknown": False,
+            },
+            "models": {"text": "MiniMax-M2.7", "image": "MiniMax-M3"},
+        }})
         assert request("GET", "owner-token")[1]["context"]["message_count"] == 3
         assert request("POST", other_token, {
             "message_count": 21, "token_budget": 2400,

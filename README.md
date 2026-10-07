@@ -245,13 +245,18 @@ Importance triage is enabled per user by default with `threshold=0.75` and
 disabling triage restores legacy notify-all behavior while reply delivery still
 requires a durable selected draft. The service-only
 `POST /v1/workspace/triage` classifies one eligible event in one bounded JSON
-model call. Conversation context limits are owned per user by UserIO: defaults
-are three preceding messages and a conservative 1,000-token budget, and the
-authenticated `GET/POST /v1/preferences/context` surface plus the `Контекст ИИ`
-web setting update them. UserIO excludes the current message, retains preceding
-messages chronologically, and applies the same bounded context to importance
-triage, reply drafts, workspace claims, and deep analysis. Downstream agents
-consume the formed `recent_context` without a second limit or context store.
+model call. Conversation context limits are owned per user by UserIO: the
+default first pass is three preceding messages and 1,000 tokens, while Fast
+Agent may call `read_more_context` up to the configured adaptive ceilings. The
+authenticated `GET/POST /v1/preferences/context` surface plus the `Контекст и
+кэш ИИ` web setting control those limits and the summary cache. Direct Telegram
+dialogs are summarized by default; Gmail/email, groups, channels, and other
+channels stay off until explicitly enabled. Summaries are user-scoped, bounded,
+retained according to policy, refreshed incrementally, and injected into triage.
+UserIO excludes the current message from raw history, retains preceding messages
+chronologically, and applies the same bounded context to importance triage,
+reply drafts, workspace claims, and deep analysis. Downstream agents consume the
+formed `recent_context` without a second context store.
 Results and zero to two suggested reply snapshots are durable and idempotent by
 `(event_seq, request_id)`.
 
@@ -317,11 +322,20 @@ exmanager и ручной интеграции, но для ChatGPT следуе
 
 ## AI boundary
 
-`OpenAICompatibleDraftGenerator` is the initial AI capability adapter. UserIO
-passes it the recent canonical conversation history and receives text drafts or
-variants. It does not pass Outbox credentials, provider credentials, or browser
-session data to the model. The endpoint, model and token are deployment-owned
-configuration for UserIO alone.
+`OpenAICompatibleDraftGenerator` is UserIO's bounded adaptive inference
+adapter. It exposes the explicit `read_more_context`/submit tool contract to
+the model while keeping the database callback and provider credentials inside
+UserIO. The separately installed Fast Agent runtime owns on-demand deep
+analysis and general agent sessions; it is not imported into the Python 3.10
+control-plane process because Fast Agent 0.10.42 requires Python 3.12 or newer.
+UserIO passes the adapter recent canonical conversation history and receives
+text drafts, triage, or bounded cached summaries. Text-only work defaults to `MiniMax-M2.7`;
+images successfully hydrated through the bounded, account-scoped Telegram or
+WhatsApp adapters switch to `MiniMax-M3`. Other channels fail closed to the
+text path until they provide an equally bounded pixel loader. It does not pass
+Outbox credentials, provider credentials, or browser session data to the model.
+The endpoint, text/image models and token are deployment-owned configuration for
+UserIO alone.
 
 ## Accounts and browser workers
 

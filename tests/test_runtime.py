@@ -4,7 +4,23 @@ import json
 
 import pytest
 
-from universal_userio.runtime import build_service, load_runtime_identity
+from universal_userio.runtime import SummaryCacheMaintenance, build_service, load_runtime_identity
+
+
+def test_summary_cache_maintenance_runs_only_when_due() -> None:
+    now = [100.0]
+    calls: list[float] = []
+    maintenance = SummaryCacheMaintenance(
+        lambda: calls.append(now[0]) or 3,
+        interval_seconds=60,
+        clock=lambda: now[0],
+    )
+
+    assert maintenance.run_if_due() == 0
+    now[0] = 160.0
+    assert maintenance.run_if_due() == 3
+    assert maintenance.run_if_due() == 0
+    assert calls == [160.0]
 
 
 def test_runtime_identity_loads_strict_verified_release_file(tmp_path) -> None:

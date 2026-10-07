@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
@@ -13,10 +14,9 @@ type Conversation = { id: string; source: string; sender: string; identity_id?: 
 type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; attachment_url?: string }
 type Draft = { id: string; body: string; status: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
-type ContextSettings = { message_count: number; token_budget: number }
-
 import { defineByokPresetPicker } from "./vendor/byok-ui"
 import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type ByokLedgerTotals } from "./vendor/byok-runs-ui"
+import { beginContextSettingsLoad, completeContextSettingsLoad, confirmContextSettingsSave, contextSettingsPayload, contextSettingsValidationError, createContextSettingsSession, failContextSettingsLoad } from "./context-settings"
 import { LatestRequest } from "./latest-request"
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -215,7 +215,9 @@ export function App() {
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
-  const [contextForm, setContextForm] = useState<ContextSettings>({ message_count: 3, token_budget: 1000 })
+  const [contextSession, setContextSession] = useState(createContextSettingsSession)
+  const [contextSaving, setContextSaving] = useState(false)
+  const contextLoadRequest = useRef(0)
   // Wait for the real per-user capability response before loading the large
   // conversation list. This keeps account metadata from being starved behind
   // duplicate initial list queries in React StrictMode.
@@ -471,24 +473,45 @@ export function App() {
       setByokForm({ endpoint: data.endpoint, model: data.model, token: "" })
     } catch { /* server default is fine */ }
   }
-  const loadContextSettings = async () => {
+  const loadContextSettings = async (requestId: number) => {
     try {
-      const data = await api<{ context: ContextSettings }>("/v1/preferences/context")
-      setContextForm(data.context)
+      const data = await api<{ context?: unknown }>("/v1/preferences/context")
+      if (contextLoadRequest.current !== requestId) return
+      setContextSession((current) => completeContextSettingsLoad(current, data.context))
     } catch (error) {
-      notify(`Не удалось загрузить настройки контекста: ${(error as Error).message}`)
+      if (contextLoadRequest.current !== requestId) return
+      setContextSession((current) => failContextSettingsLoad(current, (error as Error).message))
     }
   }
+  const requestContextSettings = () => {
+    const requestId = ++contextLoadRequest.current
+    setContextSession((current) => beginContextSettingsLoad(current))
+    void loadContextSettings(requestId)
+  }
+  const openContextSettings = () => {
+    setContextOpen(true)
+    requestContextSettings()
+  }
+  const closeContextSettings = () => {
+    contextLoadRequest.current += 1
+    setContextOpen(false)
+  }
   const saveContextSettings = async () => {
+    if (contextSession.status !== "ready" || contextSaving || contextSettingsValidationError(contextSession.draft)) return
+    const requestId = contextLoadRequest.current
+    setContextSaving(true)
     try {
-      const data = await api<{ context: ContextSettings }>("/v1/preferences/context", {
-        method: "POST", body: JSON.stringify(contextForm),
+      const data = await api<{ context?: unknown }>("/v1/preferences/context", {
+        method: "POST", body: JSON.stringify(contextSettingsPayload(contextSession.draft)),
       })
-      setContextForm(data.context)
+      if (contextLoadRequest.current !== requestId) return
+      setContextSession((current) => confirmContextSettingsSave(current, data.context ?? current.draft))
       setContextOpen(false)
       notify("Настройки контекста сохранены")
     } catch (error) {
       notify(`Не удалось сохранить настройки контекста: ${(error as Error).message}`)
+    } finally {
+      setContextSaving(false)
     }
   }
   useEffect(() => {
@@ -632,7 +655,7 @@ export function App() {
     <div className="space-y-1 border-t p-2">
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон / кошелёк</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
-      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadContextSettings(); setContextOpen(true) }}><SlidersHorizontal className="size-4" /> Контекст ИИ</Button>
+      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={openContextSettings}><SlidersHorizontal className="size-4" /> Контекст ИИ</Button>
       <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
       <form method="post" action="/auth/logout"><Button type="submit" className="w-full justify-start" variant="ghost" size="sm"><LogOut /> Выйти</Button></form>
     </div>
@@ -714,14 +737,7 @@ export function App() {
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Закрыть</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Письмо" /></div>}
       {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">Сообщение {attachmentPreview.message.message_id}{attachmentPreview.meta?.size ? ` · ${humanSize(attachmentPreview.meta.size)}` : ""}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : attachmentPreview.meta.content_type === "application/pdf" ? <iframe title="PDF preview" src={attachmentPreview.meta.download_url} className="h-72 w-full rounded-lg border bg-white" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.content_type || "Файл"} · {humanSize(attachmentPreview.meta.size ?? 0)} — превью недоступно, скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
     </section>
-    {contextOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setContextOpen(false)}><div className="w-full max-w-sm rounded-lg border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-        <h2 className="font-semibold">Контекст ИИ</h2>
-        <div className="mt-4 space-y-3">
-          <label className="block text-sm"><span className="mb-1 block text-muted-foreground">Предыдущих сообщений</span><Input type="number" min={0} max={20} step={1} value={contextForm.message_count} onChange={(event) => setContextForm({ ...contextForm, message_count: Number(event.target.value) })} /></label>
-          <label className="block text-sm"><span className="mb-1 block text-muted-foreground">Токен-бюджет</span><Input type="number" min={0} max={8000} step={100} value={contextForm.token_budget} onChange={(event) => setContextForm({ ...contextForm, token_budget: Number(event.target.value) })} /></label>
-        </div>
-        <div className="mt-5 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setContextOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void saveContextSettings()}>Сохранить</Button></div>
-      </div></div>}
+    {contextOpen && <ContextSettingsDialog settings={contextSession.draft} loading={contextSession.status === "loading"} ready={contextSession.status === "ready"} loadError={contextSession.loadError} saving={contextSaving} onChange={(draft) => setContextSession((current) => ({ ...current, draft }))} onClose={closeContextSettings} onRetry={requestContextSettings} onSave={() => void saveContextSettings()} />}
     {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новое сообщение</h2><p className="mt-1 text-xs text-muted-foreground">Канал: {displayChannel(newChatSource)}. Отправка останется черновиком до вашего подтверждения.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder={newChatSource === "sms" || newChatSource === "phone" ? "+79XXXXXXXXX" : "Получатель или идентификатор"} autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
   </main>
 }

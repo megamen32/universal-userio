@@ -8,7 +8,7 @@ import os
 import re
 import threading
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import partial
 
@@ -17,6 +17,9 @@ from .store import SQLiteUserIOStore
 
 
 _LOG = logging.getLogger(__name__)
+_AI_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+_AI_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+_AI_IMAGE_MAX_COUNT = 4
 
 
 class DeliveryUnavailableError(ValueError):
@@ -36,6 +39,7 @@ class UserIOService:
         whatsapp_outbox: object | None = None,
         draft_notifier: object | None = None,
         draft_notification_delay_seconds: float = 5.0,
+        ai_image_loader: Callable[..., object | None] | None = None,
     ) -> None:
         self._store = store
         self._generator = generator
@@ -51,7 +55,115 @@ class UserIOService:
         self.whatsapp_outbox = whatsapp_outbox
         self.draft_notifier = draft_notifier
         self.draft_notification_delay_seconds = max(0.0, float(draft_notification_delay_seconds))
+        self._ai_image_loader = ai_image_loader or self._download_ai_image
         self._inbound_listeners: list[object] = []
+
+    def _download_ai_image(
+        self, *, source: str, message_id: str,
+        attachment: dict[str, object], user_id: str,
+    ) -> object | None:
+        """Load one image through the account-scoped channel adapter.
+
+        Provider URLs and references remain inside the adapter boundary.  The
+        AI receives only validated bytes added by ``_hydrate_ai_images``.
+        """
+        from .adapters import TelegramChannelAdapter, WhatsAppChannelAdapter
+        from .channels.core import AdapterNotSupported
+
+        key = source.split(":", 1)[0]
+        adapters = {
+            "telegram": TelegramChannelAdapter,
+            "whatsapp": WhatsAppChannelAdapter,
+        }
+        adapter_type = adapters.get(key)
+        if adapter_type is None:
+            return None
+        file_ref = message_id
+        try:
+            adapter = adapter_type(self._store, self, user_id)
+            bounded = getattr(adapter, "download_for_ai", None)
+            if not callable(bounded):
+                return None
+            return bounded(file_ref=file_ref, max_bytes=_AI_IMAGE_MAX_BYTES)
+        except (AdapterNotSupported, KeyError, ValueError, OSError):
+            return None
+
+    def _hydrate_ai_images(
+        self, entries: Sequence[dict[str, object]], *, user_id: str,
+        image_budget: list[int] | None = None,
+    ) -> list[dict[str, object]]:
+        """Attach bounded image bytes ephemerally; never persist provider URLs."""
+        if image_budget is not None and (
+            len(image_budget) != 1 or type(image_budget[0]) is not int
+        ):
+            raise ValueError("image_budget must be a one-item integer list")
+        remaining = (
+            max(0, min(_AI_IMAGE_MAX_COUNT, image_budget[0]))
+            if image_budget is not None else _AI_IMAGE_MAX_COUNT
+        )
+        hydrated: list[dict[str, object]] = []
+        for raw in entries:
+            entry = dict(raw)
+            safe_attachments: list[dict[str, object]] = []
+            attachments = raw.get("attachments")
+            if isinstance(attachments, (list, tuple)):
+                for item in attachments[:8]:
+                    if not isinstance(item, dict):
+                        continue
+                    safe = {
+                        key: item[key]
+                        for key in ("kind", "content_type", "mime_type", "size", "transcript")
+                        if item.get(key) is not None
+                    }
+                    mime = str(
+                        item.get("content_type") or item.get("mime_type") or ""
+                    ).split(";", 1)[0].strip().lower()
+                    kind = str(item.get("kind") or "").strip().lower()
+                    declared_image = mime in _AI_IMAGE_MIME_TYPES or kind in {
+                        "image", "photo", "picture", "sticker",
+                    }
+                    declared_size = item.get("size")
+                    if (
+                        remaining > 0 and declared_image
+                        and (not isinstance(declared_size, int)
+                             or 0 <= declared_size <= _AI_IMAGE_MAX_BYTES)
+                    ):
+                        # Bound provider fetch attempts, not only successfully
+                        # decoded images. Broken historic refs must not turn a
+                        # summary refresh into an unbounded bridge fan-out.
+                        remaining -= 1
+                        if image_budget is not None:
+                            image_budget[0] = remaining
+                        file = self._ai_image_loader(
+                            source=str(raw.get("source") or ""),
+                            message_id=str(raw.get("message_id") or ""),
+                            attachment=item, user_id=user_id,
+                        )
+                        data = getattr(file, "data", None)
+                        actual_mime = str(getattr(file, "content_type", "") or "").split(
+                            ";", 1,
+                        )[0].strip().lower()
+                        if (
+                            isinstance(data, bytes) and data
+                            and len(data) <= _AI_IMAGE_MAX_BYTES
+                            and actual_mime in _AI_IMAGE_MIME_TYPES
+                        ):
+                            safe["content_type"] = actual_mime
+                            safe["image_bytes"] = data
+                    if declared_image and "image_bytes" not in safe:
+                        # Do not claim vision support when the account-scoped
+                        # adapter could not provide bounded pixels.
+                        safe.pop("kind", None)
+                        safe.pop("content_type", None)
+                        safe.pop("mime_type", None)
+                    if safe:
+                        safe_attachments.append(safe)
+            if safe_attachments:
+                entry["attachments"] = safe_attachments
+            else:
+                entry.pop("attachments", None)
+            hydrated.append(entry)
+        return hydrated
 
     @staticmethod
     def conversation_id(message: InboxMessage, *, user_id: str = "") -> str:
@@ -144,6 +256,72 @@ class UserIOService:
             "receiver_display_name": str(receiver["display_name"])[:320],
         }
 
+    def _cached_summary_and_refresh(
+        self, *, conversation_id: str, current_message_id: str,
+        current_message_source: str = "",
+        generator: object, user_id: str,
+    ) -> str:
+        """Refresh the cache and return the newest summary for this triage.
+
+        Summarization is an optimization, never a prerequisite for receiving or
+        triaging a message.  A missing/failed summarizer therefore leaves the
+        durable cursor untouched so a later event can retry the same increment.
+        """
+        work = self._store.conversation_summary_work(
+            conversation_id, through_message_id=current_message_id, user_id=user_id,
+            through_message_source=current_message_source,
+        )
+        if work is None:
+            return ""
+        previous = str(work.get("previous_summary") or "")
+        messages = work.get("new_messages")
+        summarize = getattr(generator, "summarize_conversation", None)
+        if not callable(summarize) or not isinstance(messages, list) or not messages:
+            return previous
+        model_messages = self._hydrate_ai_images(messages, user_id=user_id)
+        try:
+            updated = summarize(
+                conversation_id=conversation_id,
+                previous_summary=previous,
+                new_messages=model_messages,
+                token_budget=int(work["summary_token_budget"]),
+            )
+            if not isinstance(updated, str) or not updated.strip():
+                raise ValueError("conversation summarizer returned an empty summary")
+            last = messages[-1]
+            saved = self._store.save_conversation_summary(
+                conversation_id,
+                summary=updated,
+                expected_through_message_rowid=int(work["expected_through_message_rowid"]),
+                through_message_rowid=int(last["message_rowid"]),
+                through_message_id=str(last.get("message_id") or ""),
+                summarized_message_count=(
+                    int(work["summarized_message_count"]) + len(messages)
+                ),
+                expected_messages=messages,
+                user_id=user_id,
+            )
+            if saved:
+                persisted = self._store.conversation_summary(
+                    conversation_id, through_message_id=current_message_id,
+                    through_message_source=current_message_source, user_id=user_id,
+                )
+                return str((persisted or {}).get("summary") or "")
+            concurrent = self._store.conversation_summary(
+                conversation_id, through_message_id=current_message_id,
+                through_message_source=current_message_source,
+                user_id=user_id,
+            )
+            if concurrent is not None:
+                return str(concurrent.get("summary") or previous)
+            return ""
+        except Exception as error:
+            _LOG.warning(
+                "conversation summary refresh failed for %s: %s",
+                conversation_id, error,
+            )
+        return previous
+
     def triage_workspace_event(
         self, *, event_seq: int, request_id: str, max_drafts: int = 2,
         user_id: str | None = None,
@@ -181,10 +359,38 @@ class UserIOService:
                 event_seq=event_seq, request_id=request_id, result=result,
                 draft_bodies=[], user_id=resolved_user,
             )
+        generator = self._generator_for(resolved_user)
+        if not callable(getattr(generator, "triage_with_context", None)):
+            # Per-user BYOK currently owns opt-in draft generation only. Inbox
+            # triage and cache summaries stay on the deployment-owned adaptive
+            # agent so every user gets the same bounded tool loop.
+            generator = self._generator
+        context_settings = self._store.context_settings(user_id=resolved_user)
+        cached_summary = self._cached_summary_and_refresh(
+            conversation_id=str(event["conversation_id"]), generator=generator,
+            current_message_id=str(event["message_id"]), user_id=resolved_user,
+            current_message_source=str(event["source"]),
+        )
         history = self._store.bounded_conversation_context(
             str(event["conversation_id"]),
             current_message_id=str(event["message_id"]),
+            current_message_source=str(event["source"]),
             user_id=resolved_user,
+        )
+        triage_image_budget = [_AI_IMAGE_MAX_COUNT]
+        # The current message owns the first slots in the bounded hydration
+        # budget. Older images may add context, but must never crowd out the
+        # pixels that caused this triage operation.
+        latest_attachments = self._hydrate_ai_images([{
+            "source": str(event["source"]),
+            "message_id": str(event["message_id"]),
+            "attachments": self._store.attachments_for_message(
+                source=str(event["source"]), message_id=str(event["message_id"]),
+                user_id=resolved_user,
+            ),
+        }], user_id=resolved_user, image_budget=triage_image_budget)[0].get("attachments")
+        history = self._hydrate_ai_images(
+            history, user_id=resolved_user, image_budget=triage_image_budget,
         )
         message = InboxMessage(
             source=str(event["source"]), message_id=str(event["message_id"]),
@@ -192,6 +398,7 @@ class UserIOService:
             received_at=float(event["received_at"]), direction=str(event["direction"]),
             conversation_kind=str(event["conversation_kind"]), peer_id=str(event["peer_id"]),
             sender_is_bot=bool(event["sender_is_bot"]),
+            attachments=tuple(latest_attachments if isinstance(latest_attachments, list) else ()),
         )
         anchor_conversation_id = str(event["conversation_id"])
         anchor_message_id = str(event["message_id"])
@@ -200,11 +407,16 @@ class UserIOService:
             anchor = before_message_id.strip() or anchor_message_id
             if not anchor:
                 return []
-            return self._store.bounded_conversation_context(
-                anchor_conversation_id, current_message_id=anchor, user_id=resolved_user,
+            page = self._store.bounded_conversation_context(
+                anchor_conversation_id, before_message_id=anchor, user_id=resolved_user,
+                current_message_source=str(event["source"]) if anchor == anchor_message_id else "",
+                message_limit=int(context_settings["max_message_count"]),
+                token_limit=int(context_settings["max_token_budget"]),
+            )
+            return self._hydrate_ai_images(
+                page, user_id=resolved_user, image_budget=triage_image_budget,
             )
 
-        generator = self._generator_for(resolved_user)
         triage = getattr(generator, "triage_with_context", None)
         try:
             if not callable(triage):
@@ -214,6 +426,10 @@ class UserIOService:
                 history=history, max_drafts=max_drafts,
                 actor_context=self._triage_actor_context(event, resolved_user),
                 history_reader=_older_context,
+                cached_summary=cached_summary,
+                initial_context_messages=int(context_settings["message_count"]),
+                max_context_messages=int(context_settings["max_message_count"]),
+                max_context_token_budget=int(context_settings["max_token_budget"]),
             )
             if not isinstance(generated, dict):
                 raise ValueError("AI triage result must be an object")
@@ -409,9 +625,15 @@ class UserIOService:
             "input": {
                 "request_id": request_id, "actor": actor,
                 "triage": triage.get("triage"),
+                "cached_summary": str((self._store.conversation_summary(
+                    str(event["conversation_id"]),
+                    through_message_id=str(event["message_id"]), user_id=resolved_user,
+                    through_message_source=str(event["source"]),
+                ) or {}).get("summary") or ""),
                 "recent_context": self._store.bounded_conversation_context(
                     str(event["conversation_id"]),
                     current_message_id=str(event["message_id"]),
+                    current_message_source=str(event["source"]),
                     user_id=resolved_user,
                 ),
             },

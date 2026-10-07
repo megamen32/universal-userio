@@ -501,6 +501,20 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             runner=self._runner,
         )
 
+    def download_for_ai(self, *, file_ref: str, max_bytes: int) -> ChannelFile:
+        return _download_via_bridge(
+            channel="telegram",
+            message=self._store.message(file_ref, user_id=self._user_id),
+            file_ref=file_ref,
+            bridge_url=self._bridge_url,
+            token_env="USERIO_API_TOKEN",
+            chat_field="chat",
+            chat_id_field="chat_id",
+            message_field="message_id",
+            runner=self._runner,
+            max_bytes=max_bytes,
+        )
+
 
 class WhatsAppChannelAdapter(StoredChannelAdapter):
     channel = "whatsapp"
@@ -525,6 +539,21 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
             chat_id_field="chat_id",
             message_field="message_id",
             runner=self._runner,
+        )
+
+    def download_for_ai(self, *, file_ref: str, max_bytes: int) -> ChannelFile:
+        bare_ref = re.sub(r"^account-\d+:", "", file_ref)
+        return _download_via_bridge(
+            channel="whatsapp",
+            message=self._store.message(file_ref, user_id=self._user_id),
+            file_ref=bare_ref,
+            bridge_url=self._bridge_url,
+            token_env="USERIO_API_TOKEN",
+            chat_field="chat",
+            chat_id_field="chat_id",
+            message_field="message_id",
+            runner=self._runner,
+            max_bytes=max_bytes,
         )
 
 
@@ -676,6 +705,7 @@ def _download_via_bridge(
     bridge_url: str, token_env: str,
     chat_field: str, chat_id_field: str, message_field: str,
     runner: Any = urllib.request.urlopen, timeout: float = 60.0,
+    max_bytes: int | None = None,
 ) -> ChannelFile:
     """Single-shot HTTP round-trip to a media bridge.
 
@@ -716,14 +746,19 @@ def _download_via_bridge(
             content_type = response.headers.get("Content-Type", "") or ""
             filename_header = response.headers.get("X-Filename", "") or ""
             disposition = response.headers.get("Content-Disposition", "") or ""
-            data = response.read()
+            data = response.read() if max_bytes is None else response.read(max_bytes + 1)
     except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="replace")[:200]
+        # Error bodies are controlled by the bridge and must stay bounded too.
+        detail = error.read(201).decode(errors="replace")[:200]
         raise AdapterNotSupported(
             f"{channel} bridge refused download: HTTP {error.code} {detail or error.reason}",
         ) from error
     except (OSError, urllib.error.URLError) as error:
         raise AdapterNotSupported(f"{channel} bridge is unreachable: {error}") from error
+    if max_bytes is not None and len(data) > max_bytes:
+        raise AdapterNotSupported(
+            f"{channel} media exceeds the bounded AI image limit"
+        )
     if "application/json" in content_type.lower():
         try:
             payload_obj = json.loads(data.decode() or "{}")

@@ -6,7 +6,8 @@ import json
 import os
 import re
 import stat
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import MappingProxyType
@@ -33,6 +34,26 @@ _UNVERIFIED_IDENTITY = MappingProxyType(
         "verified": False,
     }
 )
+
+
+class SummaryCacheMaintenance:
+    """Bounded periodic retention sweep driven by HTTPServer.service_actions."""
+
+    def __init__(
+        self, callback: Callable[[], int], *, interval_seconds: float = 3600,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._callback = callback
+        self._interval = max(60.0, min(float(interval_seconds), 86_400.0))
+        self._clock = clock
+        self._next_run = clock() + self._interval
+
+    def run_if_due(self) -> int:
+        now = self._clock()
+        if now < self._next_run:
+            return 0
+        self._next_run = now + self._interval
+        return self._callback()
 
 
 def load_runtime_identity(path: str | Path) -> Mapping[str, Any]:
@@ -117,7 +138,11 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     store = SQLiteUserIOStore(_required(environment, "USERIO_DB_PATH"))
     seed_owner_from_file(store, environment.get("USERIO_OWNER_SEED_FILE", ".env.owner-seed"))
     generator = OpenAICompatibleDraftGenerator(
-        endpoint=_required(environment, "USERIO_AI_ENDPOINT"), token=_required(environment, "USERIO_AI_TOKEN"), model=_required(environment, "USERIO_AI_MODEL"),
+        endpoint=_required(environment, "USERIO_AI_ENDPOINT"),
+        token=_required(environment, "USERIO_AI_TOKEN"),
+        model=_required(environment, "USERIO_AI_MODEL"),
+        image_model=environment.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3").strip() or "MiniMax-M3",
+        summary_model=environment.get("USERIO_AI_SUMMARY_MODEL", "").strip() or None,
     )
     sms_url, sms_token = environment.get("USERIO_SMS_GATEWAY_URL", "").strip(), environment.get("USERIO_SMS_GATEWAY_TOKEN", "").strip()
     if bool(sms_url) != bool(sms_token):
@@ -182,7 +207,18 @@ def main() -> None:
     runtime_identity = load_runtime_identity(
         environment.get("USERIO_RELEASE_FILE", "/opt/universal-userio/.userio-release.json")
     )
-    server = ThreadingHTTPServer(
+    maintenance = SummaryCacheMaintenance(
+        service._store.maintain_conversation_summaries,
+        interval_seconds=float(
+            environment.get("USERIO_SUMMARY_MAINTENANCE_SECONDS", "3600") or "3600"
+        ),
+    )
+
+    class UserIOHTTPServer(ThreadingHTTPServer):
+        def service_actions(self) -> None:
+            maintenance.run_if_due()
+
+    server = UserIOHTTPServer(
         (environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))),
         handler(
             service, token=token, vkid_app_id=environment.get("USERIO_VKID_APP_ID", ""),

@@ -40,6 +40,17 @@ _GMAIL_ACCOUNTS_FILE = Path("/var/lib/universal-userio/gmail-accounts.txt")
 _GMAIL_PASSWORD_HELPER = "/usr/local/bin/universal-userio-gmail-password"
 _DASHBOARD_SESSION_LIFETIME = 12 * 60 * 60
 
+
+def _context_preferences(service: UserIOService, user_id: str) -> dict[str, object]:
+    settings = dict(service._store.context_settings(user_id=user_id))
+    settings["models"] = {
+        "text": os.environ.get("USERIO_AI_MODEL", "MiniMax-M2.7").strip()
+        or "MiniMax-M2.7",
+        "image": os.environ.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3").strip()
+        or "MiniMax-M3",
+    }
+    return settings
+
 # Mirrors the web client's MEDIA_PLACEHOLDER regex so the /media endpoint can
 # describe a bubble without trusting the client.
 _PLACEHOLDER_RE = re.compile(
@@ -521,10 +532,16 @@ def handler(
                     payload = self._json()
                     settings = service._store.set_context_settings(
                         message_count=payload.get("message_count"),
+                        max_message_count=payload.get("max_message_count"),
                         token_budget=payload.get("token_budget"),
+                        max_token_budget=payload.get("max_token_budget"),
+                        summary_token_budget=payload.get("summary_token_budget"),
+                        summary_retention_days=payload.get("summary_retention_days"),
+                        cache_channels=payload.get("cache_channels"),
+                        cache_conversation_kinds=payload.get("cache_conversation_kinds"),
                         user_id=user_id,
                     )
-                    self._reply(200, {"context": settings})
+                    self._reply(200, {"context": _context_preferences(service, user_id)})
                     return
                 if path == "/v1/ai-runs":
                     bridge = os.environ.get("USERIO_BYOK_BRIDGE_URL", "").rstrip("/")
@@ -941,7 +958,7 @@ def handler(
                 self._reply(200, {"send_enabled": service._store.send_enabled(user_id=user_id)})
                 return
             if path == "/v1/preferences/context":
-                self._reply(200, {"context": service._store.context_settings(user_id=user_id)})
+                self._reply(200, {"context": _context_preferences(service, user_id)})
                 return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)
