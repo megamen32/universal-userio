@@ -185,3 +185,26 @@ start timestamps2026-10-06 23:15:59/23:16:03MSK. No deploy/restart performed.
 After guarded checks: coordinated clean install preserving /opt foreign work,
 exact release verification, final same-card accepted→link→result canary, then
 Mac cleanup/sync and clean-main audit. Delivery is incomplete until these pass.
+
+## Resumed read-only audit after the handoff
+
+Fresh authoritative fetch confirms UserIO main0b5da296 and dispatcher
+main2a6a900c. Both canonical working trees are now clean. The three neighboring
+same-channel validator/contract files are tracked in0b5da296, still unwired;
+the earlier untracked-file warning describes the previous snapshot. Their
+publication does not provide native SMS/Matrix delivery support.
+
+The resource gate is still closed: UID memory.current36,515,405,824 against
+memory.high38,654,705,664, UID full PSI avg10=33.12/avg60=27.11, host memory
+full avg10=1.30, swap4,292,198,400 of4,294,967,296 bytes. No tests/build/browser
+or runtime mutation was admitted. Reverse Mac SSH2222 still refuses TCP.
+
+The exact installed units remain active: universal-userio.service PID3672069
+and userio-hermes-dispatcher.service PID3672766, both NRestarts0 and the same
+2026-10-06 start timestamps. The dispatcher unit is userio-hermes-dispatcher,
+not a hermes-unified-inbox unit. Source changes are not yet installed.
+
+Smallest next action is the current seven-test secretary file under the
+corrected existing shared gate, followed sequentially by the dispatcher
+selection and UI checks. Root44 must restore usable reserve and Mac transport;
+no independent source fix or safe deploy remains pending before those proofs.
