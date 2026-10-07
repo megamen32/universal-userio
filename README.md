@@ -273,6 +273,43 @@ provider outcome is never retried. The sibling `/deep` and `/feedback` routes
 record operator actions, and `userio.workspace.triage.feedback` exposes
 `important`, `not_important`, and `ignore_chat` through MCP.
 
+### Секретарь в веб-интерфейсе UserIO
+
+Секретарь — часть существующего UserIO на `msg.bezrabotnyi.com`, а не отдельное
+приложение. В открытом диалоге владелец видит приоритет, причину и рекомендуемое
+действие для последнего входящего сообщения. Кнопка «Разобрать» использует тот
+же адаптивный контекст и кэш резюме, что и workspace triage. «Глубокий разбор»
+создаёт один идемпотентный запрос, привязанный к точным `conversation_id`,
+`event_seq`, source/account/peer и исходному triage request. UserIO сохраняет
+его состояние, неизменяемые `session_id`/Agent Herder URL и конечный результат,
+поэтому веб-интерфейс может безопасно опрашивать статус после перезагрузки.
+
+Браузер работает только через обычную owner SSO-сессию UserIO:
+
+- `GET /v1/conversations/<id>/secretary` читает разбор и статус;
+- `POST /v1/conversations/<id>/secretary/triage` запускает обычный разбор;
+- `POST /v1/conversations/<id>/secretary/deep` принимает глубокий разбор.
+
+Внутренний воркер с service-account token читает
+`GET /v1/workspace/secretary/deep-jobs` и обновляет конкретную работу через
+`POST /v1/workspace/secretary/deep-jobs/<job_id>/progress`. Service token,
+provider credentials и prompt не возвращаются в браузер. Воркер сначала
+атомарно закрепляет работу запросом `phase=accepted` с обязательным
+`worker_id`; только тот же воркер может передать `running` с парой
+`session_id`/`session_url`, а затем `completed` или `failed`. Ссылка принимается
+только в строгом виде `https://agent.bezrabotnyi.com/#/session/<encoded-key>`:
+ровно один percent-encoded сегмент без `/` и некорректных `%`-последовательностей.
+После первой привязки worker/session/URL не могут быть заменены. Существующий Telegram/NoticePlace поток
+остаётся отдельным потребителем тех же workspace triage контрактов и не
+меняется. Внешняя интеграция ограничена этим тонким API-адаптером.
+
+После ошибки «Повторить глубокий разбор» создаёт новую попытку с новым job ID
+и новой именованной сессией Fast Agent. Предыдущая ошибка и привязка воркера
+сохраняются; повторное нажатие во время активной попытки возвращает тот же job.
+Source/account/peer зафиксированы в job, и изменение привязки до запуска
+завершает его ошибкой без inference. Ошибка загрузки панели видна с кнопкой
+повторной загрузки; старый GET не может затереть результат запуска.
+
 ### ChatGPT CDP adapter
 
 `chatgpt` is a read-only channel backed by [chatgpt-cdp-mcp](https://github.com/megamen32/chatgpt-cdp-mcp). Install that project and its **local, authorized** CDP driver separately, then configure the UserIO service with:

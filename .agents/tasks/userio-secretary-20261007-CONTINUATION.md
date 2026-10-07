@@ -91,3 +91,22 @@ The ru_maxrss report includes pre-exec historical process high-water and is
 not used as a workload peak measurement; subsequent wrapper records /proc
 VmHWM/VmRSS directly. Dispatcher check was gated out before pytest when PSI
 returned to2.47%; no broad suite ran. UI test/type/build remain pending.
+
+## Resource gate correction
+
+The initial focused wrapper checked HOST memory/io PSI only. Neighbor proved
+UID full pressure can stay high while host PSI is low; the first five-test
+result is functional proof, NOT proof of UID reserve. No further workload is
+allowed on that old predicate. Corrected gate also requires UID
+`memory.pressure` full avg10<1 and avg60<3, in addition to>=2GiB below
+MemoryHigh, host memory/io full avg10<1, and the same shared lock. No limits
+are raised or bypassed. ru_maxrss exceeded the address-space cap and is not
+accepted as a workload peak; collect /proc VmHWM/VmRSS on the next allowed run.
+
+Backend scoped commit067abef88bf22fb36390b9e3ce4aff87215d1bcc is published
+to authoritative main. SSH443 push was rejected before handshake; per-command
+HTTPS with existing gh credential helper succeeded, no global Git/auth/bridge
+configuration changed. Remaining UI and dispatcher sources are reviewed but
+not behavior/type/build verified and not deployed. Final delivery is incomplete
+until those checks, coordinated clean runtime install, Herder readiness, same
+card live canary and Mac source synchronization pass.
