@@ -439,13 +439,12 @@ def handler(
                         .removesuffix("/secretary/deep").strip("/")
                     )
                     payload = self._json()
-                    retry = payload.get("retry", False)
-                    if type(retry) is not bool:
-                        self._reply(400, {"error": "retry must be boolean"})
-                        return
+                    if set(payload) - {"retry_of_job_id"}:
+                        raise ValueError("secretary deep accepts only retry_of_job_id")
                     result = service.request_conversation_secretary_deep(
                         conversation_id=conversation_id,
-                        actor=f"userio-web:{principal.username}", retry=retry, user_id=user_id,
+                        actor=f"userio-web:{principal.username}", user_id=user_id,
+                        retry_of_job_id=str(payload.get("retry_of_job_id") or ""),
                     )
                     self._reply(202, {"ok": True, **result})
                     return

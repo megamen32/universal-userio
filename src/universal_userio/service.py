@@ -670,11 +670,29 @@ class UserIOService:
         }
 
     def request_conversation_secretary_deep(
-        self, *, conversation_id: str, actor: str, retry: bool = False,
+        self, *, conversation_id: str, actor: str, retry_of_job_id: str = "",
         user_id: str | None = None,
     ) -> dict[str, object]:
         """Persist one idempotent deep-analysis request for the exact selected chat."""
         resolved_user = self._store._user(user_id)
+        if retry_of_job_id:
+            parent = self._store.conversation_secretary_job(retry_of_job_id, user_id=resolved_user)
+            if parent["conversation_id"] != conversation_id:
+                raise ValueError("secretary retry conversation mismatch")
+            if parent["status"] != "failed":
+                raise ValueError("only a failed secretary job can be retried")
+            self.deep_workspace_triage(
+                event_seq=int(parent["event_seq"]), request_id=str(parent["triage_request_id"]),
+                actor=actor, user_id=resolved_user,
+            )
+            job = self._store.retry_conversation_secretary_job(
+                job_id=retry_of_job_id, actor=actor,
+                conversation_id=conversation_id, user_id=resolved_user,
+            )
+            return {
+                **self._store.conversation_secretary(conversation_id, user_id=resolved_user),
+                "deep": job,
+            }
         overview = self.triage_conversation_secretary(
             conversation_id=conversation_id, actor=actor, user_id=resolved_user,
         )
@@ -691,7 +709,7 @@ class UserIOService:
         )
         job = self._store.create_conversation_secretary_job(
             conversation_id=conversation_id, event_seq=event_seq,
-            triage_request_id=request_id, actor=actor, retry=retry,
+            triage_request_id=request_id, actor=actor,
             identity=overview["conversation"], user_id=resolved_user,
         )
         return {
