@@ -83,7 +83,7 @@ def test_duplicate_variants_are_not_repeated() -> None:
     assert drafts == ["same answer"]
 
 
-def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() -> None:
+def test_importance_triage_is_one_bounded_json_call_with_minimal_initial_context() -> None:
     requests = []
     content = json.dumps({
         "decision": "notify",
@@ -131,8 +131,8 @@ def test_importance_triage_is_one_bounded_json_call_with_last_twenty_messages() 
     assert context["raw_sender_label"] == "anna"
     assert context["actor_context"]["receiver_account_id"] == "telegram:100"
     assert context["direction"] == "incoming"
-    assert "message-4" not in prompt
-    assert "message-5" in prompt and "message-24" in prompt
+    assert "message-20" not in prompt
+    assert "message-21" in prompt and "message-24" in prompt
     assert result["importance"] == 0.91
     assert result["suggested_replies"] == [
         {"body": "Да, отвечу сегодня."},

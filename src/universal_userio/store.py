@@ -23,6 +23,29 @@ CONTEXT_MESSAGE_COUNT_DEFAULT = 3
 CONTEXT_MESSAGE_COUNT_MAX = 20
 CONTEXT_TOKEN_BUDGET_DEFAULT = 1000
 CONTEXT_TOKEN_BUDGET_MAX = 8_000
+CONTEXT_MAX_MESSAGE_COUNT_DEFAULT = 150
+CONTEXT_MAX_MESSAGE_COUNT_MAX = 1_000
+CONTEXT_MAX_TOKEN_BUDGET_DEFAULT = 48_000
+CONTEXT_MAX_TOKEN_BUDGET_MAX = 100_000
+SUMMARY_TOKEN_BUDGET_DEFAULT = 1_200
+SUMMARY_TOKEN_BUDGET_MAX = 4_096
+SUMMARY_RETENTION_DAYS_DEFAULT = 90
+SUMMARY_RETENTION_DAYS_MAX = 3_650
+SUMMARY_CACHE_CHANNEL_DEFAULTS = {
+    "telegram": True,
+    "gmail": False,
+    "whatsapp": False,
+    "max": False,
+    "sms": False,
+    "chatgpt": False,
+    "vk": False,
+}
+SUMMARY_CACHE_KIND_DEFAULTS = {
+    "direct": True,
+    "group": False,
+    "channel": False,
+    "unknown": False,
+}
 
 
 def _estimated_tokens(value: str) -> int:
@@ -43,6 +66,15 @@ def _prefix_for_tokens(value: object, token_limit: int) -> str:
         else:
             high = middle - 1
     return text[:low]
+
+
+def _cache_channel(source: object) -> str:
+    value = str(source or "").strip().lower()
+    if value in {"mail", "email", "gmail"} or value.startswith("gmail:"):
+        return "gmail"
+    if value == "chatgpt" or value.startswith("chatgpt:"):
+        return "chatgpt"
+    return value
 
 
 class SQLiteUserIOStore:
@@ -71,6 +103,7 @@ class SQLiteUserIOStore:
                     "ALTER TABLE messages ADD COLUMN sender_is_bot INTEGER NOT NULL DEFAULT 0"
                 )
             self._backfill_workspace_events()
+            self.maintain_conversation_summaries()
 
     @property
     def default_user_id(self) -> str:
@@ -361,6 +394,18 @@ class SQLiteUserIOStore:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY(user_id,key)
             );
+            CREATE TABLE IF NOT EXISTS conversation_summaries (
+                user_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                through_message_rowid INTEGER NOT NULL DEFAULT 0,
+                through_message_id TEXT NOT NULL DEFAULT '',
+                summarized_message_count INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(user_id,conversation_id)
+            );
+            CREATE INDEX IF NOT EXISTS conversation_summaries_updated_idx
+                ON conversation_summaries(user_id,updated_at);
         """
         for statement in script.split(";"):
             if statement.strip():
@@ -1441,6 +1486,7 @@ class SQLiteUserIOStore:
                 )
                 new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
                 if old_placeholder and new_is_text:
+                    self._invalidate_message_summary(user_id, message.source, message.message_id)
                     self._connection.execute(
                         "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
                         (new_body, user_id, message.source, message.message_id),
@@ -1450,6 +1496,7 @@ class SQLiteUserIOStore:
                         (now, user_id, conversation_id),
                     )
                 elif new_is_text and new_body != old_body:
+                    self._invalidate_message_summary(user_id, message.source, message.message_id)
                     edited_at = float(message.edited_at or 0.0) or now
                     self._connection.execute(
                         """UPDATE messages SET body=?,edited_at=?
@@ -1517,6 +1564,20 @@ class SQLiteUserIOStore:
         transcription_status = attachment.get("transcription_status")
         transcription_model = attachment.get("transcription_model")
         with self._lock, self._connection:
+            existing = self._connection.execute(
+                "SELECT * FROM message_attachments WHERE user_id=? AND source=? AND message_id=? AND idx=?",
+                (user_id, source, message_id, idx),
+            ).fetchone()
+            values = (kind, content_type, filename, size_int, str(src) if src else None,
+                      str(attachment_id) if attachment_id else None,
+                      str(provider_ref) if provider_ref else None,
+                      str(transcript) if transcript is not None else None,
+                      str(transcription_status) if transcription_status is not None else None,
+                      str(transcription_model) if transcription_model is not None else None)
+            keys = ("kind", "content_type", "filename", "size", "src", "attachment_id",
+                    "provider_ref", "transcript", "transcription_status", "transcription_model")
+            if existing is None or tuple(existing[key] for key in keys) != values:
+                self._invalidate_message_summary(user_id, source, message_id)
             self._connection.execute(
                 """
                 INSERT OR REPLACE INTO message_attachments
@@ -1654,6 +1715,10 @@ class SQLiteUserIOStore:
             )
             self._connection.execute(
                 "DELETE FROM messages WHERE user_id=? AND conversation_id=?", (user_id, conversation_id)
+            )
+            self._connection.execute(
+                "DELETE FROM conversation_summaries WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
             )
             self._connection.execute(
                 "DELETE FROM workspace_exclusions WHERE user_id=? AND conversation_id=?",
@@ -1879,7 +1944,7 @@ class SQLiteUserIOStore:
                 (self._user(user_id), key, str(value), time.time()),
             )
 
-    def context_settings(self, *, user_id: str | None = None) -> dict[str, int]:
+    def context_settings(self, *, user_id: str | None = None) -> dict[str, object]:
         user = self._user(user_id)
 
         def value(key: str, default: int, maximum: int) -> int:
@@ -1889,77 +1954,485 @@ class SQLiteUserIOStore:
             except ValueError:
                 return default
 
-        return {
-            "message_count": value(
-                "context_message_count", CONTEXT_MESSAGE_COUNT_DEFAULT,
-                CONTEXT_MESSAGE_COUNT_MAX,
+        def flags(key: str, defaults: dict[str, bool]) -> dict[str, bool]:
+            raw = self.user_preference(
+                key, user_id=user,
+                default=json.dumps(defaults, ensure_ascii=False, separators=(",", ":")),
+            )
+            try:
+                parsed = json.loads(str(raw))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = {}
+            if not isinstance(parsed, dict):
+                parsed = {}
+            result = dict(defaults)
+            for name, enabled in parsed.items():
+                if isinstance(name, str) and isinstance(enabled, bool):
+                    result[name] = enabled
+            return result
+
+        message_count = value(
+            "context_message_count", CONTEXT_MESSAGE_COUNT_DEFAULT,
+            CONTEXT_MESSAGE_COUNT_MAX,
+        )
+        token_budget = value(
+            "context_token_budget", CONTEXT_TOKEN_BUDGET_DEFAULT,
+            CONTEXT_TOKEN_BUDGET_MAX,
+        )
+        max_message_count = max(
+            message_count,
+            value(
+                "context_max_message_count", CONTEXT_MAX_MESSAGE_COUNT_DEFAULT,
+                CONTEXT_MAX_MESSAGE_COUNT_MAX,
             ),
-            "token_budget": value(
-                "context_token_budget", CONTEXT_TOKEN_BUDGET_DEFAULT,
-                CONTEXT_TOKEN_BUDGET_MAX,
+        )
+        max_token_budget = max(
+            64, token_budget,
+            value(
+                "context_max_token_budget", CONTEXT_MAX_TOKEN_BUDGET_DEFAULT,
+                CONTEXT_MAX_TOKEN_BUDGET_MAX,
+            ),
+        )
+        summary_token_budget = value(
+            "summary_token_budget", SUMMARY_TOKEN_BUDGET_DEFAULT,
+            SUMMARY_TOKEN_BUDGET_MAX,
+        )
+        if summary_token_budget < 64:
+            summary_token_budget = SUMMARY_TOKEN_BUDGET_DEFAULT
+        return {
+            "message_count": message_count,
+            "max_message_count": max_message_count,
+            "token_budget": token_budget,
+            "max_token_budget": max_token_budget,
+            "summary_token_budget": summary_token_budget,
+            "summary_retention_days": value(
+                "summary_retention_days", SUMMARY_RETENTION_DAYS_DEFAULT,
+                SUMMARY_RETENTION_DAYS_MAX,
+            ),
+            "cache_channels": flags(
+                "summary_cache_channels", SUMMARY_CACHE_CHANNEL_DEFAULTS,
+            ),
+            "cache_conversation_kinds": flags(
+                "summary_cache_conversation_kinds", SUMMARY_CACHE_KIND_DEFAULTS,
             ),
         }
 
     def set_context_settings(
-        self, *, message_count: int, token_budget: int,
+        self, *, message_count: int | None = None, max_message_count: int | None = None,
+        token_budget: int | None = None, max_token_budget: int | None = None,
+        summary_token_budget: int | None = None,
+        summary_retention_days: int | None = None,
+        cache_channels: dict[str, bool] | None = None,
+        cache_conversation_kinds: dict[str, bool] | None = None,
         user_id: str | None = None,
-    ) -> dict[str, int]:
-        for name, setting, maximum in (
-            ("message_count", message_count, CONTEXT_MESSAGE_COUNT_MAX),
-            ("token_budget", token_budget, CONTEXT_TOKEN_BUDGET_MAX),
-        ):
-            if type(setting) is not int or not 0 <= setting <= maximum:
-                raise ValueError(f"{name} must be between 0 and {maximum}")
+    ) -> dict[str, object]:
         user = self._user(user_id)
+        current = self.context_settings(user_id=user)
+        values = {
+            "message_count": current["message_count"] if message_count is None else message_count,
+            "max_message_count": (
+                current["max_message_count"] if max_message_count is None else max_message_count
+            ),
+            "token_budget": current["token_budget"] if token_budget is None else token_budget,
+            "max_token_budget": (
+                current["max_token_budget"] if max_token_budget is None else max_token_budget
+            ),
+            "summary_token_budget": (
+                current["summary_token_budget"]
+                if summary_token_budget is None else summary_token_budget
+            ),
+            "summary_retention_days": (
+                current["summary_retention_days"]
+                if summary_retention_days is None else summary_retention_days
+            ),
+        }
+        for name, minimum, maximum in (
+            ("message_count", 0, CONTEXT_MESSAGE_COUNT_MAX),
+            ("max_message_count", 1, CONTEXT_MAX_MESSAGE_COUNT_MAX),
+            ("token_budget", 0, CONTEXT_TOKEN_BUDGET_MAX),
+            ("max_token_budget", 64, CONTEXT_MAX_TOKEN_BUDGET_MAX),
+            ("summary_token_budget", 64, SUMMARY_TOKEN_BUDGET_MAX),
+            ("summary_retention_days", 0, SUMMARY_RETENTION_DAYS_MAX),
+        ):
+            setting = values[name]
+            if type(setting) is not int or not 0 <= setting <= maximum:
+                raise ValueError(f"{name} must be between {minimum} and {maximum}")
+            if setting < minimum:
+                raise ValueError(f"{name} must be between {minimum} and {maximum}")
+        if int(values["max_message_count"]) < int(values["message_count"]):
+            raise ValueError("max_message_count must be at least message_count")
+        if int(values["max_token_budget"]) < int(values["token_budget"]):
+            raise ValueError("max_token_budget must be at least token_budget")
+
+        def validated_flags(
+            name: str, supplied: dict[str, bool] | None, current_value: object,
+            *, normalise_channels: bool = False,
+        ) -> dict[str, bool]:
+            if supplied is None:
+                return dict(current_value) if isinstance(current_value, dict) else {}
+            if not isinstance(supplied, dict) or len(supplied) > 64:
+                raise ValueError(f"{name} must be an object with at most 64 entries")
+            result: dict[str, bool] = {}
+            for raw_key, enabled in supplied.items():
+                key = _cache_channel(raw_key) if normalise_channels else str(raw_key).strip().lower()
+                if not re.fullmatch(r"[a-z0-9_.:-]{1,64}", key) or type(enabled) is not bool:
+                    raise ValueError(f"{name} must contain safe boolean entries")
+                result[key] = enabled
+            return result
+
+        channels = validated_flags(
+            "cache_channels", cache_channels, current["cache_channels"],
+            normalise_channels=True,
+        )
+        kinds = validated_flags(
+            "cache_conversation_kinds", cache_conversation_kinds,
+            current["cache_conversation_kinds"],
+        )
         now = time.time()
         with self._lock, self._connection:
             self._connection.executemany(
                 "INSERT OR REPLACE INTO user_preferences(user_id,key,value,updated_at) VALUES (?,?,?,?)",
                 (
-                    (user, "context_message_count", str(message_count), now),
-                    (user, "context_token_budget", str(token_budget), now),
+                    (user, "context_message_count", str(values["message_count"]), now),
+                    (user, "context_max_message_count", str(values["max_message_count"]), now),
+                    (user, "context_token_budget", str(values["token_budget"]), now),
+                    (user, "context_max_token_budget", str(values["max_token_budget"]), now),
+                    (user, "summary_token_budget", str(values["summary_token_budget"]), now),
+                    (user, "summary_retention_days", str(values["summary_retention_days"]), now),
+                    (user, "summary_cache_channels", json.dumps(
+                        channels, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    ), now),
+                    (user, "summary_cache_conversation_kinds", json.dumps(
+                        kinds, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                    ), now),
                 ),
             )
+            self._purge_conversation_summaries(user_id=user)
         return self.context_settings(user_id=user)
+
+    @staticmethod
+    def _summary_cache_enabled_for(
+        source: object, conversation_kind: object, settings: dict[str, object],
+    ) -> bool:
+        channels = settings.get("cache_channels")
+        kinds = settings.get("cache_conversation_kinds")
+        return bool(
+            isinstance(channels, dict)
+            and channels.get(_cache_channel(source), False) is True
+            and isinstance(kinds, dict)
+            and kinds.get(str(conversation_kind or "unknown").strip().lower(), False) is True
+        )
+
+    def _invalidate_message_summary(self, user_id: str, source: str, message_id: str) -> None:
+        self._connection.execute(
+            """DELETE FROM conversation_summaries WHERE user_id=? AND EXISTS (
+                SELECT 1 FROM messages m WHERE m.user_id=? AND m.source=? AND m.message_id=?
+                AND m.conversation_id=conversation_summaries.conversation_id
+                AND m.rowid<=conversation_summaries.through_message_rowid)""",
+            (user_id, user_id, source, message_id),
+        )
+
+    def maintain_conversation_summaries(self, *, user_id: str | None = None) -> int:
+        """Run at startup and periodically to enforce inactive cache retention."""
+        with self._lock, self._connection:
+            users = [self._user(user_id)] if user_id else [str(row[0]) for row in
+                self._connection.execute("SELECT DISTINCT user_id FROM conversation_summaries")]
+            return sum(self._purge_conversation_summaries(user_id=user) for user in users)
+
+    def _message_anchor(self, user: str, conversation_id: str, message_id: str,
+                        source: str = "", rowid: int | None = None) -> int | None:
+        if message_id.startswith("rowid:") and rowid is None:
+            try:
+                rowid = int(message_id[6:])
+            except ValueError:
+                return None
+        sql = "SELECT rowid FROM messages WHERE user_id=? AND conversation_id=?"
+        parameters: list[object] = [user, conversation_id]
+        if rowid is not None:
+            sql += " AND rowid=?"
+            parameters.append(rowid)
+        else:
+            sql += " AND message_id=?"
+            parameters.append(message_id)
+            if source:
+                sql += " AND source=?"
+                parameters.append(source)
+        rows = self._connection.execute(sql + " LIMIT 2", parameters).fetchall()
+        return int(rows[0][0]) if len(rows) == 1 else None
+
+    def _purge_conversation_summaries(self, *, user_id: str) -> int:
+        settings = self.context_settings(user_id=user_id)
+        rows = self._connection.execute(
+            """SELECT s.conversation_id,c.source,c.conversation_kind,s.updated_at
+               FROM conversation_summaries s
+               LEFT JOIN conversations c ON c.user_id=s.user_id AND c.id=s.conversation_id
+               WHERE s.user_id=?""",
+            (user_id,),
+        ).fetchall()
+        retention_days = int(settings["summary_retention_days"])
+        cutoff = time.time() - retention_days * 86_400 if retention_days > 0 else None
+        for summary in self._connection.execute(
+            "SELECT conversation_id,summary FROM conversation_summaries WHERE user_id=?", (user_id,),
+        ).fetchall():
+            bounded = _prefix_for_tokens(str(summary["summary"]), int(settings["summary_token_budget"]))
+            if bounded != summary["summary"]:
+                self._connection.execute(
+                    "UPDATE conversation_summaries SET summary=? WHERE user_id=? AND conversation_id=?",
+                    (bounded, user_id, summary["conversation_id"]),
+                )
+        stale = [
+            str(row["conversation_id"])
+            for row in rows
+            if row["source"] is None
+            or not self._summary_cache_enabled_for(
+                row["source"], row["conversation_kind"], settings,
+            )
+            or (cutoff is not None and float(row["updated_at"]) < cutoff)
+        ]
+        if not stale:
+            return 0
+        placeholders = ",".join("?" for _ in stale)
+        return self._connection.execute(
+            f"DELETE FROM conversation_summaries WHERE user_id=? AND conversation_id IN ({placeholders})",
+            (user_id, *stale),
+        ).rowcount
+
+    def conversation_summary(
+        self, conversation_id: str, *, through_message_id: str = "",
+        through_message_source: str = "", through_message_rowid: int | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            self._purge_conversation_summaries(user_id=user)
+            row = self._connection.execute(
+                """SELECT summary,through_message_rowid,through_message_id,
+                          summarized_message_count,updated_at
+                   FROM conversation_summaries
+                   WHERE user_id=? AND conversation_id=?""",
+                (user, conversation_id),
+            ).fetchone()
+            if row is not None and (through_message_id or through_message_rowid is not None):
+                anchor = self._message_anchor(user, conversation_id, through_message_id,
+                                              through_message_source, through_message_rowid)
+                if anchor is None or int(row["through_message_rowid"]) > anchor:
+                    return None
+        return None if row is None else dict(row)
+
+    def conversation_summary_work(
+        self, conversation_id: str, *, through_message_id: str = "",
+        through_message_source: str = "", through_message_rowid: int | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        user = self._user(user_id)
+        settings = self.context_settings(user_id=user)
+        with self._lock, self._connection:
+            self._purge_conversation_summaries(user_id=user)
+            conversation = self._connection.execute(
+                "SELECT source,conversation_kind FROM conversations WHERE user_id=? AND id=?",
+                (user, conversation_id),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError("conversation not found")
+            if not self._summary_cache_enabled_for(
+                conversation["source"], conversation["conversation_kind"], settings,
+            ):
+                return None
+            cached = self._connection.execute(
+                """SELECT summary,through_message_rowid,through_message_id,
+                          summarized_message_count,updated_at
+                   FROM conversation_summaries
+                   WHERE user_id=? AND conversation_id=?""",
+                (user, conversation_id),
+            ).fetchone()
+            cursor = 0 if cached is None else int(cached["through_message_rowid"])
+            anchor_rowid: int | None = None
+            if through_message_id or through_message_rowid is not None:
+                anchor = self._message_anchor(user, conversation_id, through_message_id,
+                                              through_message_source, through_message_rowid)
+                if anchor is None:
+                    return None
+                anchor_rowid = anchor
+                if cursor > anchor_rowid:
+                    return {
+                        "previous_summary": "",
+                        "expected_through_message_rowid": cursor,
+                        "summarized_message_count": int(cached["summarized_message_count"]),
+                        "new_messages": [],
+                        "summary_token_budget": int(settings["summary_token_budget"]),
+                    }
+            upper_sql = " AND rowid<=?" if anchor_rowid is not None else ""
+            parameters: list[object] = [user, conversation_id, cursor]
+            if anchor_rowid is not None:
+                parameters.append(anchor_rowid)
+            parameters.append(100)
+            rows = self._connection.execute(
+                f"""SELECT rowid AS message_rowid,source,message_id,sender,body,direction,received_at
+                   FROM messages
+                   WHERE user_id=? AND conversation_id=? AND rowid>?{upper_sql}
+                   ORDER BY rowid LIMIT ?""",
+                parameters,
+            ).fetchall()
+        messages = [dict(row) for row in rows]
+        for message in messages:
+            attachments = self.attachments_for_message(
+                source=str(message["source"]), message_id=str(message["message_id"]),
+                user_id=user,
+            )
+            if attachments:
+                message["attachments"] = attachments
+        return {
+            "previous_summary": "" if cached is None else str(cached["summary"]),
+            "expected_through_message_rowid": cursor,
+            "summarized_message_count": (
+                0 if cached is None else int(cached["summarized_message_count"])
+            ),
+            "new_messages": messages,
+            "summary_token_budget": int(settings["summary_token_budget"]),
+        }
+
+    def save_conversation_summary(
+        self, conversation_id: str, *, summary: str,
+        expected_through_message_rowid: int, through_message_rowid: int,
+        through_message_id: str, summarized_message_count: int,
+        expected_messages: list[dict[str, object]] | None = None,
+        user_id: str | None = None,
+    ) -> bool:
+        user = self._user(user_id)
+        settings = self.context_settings(user_id=user)
+        text = _prefix_for_tokens(summary, int(settings["summary_token_budget"]))
+        if not text:
+            raise ValueError("conversation summary must not be empty")
+        if (
+            type(expected_through_message_rowid) is not int
+            or type(through_message_rowid) is not int
+            or through_message_rowid <= expected_through_message_rowid
+            or type(summarized_message_count) is not int
+            or summarized_message_count <= 0
+        ):
+            raise ValueError("invalid conversation summary cursor")
+        now = time.time()
+        with self._lock, self._connection:
+            # A provider edit can arrive while the AI is running, including on
+            # the first page when there is no existing cache to invalidate.
+            if expected_messages is not None:
+                for snapshot in expected_messages:
+                    current = self._connection.execute(
+                        "SELECT source,message_id,sender,body,direction,received_at FROM messages WHERE user_id=? AND conversation_id=? AND rowid=?",
+                        (user, conversation_id, snapshot["message_rowid"]),
+                    ).fetchone()
+                    if current is None or any(current[key] != snapshot[key] for key in current.keys()):
+                        return False
+                    attachments = self.attachments_for_message(
+                        source=str(snapshot["source"]), message_id=str(snapshot["message_id"]), user_id=user)
+                    if attachments != snapshot.get("attachments", []):
+                        return False
+            conversation = self._connection.execute(
+                "SELECT source,conversation_kind FROM conversations WHERE user_id=? AND id=?",
+                (user, conversation_id),
+            ).fetchone()
+            if conversation is None:
+                raise KeyError("conversation not found")
+            if not self._summary_cache_enabled_for(
+                conversation["source"], conversation["conversation_kind"], settings,
+            ):
+                self._connection.execute(
+                    "DELETE FROM conversation_summaries WHERE user_id=? AND conversation_id=?",
+                    (user, conversation_id),
+                )
+                return False
+            if expected_through_message_rowid == 0:
+                changed = self._connection.execute(
+                    """INSERT OR IGNORE INTO conversation_summaries
+                       (user_id,conversation_id,summary,through_message_rowid,
+                        through_message_id,summarized_message_count,updated_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (user, conversation_id, text, through_message_rowid,
+                     through_message_id[:256], summarized_message_count, now),
+                ).rowcount
+            else:
+                changed = self._connection.execute(
+                    """UPDATE conversation_summaries
+                       SET summary=?,through_message_rowid=?,through_message_id=?,
+                           summarized_message_count=?,updated_at=?
+                       WHERE user_id=? AND conversation_id=? AND through_message_rowid=?""",
+                    (text, through_message_rowid, through_message_id[:256],
+                     summarized_message_count, now, user, conversation_id,
+                     expected_through_message_rowid),
+                ).rowcount
+        return changed == 1
 
     def bounded_conversation_context(
         self, conversation_id: str, *, current_message_id: str = "",
+        current_message_source: str = "", current_message_rowid: int | None = None,
         before_message_id: str = "", user_id: str | None = None,
+        message_limit: int | None = None, token_limit: int | None = None,
     ) -> list[dict[str, object]]:
         if before_message_id:
             current_message_id = before_message_id
         settings = self.context_settings(user_id=user_id)
-        message_limit = settings["message_count"]
-        token_limit = settings["token_budget"]
+        message_limit = int(settings["message_count"]) if message_limit is None else message_limit
+        token_limit = int(settings["token_budget"]) if token_limit is None else token_limit
+        if type(message_limit) is not int or not 0 <= message_limit <= int(settings["max_message_count"]):
+            raise ValueError("message_limit exceeds configured context maximum")
+        if type(token_limit) is not int or not 0 <= token_limit <= int(settings["max_token_budget"]):
+            raise ValueError("token_limit exceeds configured context maximum")
         if message_limit <= 0 or token_limit <= 0:
             return []
-        conversation = self.conversation(conversation_id, user_id=user_id)
-        if conversation is None:
-            raise KeyError("conversation not found")
+        user = self._user(user_id)
+        with self._lock:
+            if self._connection.execute("SELECT 1 FROM conversations WHERE user_id=? AND id=?",
+                                        (user, conversation_id)).fetchone() is None:
+                raise KeyError("conversation not found")
+            upper = self._message_anchor(user, conversation_id, current_message_id,
+                                         current_message_source, current_message_rowid) if (
+                current_message_id or current_message_rowid is not None) else None
+            if (current_message_id or current_message_rowid is not None) and upper is None:
+                return []
+            sql = "SELECT rowid AS message_rowid,source,message_id,sender,body,direction,received_at FROM messages WHERE user_id=? AND conversation_id=?"
+            parameters: list[object] = [user, conversation_id]
+            if upper is not None:
+                sql += " AND rowid<?"
+                parameters.append(upper)
+            rows = self._connection.execute(sql + " ORDER BY rowid DESC LIMIT ?",
+                                            (*parameters, message_limit)).fetchall()
+        records = [dict(row) for row in reversed(rows)]
+        for record in records:
+            record["attachments"] = self.attachments_for_message(
+                source=str(record["source"]), message_id=str(record["message_id"]), user_id=user)
         candidates: list[dict[str, object]] = []
-        anchor_found = False
-        for raw in conversation.get("messages") or []:
+        for raw in records:
             if not isinstance(raw, dict):
                 continue
             message_id = str(raw.get("message_id") or "").strip()[:256]
-            if current_message_id and message_id == current_message_id:
-                anchor_found = True
-                break
             body = str(raw.get("body") or "").strip()
-            if not body:
+            attachments = raw.get("attachments")
+            if not body and not (isinstance(attachments, list) and attachments):
                 continue
-            candidates.append({
+            candidate: dict[str, object] = {
+                "message_rowid": int(raw["message_rowid"]),
+                "anchor_id": f"rowid:{raw['message_rowid']}",
                 "source": str(raw.get("source") or "").strip()[:128],
                 "message_id": message_id,
                 "sender": " ".join(str(raw.get("sender") or "").split())[:320],
                 "direction": " ".join(str(raw.get("direction") or "").split())[:32],
                 "received_at": raw.get("received_at"),
                 "body": body,
-            })
-        if before_message_id and not anchor_found:
-            # A paging anchor outside this conversation must not fall back to
-            # the newest window: report "nothing older" instead of duplicating.
-            return []
+            }
+            if isinstance(attachments, list) and attachments:
+                candidate["attachments"] = [
+                    {
+                        key: attachment[key]
+                        for key in (
+                            "kind", "content_type", "filename", "size",
+                            "attachment_id",
+                        )
+                        if attachment.get(key) is not None
+                    }
+                    for attachment in attachments[:8]
+                    if isinstance(attachment, dict)
+                ]
+            candidates.append(candidate)
         candidates = candidates[-message_limit:]
         metadata_tokens = [
             _estimated_tokens(json.dumps(
@@ -2655,6 +3128,10 @@ class SQLiteUserIOStore:
                     current_message_id=str(event["message_id"]),
                     user_id=scoped_user,
                 ),
+                "cached_summary": str((self.conversation_summary(
+                    str(event["conversation_id"]),
+                    through_message_id=str(event["message_id"]), user_id=scoped_user,
+                ) or {}).get("summary") or ""),
                 "context_policy": self.context_settings(user_id=scoped_user),
             },
             "claim": {
