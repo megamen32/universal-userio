@@ -7,13 +7,13 @@ surfaces in one process:
    `/var/lib/universal-userio/telegram-qr/sessions/account-N.session` and
    register the account with UserIO (`POST /v1/accounts`).
 2. **Ingest leg** — one connected client per saved session: backfills the
-   recent top dialogs and pushes incoming messages into the UserIO inbox
+   recent top dialogs and pushes incoming and outgoing messages into the UserIO inbox
    (`POST /v1/messages`, schema `universal.inbox.message.v1`), plus live
    `NewMessage` and `EditedMessage` events and a 5-minute reconciliation
    backfill. Edited messages are re-posted under the same message id with the
    provider `editDate`, and never reschedule agent delivery.
 
-Canonical source: `/opt/universal-userio/deploy/telegram-qr-connector/` on
+Canonical source: `/home/roomhacker/agents-projects/universal-userio/deploy/telegram-qr-connector/` on
 server-100. `/opt/userio-telegram-qr/` is only the installed Node runtime and
 dependency directory; it is never a competing source of truth.
 
@@ -62,3 +62,20 @@ Webpage-preview text handling mirrors
 `megamen32/mcp-telegram@codex/read-webpage-preview-messages`
 (`extractMessageText`): message text first, then the visible webpage
 `title`/`description` when the body is empty.
+
+## Native mirror contract
+
+`message.out` and `message.date` are preserved as direction and provider Unix
+time. Dialog inbox/outbox read maxima and live Raw read updates populate a
+separate provider-read field; opening UserIO never sends a Telegram read receipt.
+Outgoing, edited and historical messages never schedule agent delivery.
+
+The existing reconciliation loop repairs recent history without notifying or
+sending. A bearer-protected `POST /reconcile` with exact `account_id` and
+`peer_id` performs one bounded200-message repair on the connected client. It
+creates no new session or polling worker. Missing database IDs within the
+returned history range are individually probed with getMessages(ids); only a
+successful exact-ID absence or native deletion update creates a tombstone.
+Message/event/draft/receipt identities remain retained. No inferred deletion
+is made outside that range. Runtime Node budget128/256MiB, CPU1, tasks64 and
+existing20-dialog/5-minute reconciliation cadence are unchanged.

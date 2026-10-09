@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import { NewMessage } from "telegram/events/index.js";
+import { NewMessage, Raw } from "telegram/events/index.js";
 // GramJS 2.26 events/index.js exports only Raw/NewMessage(NewEvent); the
 // EditedMessage builder must come straight from its own CommonJS module.
 import { EditedMessage } from "telegram/events/EditedMessage.js";
@@ -13,6 +13,7 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
+import { mirrorMetadata, confirmedDeletedIds } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 
 const port = Number(process.env.PORT || 18095);
@@ -264,9 +265,12 @@ function verifyCallbackSignature(req, body) {
 }
 
 function postInbox(accountId, envelope) {
-  const body = JSON.stringify({ route_id: routeId, account_id: accountId, message: envelope });
+  return postUserIO("/v1/messages", { route_id: routeId, account_id: accountId, message: envelope });
+}
+function postUserIO(path, payload) {
+  const body = JSON.stringify(payload);
   return new Promise((resolve, reject) => {
-    const target = new URL("/v1/messages", userIoUrl);
+    const target = new URL(path, userIoUrl);
     const request = http.request(target, {
       method: "POST",
       headers: {
@@ -511,11 +515,70 @@ async function envelope(chatKey, label, message, client, self, options) {
     peer_id: chatKey,
     conversation_kind: conversationKind,
     sender_is_bot: senderIsBot,
+    ...mirrorMetadata(message, options && options.dialog),
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     body: normalized.body.slice(0, 8000),
     ...(attachments.length ? { attachments } : {}),
   };
+}
+
+async function reconcileDialog(slot, client, accountId, labels, self, peer, chatKey, label, dialog, limit) {
+  const messages = await client.getMessages(peer, { limit: Math.min(200, Math.max(1, limit)) });
+  let posted = 0;
+  for (const message of messages) {
+    if (!message || !message.date) continue;
+    const value = await envelope(chatKey, label, message, client, self,
+      { transcribeAudio: false, accountId, reconciliation: true, chatEntity: peer, dialog });
+    if (!value.body && !(value.attachments && value.attachments.length)) continue;
+    await postInbox(accountId, value);
+    posted += 1;
+  }
+  const state = await postUserIO("/v1/telegram/mirror-state", {
+    account_id: accountId, peer_id: chatKey,
+    read_inbox_max_id: Number(dialog && dialog.readInboxMaxId || 0),
+    read_outbox_max_id: Number(dialog && dialog.readOutboxMaxId || 0),
+    history_ids: messages.filter(m => m && m.date).map(m => Number(m.id)),
+  });
+  if (state.missing_ids && state.missing_ids.length) {
+    const requested = state.missing_ids;
+    const inputPeer = await client.getInputEntity(peer);
+    const ids = requested.map(id => new Api.InputMessageID({id}));
+    const response = inputPeer.className === "InputPeerChannel"
+      ? await client.invoke(new Api.channels.GetMessages({
+          channel:new Api.InputChannel({channelId:inputPeer.channelId,accessHash:inputPeer.accessHash}), id:ids}))
+      : await client.invoke(new Api.messages.GetMessages({id:ids}));
+    const exact = response.messages;
+    const deleted = confirmedDeletedIds(requested, exact);
+    if (deleted.length) await postUserIO("/v1/telegram/mirror-state",
+      {account_id:accountId, peer_id:chatKey, deleted_ids:deleted});
+  }
+  return posted;
+}
+
+async function ingestProviderState(slot, client, accountId, update) {
+  const name = update.className;
+  const inbox = name === "UpdateReadHistoryInbox" || name === "UpdateReadChannelInbox";
+  const outbox = name === "UpdateReadHistoryOutbox" || name === "UpdateReadChannelOutbox";
+  if (inbox || outbox) {
+    const peer = update.peer || new Api.PeerChannel({channelId:update.channelId});
+    const chatKey = String(await client.getPeerId(peer, true));
+    await postUserIO("/v1/telegram/mirror-state", {account_id:accountId, peer_id:chatKey,
+      [inbox ? "read_inbox_max_id" : "read_outbox_max_id"]:Number(update.maxId)});
+  } else if (name === "UpdateDeleteChannelMessages") {
+    const peer = new Api.PeerChannel({channelId:update.channelId});
+    await postUserIO("/v1/telegram/mirror-state", {account_id:accountId,
+      peer_id:String(await client.getPeerId(peer,true)), deleted_ids:update.messages.slice(0,200)});
+  } else if (name === "UpdateDeleteMessages") {
+    // Non-channel IDs are account-global; apply only to known non-channel
+    // peers on this account. Unknown peers are repaired by reconciliation.
+    const live = liveSlots.get(slot);
+    if (live) for (const [chatKey, entity] of live.labelPeers.idPeers) {
+      if (entity && entity.className === "Channel") continue;
+      await postUserIO("/v1/telegram/mirror-state", {account_id:accountId,
+        peer_id:chatKey, deleted_ids:update.messages.slice(0,200)});
+    }
+  }
 }
 
 async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, self, limit) {
@@ -530,20 +593,8 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
         if (!labelPeers.idPeers.has(chatKey)) labelPeers.idPeers.set(chatKey, dialog.entity);
         if (dialog.entity && !labelPeers.labelPeers.has(label)) labelPeers.labelPeers.set(label, dialog.entity);
       }
-      const messages = await client.getMessages(dialog.id, { limit: syncPerDialog });
-      let posted = 0;
-      for (const message of messages) {
-        if (!message || message.out) continue;
-        // Backfill must never stall the live listener on a historical media
-        // download. Live arrivals are transcribed; reconciliation is text-only.
-        const envelopeMessage = await envelope(
-          chatKey, label, message, client, self,
-          { transcribeAudio: false, accountId, reconciliation: true, chatEntity: dialog.entity },
-        );
-        if (!envelopeMessage.body) continue;
-        await postInbox(accountId, envelopeMessage);
-        posted += 1;
-      }
+      const posted = await reconcileDialog(slot, client, accountId, dialogLabels, self,
+        dialog.entity, chatKey, label, dialog.dialog, syncPerDialog);
       chats += 1;
       setSync(slot, { status: `backfill ${chats}/${dialogs.length}`, chats, lastSyncAt: Date.now() });
       if (posted) console.log(`sync ${slot}: ${label} +${posted} messages`);
@@ -557,25 +608,27 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
 
 async function ingestLive(slot, client, accountId, dialogLabels, self, event, isEdit = false) {
   const message = event.message;
-  if (!message || message.out) return;
+  if (!message) return;
   let chatKey = "";
   try {
     chatKey = String(await client.getPeerId(message.peerId, true));
   } catch (error) { /* fall back to the event chat id below */ }
   if (!chatKey || chatKey === "undefined") chatKey = String(event.chatId != null ? event.chatId : "");
   if (!chatKey) return;
-  const label = dialogLabels.get(chatKey) || entityLabel(message.chat) || "telegram";
+  let chatEntity = message.chat || null;
+  if (!chatEntity && typeof message.getChat === "function") chatEntity = await message.getChat();
+  const label = dialogLabels.get(chatKey) || entityLabel(chatEntity) || "telegram";
   const live = liveSlots.get(slot);
-  if (live && message.chat && label && label !== "telegram") {
-    live.labelPeers.labelPeers.set(label, message.chat);
-    live.labelPeers.idPeers.set(chatKey, message.chat);
+  if (live && chatEntity && label && label !== "telegram") {
+    live.labelPeers.labelPeers.set(label, chatEntity);
+    live.labelPeers.idPeers.set(chatKey, chatEntity);
   }
-  const inboxMessage = await envelope(chatKey, label, message, client, self, { accountId });
+  const inboxMessage = await envelope(chatKey, label, message, client, self, { accountId, chatEntity });
   if (!inboxMessage.body) return;
   const posted = await postInbox(accountId, inboxMessage);
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
-  if (!isEdit) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
+  if (!isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
 }
@@ -611,6 +664,10 @@ async function syncAccount(slot) {
         (event) => { ingestLive(slot, client, accountId, dialogLabels, me, event, true).catch((error) => console.error(`sync ${slot} live edit error:`, (error && error.message) || error)); },
         new EditedMessage({}),
       );
+      client.addEventHandler((update) => {
+        ingestProviderState(slot, client, accountId, update).catch(error =>
+          console.error(`sync ${slot} state error:`, error.message || error));
+      }, new Raw({}));
       const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
@@ -803,6 +860,34 @@ http.createServer(async (req, res) => {
     void startQr(created);
     res.writeHead(302, { Location: `${publicPrefix}/?slot=${created}` });
     return res.end();
+  }
+  if (url.pathname === "/reconcile" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"unauthorized"}));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const item = [...liveSlots.values()].find(v => v.accountId === payload.account_id);
+      if (!item) throw new Error("requested account is not connected");
+      const chatKey = String(payload.peer_id || "");
+      if (!/^-?[0-9]+$/.test(chatKey)) throw new Error("exact peer_id required");
+      const peer = item.labelPeers.idPeers.get(chatKey) || await item.client.getEntity(chatKey);
+      const input = await item.client.getInputEntity(peer);
+      const detail = await item.client.invoke(new Api.messages.GetPeerDialogs({
+        peers:[new Api.InputDialogPeer({peer:input})],
+      }));
+      if (!detail.dialogs || !detail.dialogs.length) throw new Error("provider dialog is unavailable");
+      const me = await item.client.getMe();
+      const posted = await reconcileDialog("operator", item.client, item.accountId, null, me,
+        peer, chatKey, entityLabel(peer), detail.dialogs[0], 200);
+      res.writeHead(200, {"content-type":"application/json"});
+      return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey, mirrored:posted}));
+    } catch (error) {
+      res.writeHead(400, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:String(error.message || error)}));
+    }
   }
   if (url.pathname === "/download" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
