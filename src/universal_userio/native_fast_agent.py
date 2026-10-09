@@ -83,6 +83,7 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
         state.setdefault("vision_bytes", sum(len(data) * 3 // 4 - len(data) + len(data.rstrip("="))
                                              for data in image_data))
         models = []
+        attached_llm = None
         settings = Settings(
             generic=GenericSettings(base_url=self._endpoint.removesuffix("/chat/completions"),
                                     api_key=self._token),
@@ -106,7 +107,10 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
 
         instruction = str(payload["messages"][0]["content"])
         instruction = instruction.replace("Call submit_triage exactly once.", "Return the exact requested JSON object.")
+        instruction = instruction.replace("Finish by calling submit_triage exactly once.", "Return the exact requested JSON object.")
         instruction = instruction.replace("Call submit_conversation_summary exactly once.", "Return the exact requested JSON summary.")
+        if schema is not None:
+            instruction += " Return only the JSON object defined by this schema: " + json.dumps(schema)
         if read_page is not None:
             instruction += (
                 " You may use read_more_context if more history is needed."
@@ -120,7 +124,10 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
         )
 
         async def attach_model(model):
-            overrides = {}
+            nonlocal attached_llm
+            # The SDK factory's plural `instructions` argument is not consumed
+            # by GenericLLM. Pass its public singular constructor parameter.
+            overrides = {"instruction": instruction}
             if model == self._image_model:
                 spec = ModelFactory.resolve_model_spec("generic/" + model)
                 mimes = ["text/plain", "image/png", "image/jpeg", "image/gif", "image/webp"]
@@ -136,7 +143,7 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
                     )
                     spec = replace(spec, overlay=overlay)
                 overrides["resolved_model_spec"] = spec
-            await agent.attach_llm(get_model_factory(context, model="generic/" + model), **overrides)
+            attached_llm = await agent.attach_llm(get_model_factory(context, model="generic/" + model), **overrides)
             state["attached_model"] = model
 
         async def before_llm_call(runner, messages):
@@ -161,7 +168,15 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
             if schema is not None:
                 parsed, response = await agent.structured_schema(messages, schema, params)
                 if parsed is None:
-                    raise ValueError("invalid native Fast Agent structured result")
+                    # MiniMax keeps reasoning in the text lane. The native
+                    # schema parser rejects the enclosing <think> block; reuse
+                    # UserIO's existing filter, then validate the exact schema.
+                    cleaned = response.model_copy(update={
+                        "content": self._native_content(_THINK_BLOCK.sub("", response.last_text() or "").strip()),
+                    })
+                    parsed, _ = attached_llm.parse_structured_schema_response(cleaned, schema)
+                    if parsed is None:
+                        raise ValueError("invalid native Fast Agent structured result")
                 return parsed
             response = await agent.generate(messages, params)
             text = response.last_text()
