@@ -354,3 +354,21 @@ ROLLDOWN_MAX_BLOCKING_THREADS=2 before native binding initialization. Kernel
 256/512MiB,CPU1,tasks64,wall120s remain finite. This is build evidence, not
 live UI/install acceptance. Shared SDK has22 live foreign MCP consumers; its
 owner received the concrete env maintenance boundary, no foreign process stopped.
+
+### Dispatcher and runtime environment, 2026-10-09
+
+The exact selected dispatcher regression set passed25cases/45deselected in1.32s,
+peak45960KiB,swap0 under256/384MiB,CPU1,tasks64,wall120. No provider or sends.
+Production-own /opt/universal-userio/.venv now has Python3.12.13/SDK0.10.43
+and preserved channel dependencies. Every SDK dependency version matches the
+SDK5 tested environment; only channel extras are added and pytest absent. Setup
+30.331s/144492KiB/swap0 under128/256MiB,CPU1,tasks64,wall120. Core not restarted.
+
+Existing automaticseven now admits its fixed reviewed packet. Its firstactual
+payload stopped during pytest logging configuration before anycase: /dev/null
+write rejected as outside_private_storage. No guard override or automatic retry.
+Preserved receipt attempt-60c0ad9099c32975638e74118b334bf9 and bounded-sghxl8w0
+payload.log/native-result.json (38MB/swap0/noOOM), owned cleanup complete.
+Runner owner01a11f58 received smallestfix disable unused pytest logging plugin
+or route log to exact private fixture storage; controller/packet repin belongs
+to that owner. This exact runner defect alone still blocks backend7/deploy.
