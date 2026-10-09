@@ -16,7 +16,7 @@ from typing import Any
 from .adapters import ChatGPTWebOutbox, DirectProviderOutbox, HimalayaGmailOutbox
 from .channels.sms_gateway import AndroidSmsGatewayClient
 from .channels.whatsapp import WhatsAppBridgeClient
-from .ai import OpenAICompatibleDraftGenerator
+from .native_fast_agent import FastAgentDraftGenerator
 from .channels.live_telegram import live_telegram_outbox_from_env
 from .draft_notifications import TelegramDraftApprovalNotifier
 from .http_api import handler
@@ -137,7 +137,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
     environment = os.environ if environment is None else environment
     store = SQLiteUserIOStore(_required(environment, "USERIO_DB_PATH"))
     seed_owner_from_file(store, environment.get("USERIO_OWNER_SEED_FILE", ".env.owner-seed"))
-    generator = OpenAICompatibleDraftGenerator(
+    generator = FastAgentDraftGenerator(
         endpoint=_required(environment, "USERIO_AI_ENDPOINT"),
         token=_required(environment, "USERIO_AI_TOKEN"),
         model=_required(environment, "USERIO_AI_MODEL"),
