@@ -372,3 +372,35 @@ payload.log/native-result.json (38MB/swap0/noOOM), owned cleanup complete.
 Runner owner01a11f58 received smallestfix disable unused pytest logging plugin
 or route log to exact private fixture storage; controller/packet repin belongs
 to that owner. This exact runner defect alone still blocks backend7/deploy.
+
+### Installed release and actual provider repair, 2026-10-09
+
+Original7 now passed4.207s/actualcgroup61558784B/swap0/OOM0, all7collected,
+no forbidden attempts/listeners, exact generation cleanup. Receiptcc884085
+in Admin ignoredcase artifacts is complete; do not repeat these unchanged18.
+Releasecec70af was installed/activated/byte-verified with100managedfiles and
+matching authenticated /v1/runtime. Existing29runtime deltas were archived
+unchanged; SQLite backup82,907,136B/SHA6749c36a passedquick_check. Its root
+hash child outlived the userunit timeout under64MiBsoft. Reviewed own96MiBsoft
+with same128hard let it finish; realcgroup is nowgone. Streaminghash proof
+used17472KiB and keeps future verification inside64MiB. No global caps change.
+
+Actual MiniMax then exposed a native-integration defect not covered by fake
+provider compliance: GenericLLM receives instruction singular, but SDK factory
+passed plural, so no actual system instruction reached it. Unknown model JSON
+capability also cannot replace an explicit schema instruction. A synthetic
+provider probe preserved the wrong result privately; incoming event43175
+remained review with no summary cursor advance. Own dispatcher was stopped
+to avoid uncontrolled repeated inference; core/read/ingress remain active.
+
+Corrected attachment explicitly passes singular instruction plus exact schema.
+Existing MiniMax think-block filter feeds the same public native schema parser;
+malformed JSON still fails closed. Native5 with wire instruction/schema and
+reasoning regression passed7.18s,126708KiB/swap0; independent source review found
+no blocking defect. This fix still needs publication/install/provider proof.
+
+NoticePlace business API lock defect was independently fixed by its existing
+R40owner9a1a1f2: audit index prevents431186-row correlated full scans while
+holding global lock. Existing userio43010/42696 loopback/public GET200 with
+unchangedcards. Do not replay old sends/cards; own UserIO finalsame-card
+consumer remains pending.

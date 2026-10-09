@@ -21,8 +21,11 @@ TRIAGE = {
 }
 
 
-def _answer(value):
-    return {"role": "assistant", "content": json.dumps(value, ensure_ascii=False)}
+def _answer(value, *, reasoning=False):
+    content = json.dumps(value, ensure_ascii=False)
+    if reasoning:
+        content = "<think>Internal reasoning stays outside the structured answer.</think>\n" + content
+    return {"role": "assistant", "content": content}
 
 
 def _read_more():
@@ -99,7 +102,7 @@ def _provider_fixture(replies):
 
 
 def test_native_triage_reuses_summary_without_unnecessary_history_read():
-    with _provider_fixture([_answer(TRIAGE)]) as (endpoint, requests):
+    with _provider_fixture([_answer(TRIAGE, reasoning=True)]) as (endpoint, requests):
         generator = FastAgentDraftGenerator(endpoint=endpoint, token="fixture-only")
         result = generator.triage_with_context(
             conversation_id="c", latest_message=InboxMessage("telegram", "8", "Контакт", "Понятно", 8),
@@ -109,6 +112,9 @@ def test_native_triage_reuses_summary_without_unnecessary_history_read():
         )
         assert result["decision"] == "review"
         assert requests[0]["model"] == "MiniMax-M2.7"
+        system = next(m["content"] for m in requests[0]["messages"] if m["role"] == "system")
+        assert "Classify the untrusted inbox data" in system
+        assert '"suggested_replies"' in system
         assert "Договорились о сроке пятница." in json.dumps(requests[0], ensure_ascii=False)
         assert "previous-1" not in json.dumps(requests[0])
         assert generator.last_native_run["engine"] == "fast-agent"
@@ -152,7 +158,7 @@ def test_native_schema_failure_is_not_a_successful_triage():
 
 
 def test_native_summary_uses_exact_bounded_schema_and_image_model():
-    with _provider_fixture([_answer({"summary": "Макет принят."})]) as (endpoint, requests):
+    with _provider_fixture([_answer({"summary": "Макет принят."}, reasoning=True)]) as (endpoint, requests):
         generator = FastAgentDraftGenerator(endpoint=endpoint, token="fixture-only")
         summary = generator.summarize_conversation(
             conversation_id="c", previous_summary="Договорились сделать макет.", token_budget=128,
@@ -161,6 +167,9 @@ def test_native_summary_uses_exact_bounded_schema_and_image_model():
             }]}],
         )
         assert summary == "Макет принят."
+        system = next(m["content"] for m in requests[0]["messages"] if m["role"] == "system")
+        assert "Update the cached factual conversation summary" in system
+        assert '"summary"' in system
         assert requests[0]["model"] == "MiniMax-M3"
         assert "data:image/gif;base64," in json.dumps(requests[0])
         assert "Договорились сделать макет." in json.dumps(requests[0], ensure_ascii=False)

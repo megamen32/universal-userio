@@ -1,7 +1,7 @@
 {
   "schema": "userio.native-fast-agent-five.v1",
-  "observed_unix": 1791529624,
-  "status": "PASS5_LOCAL_PROVIDER_AFTER_MIME_FIX",
+  "observed_unix": 1791535363,
+  "status": "PASS5_SYSTEM_PROMPT_AND_REASONING_AFTER_ACTUAL_PROVIDER_FAILURE",
   "project": "/home/roomhacker/agents-projects/universal-userio",
   "cases": [
     "test_native_triage_reuses_summary_without_unnecessary_history_read",
@@ -12,8 +12,8 @@
   ],
   "source_manifest": {
     "src/universal_userio/native_fast_agent.py": {
-      "sha256": "2f2e276d9979ad62b87267e535216611f5f284e47a36fe026a2c1457daa3a4e8",
-      "bytes": 12350
+      "sha256": "d2dde6d385e128b2bb99dd05469ebc1b44c17620455975aa088247a4d55c0196",
+      "bytes": 13447
     },
     "src/universal_userio/ai.py": {
       "sha256": "9da699e84362112ffce9b2a731bc2f93b6645cbd8beefb759211127177c92d4c",
@@ -32,8 +32,8 @@
       "bytes": 728
     },
     "tests/test_native_fast_agent.py": {
-      "sha256": "e980bdab6e4ea45bfe2a6e37b3f59bb21f506b512a9447f2dfa03d7928029810",
-      "bytes": 8579
+      "sha256": "262f8e93d0178f5e236321f2c8cfeaa8587a5adda9535e29e43a293306255db9",
+      "bytes": 9181
     }
   },
   "sdk": {
@@ -66,13 +66,14 @@
     "pass": 5,
     "fail": 0,
     "skip": 0,
-    "pytest_seconds": 7.8,
-    "peak_rss_kib": 126772,
+    "pytest_seconds": 7.18,
+    "peak_rss_kib": 126708,
     "swaps": 0,
     "actual_memory_high": 268435456,
     "actual_memory_max": 402653184,
     "CPU": 1,
-    "wall_limit": 120
+    "wall_limit": 120,
+    "wall_seconds": 8.74
   },
-  "failure_shield": "Instance-local model MIME overlay plus reattach before M3 turn; user image parts preserve read-more bytes."
+  "failure_shield": "Instance-local model MIME overlay plus reattach before M3 turn; user image parts preserve read-more bytes. Explicit singular instruction/schema for GenericLLM; existing think filtering reparsed with the same public SDK schema validator."
 }
