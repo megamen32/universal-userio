@@ -27,7 +27,7 @@ Source APIs were independently reviewed and matched against the official
 Five real-native/local-provider integration cases are prepared in
 `tests/test_native_fast_agent.py`: sufficient cached context, read-more with
 M3 switch, schema failure, incremental image summary, exhausted history.
-They have NOT executed. AST/diff checks are source proof only. The original
+Their five real-native/local-provider cases now pass; actual MiniMax/runtime acceptance remains pending. The original
 seven tests and all18 reviewed local import bytes remain unchanged; their
 test SHA remains1ffd14c84337df9bd7531c247419b4a5b60041c4fc9bfe5529586e35b3292059.
 After publishing, the existing seven-case packet may repin the new canonical
@@ -343,3 +343,14 @@ UserIO Mac/server100 reached clean6b17e93 including the first preservation
 handoff. Herder owner independently confirmed both its copies clean0681005.
 Final light ff-sync includes these latest handoff commits. No test/build,
 provider prompt, runtime install or restart was performed during this recovery.
+
+### UI compiled and checked, 2026-10-09
+
+Actual App TypeScript check passed in10.164s, peak219796KiB. Vite compiled1912
+modules and new secretary/cache assets in3.175s, peak304176KiB,swap0. Two prior
+timeouts exposed80 Rolldown worker threads despite CPU1/RAYON1. The штатная
+build command now sets supported ROLLDOWN_WORKER_THREADS=2 and
+ROLLDOWN_MAX_BLOCKING_THREADS=2 before native binding initialization. Kernel
+256/512MiB,CPU1,tasks64,wall120s remain finite. This is build evidence, not
+live UI/install acceptance. Shared SDK has22 live foreign MCP consumers; its
+owner received the concrete env maintenance boundary, no foreign process stopped.

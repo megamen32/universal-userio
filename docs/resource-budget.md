@@ -9,6 +9,12 @@ universal admission threshold. No live harness/tenant is moved or stopped.
 
 Measured owning continuation jobs, serialized per agent:
 
+- UI App TypeScript:256/512MiB,CPU1,swap0,tasks64,wall90s;10.164s,
+  peak219796KiB RSS. Vite assets:256/512MiB,CPU1,swap0,tasks64,wall120s;
+  3.175s,peak304176KiB RSS. The build command constrains Rolldown workers2,
+  blocking threads2 and Rayon1; CPU affinity/Rayon alone left80 spinning
+  native workers and timed out twice. No global or runtime service caps change.
+
 - UI six pure cases:128/256MiB RAM, swap0,CPU1,tasks64,wall30s,IO10,
   zero temp output;6PASS/runtime581ms/CPU586ms.
 - SDK environment setup:128/256MiB RAM, swap0,CPU1,tasks64,wall120s,
