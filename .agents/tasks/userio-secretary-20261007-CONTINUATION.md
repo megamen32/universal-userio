@@ -3,6 +3,29 @@
 Original Mac thread: `01a116bf-61ec-73e2-adb8-ba586475a8f2`.
 Current server-100 owner: `01a11747-7bb9-7bc0-8c0a-ce64db49105d`.
 
+## Coordination pause — direct owner priority2026-10-09
+
+AutoFind acceptance by15:00MSK is the sole current priority. This line is
+paused: no new suites, builds, browser sessions or model/provider tasks until
+that acceptance. UserIO/dispatcher/MCP services stay running for other users;
+foreign warm processes remain untouched. Current product acceptance and all
+claimed results are retained, never replayed.
+
+Execution owner remains01a11747-7bb9-7bc0-8c0a-ce64db49105d. Product source
+74df79c, dispatcher4ec578c and included Mac copies are clean/synchronized;
+those post-canary commits contain proof documents only. Runtime backend+Node
+code19c8755 remains active; dispatcher executable bytes aredc7f2ee.
+
+The final read-only Git audit also observed an older clean secondary worktree
+/home/roomhacker/agents-projects/universal-userio-airlock on
+codex/userio-airlock-modularize-20260928, HEADef7fe45. It was not created or
+edited by this task; current ownership and remote-main reachability have not
+been established. Conditional unmanaged-tree cleanup from the old request
+must wait. Smallest next action afterAutoFind acceptance: determine that
+worktree's owner/reachability, preserve it unless unowned cleanup is proven
+within the existing authorization. This is not a blocker for the accepted
+UserIO SDK/cache/Secretary consumer and is not permission to merge/delete it.
+
 ## Delivery accepted —2026-10-09
 
 Original task and urgent Telegram381 mirror repair are delivered. Native
