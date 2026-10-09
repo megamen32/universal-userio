@@ -40,12 +40,12 @@ class _Outbox:
         return "receipt"
 
 
-def _service(tmp_path) -> tuple[UserIOService, str]:
+def _service(tmp_path, *, body="Нужно подписать сегодня") -> tuple[UserIOService, str]:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, _Generator(), _Outbox())
     conversation_id, accepted = service.receive(
         InboxMessage(
-            "telegram", "540308572:44", "Катя", "Нужно подписать сегодня", 44.0,
+            "telegram", "540308572:44", "Катя", body, 44.0,
             conversation_kind="direct", peer_id="540308572",
         ),
         route_id="telegram-owner",
@@ -281,6 +281,38 @@ def test_secretary_new_message_during_triage_keeps_the_selected_event(tmp_path) 
 
 
 def test_secretary_failed_retry_gets_new_job_and_preserves_old_result(tmp_path) -> None:
+    # A failed ordinary triage must also be recoverable by the owner's
+    # explicit action, without automatic replays or a different request ID.
+    retry_path = tmp_path / "ordinary-retry"
+    retry_path.mkdir()
+    retry_service, retry_conversation = _service(retry_path, body="Привет, как дела?")
+    class FailingGenerator(_Generator):
+        def triage_with_context(self, **kwargs):
+            raise ValueError("provider structured result failure")
+    retry_service._generator = FailingGenerator()
+    request_id = "userio-web-triage-1"
+    for _ in range(3):
+        retry_service.triage_workspace_event(event_seq=1, request_id=request_id, max_drafts=0)
+    held = retry_service.triage_workspace_event(event_seq=1, request_id=request_id, max_drafts=0)
+    assert held["status"] == "review"
+    assert retry_service._store._connection.execute(
+        "SELECT attempts FROM workspace_triage WHERE event_seq=1"
+    ).fetchone()[0] == 3
+    retry_service._generator = _Generator()
+    recovered = retry_service.triage_conversation_secretary(
+        conversation_id=retry_conversation, actor="userio-web:owner",
+    )
+    assert recovered["triage"]["status"] == "completed"
+    assert recovered["triage"]["request_id"] == request_id
+    assert retry_service._store._connection.execute(
+        "SELECT attempts FROM workspace_triage WHERE event_seq=1"
+    ).fetchone()[0] == 4
+    retry_service.triage_conversation_secretary(
+        conversation_id=retry_conversation, actor="userio-web:owner",
+    )
+    assert retry_service._store._connection.execute(
+        "SELECT attempts FROM workspace_triage WHERE event_seq=1"
+    ).fetchone()[0] == 4
     service, conversation_id = _service(tmp_path)
     store = service._store
     first = service.request_conversation_secretary_deep(

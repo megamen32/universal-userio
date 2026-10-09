@@ -2850,6 +2850,7 @@ class SQLiteUserIOStore:
 
     def begin_workspace_triage(
         self, *, event_seq: int, request_id: str, user_id: str | None = None,
+        retry_failed: bool = False,
     ) -> tuple[dict[str, object], bool]:
         user = self._user(user_id)
         request_id = self._triage_request_id(request_id)
@@ -2879,7 +2880,9 @@ class SQLiteUserIOStore:
                 if str(row["request_id"]) != request_id:
                     raise ValueError("triage_request_conflict")
                 status = str(row["status"])
-                if status in {"completed", "review"}:
+                if status == "completed" or (
+                    status == "review" and not (retry_failed and row["last_error"])
+                ):
                     return self._workspace_triage_record(row), False
                 if status == "running" and now - float(row["updated_at"]) < 120:
                     return self._workspace_triage_record(row), False

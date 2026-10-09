@@ -404,3 +404,31 @@ R40owner9a1a1f2: audit index prevents431186-row correlated full scans while
 holding global lock. Existing userio43010/42696 loopback/public GET200 with
 unchangedcards. Do not replay old sends/cards; own UserIO finalsame-card
 consumer remains pending.
+
+### Real provider and safe shared SDK receipt
+
+Published/deployed07787be fixed native instruction/schema/reasoning. Actual
+MiniMax-M2.7 synthetic summary nowPASS9.308s/110656KiB/swap0 (no business sends).
+Shared cold CLI entrypoints now independently report SDK0.10.43, installed via
+versioned official UV_TOOL_DIR in6.218s/138204KiB/swap0. The legacy default
+UV0.10.42 environment remains unchanged for22live MCPs; none were restarted,
+so old and new imports do not mix. Exact4links/version/hash/rollback are in
+userio-shared-sdk-install-20261009.json; Herder owner received actualFINISH.
+
+The latest ordinary owner triage has a separate confirmed retry gap: after
+3failures statusreview is permanently reused by the UI button. A narrow owned
+service/store repair allows an explicit owner retry with the sameevent/request
+and attempts3→4; automatic workers do not retry terminal state. Original7
+fixture was extended (same7names), so old7proof is retained but not used to
+claim this delta. Firstdelta7gave6PASS/one missing fixture directory; corrected
+fixture creates its private directory and uses neutral input. Current3paths
+are frozen while existingcontroller owner repins test12071e67, then one
+full7run/publish/install. Do not reset live review records or replay old sends.
+
+Owner-retry repair now passed full7 with test12071e67 in5.047s,actualnative
+peak54419456B/swap0/OOM0,forbidden{} andlisteners0. Both failedfixture/source
+attempts remain preserved. Exactreceiptbb63bfad/leasebounded-kmv63c0v is finished
+and cleaned; all SDK5/UI6/dispatcher25/compiledassets are reused. Independent
+review confirms owner-only retry, immutable IDs, counter preservation and no
+automatic replay. Publish this slice, install before ONE originalcard callback
+and capture actual cachedsummary/ownerrequest response; no further permission.

@@ -1,0 +1,34 @@
+{
+  "observed_unix": 1791536496,
+  "installed_version": "0.10.43",
+  "actual_cli": "fast-agent-mcp v0.10.43",
+  "new_env": "/home/roomhacker/.local/share/uv/tools-fast-agent-0.10.43/fast-agent-mcp",
+  "metadata_sha256": "aba2af5fb6ed2443c098665fae8bd70c92b14adab588f58aa22df7dec498b114",
+  "canonical_entrypoints": {
+    "fast-agent": "/home/roomhacker/.local/share/uv/tools-fast-agent-0.10.43/fast-agent-mcp/bin/fast-agent",
+    "fast-agent-mcp": "/home/roomhacker/.local/share/uv/tools-fast-agent-0.10.43/fast-agent-mcp/bin/fast-agent-mcp",
+    "fast-agent-acp": "/home/roomhacker/.local/share/uv/tools-fast-agent-0.10.43/fast-agent-mcp/bin/fast-agent-acp",
+    "apply_patch": "/home/roomhacker/.local/share/uv/tools-fast-agent-0.10.43/fast-agent-mcp/bin/apply_patch"
+  },
+  "rollback_entrypoints": {
+    "fast-agent": "/home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/fast-agent",
+    "fast-agent-mcp": "/home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/fast-agent-mcp",
+    "fast-agent-acp": "/home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/fast-agent-acp",
+    "apply_patch": "/home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/apply_patch"
+  },
+  "legacy_warm_consumers_retained": true,
+  "old_env_mutated": false,
+  "daemon_restarts": 0,
+  "provider_calls": 0,
+  "install_wall_seconds": 6.218,
+  "rss_kib": 138204,
+  "swap": 0,
+  "limits": {
+    "high": 268435456,
+    "max": 402653184,
+    "CPU": 1,
+    "tasks": 64,
+    "wall": 120
+  },
+  "uv_default_registry_note": "Legacy default UV_TOOL_DIR is retained as rollback for live0.10.42 consumers; new cold entrypoints use explicit immutable UV_TOOL_DIR tools-fast-agent-0.10.43."
+}
