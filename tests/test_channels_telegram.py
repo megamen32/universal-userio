@@ -104,6 +104,31 @@ def test_get_profile_does_not_request_user_details_for_channel() -> None:
     assert client.requests == []
 
 
+@pytest.mark.parametrize("full_details_available", [True, False])
+def test_get_profile_preserves_resolved_user_when_loading_full_details(full_details_available: bool) -> None:
+    """Fast unit: detect dropped user profiles after full details; expected <1s, maximum 10s."""
+
+    class Client:
+        async def get_entity(self, target):
+            assert target == "operator_test"
+            return types.User(id=42, access_hash=123, first_name="Operator", username="operator_test")
+
+        async def __call__(self, request):
+            assert request.__class__.__name__ == "GetFullUserRequest"
+            if not full_details_available:
+                raise RuntimeError("optional profile details unavailable")
+            return SimpleNamespace(full_user=SimpleNamespace(about="Public operator profile"))
+
+    profile = asyncio.run(TelegramAPI(Client()).get_profile("operator_test"))
+
+    assert profile is not None
+    assert profile.user_id == 42
+    assert profile.access_hash == 123
+    assert profile.username == "operator_test"
+    assert profile.first_name == "Operator"
+    assert profile.about == ("Public operator profile" if full_details_available else None)
+
+
 def test_file_contact_and_group_operations_are_provider_neutral() -> None:
     client = _RichStubClient()
     adapter = TelegramAPI(client)
