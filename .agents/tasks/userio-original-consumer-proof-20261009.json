@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "status": "accepted",
+  "original_thread": "01a116bf-61ec-73e2-adb8-ba586475a8f2",
+  "owner_thread": "01a11747-7bb9-7bc0-8c0a-ce64db49105d",
+  "observed_unix": 1791542863.710231,
+  "userio_code_commit": "19c8755b7b50a7d47d27bcba466000e1fe27fb1a",
+  "dispatcher_code_commit": "dc7f2eee1b89c3b488674d47167d9cbb1b1feace",
+  "mirror": {
+    "account": "telegram:540308572",
+    "peer": "381703703",
+    "native_comparisons": [
+      {
+        "id": "1983328",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983326",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983323",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983316",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983315",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983314",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983231",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983230",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983229",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1983228",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1982951",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1982950",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1982941",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1982763",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      },
+      {
+        "id": "1982761",
+        "exists": true,
+        "direction_equal": true,
+        "time_equal": true,
+        "body_equal": true
+      }
+    ],
+    "same_existing_conversation": true,
+    "outgoing1983328_present": true,
+    "provider_time_and_read": true,
+    "confirmed_deleted1983325_tombstone": true,
+    "new_sends": 0,
+    "new_polling_client": 0,
+    "mini_browser_visible_checks": [
+      "reply",
+      "provider_read",
+      "provider_time",
+      "Nikita_account",
+      "owner_followups",
+      "importance_label",
+      "deep_label"
+    ],
+    "cropped_screenshot_sha256": "35740a9dbfe9a0f232ef1e3040648794f74d39ba725795851969f90925f84e5d"
+  },
+  "same_card": {
+    "observed_unix": 1791541304.8869903,
+    "request_id": "userio-43010",
+    "same_telegram_message_id": 6202,
+    "actor": "telegram:540308572",
+    "choice": "deep_analysis",
+    "state": "resolved",
+    "phase": "completed",
+    "session_url": "https://agent.bezrabotnyi.com/#/session/fast-agent%3Afast-agent%3A2610091313-LNfe6C",
+    "result_sha256": "c2c8d0a32aefec22b255ed6b3f1680dfcdd71177ed95cf7ae0155894d9f813a6",
+    "result_characters": 321,
+    "original_callback_press_count": 1,
+    "new_canary_cards": 0,
+    "telegram_direct_sends": 0,
+    "native_telegram_readback": {
+      "sameMessage6202": true,
+      "completedResult": true,
+      "nativeSessionLink": true
+    }
+  },
+  "backend_original_seven": {
+    "product_commit": "19c8755b7b50a7d47d27bcba466000e1fe27fb1a",
+    "test_sha256": "12071e67158afa9fd26bc03739a5f201a064fceace9f06ee1e2ad89d44214593",
+    "lease": "/home/roomhacker/ServersAdministartion/.tmp/fleet-codex-watch-20261007/userio-foreground-temp/bounded-tfqvmd2w",
+    "attempt": "64af08b38da00d7042c9896e31e8d478",
+    "seven_passes": 7,
+    "pytest_seconds": 4.48,
+    "native_helper_exit": 0,
+    "native_peak_bytes": 54927360,
+    "swap": 0,
+    "oom": 0,
+    "cleanup_recovery_exit": 0,
+    "reservation_id": "b07a0d93447ef09af67af78ad9e11cc4",
+    "unit": "run-u15301.scope",
+    "invocation": "c0bf43b6feaa49bf9bc7d99bdac847e6",
+    "cgroup_inode": 50994564,
+    "native_sha256": "402213b10822cf703f65e24029cfc1aaa5c586c2169b3a0c668c1a0e09d0982b",
+    "cleanup_proof": "same canonical OFD free; exact native result; collected unit; original no-move path gone",
+    "owned_guardian_cleanup": "pidfd SIGKILL after generation/FD/native/unit proof; TERM ignored by existing cleanup loop",
+    "payload_replayed": false,
+    "observed_unix": 1791542200.205225
+  },
+  "selected_python_tests": {
+    "passes": 30,
+    "mirror": 9,
+    "context": 16,
+    "native_sdk": 5,
+    "wall_seconds": 20.132,
+    "rss_kib": 134784,
+    "swap": 0
+  },
+  "node_metadata_cases": 2,
+  "dispatcher_followup_fixture": 1,
+  "ui_six_prior_passes_reused": true,
+  "dispatcher25_prior_passes_reused": true,
+  "app_build": {
+    "passed": true,
+    "wall_seconds": 62.742,
+    "rss_kib": 297324,
+    "native_workers": 2,
+    "swap": 0
+  },
+  "cache_consumer": {
+    "context": {
+      "message_count": 3,
+      "max_message_count": 150,
+      "token_budget": 1000,
+      "max_token_budget": 48000,
+      "summary_token_budget": 1200,
+      "summary_retention_days": 90,
+      "cache_channels": {
+        "telegram": true,
+        "gmail": false,
+        "whatsapp": false,
+        "max": false,
+        "sms": false,
+        "chatgpt": false,
+        "vk": false
+      },
+      "cache_conversation_kinds": {
+        "direct": true,
+        "group": false,
+        "channel": false,
+        "unknown": false
+      },
+      "models": {
+        "text": "MiniMax-M2.7",
+        "image": "MiniMax-M3"
+      }
+    },
+    "cache": [
+      {
+        "conversation_id": "conv_5cf7d7c0e9a052c7ab4aa8ac",
+        "summarized_message_count": 129,
+        "through_message_id": "telegram:540308572|5479231456:1983360",
+        "summary_chars": 601
+      }
+    ],
+    "native_runtime": "19c8755b7b50a7d47d27bcba466000e1fe27fb1a"
+  },
+  "exmanager_existing_mcp_consumer": {
+    "accepted_commit": "ebe4956",
+    "native_successful_runs": 5,
+    "tool_count": 34,
+    "accounts": 10,
+    "new_sends": 0,
+    "generic_airlock_not_required": true
+  },
+  "browser_slot_returned": true,
+  "same_core_and_ingress_generation_through_canary": true,
+  "limits_and_common_daemon_unchanged": true,
+  "legacy_warm_linux_sdk_preserved": true
+}

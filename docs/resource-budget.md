@@ -79,3 +79,32 @@ Broad tests must run one suite at a time. The initial bounded validation scope
 uses at most 768 MiB RAM, 256 MiB swap, two CPUs, and 128 tasks. Increase these
 limits only after measuring a legitimate failing workload, documenting the
 host-reserve impact, and rerunning a real consumer canary.
+
+## Accepted continuation measurements —2026-10-09
+
+The original7 used512/768MiB,CPU1,swap0,tasks128,wall120: actual54,927,360B
+peak /4.48s /OOM0. Post-payload cleanup was reconciled through the existing
+exact-generation recovery API; no test replay or foreign process stop.
+
+Mirror/context/SDK30 selected cases used256/384MiB,CPU1,tasks128,wall120:
+134784KiB RSS /20.132s /swap0. Node2 used64/128MiB,CPU1,tasks32,wall30.
+Compiled App type/build passed with two native workers under512MiBhard.
+Its297324KiB working set reclaimed heavily at256MiBsoft; future equivalent
+App builds use384MiBsoft with the same512MiBhard/CPU1/tasks64/wall120.
+
+Mac SDK update used nativeShellMCP120s timeout,90CPU-seconds,128MiB/file,
+one download/install/build worker and no source compilation. Darwin rejects
+RLIMIT_DATA; no kernel RAM hard bound is claimed. Measured installer159,727,616B
+RSS and import101,924,864B fit the reviewed512MiB target with16GiB free reserve.
+SDK upgrade occurred only after no liveSDK consumers were found; an APFS-cloned
+old environment is preserved for exact rollback. No daemon/session restart.
+
+Server88 SDK installer used native256/512MiB,CPU1,swap0,tasks64,wall120 and
+64MiB/file:140912KiB RSS /33.995s. Consumer native imports used128/256MiB,
+CPU1,tasks32,wall30:96040KiB /2.938s /swap0. Units collected, dependency
+check131 compatible; previous0.10.13 environment is preserved. Physical reserve
+was90GiB withmemoryPSIfull0. Shared host/user/service limits remain unchanged.
+
+Actual UserIO cache118 messages and ordinary native analysis, plus existing
+same-card deep consumer, passed inside the unchanged128/256MiB core budget.
+Evidence: .agents/tasks/userio-original-consumer-proof-20261009.json.

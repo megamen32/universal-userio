@@ -30,5 +30,67 @@
     "tasks": 64,
     "wall": 120
   },
-  "uv_default_registry_note": "Legacy default UV_TOOL_DIR is retained as rollback for live0.10.42 consumers; new cold entrypoints use explicit immutable UV_TOOL_DIR tools-fast-agent-0.10.43."
+  "uv_default_registry_note": "Legacy default UV_TOOL_DIR is retained as rollback for live0.10.42 consumers; new cold entrypoints use explicit immutable UV_TOOL_DIR tools-fast-agent-0.10.43.",
+  "fresh_pypi_latest": "0.10.43",
+  "mac": {
+    "status": "installed_and_consumer_verified",
+    "version": "0.10.43",
+    "metadata_sha256": "aba2af5fb6ed2443c098665fae8bd70c92b14adab588f58aa22df7dec498b114",
+    "canonical_uv_env": "/Users/user/.local/share/uv/tools/fast-agent-mcp",
+    "prior_version": "0.10.42",
+    "rollback_snapshot": "/Users/user/Documents/ServerAdministartion/.tmp/universal-userio/.tmp/mac-sdk-install-20261009/rollback-0.10.42",
+    "warm_sdk_processes_before_install": 0,
+    "install_seconds": 26.66,
+    "install_rss_bytes": 159727616,
+    "imports": [
+      "ToolAgent",
+      "ToolRunner"
+    ],
+    "dependency_check_count": 131,
+    "swap": 0,
+    "bounds": {
+      "native_shell_wall_seconds": 120,
+      "cpu_seconds": 90,
+      "file_bytes": 134217728,
+      "download_install_build_concurrency": 1,
+      "no_source_builds": true,
+      "measured_ram_target_bytes": 536870912,
+      "native_memory_hard_enforcement": false
+    },
+    "first_attempt": "Darwin rejected RLIMIT_DATA before install; retained; supported ShellMCP wall/CPU/file/concurrency bounds used, measured working set stayed below target"
+  },
+  "server88": {
+    "status": "installed_and_consumer_verified",
+    "version": "0.10.43",
+    "prior_version": "0.10.13",
+    "metadata_sha256": "aba2af5fb6ed2443c098665fae8bd70c92b14adab588f58aa22df7dec498b114",
+    "canonical_uv_env": "/home/roomhacker/.local/share/uv/tools/fast-agent-mcp",
+    "rollback_snapshot": "/home/roomhacker/.local/share/uv/.tmp/userio-sdk-20261009/rollback-0.10.13",
+    "warm_sdk_processes_before_install": 0,
+    "install_seconds": 33.995,
+    "install_rss_kib": 140912,
+    "consumer_seconds": 2.938,
+    "consumer_rss_kib": 96040,
+    "dependency_check_count": 131,
+    "imports": [
+      "ToolAgent",
+      "ToolRunner"
+    ],
+    "swap": 0,
+    "bounds": {
+      "high": 268435456,
+      "max": 536870912,
+      "cpu": 1,
+      "tasks": 64,
+      "wall_seconds": 120,
+      "file_bytes": 67108864,
+      "no_source_builds": true
+    },
+    "actual_unit_collected": true
+  },
+  "server44": {
+    "identity": "server-44",
+    "fast_agent_cli_installed": false,
+    "new_install": false
+  }
 }

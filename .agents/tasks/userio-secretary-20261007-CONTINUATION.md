@@ -3,17 +3,34 @@
 Original Mac thread: `01a116bf-61ec-73e2-adb8-ba586475a8f2`.
 Current server-100 owner: `01a11747-7bb9-7bc0-8c0a-ce64db49105d`.
 
-## Latest execution — historical blockers below are not current
+## Delivery accepted —2026-10-09
 
-Core10f9 is installed. Original7 PASS5.047s; SDK5/UI6/dispatcher25/build
-passed and cold Linux FastAgent0.10.43 is installed with warm0.10.42
-consumers retained. Secretary MCP consumer accepted existing route. Backup
-completed with consistent quick_check/checksum and actual child cleanup.
-Urgent Telegram mirror source repair and30selected+Node2 checks passed; see
-[userio-telegram-mirror-20261009.md](userio-telegram-mirror-20261009.md).
-Mini QA9223 window is transferred to this owner. Final real mirror/UI and
-same-card consumer acceptance remain pending, and dispatcher is intentionally
-stopped until release is verified. No additional permission is required.
+Original task and urgent Telegram381 mirror repair are delivered. Native
+FastAgentToolAgent/ToolRunner owns ordinary adaptive analysis/cache with M2.7
+and per-instanceM3 image routing; UserIO owns preferences/context/approval/outbox.
+Existing SecretaryMCP route is accepted; no genericAirlock prerequisite.
+
+Source19c8755/core+Node installed and verified; dispatcher dc7f2ee published
+and restored. Backend original7 current source PASS4.48s plus exact recovered
+same-generation cleanup0, selected mirror/context/SDK30 PASS, Node2, dispatcher
+followup1 and App build pass. Existing UI6/dispatcher25 results reused.
+
+Actual native15 messages in Nikita's381703703 match text/direction/time; reply
+and native read visible in API/Mini UI. Existing card6202 owner540 ONE callback
+accepted→native session link→completed result on SAME message, native readback
+confirmed. Real cache118 messages and saved settings/models returned throughAPI.
+
+SDK0.10.43 native imports/dependencies/CLI verified on100core/coldCLI, Mac and88;
+no common daemon restart, global limits change or foreign session stop. Old warm
+Linux42 SDK processes are deliberately preserved. Included Mac source checkouts
+are clean/synced. MiniQA slot returned for priorityAutoFind; no new browser gate.
+
+[Original consumer proof](userio-original-consumer-proof-20261009.json) is the
+current result; all older blockers and pending clauses below are history. Do not
+rerun claimed7, callback6202, existing sends/cards or fulfilled provider canaries.
+Runtime code release remains19c8755; later commits contain acceptance documents
+only, with no post-canary service restart. Preserve the29 archived runtime WIP
+files, SDK rollback snapshots and foreignAdmin edits.
 
 ## Earlier execution, 2026-10-09
 
