@@ -16,4 +16,10 @@ Actual delivered receipt is exmanager-relay:telegram:8810909089:8634588930:<prov
 
 Dispatcher guard renewed hot to 2026-10-09T22:00:00Z; current SHA 1af59f9e2f27d3a6f8530d5d93985b50e7da50d05260cf5c9ffaf90827242614, same PID759490. Original baseline absent, old9365 bytes preserved privately. After full consumer, remove only exact same-SHA /var/lib/hermes-userio-dispatcher/pilot-pair-guard.json without restart. Mismatch requires owner reconciliation. Relay guard/bridge expiry must be verified independently and restored by its owner.
 
-Installation and actual connected read-route acceptance remain pending until the installed receipt is appended. Source/tests alone do not establish usable receiver. Consumer61 alone performs actual sends.
+## Installed receiver acceptance
+
+2026-10-09T20:44:59Z: source3444ef6d96cbb168b6975b3ecebafee72d943b45 published and installed with rollback-first controller; full managed manifest65ddcdccf67b842965f85e71c2c19ee01a1452f77a1835309f0969ef4f5e8581 verified. Core PID2850194/invocation75636b38c98a4701934b016ad3933804 active, measured38.3MiB, soft224/hard256/swap64/CPU1/tasks64. Soft persisted through native settings and canonical unit. Only own core restarted once; ingress, relay, dispatcher, shared SDK and daemons unchanged.
+
+Actual authenticated accounts returned registered enabled881/read/reply HTTP200 in116ms. Maintained relay cached actual881/exact863, live bridge and both guards expire22UTC. Actual normal UserIO relay-sync returned HTTP200 in26ms, imported0/conversation_ids=[]/cursor0 from independently checked empty provider journal; no fabricated conversation, draft, message, model, provider RPC or send. Private ready packet: .tmp/pilot9-receiver-readiness/ready-packet.json, rollback receipt bridge-rollback.json, protected environment rollback receipt relay-env-receipt.json. Five nonsecret exact-account config lines appended; existing credential values and QR fallback retained.
+
+The receiver capability gap is closed. Business consumer61 must perform the single actual provider→normal UserIO draft→explicit approval→provider receipt flow and restore the scoped rules promptly; full Pilot9 delivery is not claimed by this receiver acceptance. Parent cache remains paused. Runtime inputs frozen until61 captures the result; do not repeat the empty readiness probe or tests.

@@ -42,3 +42,8 @@ aux-current-slots-proof.json, aux-supported-route-gap.json,
 registration-api-blocked-proof.json, exmanager-candidate-cached-identity.json.
 Broader cache parent remains paused; task outcome is BLOCKED exactroute, not
 consumer acceptance. Replyonly after Root/9a supplies actual supported contract.
+
+
+## Resolution 2026-10-09T20:44:59Z
+
+The earlier absence of a maintained existing881 read/reply API was repaired by eXmanager3660089 and the thin normal UserIO route3444ef6. Actual installed empty read returned200/26ms with cached881/exact863, enabled owner registry and both active guards until22UTC. No new authorization/session clone, fake conversation or actual send. See 20261009-pilot9-userio-bridge.md and private ready-packet.json. The broader cache task remains paused; sole61 owns actual consumer and scoped restore.
