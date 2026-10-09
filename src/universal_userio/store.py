@@ -104,6 +104,13 @@ class SQLiteUserIOStore:
                 self._connection.execute(
                     "ALTER TABLE messages ADD COLUMN sender_is_bot INTEGER NOT NULL DEFAULT 0"
                 )
+            for name, definition in (("provider_read", "INTEGER"), ("deleted_at", "REAL")):
+                if name not in message_columns:
+                    self._connection.execute(f"ALTER TABLE messages ADD COLUMN {name} {definition}")
+            self._connection.execute("""CREATE TABLE IF NOT EXISTS telegram_read_state (
+                user_id TEXT NOT NULL, account_ref TEXT NOT NULL, peer_id TEXT NOT NULL,
+                inbox_max INTEGER NOT NULL DEFAULT 0, outbox_max INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(user_id,account_ref,peer_id))""")
             self._backfill_workspace_events()
             self.maintain_conversation_summaries()
 
@@ -1382,8 +1389,10 @@ class SQLiteUserIOStore:
         user = self._user(user_id)
         chat = self.evaluate_workspace_chat(conversation_id=conversation_id, user_id=user)
         with self._lock:
-            row = self._connection.execute("""SELECT eligible FROM workspace_events
-                WHERE user_id=? AND conversation_id=? AND source=? AND message_id=?""",
+            row = self._connection.execute("""SELECT e.eligible FROM workspace_events e JOIN messages m
+                ON m.user_id=e.user_id AND m.source=e.source AND m.message_id=e.message_id
+                WHERE e.user_id=? AND e.conversation_id=? AND e.source=? AND e.message_id=?
+                AND m.direction='incoming' AND m.deleted_at IS NULL""",
                 (user, conversation_id, source, message_id)).fetchone()
         eligible = row is not None and bool(row["eligible"])
         return {**chat, "eligible_at_ingest": eligible,
@@ -1502,38 +1511,62 @@ class SQLiteUserIOStore:
                         (user_id,conversation_id,action,reason,created_at,updated_at)
                         VALUES (?,?,'ignore',?,?,?)""",
                         (user_id, conversation_id, reason, now, now))
-            # The connector's account-scoped ID replaces the old peer:message
-            # format. A reconciliation replay of an existing legacy message in
-            # this exact conversation is the same message, not a new arrival.
-            if message.source == "telegram" and account_ref and message.message_id.startswith(
-                f"{account_ref}|"
-            ):
+            # Replays hydrate the existing legacy identity in this exact chat;
+            # no ID/history/receipt is renamed and no arrival is invented.
+            if message.source == "telegram" and account_ref and message.message_id.startswith(f"{account_ref}|"):
                 legacy_id = message.message_id[len(account_ref) + 1:]
                 legacy = self._connection.execute("""SELECT 1 FROM messages
-                    WHERE user_id=? AND source='telegram' AND message_id=?
-                      AND conversation_id=?""",
+                    WHERE user_id=? AND source='telegram' AND message_id=? AND conversation_id=?""",
                     (user_id, legacy_id, conversation_id)).fetchone()
                 if legacy is not None:
-                    if message.sender_is_bot:
-                        self._connection.execute("""UPDATE messages SET sender_is_bot=1
-                            WHERE user_id=? AND source='telegram' AND message_id=?""",
-                            (user_id, legacy_id))
-                        self._connection.execute("""UPDATE workspace_events SET eligible=0
-                            WHERE user_id=? AND source='telegram' AND message_id=?""",
-                            (user_id, legacy_id))
-                    return False
+                    from dataclasses import replace
+                    message = replace(message, message_id=legacy_id)
+            if message.source == "telegram" and account_ref and message.peer_id:
+                watermark = self._connection.execute("""SELECT inbox_max,outbox_max FROM telegram_read_state
+                    WHERE user_id=? AND account_ref=? AND peer_id=?""",
+                    (user_id,account_ref,message.peer_id)).fetchone()
+                native_id = message.message_id.rsplit(":",1)[-1]
+                if watermark is not None and native_id.isdigit() and int(native_id) <= int(
+                        watermark["outbox_max" if message.direction == "outgoing" else "inbox_max"]):
+                    from dataclasses import replace
+                    message = replace(message,provider_read=True)
+            previous = self._connection.execute("""SELECT body,direction,received_at,edited_at,provider_read
+                FROM messages WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
+                (user_id, message.source, message.message_id, conversation_id)).fetchone()
+            if previous is not None:
+                if (previous["direction"] != message.direction or previous["received_at"] != message.received_at
+                        or previous["edited_at"] != (message.edited_at or None)):
+                    self._invalidate_message_summary(user_id, message.source, message.message_id)
+                self._connection.execute("""UPDATE messages SET direction=?,received_at=?,
+                    provider_read=CASE WHEN provider_read=1 THEN 1 ELSE COALESCE(?,provider_read) END,sender_is_bot=?,edited_at=COALESCE(?,edited_at)
+                    WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
+                    (message.direction, message.received_at, message.provider_read, int(message.sender_is_bot),
+                     message.edited_at or None, user_id, message.source, message.message_id, conversation_id))
+                if message.direction != "incoming" or (message.sender_is_bot
+                        and not self.workspace_policy(user_id=user_id)["defaults"]["telegram_bot"]):
+                    self._connection.execute("""UPDATE workspace_events SET eligible=0
+                        WHERE user_id=? AND source=? AND message_id=?""",
+                        (user_id, message.source, message.message_id))
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot,edited_at,provider_read)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, message.source, message.message_id, conversation_id,
                     message.sender, message.body, message.direction, message.received_at,
-                    int(message.sender_is_bot),
+                    int(message.sender_is_bot), message.edited_at or None, message.provider_read,
                 ),
             ).rowcount == 1
+            if inserted:
+                # A late history item can precede the cached temporal frontier
+                # even though its durable rowid is new. Rebuild that cache.
+                self._connection.execute("""DELETE FROM conversation_summaries
+                    WHERE user_id=? AND conversation_id=? AND EXISTS (
+                        SELECT 1 FROM messages m WHERE m.user_id=? AND m.conversation_id=?
+                        AND m.rowid<=conversation_summaries.through_message_rowid AND m.received_at>=?)""",
+                    (user_id, conversation_id, user_id, conversation_id, message.received_at))
             if inserted and message.direction == "incoming":
                 bot_enabled = bool(self.workspace_policy(user_id=user_id)["defaults"]["telegram_bot"])
                 eligible = ((not message.reconciliation)
@@ -1627,6 +1660,65 @@ class SQLiteUserIOStore:
                         (now, user_id, conversation_id),
                     )
         return inserted
+
+    def telegram_mirror_state(
+        self, *, account_ref: str, peer_id: str, user_id: str,
+        read_inbox_max_id: int | None = None, read_outbox_max_id: int | None = None,
+        deleted_ids: list[int] | None = None, history_ids: list[int] | None = None,
+    ) -> dict[str, object]:
+        """Apply native read/deletion facts; absence in a short history is only a probe candidate.
+
+        Account ownership is checked at the HTTP boundary. Messages, event IDs,
+        drafts and receipts are retained when a provider confirms deletion.
+        """
+        if not account_ref.startswith("telegram:") or not peer_id.lstrip("-").isdigit():
+            raise ValueError("exact Telegram account and peer required")
+        for value in (read_inbox_max_id, read_outbox_max_id):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("read watermark must be a nonnegative integer")
+        for values in (deleted_ids, history_ids):
+            if values is not None and (not isinstance(values, list) or len(values) > 200
+                    or any(type(v) is not int or v <= 0 for v in values)):
+                raise ValueError("provider IDs must contain at most 200 positive integers")
+        changed = 0
+        missing: list[int] = []
+        with self._lock, self._connection:
+            self._connection.execute("""INSERT INTO telegram_read_state
+                (user_id,account_ref,peer_id,inbox_max,outbox_max) VALUES (?,?,?,?,?)
+                ON CONFLICT(user_id,account_ref,peer_id) DO UPDATE SET
+                  inbox_max=MAX(inbox_max,excluded.inbox_max),outbox_max=MAX(outbox_max,excluded.outbox_max)""",
+                (user_id,account_ref,peer_id,read_inbox_max_id or 0,read_outbox_max_id or 0))
+            conversation = self._connection.execute("""SELECT id FROM conversations
+                WHERE user_id=? AND source='telegram' AND account_ref=? AND peer_id=?""",
+                (user_id, account_ref, peer_id)).fetchone()
+            if conversation is None:
+                return {"changed": 0, "missing_ids": []}
+            cid = str(conversation["id"])
+            # Both historic and account-scoped identities remain unchanged.
+            locator = "CAST(substr(message_id,length(rtrim(message_id,'0123456789'))+1) AS INTEGER)"
+            scope = "user_id=? AND conversation_id=? AND source='telegram' AND (message_id LIKE ? OR message_id LIKE ?)"
+            params = (user_id, cid, f"{peer_id}:%", f"{account_ref}|{peer_id}:%")
+            for direction, watermark in (("incoming", read_inbox_max_id), ("outgoing", read_outbox_max_id)):
+                if watermark is not None:
+                    changed += self._connection.execute(f"""UPDATE messages SET provider_read=1
+                        WHERE {scope} AND direction=? AND {locator}<=? AND {locator}>0
+                        AND COALESCE(provider_read,0)=0""", (*params, direction, watermark)).rowcount
+            if deleted_ids:
+                placeholders = ','.join('?' for _ in deleted_ids)
+                changed += self._connection.execute(f"""UPDATE messages SET deleted_at=?
+                    WHERE {scope} AND {locator} IN ({placeholders}) AND deleted_at IS NULL""",
+                    (time.time(), *params, *deleted_ids)).rowcount
+                self._connection.execute("""UPDATE workspace_events SET eligible=0 WHERE user_id=?
+                    AND conversation_id=? AND message_id IN (SELECT message_id FROM messages
+                    WHERE user_id=? AND conversation_id=? AND deleted_at IS NOT NULL)""", (user_id,cid,user_id,cid))
+                self._connection.execute("DELETE FROM conversation_summaries WHERE user_id=? AND conversation_id=?", (user_id,cid))
+            if history_ids:
+                rows = self._connection.execute(f"""SELECT {locator} AS provider_id FROM messages
+                    WHERE {scope} AND deleted_at IS NULL AND {locator} BETWEEN ? AND ? LIMIT 200""",
+                    (*params, min(history_ids), max(history_ids))).fetchall()
+                known = set(history_ids)
+                missing = [int(r["provider_id"]) for r in rows if int(r["provider_id"]) not in known]
+        return {"changed": changed, "missing_ids": missing}
 
     def create_conversation(
         self, source: str, sender: str, *, user_id: str | None = None
@@ -2000,10 +2092,10 @@ class SQLiteUserIOStore:
             messages = self._connection.execute(
                 """
                 SELECT * FROM (
-                    SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at
+                    SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at,provider_read
                     FROM messages
-                    WHERE user_id=? AND conversation_id=? ORDER BY received_at DESC LIMIT 200
-                ) ORDER BY received_at
+                    WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL ORDER BY received_at DESC,rowid DESC LIMIT 200
+                ) ORDER BY received_at,message_id
                 """,
                 (user_id, conversation_id),
             ).fetchall()
@@ -2251,7 +2343,7 @@ class SQLiteUserIOStore:
             """DELETE FROM conversation_summaries WHERE user_id=? AND EXISTS (
                 SELECT 1 FROM messages m WHERE m.user_id=? AND m.source=? AND m.message_id=?
                 AND m.conversation_id=conversation_summaries.conversation_id
-                AND m.rowid<=conversation_summaries.through_message_rowid)""",
+)""",
             (user_id, user_id, source, message_id),
         )
 
@@ -2338,7 +2430,12 @@ class SQLiteUserIOStore:
             if row is not None and (through_message_id or through_message_rowid is not None):
                 anchor = self._message_anchor(user, conversation_id, through_message_id,
                                               through_message_source, through_message_rowid)
-                if anchor is None or int(row["through_message_rowid"]) > anchor:
+                if anchor is None:
+                    return None
+                if self._connection.execute("""SELECT 1 FROM messages WHERE user_id=? AND conversation_id=?
+                    AND rowid<=? AND deleted_at IS NULL AND (received_at,rowid)>
+                    (SELECT received_at,rowid FROM messages WHERE user_id=? AND rowid=?) LIMIT 1""",
+                    (user,conversation_id,int(row["through_message_rowid"]),user,anchor)).fetchone():
                     return None
         return None if row is None else dict(row)
 
@@ -2376,27 +2473,33 @@ class SQLiteUserIOStore:
                 if anchor is None:
                     return None
                 anchor_rowid = anchor
-                if cursor > anchor_rowid:
-                    return {
-                        "previous_summary": "",
-                        "expected_through_message_rowid": cursor,
-                        "summarized_message_count": int(cached["summarized_message_count"]),
-                        "new_messages": [],
-                        "summary_token_budget": int(settings["summary_token_budget"]),
-                    }
-            upper_sql = " AND rowid<=?" if anchor_rowid is not None else ""
+                # A cache cursor is an arrival frontier, not a timestamp.
+                # Never jump across a newer native message excluded by an old
+                # event anchor, even when late history has larger rowids.
+                blocked = self._connection.execute("""SELECT MIN(rowid) FROM messages
+                    WHERE user_id=? AND conversation_id=? AND rowid>? AND deleted_at IS NULL
+                    AND (received_at,rowid)>(SELECT received_at,rowid FROM messages WHERE user_id=? AND rowid=?)""",
+                    (user,conversation_id,cursor,user,anchor_rowid)).fetchone()[0]
+                cached_for_anchor = self.conversation_summary(conversation_id,
+                    through_message_rowid=anchor_rowid,user_id=user)
+                if cached is not None and cached_for_anchor is None:
+                    return None
+            upper_sql = " AND (received_at,rowid)<=(SELECT received_at,rowid FROM messages WHERE user_id=? AND rowid=?)" if anchor_rowid is not None else ""
             parameters: list[object] = [user, conversation_id, cursor]
             if anchor_rowid is not None:
-                parameters.append(anchor_rowid)
+                parameters.extend([user, anchor_rowid])
+            if anchor_rowid is not None and blocked is not None:
+                upper_sql += " AND rowid<?"
+                parameters.append(int(blocked))
             parameters.append(100)
             rows = self._connection.execute(
                 f"""SELECT rowid AS message_rowid,source,message_id,sender,body,direction,received_at
                    FROM messages
-                   WHERE user_id=? AND conversation_id=? AND rowid>?{upper_sql}
+                   WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL AND rowid>?{upper_sql}
                    ORDER BY rowid LIMIT ?""",
                 parameters,
             ).fetchall()
-        messages = [dict(row) for row in rows]
+        messages = sorted([dict(row) for row in rows], key=lambda m: (m["received_at"], m["message_rowid"]))
         for message in messages:
             attachments = self.attachments_for_message(
                 source=str(message["source"]), message_id=str(message["message_id"]),
@@ -2439,9 +2542,15 @@ class SQLiteUserIOStore:
             # A provider edit can arrive while the AI is running, including on
             # the first page when there is no existing cache to invalidate.
             if expected_messages is not None:
+                newest_row = max(int(m["message_rowid"]) for m in expected_messages)
+                latest_time = max(float(m["received_at"]) for m in expected_messages)
+                if self._connection.execute("""SELECT 1 FROM messages WHERE user_id=? AND conversation_id=?
+                    AND rowid>? AND received_at<=? AND deleted_at IS NULL LIMIT 1""",
+                    (user, conversation_id, newest_row, latest_time)).fetchone():
+                    return False
                 for snapshot in expected_messages:
                     current = self._connection.execute(
-                        "SELECT source,message_id,sender,body,direction,received_at FROM messages WHERE user_id=? AND conversation_id=? AND rowid=?",
+                        "SELECT source,message_id,sender,body,direction,received_at FROM messages WHERE user_id=? AND conversation_id=? AND rowid=? AND deleted_at IS NULL",
                         (user, conversation_id, snapshot["message_rowid"]),
                     ).fetchone()
                     if current is None or any(current[key] != snapshot[key] for key in current.keys()):
@@ -2515,9 +2624,9 @@ class SQLiteUserIOStore:
             sql = "SELECT rowid AS message_rowid,source,message_id,sender,body,direction,received_at FROM messages WHERE user_id=? AND conversation_id=?"
             parameters: list[object] = [user, conversation_id]
             if upper is not None:
-                sql += " AND rowid<?"
-                parameters.append(upper)
-            rows = self._connection.execute(sql + " ORDER BY rowid DESC LIMIT ?",
+                sql += " AND (received_at,rowid)<(SELECT received_at,rowid FROM messages WHERE user_id=? AND rowid=?)"
+                parameters.extend([user, upper])
+            rows = self._connection.execute(sql + " AND deleted_at IS NULL ORDER BY received_at DESC,rowid DESC LIMIT ?",
                                             (*parameters, message_limit)).fetchall()
         records = [dict(row) for row in reversed(rows)]
         for record in records:
@@ -2667,7 +2776,7 @@ class SQLiteUserIOStore:
             rows = self._connection.execute(
                 f"""
                 SELECT source,message_id,conversation_id,sender,body,received_at,seen_at
-                FROM messages WHERE {where} ORDER BY received_at DESC LIMIT 2
+                FROM messages WHERE {where} AND deleted_at IS NULL ORDER BY received_at DESC LIMIT 2
                 """,
                 values,
             ).fetchall()
@@ -2695,7 +2804,8 @@ class SQLiteUserIOStore:
                        c.id AS conversation_id,c.identity_id
                 FROM messages m JOIN conversations c
                   ON c.user_id=m.user_id AND c.id=m.conversation_id
-                WHERE m.user_id=? AND m.seen_at IS NULL {source_sql}
+                WHERE m.user_id=? AND m.direction='incoming' AND m.deleted_at IS NULL
+                  AND COALESCE(m.provider_read,m.seen_at IS NOT NULL)=0 {source_sql}
                 ORDER BY m.received_at DESC LIMIT ?
                 """,
                 [self._user(user_id), *values, limit],
@@ -3097,8 +3207,8 @@ class SQLiteUserIOStore:
                    FROM workspace_events e
                    JOIN messages m ON m.user_id=e.user_id AND m.source=e.source
                      AND m.message_id=e.message_id
-                   WHERE e.user_id=? AND e.conversation_id=? AND m.direction='incoming'
-                   ORDER BY e.seq DESC LIMIT 1""",
+                   WHERE e.user_id=? AND e.conversation_id=? AND m.direction='incoming' AND m.deleted_at IS NULL
+                   ORDER BY m.received_at DESC,m.rowid DESC LIMIT 1""",
                 (user, conversation_id),
             ).fetchone()
             triage_row = None
@@ -3143,7 +3253,24 @@ class SQLiteUserIOStore:
             "triage": triage,
             "summary": str((summary or {}).get("summary") or ""),
             "deep": job,
+            "owner_messages_after_current": self.owner_messages_after(
+                conversation_id, str(event["message_id"]), user_id=user,
+            ) if event is not None else [],
         }
+
+    def owner_messages_after(self, conversation_id: str, message_id: str, *,
+                             user_id: str | None = None) -> list[dict[str, object]]:
+        """A bounded snapshot of replies the owner already sent, never read authority."""
+        user = self._user(user_id)
+        with self._lock:
+            anchor = self._message_anchor(user, conversation_id, message_id)
+            if anchor is None:
+                return []
+            rows = self._connection.execute("""SELECT message_id,body,received_at,direction FROM messages
+                WHERE user_id=? AND conversation_id=? AND direction='outgoing' AND deleted_at IS NULL
+                AND (received_at,rowid)>(SELECT received_at,rowid FROM messages WHERE user_id=? AND rowid=?)
+                ORDER BY received_at DESC,rowid DESC LIMIT 5""", (user,conversation_id,user,anchor)).fetchall()
+        return [dict(row) | {"body": str(row["body"])[:2000]} for row in reversed(rows)]
 
     @staticmethod
     def _secretary_job_record(row: sqlite3.Row) -> dict[str, object]:
@@ -3712,12 +3839,13 @@ class SQLiteUserIOStore:
             rows = self._connection.execute(
                 f"""
                 SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,c.account_ref,
-                       (SELECT body FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
-                        ORDER BY received_at DESC LIMIT 1) AS preview,
-                       (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id
-                        ORDER BY received_at DESC LIMIT 1) AS last_at,
+                       (SELECT body FROM messages WHERE user_id=c.user_id AND conversation_id=c.id AND deleted_at IS NULL
+                        ORDER BY received_at DESC,rowid DESC LIMIT 1) AS preview,
+                       (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id AND deleted_at IS NULL
+                        ORDER BY received_at DESC,rowid DESC LIMIT 1) AS last_at,
                        (SELECT COUNT(*) FROM messages WHERE user_id=c.user_id
-                        AND conversation_id=c.id AND seen_at IS NULL) AS unread_count,
+                        AND conversation_id=c.id AND direction='incoming' AND deleted_at IS NULL
+                        AND COALESCE(provider_read,seen_at IS NOT NULL)=0) AS unread_count,
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
                         AND source=c.source AND sender=c.sender) AS display_name,
                        (SELECT MAX(received_at) FROM messages
@@ -3752,7 +3880,7 @@ class SQLiteUserIOStore:
                      ) AS rn
               FROM messages
               WHERE user_id=?
-                AND conversation_id IN ({placeholders})
+                AND conversation_id IN ({placeholders}) AND deleted_at IS NULL
             ) WHERE rn <= 30
             ORDER BY conversation_id, received_at DESC
         """

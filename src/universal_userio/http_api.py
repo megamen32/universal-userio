@@ -684,6 +684,29 @@ def handler(
                     service._store.set_user_capability("send", enabled, user_id=user_id)
                     self._reply(200, {"send_enabled": enabled})
                     return
+                if path == "/v1/telegram/mirror-state":
+                    # Only the registered ingress can attest provider read/deletion.
+                    # A dashboard read is never Telegram send/read authority.
+                    if not principal.service_account and not (token and hmac.compare_digest(
+                            self.headers.get("Authorization", ""), f"Bearer {token}")):
+                        self._reply(403, {"error": "registered ingress required"})
+                        return
+                    payload = self._json()
+                    account_id = str(payload.get("account_id") or "").strip()
+                    if not account_id:
+                        raise ValueError("account_id required")
+                    target_user = service._store.ingress_user(source="telegram", account_id=account_id)
+                    if principal.service_account and target_user != user_id:
+                        self._reply(403, {"error": "account belongs to another user"})
+                        return
+                    result = service._store.telegram_mirror_state(
+                        account_ref=account_id, peer_id=str(payload.get("peer_id") or ""), user_id=target_user,
+                        read_inbox_max_id=payload.get("read_inbox_max_id"),
+                        read_outbox_max_id=payload.get("read_outbox_max_id"),
+                        deleted_ids=payload.get("deleted_ids"), history_ids=payload.get("history_ids"),
+                    )
+                    self._reply(202, result)
+                    return
                 if path == "/v1/messages":
                     payload = self._json()
                     route_id = str(payload.get("route_id") or "")
@@ -709,7 +732,8 @@ def handler(
                         conversation_id, user_id=target_user_id
                     )
                     if (
-                        accepted and conversation and conversation["response_mode"] == "auto_send"
+                        accepted and message.direction == "incoming" and not message.reconciliation
+                        and conversation and conversation["response_mode"] == "auto_send"
                         and service._store.evaluate_workspace_event(
                             conversation_id=conversation_id, source=message.source,
                             message_id=message.message_id, user_id=target_user_id,

@@ -196,7 +196,7 @@ class UserIOService:
             message, conversation_id=conversation_id, policy=policy, user_id=user_id,
             conversation_key=conversation_key, account_ref=account_ref,
         )
-        if accepted:
+        if accepted and message.direction == "incoming" and not message.reconciliation:
             for listener in tuple(self._inbound_listeners):
                 listener(user_id, conversation_id, message)
         return conversation_id, accepted
@@ -288,7 +288,7 @@ class UserIOService:
             )
             if not isinstance(updated, str) or not updated.strip():
                 raise ValueError("conversation summarizer returned an empty summary")
-            last = messages[-1]
+            last = max(messages, key=lambda m: int(m["message_rowid"]))
             saved = self._store.save_conversation_summary(
                 conversation_id,
                 summary=updated,
@@ -341,6 +341,9 @@ class UserIOService:
                 }
             return current
         event = self._store.workspace_event(event_seq, user_id=resolved_user)
+        owner_followups = self._store.owner_messages_after(
+            str(event["conversation_id"]), str(event["message_id"]), user_id=resolved_user,
+        )
         chat = self._store.evaluate_workspace_event(
             conversation_id=str(event["conversation_id"]), source=str(event["source"]),
             message_id=str(event["message_id"]), user_id=resolved_user,
@@ -425,7 +428,9 @@ class UserIOService:
             generated = triage(
                 conversation_id=anchor_conversation_id, latest_message=message,
                 history=history, max_drafts=max_drafts,
-                actor_context=self._triage_actor_context(event, resolved_user),
+                actor_context=({**(self._triage_actor_context(event, resolved_user) or {}),
+                    "owner_messages_after_current": owner_followups} if owner_followups
+                    else self._triage_actor_context(event, resolved_user)),
                 history_reader=_older_context,
                 cached_summary=cached_summary,
                 initial_context_messages=int(context_settings["message_count"]),
@@ -625,6 +630,9 @@ class UserIOService:
             "message": message,
             "input": {
                 "request_id": request_id, "actor": actor,
+                "owner_messages_after_current": self._store.owner_messages_after(
+                    str(event["conversation_id"]), str(event["message_id"]), user_id=resolved_user,
+                ),
                 "triage": triage.get("triage"),
                 "cached_summary": str((self._store.conversation_summary(
                     str(event["conversation_id"]),

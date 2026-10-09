@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import shlex
@@ -46,6 +47,14 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         raise ValueError("unsupported message source")
     if not message_id or not sender:
         raise ValueError("inbox message requires message_id and sender")
+    if "received_at" in payload:
+        timestamp = payload["received_at"]
+        if type(timestamp) not in (int, float) or not math.isfinite(timestamp) or timestamp <= 0:
+            raise ValueError("received_at must be a positive finite unix timestamp")
+        received_at = float(timestamp)
+    provider_read = payload.get("provider_read")
+    if provider_read is not None and type(provider_read) is not bool:
+        raise ValueError("provider_read must be a boolean or null")
     sender_name = str(payload.get("sender_name") or "").strip()
     direction = str(payload.get("direction") or "incoming").strip().lower()
     if direction not in {"incoming", "outgoing", "system"}:
@@ -68,7 +77,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     if type(edited_at) not in (int, float) or type(edited_at) is bool:
         raise ValueError("edited_at must be a unix timestamp number")
     edited_at = float(edited_at)
-    if edited_at < 0:
+    if not math.isfinite(edited_at) or edited_at < 0:
         raise ValueError("edited_at must not be negative")
     raw_attachments = payload.get("attachments")
     parsed_attachments: list[dict[str, Any]] = []
@@ -129,6 +138,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         reconciliation=reconciliation,
         sender_is_bot=sender_is_bot,
         edited_at=edited_at,
+        provider_read=provider_read,
     )
 
 

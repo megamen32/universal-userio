@@ -85,7 +85,7 @@ class OpenAICompatibleDraftGenerator:
     def triage_with_context(
         self, *, conversation_id: str, latest_message: InboxMessage,
         history: Sequence[dict[str, object]], max_drafts: int = 2,
-        actor_context: dict[str, str] | None = None,
+        actor_context: dict[str, object] | None = None,
         history_reader: Callable[[str], Sequence[dict[str, object]]] | None = None,
         cached_summary: str | None = None,
         initial_context_messages: int | None = None,
@@ -137,7 +137,7 @@ class OpenAICompatibleDraftGenerator:
             context["latest_attachments"] = latest_attachments
         if actor_context:
             context["raw_sender_label"] = context["sender"]
-            context["sender"] = actor_context["sender_display_name"]
+            context["sender"] = actor_context.get("sender_display_name") or context["sender"]
         prompt = (
             "Classify this incoming message for the owner's private inbox. Return exactly one JSON "
             "object and no markdown. Required keys: decision, importance, urgency, confidence, "
@@ -151,6 +151,9 @@ class OpenAICompatibleDraftGenerator:
             "An incoming message from a different registered account is not a self-sent message, "
             "even if an old contact label resembles the owner's name. Use the resolved sender "
             "label for identity; still judge importance normally and do not automatically notify.\n"
+            "owner_messages_after_current, when present, are replies the owner already sent after "
+            "the selected incoming message. Assess the current need for action using those replies; "
+            "do not propose repeating an answer already sent. A reply alone is not proof of read status.\n"
             + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         )
         initial_content, vision_bytes, vision_images = self._vision_content_with_usage(

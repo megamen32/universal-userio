@@ -23,6 +23,8 @@ class InboxMessage:
     # Provider-side edit timestamp (unix seconds). Zero means the sender never
     # reported an edit; re-delivery of an unchanged message must not set it.
     edited_at: float = 0.0
+    # Provider read state is distinct from opening the local UserIO view.
+    provider_read: bool | None = None
 
     @property
     def conversation_key(self) -> str:

@@ -3,7 +3,19 @@
 Original Mac thread: `01a116bf-61ec-73e2-adb8-ba586475a8f2`.
 Current server-100 owner: `01a11747-7bb9-7bc0-8c0a-ce64db49105d`.
 
-## Current execution, 2026-10-09
+## Latest execution — historical blockers below are not current
+
+Core10f9 is installed. Original7 PASS5.047s; SDK5/UI6/dispatcher25/build
+passed and cold Linux FastAgent0.10.43 is installed with warm0.10.42
+consumers retained. Secretary MCP consumer accepted existing route. Backup
+completed with consistent quick_check/checksum and actual child cleanup.
+Urgent Telegram mirror source repair and30selected+Node2 checks passed; see
+[userio-telegram-mirror-20261009.md](userio-telegram-mirror-20261009.md).
+Mini QA9223 window is transferred to this owner. Final real mirror/UI and
+same-card consumer acceptance remain pending, and dispatcher is intentionally
+stopped until release is verified. No additional permission is required.
+
+## Earlier execution, 2026-10-09
 
 The user renewed execution authority and replaced infrastructure policy with
 execution-first rules. Historical UID36/44 and absolute PSI/one-global-slot
