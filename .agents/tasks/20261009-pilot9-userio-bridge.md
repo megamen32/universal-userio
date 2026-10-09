@@ -23,3 +23,10 @@ Dispatcher guard renewed hot to 2026-10-09T22:00:00Z; current SHA 1af59f9e2f27d3
 Actual authenticated accounts returned registered enabled881/read/reply HTTP200 in116ms. Maintained relay cached actual881/exact863, live bridge and both guards expire22UTC. Actual normal UserIO relay-sync returned HTTP200 in26ms, imported0/conversation_ids=[]/cursor0 from independently checked empty provider journal; no fabricated conversation, draft, message, model, provider RPC or send. Private ready packet: .tmp/pilot9-receiver-readiness/ready-packet.json, rollback receipt bridge-rollback.json, protected environment rollback receipt relay-env-receipt.json. Five nonsecret exact-account config lines appended; existing credential values and QR fallback retained.
 
 The receiver capability gap is closed. Business consumer61 must perform the single actual provider→normal UserIO draft→explicit approval→provider receipt flow and restore the scoped rules promptly; full Pilot9 delivery is not claimed by this receiver acceptance. Parent cache remains paused. Runtime inputs frozen until61 captures the result; do not repeat the empty readiness probe or tests.
+
+
+## Handoff and remaining ownership
+
+Installed ready packet was delivered directly to active consumer61 (native turn01a12226-d44f-7901-8452-e60065e3ab26) and Root24 (turn01a12258-fb65-77c3-ab19-a1082dee6c25), stable input pilot9-userio-installed-ready-3444ef6-v1, both admitted. Receiver source/dependency work is delivered. Sole61 now owns actual case2062 provider flow; UserIO owner remains available for an exact failure or scoped restore. Do not mint another case, send or restart during that flow.
+
+A minor existing wording defect is recorded for after the frozen consumer: mcp_dispatch.py and legacy mcp_surface.py label every manual-approval lock as SMS even for this Telegram route (and MAX). Current explicit confirmation behavior is correct. Fix the channel wording in the next permitted source cycle; no runtime change during the sole consumer. This does not relax approval authority or declare parent cache acceptance.
