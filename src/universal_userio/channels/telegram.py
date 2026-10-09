@@ -670,15 +670,6 @@ class TelegramAPI(ChatPort, TelegramIdentityPort, TelegramModerationPort):
                 full = await request(GetFullUserRequest(entity.id))
                 full_user = getattr(full, "full_user", full)
                 about = getattr(full_user, "about", about)
-                first_name = getattr(full_user, "first_name", getattr(entity, "first_name", None))
-                last_name = getattr(full_user, "last_name", getattr(entity, "last_name", None))
-                entity = type("ProfileEntity", (), {
-                    "id": entity.id,
-                    "username": getattr(entity, "username", None),
-                    "access_hash": getattr(entity, "access_hash", None),
-                    "first_name": first_name,
-                    "last_name": last_name,
-                })()
             except Exception:
                 logger.debug("Failed to fetch full profile for %s", target, exc_info=True)
         return self._profile_from_entity(entity, about=about)
