@@ -527,6 +527,14 @@ def handler(
                         "token": issued_token, "token_returned_once": True,
                     })
                     return
+                if path == "/v1/telegram/relay-sync":
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"})
+                        return
+                    if self._json():
+                        raise ValueError("relay-sync takes no caller-selected account or peer")
+                    self._reply(200, {"ok": True, **service.sync_relay_account(user_id=user_id)})
+                    return
                 if path == "/v1/channel-routes":
                     if principal.role != "owner":
                         self._reply(403, {"error": "owner required"})

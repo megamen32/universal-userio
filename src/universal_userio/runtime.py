@@ -122,14 +122,29 @@ def seed_owner_from_file(store: SQLiteUserIOStore, path: str | Path) -> bool:
     return True
 
 
-def telegram_outbox_from_env(environment: Mapping[str, str]):
+def telegram_outbox_from_env(environment: Mapping[str, str], *, store=None):
     """Prefer the telegram-qr connector HTTP outbox; fall back to in-process Telethon."""
     qr_url = environment.get("USERIO_TELEGRAM_QR_URL", "").strip()
     if qr_url:
         from .adapters import TelegramQrHttpOutbox
 
         token = environment.get("USERIO_TELEGRAM_QR_TOKEN", "").strip() or environment.get("USERIO_API_TOKEN", "")
-        return TelegramQrHttpOutbox(qr_url, token)
+        fallback = TelegramQrHttpOutbox(qr_url, token)
+        relay_url = environment.get("USERIO_TELEGRAM_RELAY_URL", "").strip()
+        if relay_url:
+            if store is None:
+                raise ValueError("account relay requires the durable UserIO store")
+            from .relay_account_bridge import RelayAccountBridge
+            return RelayAccountBridge(fallback=fallback, store=store, base_url=relay_url,
+                token_file=_required(environment, "USERIO_TELEGRAM_RELAY_TOKEN_FILE"),
+                approval_key=_required(environment, "USERIO_API_TOKEN"),
+                account_id=_required(environment, "USERIO_TELEGRAM_RELAY_ACCOUNT"),
+                peer_id=_required(environment, "USERIO_TELEGRAM_RELAY_PEER"),
+                guard_file=environment.get("USERIO_TELEGRAM_RELAY_GUARD_FILE",
+                    "/var/lib/hermes-userio-dispatcher/pilot-pair-guard.json"))
+        return fallback
+    if environment.get("USERIO_TELEGRAM_RELAY_URL", "").strip():
+        raise ValueError("account relay requires retaining the existing QR fallback")
     return live_telegram_outbox_from_env(environment)
 
 
@@ -164,7 +179,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
             max_token, environment.get("USERIO_MAX_DEVICE_ID", "").strip(),
             socks_host=max_socks_host, socks_port=max_socks_port,
         )
-    telegram_outbox = telegram_outbox_from_env(environment)
+    telegram_outbox = telegram_outbox_from_env(environment, store=store)
     whatsapp_bridge_url = environment.get("USERIO_WHATSAPP_BRIDGE_URL", "").strip()
     whatsapp_outbox = WhatsAppBridgeClient(whatsapp_bridge_url) if whatsapp_bridge_url else None
     notify_chat = environment.get("USERIO_DRAFT_NOTIFY_TELEGRAM_CHAT", "").strip()

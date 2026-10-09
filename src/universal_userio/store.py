@@ -375,6 +375,12 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
+            CREATE TABLE IF NOT EXISTS draft_reply_origins (
+                user_id TEXT NOT NULL,draft_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,message_key TEXT NOT NULL,
+                provider_message_id TEXT NOT NULL,source_body_sha256 TEXT NOT NULL,
+                PRIMARY KEY(user_id,draft_id)
+            );
             CREATE TABLE IF NOT EXISTS identities (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,external_id TEXT NOT NULL,
                 identity_id TEXT NOT NULL,display_name TEXT NOT NULL,
@@ -1845,6 +1851,43 @@ class SQLiteUserIOStore:
                 (self._user(user_id), draft.id, draft.conversation_id, draft.body, draft.status, time.time()),
             )
 
+    def add_source_bound_draft(self, draft: ReplyDraft, *, account_ref: str,
+                               peer_id: str, user_id: str | None = None) -> None:
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute("""SELECT m.message_id,m.body
+                FROM messages m JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id
+                WHERE m.user_id=? AND c.id=? AND c.source='telegram' AND c.account_ref=?
+                AND c.peer_id=? AND m.source='telegram' AND m.direction='incoming'
+                AND m.deleted_at IS NULL ORDER BY m.received_at DESC,m.rowid DESC LIMIT 1""",
+                (user, draft.conversation_id, account_ref, peer_id)).fetchone()
+            if row is None:
+                raise ValueError("real relay inbound source is required")
+            match = re.fullmatch(re.escape(f"{account_ref}|{peer_id}:") + r"([1-9][0-9]*)", str(row["message_id"]))
+            if match is None:
+                raise ValueError("relay provider origin is not account-bound")
+            self._connection.execute("""INSERT INTO drafts
+                (user_id,id,conversation_id,body,status,created_at) VALUES (?,?,?,?,?,?)""",
+                (user, draft.id, draft.conversation_id, draft.body, draft.status, time.time()))
+            self._connection.execute("INSERT INTO draft_reply_origins VALUES (?,?,?,?,?,?,?,?)",
+                (user, draft.id, draft.conversation_id, account_ref, peer_id, str(row["message_id"]),
+                 match[1], hashlib.sha256(str(row["body"]).encode()).hexdigest()))
+
+    def draft_reply_origin(self, draft_id: str, *, user_id: str) -> dict[str, object]:
+        with self._lock:
+            row = self._connection.execute("""SELECT o.*,m.body AS current_source_body,
+                m.direction,m.deleted_at,c.account_ref AS current_account,c.peer_id AS current_peer
+                FROM draft_reply_origins o JOIN messages m ON m.user_id=o.user_id
+                AND m.source='telegram' AND m.message_id=o.message_key
+                JOIN conversations c ON c.user_id=o.user_id AND c.id=o.conversation_id
+                WHERE o.user_id=? AND o.draft_id=?""", (user_id, draft_id)).fetchone()
+        if (row is None or row["direction"] != "incoming" or row["deleted_at"] is not None
+                or (row["account_ref"], row["peer_id"]) != (row["current_account"], row["current_peer"])
+                or hashlib.sha256(str(row["current_source_body"]).encode()).hexdigest() != row["source_body_sha256"]):
+            raise ValueError("immutable relay draft source changed or is missing")
+        return {key: row[key] for key in ("conversation_id", "account_ref", "peer_id", "provider_message_id")}
+
     def update_draft(self, draft_id: str, *, body: str, user_id: str | None = None) -> ReplyDraft:
         text, user_id = body.strip(), self._user(user_id)
         if not text:
@@ -2124,6 +2167,7 @@ class SQLiteUserIOStore:
             "id": row["id"], "route_id": row["route_id"], "response_mode": row["response_mode"],
             "identity_id": row["identity_id"], "source": row["source"], "sender": row["sender"],
             "account_ref": str(row["account_ref"] or ""),
+            "peer_id": str(row["peer_id"] or ""),
             "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
         }
