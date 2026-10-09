@@ -1,5 +1,28 @@
 # Universal UserIO resource budget
 
+The2026-10-09 continuation uses finite native systemd jobs under the unchanged
+user-1000.slice bounds; it does not require a fresh human permission for each
+case. The reviewed original-seven isolation/controller is retained and its
+infrastructure owner maintains source bindings. Independent small jobs use
+actual free memory, service health and new OOM counters; PSI alone is not a
+universal admission threshold. No live harness/tenant is moved or stopped.
+
+Measured owning continuation jobs, serialized per agent:
+
+- UI six pure cases:128/256MiB RAM, swap0,CPU1,tasks64,wall30s,IO10,
+  zero temp output;6PASS/runtime581ms/CPU586ms.
+- SDK environment setup:128/256MiB RAM, swap0,CPU1,tasks64,wall120s,
+  download/install/build concurrency1,IO10,64MiB/file,1GiB artifact and256MiB
+  temp ceilings;13.7s,136312KiB RSS,swap0,213184512bytes installed.
+- SDK five local-provider cases:256/384MiB RAM, swap0,CPU1,tasks128,
+  wall120s,IO10,16MiB/file, project-local fixture temp;5PASS in7.80s,
+  peak126772KiB RSS,swap0. This is below the512/768MiB proposed ceiling.
+
+Setup and test units have exact kernel memory/CPU/swap/task/runtime limits
+and are collected afterward. Evidence stays under owning `.tmp/`. Actual
+MiniMax and the production service working set still require a consumer
+check before changing the production128/256MiB budget below.
+
 This budget applies to the server-100 production service and to test runs for
 this project. It was reviewed on 2026-10-04 against a 125 GiB / 104 CPU host
 with 45 GiB RAM available and 554 GiB free on the backing filesystem.

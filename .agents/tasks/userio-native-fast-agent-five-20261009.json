@@ -1,7 +1,7 @@
 {
   "schema": "userio.native-fast-agent-five.v1",
   "observed_unix": 1791529624,
-  "status": "SOURCE_PREPARED_NOT_EXECUTED",
+  "status": "PASS5_LOCAL_PROVIDER_AFTER_MIME_FIX",
   "project": "/home/roomhacker/agents-projects/universal-userio",
   "cases": [
     "test_native_triage_reuses_summary_without_unnecessary_history_read",
@@ -12,8 +12,8 @@
   ],
   "source_manifest": {
     "src/universal_userio/native_fast_agent.py": {
-      "sha256": "20740d6b8532f098519ce318f7074f43e3c2259c8cb5ff67a50f77817c1e8ad4",
-      "bytes": 10449
+      "sha256": "2f2e276d9979ad62b87267e535216611f5f284e47a36fe026a2c1457daa3a4e8",
+      "bytes": 12350
     },
     "src/universal_userio/ai.py": {
       "sha256": "9da699e84362112ffce9b2a731bc2f93b6645cbd8beefb759211127177c92d4c",
@@ -32,8 +32,8 @@
       "bytes": 728
     },
     "tests/test_native_fast_agent.py": {
-      "sha256": "6d7aa882aeabdd6d104450dd713a4c3011dc5f8678cf173b7c507445f203f41c",
-      "bytes": 8512
+      "sha256": "e980bdab6e4ea45bfe2a6e37b3f59bb21f506b512a9447f2dfa03d7928029810",
+      "bytes": 8579
     }
   },
   "sdk": {
@@ -57,9 +57,22 @@
   "isolation": "Local fixed HTTP provider fixture only; no external provider/model/send; pytest --noconftest with plugins disabled",
   "provider_sends": 0,
   "inference_requests": 0,
-  "runtime_venv": "not yet installed; record exact interpreter and SDK dependency identity before payload",
+  "runtime_venv": ".tmp/native-sdk-venv Python3.12.13/FastAgent0.10.43; sharedSDK untouched",
   "command_shape": "<own Python3.12 SDK0.10.43 environment>/bin/python -m pytest --noconftest -q tests/test_native_fast_agent.py",
   "distinction": "Original secretary7 covers its unchanged18 import closure; it does not cover this SDK packet",
   "authority": "Direct user continuation and admission; use current maintained bounded route with actual capacity and existing host safeguards",
-  "proof_state": "Source AST/review only; none of these five tests or SDK imports executed"
+  "proof_state": "Five tests executed under256/384MiB CPU1 swap0; actual provider/runtime not yet accepted",
+  "result": {
+    "pass": 5,
+    "fail": 0,
+    "skip": 0,
+    "pytest_seconds": 7.8,
+    "peak_rss_kib": 126772,
+    "swaps": 0,
+    "actual_memory_high": 268435456,
+    "actual_memory_max": 402653184,
+    "CPU": 1,
+    "wall_limit": 120
+  },
+  "failure_shield": "Instance-local model MIME overlay plus reattach before M3 turn; user image parts preserve read-more bytes."
 }

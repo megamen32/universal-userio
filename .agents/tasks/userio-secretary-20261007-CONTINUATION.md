@@ -61,6 +61,38 @@ consumer proof. Do not repeat existing sends/cards. The exact SDK packet and
 unchanged18-input evidence are retained under owning `.tmp/`. Runtime delivery
 is incomplete until these consumer results are captured.
 
+### Executed independent checks, 2026-10-09
+
+The six existing UI request-race cases passed under native systemd bounds
+128/256MiB, swap0, CPU1, tasks64, wall30s; runtime581ms/CPU586ms, no skips.
+Their collected unit is gone. Do not rerun these unchanged inputs merely
+because another case or infrastructure source changed.
+
+The owning temporary Python3.12.13 environment now contains SDK0.10.43;
+shared SDK0.10.42 is still untouched. Dependency installation took13.7s,
+peak136312KiB/swap0 under128/256MiB/CPU1/tasks64/wall120s. The environment
+occupies213184512bytes; no new source checkout or runner was created.
+
+All five real-native SDK/local-provider tests passed in7.80s,
+wall9.444s/CPU6.521s/peak126772KiB/swap0, with256/384MiB/CPU1/tasks128/wall120s.
+The first two failed attempts are retained. They exposed SDK's conservative
+unknown-model MIME filter: changing the wire name alone did not change the
+attached model's capabilities, so images were stripped. The fix uses the
+public instance-local model overlay/attach API and native pre-request hook;
+it neither changes SDK files/global model metadata nor invents model context
+limits. Image summary and later-page bytes now reach the wire on M3.
+The local fixture proves SDK behavior, not actual MiniMax inference.
+
+Deployed Secretary independently accepted five UserIO MCP tool runs with
+LLM0,10accounts, exact current SMS reader and six existing distinct delivery
+receipts. Exmanager outcome ebe4956 records this; no new send/draft/approve,
+configuration change or restart occurred. Generic Airlock is not a prerequisite.
+
+Original seven remain pending while their existing source owner's automatic
+controller is repinned to the changing common helper. This is an exact source
+binding issue, not missing user permission. Dispatcher/type/build/install and
+final same-card/live cache proof still remain; production has not changed.
+
 ## Scope and restored state
 
 UserIO summary cache/adaptive context baseline `26344fa` is published and now
