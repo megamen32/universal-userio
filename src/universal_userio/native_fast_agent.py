@@ -10,8 +10,10 @@ import asyncio
 import json
 import sys
 import threading
+from dataclasses import replace
 from collections.abc import Callable, Sequence
 from importlib.metadata import version
+from pathlib import Path
 
 from .ai import OpenAICompatibleDraftGenerator, _READ_MORE_MAX_ROUNDS, _THINK_BLOCK
 
@@ -65,6 +67,9 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
         from fast_agent.config import Settings, GenericSettings, LoggerSettings, apply_isolation
         from fast_agent.context import initialize_context
         from fast_agent.core.direct_factory import get_model_factory
+        from fast_agent.llm.model_factory import ModelFactory
+        from fast_agent.llm.model_overlays import LoadedModelOverlay, ModelOverlayManifest, ModelOverlayMetadata
+        from fast_agent.llm.provider_types import Provider
         from fast_agent.core.logging.logger import LoggingConfig
         from fast_agent.types import RequestParams, PromptMessageExtended
         from fastmcp.tools import ToolResult
@@ -95,7 +100,9 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
         async def read_more_context(reason: str = ""):
             """Read one older bounded page only when the current context is insufficient."""
             body, images = read_page()
-            return ToolResult(content=self._native_content(body) + self._native_content(images))
+            if images:
+                state.setdefault("pending_images", []).extend(self._native_content(images))
+            return ToolResult(content=self._native_content(body))
 
         instruction = str(payload["messages"][0]["content"])
         instruction = instruction.replace("Call submit_triage exactly once.", "Return the exact requested JSON object.")
@@ -112,15 +119,43 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
             tools=[read_more_context] if read_page is not None else [], context=context,
         )
 
+        async def attach_model(model):
+            overrides = {}
+            if model == self._image_model:
+                spec = ModelFactory.resolve_model_spec("generic/" + model)
+                mimes = ["text/plain", "image/png", "image/jpeg", "image/gif", "image/webp"]
+                if spec.model_params is not None:
+                    spec = replace(spec, model_params=spec.model_params.model_copy(update={"tokenizes": mimes}))
+                else:
+                    overlay = LoadedModelOverlay(
+                        manifest=ModelOverlayManifest(
+                            name="userio_vision", provider=Provider.GENERIC, model=model,
+                            metadata=ModelOverlayMetadata(tokenizes=mimes),
+                        ),
+                        manifest_path=Path(__file__),
+                    )
+                    spec = replace(spec, overlay=overlay)
+                overrides["resolved_model_spec"] = spec
+            await agent.attach_llm(get_model_factory(context, model="generic/" + model), **overrides)
+            state["attached_model"] = model
+
         async def before_llm_call(runner, messages):
             model = self._image_model if state["has_images"] else payload["model"]
+            if state["attached_model"] != model:
+                await attach_model(model)
             runner.request_params.model = model
+            # OpenAI-compatible tool-result messages carry text only. Put
+            # already bounded page images in a user message before this same
+            # native runner's next request, after selecting the vision model.
+            images = state.pop("pending_images", [])
+            if images:
+                messages.append(PromptMessageExtended(role="user", content=images))
             models.append(model)
 
         agent.tool_runner_hooks = ToolRunnerHooks(before_llm_call=before_llm_call)
         try:
             await agent.initialize()
-            await agent.attach_llm(get_model_factory(context, model="generic/" + payload["model"]))
+            await attach_model(payload["model"])
             messages = [PromptMessageExtended(role=entry["role"], content=self._native_content(entry["content"]))
                         for entry in payload["messages"][1:]]
             if schema is not None:

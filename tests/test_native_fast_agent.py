@@ -162,6 +162,7 @@ def test_native_summary_uses_exact_bounded_schema_and_image_model():
         )
         assert summary == "Макет принят."
         assert requests[0]["model"] == "MiniMax-M3"
+        assert "data:image/gif;base64," in json.dumps(requests[0])
         assert "Договорились сделать макет." in json.dumps(requests[0], ensure_ascii=False)
 
 
