@@ -108,3 +108,33 @@ was90GiB withmemoryPSIfull0. Shared host/user/service limits remain unchanged.
 Actual UserIO cache118 messages and ordinary native analysis, plus existing
 same-card deep consumer, passed inside the unchanged128/256MiB core budget.
 Evidence: .agents/tasks/userio-original-consumer-proof-20261009.json.
+
+## Telegram ingress measured online soft-budget repair —2026-10-09
+
+`userio-telegram-ingress.service` uses soft224MiB/hard256MiB, swap64MiB,
+CPU1/tasks64/IOWeight50. This changes only ingress MemoryHigh; the core
+128/256MiB service and other project/UID/native boundaries retain their values.
+
+Five1s samples proved the main Node thread blocked in kernel
+mem_cgroup_handle_over_high at128MiBsoft: resident139MiB, swap63.8MiB,
+combined202.64MiB, localfullPSI82–86%, high events+170/4s, OOM0. Hostavailable
+41.08GiB supported soft224MiB without raising the hard bound. The authorized
+existing native controller applied MemoryHigh224M online, preserving PID/start,
+Invocation, auth/session-file metadata, pair guards and all other limits.
+Within1s the mainthread returned toep_poll; highcounter stopped advancing,
+currentaccountedmemory fell to65MiB, swap42MiB. ONE cached /state HTTP200
+in7.88ms proved eventloop recovery; no operator-issued providerRPC or restart.
+
+The auxiliary881 account was absent from that cached state: HTTP recovery
+is accepted, auxiliaryconnected readiness remains unproved and separately
+blocked. Do not infer receiver readiness from database account registration
+or another eXmanager connection. No new auth/import/send was performed.
+
+Persistent delivery updates this canonical unit and its installed equivalent
+and uses only existing `systemctl set-property userio-telegram-ingress.service
+MemoryHigh=224M` (no --runtime) to retain the same native setting over reboot.
+No manager-wide daemon-reload/restart, core deploy, polling/session change.
+Rollback is the recorded original unit plus MemoryHigh128M through the same
+controller, only for a new verified unsafe change; do not reset a successful
+repair to the already proven bad limit as a test cleanup. Protected receipts
+stay under .tmp/pilot9-receiver-readiness; own task contains safe proof.
