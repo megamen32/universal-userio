@@ -324,13 +324,14 @@ class UserIOService:
 
     def triage_workspace_event(
         self, *, event_seq: int, request_id: str, max_drafts: int = 2,
-        user_id: str | None = None,
+        user_id: str | None = None, retry_failed: bool = False,
     ) -> dict[str, object]:
         if type(max_drafts) is not int or not 0 <= max_drafts <= 2:
             raise ValueError("max_drafts must be between 0 and 2")
         resolved_user = self._store._user(user_id)
         current, should_run = self._store.begin_workspace_triage(
             event_seq=event_seq, request_id=request_id, user_id=resolved_user,
+            retry_failed=retry_failed,
         )
         if not should_run:
             if current["status"] == "running":
@@ -661,7 +662,7 @@ class UserIOService:
             request_id = f"userio-web-triage-{event_seq}"
         result = self.triage_workspace_event(
             event_seq=event_seq, request_id=request_id, max_drafts=2,
-            user_id=resolved_user,
+            user_id=resolved_user, retry_failed=True,
         )
         return {
             **overview,
