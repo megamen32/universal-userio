@@ -20,3 +20,21 @@ No suite/build/browser/model/provider tests or restarts. Static systemd unit
 verification accompanies source publication and durable same-value controller.
 Protected before/after/rollback receipts mode0600. Broader cache pause, other
 14cards and Pilot9 guards remain independent and are not replayed.
+
+## Persistent same-generation delivery —19:57UTC
+
+Owned source0b6fcf6 published before installing the exact single-line unit
+delta and existing native persistent controller MemoryHigh234881024B.
+Persistent controller /etc/systemd/system.control/userio-telegram-ingress.service.d/
+50-MemoryHigh.conf retained; installed canonicalunitSHA9a17521b matches source.
+No globalreload/restart; samePID1720471/start67240851/invb78d476/NRestarts0,
+hard256/swap64/CPU1/tasks64/UID/9365guard remain unchanged.
+Actual localfullavg10 now0, avg60=3.41 declining, pressuretotal stopped
+advancing; highcounter remains1294231, OOM0, mainwchanep_poll, current90.86MiB.
+No extra HTTPprobe after the ONE cached200/7.88ms consumer. Before/after
+state and previousunit mode0600 kept for exact rollback. No bad128 reset.
+
+Auxiliary881 connected readiness remains BLOCKED by its absence from cached
+state; source/noauth/TGoperatorcalls0. Executor61/Root owns product route
+disposition before incoming/import/send. This delivery repairs only actual
+UserIO ingress eventloop starvation, not the foreignhistory/sourceguard.

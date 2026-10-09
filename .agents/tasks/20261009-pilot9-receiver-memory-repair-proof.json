@@ -52,5 +52,39 @@
   "send_import_compose": 0,
   "working_set_before_bytes": 212484096,
   "HTTP_recovered": true,
-  "auxiliary_connected_ready": false
+  "auxiliary_connected_ready": false,
+  "persistent_delivery": {
+    "at": "2026-10-09T19:57:05.241414+00:00",
+    "source_commit": "0b6fcf6b5c6997aaf168df9f5ee766f9941ecf39",
+    "installed_unit_sha256": "9a17521bb76d9fe8b03bfc38774bd073a7604a4e09590ab1c910d2bf3ec11583",
+    "persistent_controller_path": "/etc/systemd/system.control/userio-telegram-ingress.service.d/50-MemoryHigh.conf",
+    "persistent_controller_sha256": "baafd4a74bdf6005f52e2e6b7db402dd4d0fb2b813de3dda67a4dc1f6accb34c",
+    "persistent_controller_value": 234881024,
+    "unit": {
+      "MainPID": "1720471",
+      "NRestarts": "0",
+      "ControlGroup": "/system.slice/userio-telegram-ingress.service",
+      "CPUQuotaPerSecUSec": "1s",
+      "MemoryHigh": "234881024",
+      "MemoryMax": "268435456",
+      "MemorySwapMax": "67108864",
+      "TasksMax": "64",
+      "ActiveState": "active",
+      "InvocationID": "b78d476028c248068423f77943cb921d"
+    },
+    "same_pid_start": "67240851",
+    "UID_limits_unchanged": true,
+    "guard9365_unchanged": true,
+    "process_wchan": "ep_poll",
+    "memory_current": "95272960",
+    "memory_pressure": "some avg10=0.00 avg60=3.41 avg300=40.94 total=22536573176\nfull avg10=0.00 avg60=3.41 avg300=40.94 total=22536573176",
+    "memory_events": "low 0\nhigh 1294231\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+    "rollback_unit_path": "/home/roomhacker/agents-projects/universal-userio/.tmp/pilot9-receiver-readiness/unit-before-soft224.service",
+    "rollback_controller": "systemctl set-property userio-telegram-ingress.service MemoryHigh=128M; only if new verified unsafe change",
+    "global_reload": 0,
+    "restart": 0,
+    "new_state_HTTP_probes": 0,
+    "operator_provider_calls": 0,
+    "auxiliary_ready": false
+  }
 }
