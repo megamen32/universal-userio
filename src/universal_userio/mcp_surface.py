@@ -335,11 +335,11 @@ class UserIOMcpSurface:
                 conversation = self._store.conversation(draft.conversation_id, user_id=user_id) or {}
                 manual_lock = self._service.manual_approval_required(conversation)
                 hint = (
-                    "SMS manual-approve lock is ON: nothing is sent until the owner explicitly "
-                    "approves this exact draft via userio_draft_approve_send (confirm=true)."
+                    "Автоматическая отправка отключена. Чтобы отправить сообщение, "
+                    "подтвердите этот черновик."
                     if manual_lock else
-                    "Draft only: nothing is sent until userio_draft_approve_send is called "
-                    "with confirm=true."
+                    "Черновик сохранён. Чтобы отправить сообщение, "
+                    "подтвердите этот текст и получателя."
                 )
                 return {
                     "ok": True, "draft": self._draft(draft),

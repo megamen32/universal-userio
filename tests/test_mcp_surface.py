@@ -360,7 +360,7 @@ def test_mcp_send_draft_states_approval_need_and_approve_returns_receipt(tmp_pat
     assert queued["approval_required"] is True
     assert queued["manual_approval_only"] is True
     assert queued["channel"] == "sms"
-    assert "manual-approve lock is ON" in queued["approval_hint"]
+    assert "Автоматическая отправка отключена" in queued["approval_hint"]
 
     sent = surface.dispatch("userio.draft.approve_send", {
         "draft_id": queued["draft"]["id"], "confirm": True,
@@ -429,3 +429,35 @@ def test_workspace_poll_is_durable_user_scoped_and_does_not_mark_seen(tmp_path) 
     assert len(bounded["body"]) == 4096
     assert bounded["body_truncated"] is True
     assert exact == "x" * 5000
+
+
+@pytest.mark.parametrize("surface_kind", ["surface", "dispatcher"])
+@pytest.mark.parametrize("manual_lock", [True, False])
+def test_telegram_draft_hint_explains_approval_without_sms_label(
+    tmp_path, monkeypatch, surface_kind, manual_lock,
+):
+    """Fast unit: wrong-channel hint; expected 1s, maximum 10s, live sends0."""
+    from universal_userio.mcp_dispatch import UserIOToolDispatcher
+    store, outbox = SQLiteUserIOStore(tmp_path / "hint.sqlite3"), Outbox()
+    try:
+        service = UserIOService(store, Generator(), outbox)
+        conversation, _ = service.receive(
+            InboxMessage("telegram", "fixture-1", "owned-peer", "hello", 1.0),
+            route_id="telegram",
+        )
+        monkeypatch.setattr(service, "manual_approval_required", lambda _chat: manual_lock)
+        surface = (UserIOMcpSurface(store, service) if surface_kind == "surface"
+                   else UserIOToolDispatcher(store, service))
+        result = surface.dispatch("userio.channels.send_draft", {
+            "chat_id": conversation, "text": "exact reply", "attachments": [],
+        }, principal=store.owner())
+        assert result["ok"] is True and result["channel"] == "telegram"
+        assert "SMS" not in result["approval_hint"]
+        assert "подтвердите" in result["approval_hint"]
+        assert result["manual_approval_only"] is manual_lock
+        assert result["approval_required"] is True and result["sent"] is False
+        assert result["draft"]["body"] == "exact reply"
+        assert store.draft(result["draft"]["id"]).status == "proposed"
+        assert outbox.calls == []
+    finally:
+        store.close()
