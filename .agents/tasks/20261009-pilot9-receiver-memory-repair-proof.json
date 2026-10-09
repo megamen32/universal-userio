@@ -1,0 +1,56 @@
+{
+  "at": "2026-10-09T19:54:00.734333+00:00",
+  "unit_before": {
+    "MainPID": "1720471",
+    "NRestarts": "0",
+    "ControlGroup": "/system.slice/userio-telegram-ingress.service",
+    "CPUQuotaPerSecUSec": "1s",
+    "MemoryHigh": "134217728",
+    "MemoryMax": "268435456",
+    "MemorySwapMax": "67108864",
+    "TasksMax": "64",
+    "ActiveState": "active",
+    "InvocationID": "b78d476028c248068423f77943cb921d"
+  },
+  "unit_after": {
+    "MainPID": "1720471",
+    "NRestarts": "0",
+    "ControlGroup": "/system.slice/userio-telegram-ingress.service",
+    "CPUQuotaPerSecUSec": "1s",
+    "MemoryHigh": "234881024",
+    "MemoryMax": "268435456",
+    "MemorySwapMax": "67108864",
+    "TasksMax": "64",
+    "ActiveState": "active",
+    "InvocationID": "b78d476028c248068423f77943cb921d"
+  },
+  "cached_state_probe": {
+    "provider_calls": 0,
+    "request": "GET /state",
+    "timeout_seconds": 5,
+    "http_status": 200,
+    "auxiliary_metadata": [],
+    "seconds": 0.007881577010266483,
+    "healthy": false
+  },
+  "sessions_metadata_unchanged": true,
+  "uid_limits_unchanged": true,
+  "source_hash_unchanged": true,
+  "guard_hash_unchanged": true,
+  "same_pid_start": true,
+  "rollback": [
+    "sudo",
+    "-n",
+    "systemctl",
+    "set-property",
+    "--runtime",
+    "userio-telegram-ingress.service",
+    "MemoryHigh=128M"
+  ],
+  "restart": 0,
+  "operator_TG_calls": 0,
+  "send_import_compose": 0,
+  "working_set_before_bytes": 212484096,
+  "HTTP_recovered": true,
+  "auxiliary_connected_ready": false
+}

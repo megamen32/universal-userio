@@ -77,5 +77,5 @@ creates no new session or polling worker. Missing database IDs within the
 returned history range are individually probed with getMessages(ids); only a
 successful exact-ID absence or native deletion update creates a tombstone.
 Message/event/draft/receipt identities remain retained. No inferred deletion
-is made outside that range. Runtime Node budget128/256MiB, CPU1, tasks64 and
+is made outside that range. Runtime Node budget224/256MiB (measured soft adjustment2026-10-09), CPU1, tasks64 and
 existing20-dialog/5-minute reconciliation cadence are unchanged.
