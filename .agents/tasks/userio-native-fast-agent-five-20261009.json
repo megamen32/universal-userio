@@ -1,0 +1,65 @@
+{
+  "schema": "userio.native-fast-agent-five.v1",
+  "observed_unix": 1791529624,
+  "status": "SOURCE_PREPARED_NOT_EXECUTED",
+  "project": "/home/roomhacker/agents-projects/universal-userio",
+  "cases": [
+    "test_native_triage_reuses_summary_without_unnecessary_history_read",
+    "test_native_read_more_switches_to_m3_before_sending_new_image",
+    "test_native_schema_failure_is_not_a_successful_triage",
+    "test_native_summary_uses_exact_bounded_schema_and_image_model",
+    "test_native_read_more_budget_blocks_repeated_empty_fetch"
+  ],
+  "source_manifest": {
+    "src/universal_userio/native_fast_agent.py": {
+      "sha256": "20740d6b8532f098519ce318f7074f43e3c2259c8cb5ff67a50f77817c1e8ad4",
+      "bytes": 10449
+    },
+    "src/universal_userio/ai.py": {
+      "sha256": "9da699e84362112ffce9b2a731bc2f93b6645cbd8beefb759211127177c92d4c",
+      "bytes": 39440
+    },
+    "src/universal_userio/contracts.py": {
+      "sha256": "de2673da1b23dce3515a6d88cb209541b3eb6deea98e040f2a1aca8492a97a03",
+      "bytes": 2279
+    },
+    "src/universal_userio/runtime.py": {
+      "sha256": "86aad12f9ca62f112783cf09a9123f48a9cfd2db55235345ee298567d6d304a2",
+      "bytes": 9869
+    },
+    "pyproject.toml": {
+      "sha256": "585a980df0e1355fa7699c9aee5594011bc59e5d7c0ff6a1c06fa3f93ae8ab0f",
+      "bytes": 728
+    },
+    "tests/test_native_fast_agent.py": {
+      "sha256": "6d7aa882aeabdd6d104450dd713a4c3011dc5f8678cf173b7c507445f203f41c",
+      "bytes": 8512
+    }
+  },
+  "sdk": {
+    "distribution": "fast-agent-mcp",
+    "version": "0.10.43",
+    "wheel_sha256": "64d3f3245b8adeebf0e1ba100200dfd7449f665384e35132b33746ce6b7e2015",
+    "requires_python": ">=3.12,<3.15",
+    "existing_shared_sdk_mutated": false
+  },
+  "candidate_budget": {
+    "memory_high": 536870912,
+    "memory_max": 805306368,
+    "cpu": 1,
+    "swap": 0,
+    "tasks": 128,
+    "wall_seconds": 120,
+    "temp_bytes": 268435456,
+    "temp_files": 20000,
+    "io_weight": 10
+  },
+  "isolation": "Local fixed HTTP provider fixture only; no external provider/model/send; pytest --noconftest with plugins disabled",
+  "provider_sends": 0,
+  "inference_requests": 0,
+  "runtime_venv": "not yet installed; record exact interpreter and SDK dependency identity before payload",
+  "command_shape": "<own Python3.12 SDK0.10.43 environment>/bin/python -m pytest --noconftest -q tests/test_native_fast_agent.py",
+  "distinction": "Original secretary7 covers its unchanged18 import closure; it does not cover this SDK packet",
+  "authority": "Direct user continuation and admission; use current maintained bounded route with actual capacity and existing host safeguards",
+  "proof_state": "Source AST/review only; none of these five tests or SDK imports executed"
+}

@@ -9,7 +9,7 @@ User=root
 WorkingDirectory=/opt/universal-userio
 Environment=PYTHONPATH=/opt/universal-userio/src
 EnvironmentFile=/etc/universal-userio.env
-ExecStart=/usr/bin/python3 -m universal_userio.runtime
+ExecStart=/opt/universal-userio/.venv/bin/python -m universal_userio.runtime
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

@@ -3,6 +3,64 @@
 Original Mac thread: `01a116bf-61ec-73e2-adb8-ba586475a8f2`.
 Current server-100 owner: `01a11747-7bb9-7bc0-8c0a-ce64db49105d`.
 
+## Current execution, 2026-10-09
+
+The user renewed execution authority and replaced infrastructure policy with
+execution-first rules. Historical UID36/44 and absolute PSI/one-global-slot
+holds below are obsolete. Keep finite project bounds, fresh capacity/OOM and
+service checks; use the existing maintained runner, whose policy belongs to
+its infrastructure owner. No repeated short permission cycle is required.
+
+The actual missing original requirement was ordinary native analysis: deep
+analysis already routes through Herder, but ordinary triage/summaries still
+used a manual OpenAI-compatible loop. `native_fast_agent.py` now supplies a
+real Fast Agent ToolAgent/ToolRunner behind the existing generator contract.
+UserIO keeps cache, bounded context, exact validation, authorization and
+outbox. The native pre-request hook selects M3 if an older page contains an
+image; the same bounded loop continues. No new daemon, MCP server, inference
+scheduler or credentials are introduced. The core runtime uses this generator
+and its own Python3.12/FastAgent0.10.43 environment.
+
+Source APIs were independently reviewed and matched against the official
+0.10.43 wheel (SHA256
+64d3f3245b8adeebf0e1ba100200dfd7449f665384e35132b33746ce6b7e2015).
+Five real-native/local-provider integration cases are prepared in
+`tests/test_native_fast_agent.py`: sufficient cached context, read-more with
+M3 switch, schema failure, incremental image summary, exhausted history.
+They have NOT executed. AST/diff checks are source proof only. The original
+seven tests and all18 reviewed local import bytes remain unchanged; their
+test SHA remains1ffd14c84337df9bd7531c247419b4a5b60041c4fc9bfe5529586e35b3292059.
+After publishing, the existing seven-case packet may repin the new canonical
+HEAD only against those actually unchanged inputs. Seven is not SDK coverage.
+
+Production is unchanged: core PID3672069 and dispatcher PID3672766 still run
+the previous source. The release marker is5d873a5; live DB has43013 workspace
+events at the first readback and lacks summary/deep-job tables. All29 dirty
+runtime files and their tracked diff were privately archived and hash-verified
+under `.tmp/runtime-wip-preserved-20261009/receipt.json`. The existing runtime
+pytest loop-scope setting is retained in the canonical pyproject. Shared
+FastAgent0.10.42 is untouched while its Herder owner settles his second turn.
+
+The user clarified that eXmanager must use the existing UserIO route.
+`https://msg.bezrabotnyi.com/mcp` is genuinely callable: authenticated
+initialize and tools/list return200, serveruniversal-userio0.2.0,34tools;
+real `userio.workspace.poll` and `userio.accounts.list` return200/ok:true.
+The former returned cursor3/head43030. No inference or send occurred.
+The exact existing eXmanager wrappers and read/draft/confirm/receipt criterion
+were handed directly to active owner01a11744. Missing generic Airlock
+registration is removed as a blocker for that existing integration. SMS's
+live account offers read+reply; Matrix offers read only. Matrix outbound and
+the separately described exact-event reply seam remain specific UserIO gaps,
+not a requirement to invent a new Airlock bridge.
+
+Next: original seven through the corrected existing route, separately the
+five native SDK cases and measured SDK working set, dispatcher selection,
+UI6/typecheck/build, publish generated assets, rollback-first install, then
+same-card accepted→native-session link→result and actual UserIO UI/cache
+consumer proof. Do not repeat existing sends/cards. The exact SDK packet and
+unchanged18-input evidence are retained under owning `.tmp/`. Runtime delivery
+is incomplete until these consumer results are captured.
+
 ## Scope and restored state
 
 UserIO summary cache/adaptive context baseline `26344fa` is published and now

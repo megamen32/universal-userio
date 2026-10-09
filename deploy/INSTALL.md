@@ -1,6 +1,9 @@
 # Deployment
 
-1. Install this checkout at `/opt/universal-userio`.
+1. Install this checkout at `/opt/universal-userio`. The core service uses its
+   own Python 3.12 environment at `/opt/universal-userio/.venv`, with the
+   `fast-agent` extra (Fast Agent 0.10.43). Keep existing enabled channel extras
+   in that environment; do not replace or upgrade another project's SDK.
 2. Create `/var/lib/universal-userio` and root-owned `/etc/universal-userio.env`
    (`0600`) from `.env.example`. Create a separate mode-`0600`
    `.env.owner-seed` with `USERIO_SEED_USERNAME` and
@@ -72,6 +75,31 @@ approves a reply; disabling the user's read capability returns 403.
 
 The supported deployment and secret-redacted verification commands are
 provided by `scripts/runtime_release.py`; prefer them for production rollout.
+
+## Native inbox analysis
+
+The core generator uses native Fast Agent `ToolAgent`/`ToolRunner` for triage,
+incremental summaries and reply drafts. UserIO retains the durable context,
+summary cache and approval/outbox state. The only analysis tool is the existing
+bounded `read_more_context`; there is no shell, separate MCP service or new
+inference worker. Existing `USERIO_AI_ENDPOINT` and `USERIO_AI_TOKEN` configure
+an isolated SDK context without new credentials or process-wide environment
+changes. Text uses MiniMax-M2.7; images use MiniMax-M3. If a later history page
+contains an image, the native pre-request hook switches to M3 before that
+image reaches the provider.
+
+Install the core's Python environment under its reviewed finite build budget
+before activation. Verify Fast Agent 0.10.43 and Python 3.12 in that environment,
+run the five `tests/test_native_fast_agent.py` integration cases, and measure
+its initialize/request/shutdown working set against the service's existing
+128/256 MiB limits. Source publication alone does not prove that this fits.
+If installation fails, restore the prepared release receipt; the old service
+unit uses the system interpreter and does not use the new environment.
+
+After all intentional restarts, verify adaptive context/cache through the live
+UserIO surface and the accepted → session link → result progression on the
+same original NoticePlace card. Preserve its request/provider IDs to avoid
+replaying an external delivery.
 
 ## Rollback-first release procedure
 
