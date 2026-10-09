@@ -799,6 +799,10 @@ class UserIOService:
         conversation whose response_mode is auto_send stays a proposed draft until a
         human explicitly approves it.
         """
+        scoped = getattr(self.telegram_outbox, "source_bound_pair", None)
+        if conversation.get("source") == "telegram" and callable(scoped) and scoped(
+                str(conversation.get("account_ref") or ""), str(conversation.get("peer_id") or "")):
+            return True
         if self.sms_manual_approve and str(conversation.get("source") or "") == "sms":
             return True
         return self.max_manual_approve and str(conversation.get("source") or "") == "max"
@@ -864,7 +868,7 @@ class UserIOService:
         if not text:
             raise ValueError("draft body is required")
         draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, text, "proposed")
-        self._store.add_draft(draft, user_id=user_id)
+        self._persist_reply_draft(draft, user_id=user_id)
         self._notify_drafts_for_approval([draft], user_id=user_id)
         return draft
 
@@ -917,8 +921,23 @@ class UserIOService:
             raise ValueError("AI produced no reply variants")
         drafts = [ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, body, "proposed") for body in bodies]
         for draft in drafts:
-            self._store.add_draft(draft, user_id=user_id)
+            self._persist_reply_draft(draft, user_id=user_id)
         return drafts
+
+    def _persist_reply_draft(self, draft: ReplyDraft, *, user_id: str | None) -> None:
+        conversation = self._store.conversation(draft.conversation_id, user_id=user_id) or {}
+        scoped = getattr(self.telegram_outbox, "source_bound_pair", None)
+        account, peer = str(conversation.get("account_ref") or ""), str(conversation.get("peer_id") or "")
+        if conversation.get("source") == "telegram" and callable(scoped) and scoped(account, peer):
+            self._store.add_source_bound_draft(draft, account_ref=account, peer_id=peer, user_id=user_id)
+        else:
+            self._store.add_draft(draft, user_id=user_id)
+
+    def sync_relay_account(self, *, user_id: str) -> dict:
+        sync = getattr(self.telegram_outbox, "sync_into", None)
+        if not callable(sync):
+            raise DeliveryUnavailableError("account-scoped relay is not configured")
+        return sync(self, user_id=user_id)
 
     def approve(self, draft_id: str, *, user_id: str | None = None,
                 expected_snapshot: dict[str, object] | None = None) -> ReplyDraft:
@@ -1006,6 +1025,12 @@ class UserIOService:
         elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
             messages = list(conversation["messages"])
             chat_id = str(conversation.get("peer_id") or "")
+            prepare = getattr(self.telegram_outbox, "prepare_reply", None)
+            if callable(prepare):
+                return prepare(chat=str(conversation["sender"]), chat_id=chat_id,
+                    body=draft.body, draft_id=draft.id, user_id=user_id,
+                    conversation_id=draft.conversation_id,
+                    account_ref=str(conversation.get("account_ref") or ""))
             send = partial(self.telegram_outbox.send_reply,
                 chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
                 account_ref=str(conversation.get("account_ref") or ""),
