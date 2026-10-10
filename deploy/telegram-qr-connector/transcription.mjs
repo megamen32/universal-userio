@@ -139,8 +139,41 @@ export async function transcribeTelegramAudio(client, message, options) {
 }
 
 export function bodyAndAttachments(message, audioResult) {
-  const visible = String(value(message, "message", "")).trim();
-  if (!audioResult) return { body: visible, attachments: [] };
+  const visible = String(value(message, "message", ""));
+  if (!audioResult) {
+    // History reconciliation does not transcribe audio. Preserve media and
+    // service messages instead of silently losing every empty-caption item.
+    const media = value(message, "media", null);
+    const action = value(message, "action", null);
+    if (!media && !action) return { body: visible, attachments: [] };
+    const mediaClass = String(value(media, "className", ""));
+    if (mediaClass === "MessageMediaEmpty" && !action) return { body: visible, attachments: [] };
+    const document = value(media, "document", null);
+    const attributes = document && Array.isArray(document.attributes) ? document.attributes : [];
+    const audio = telegramAudioDescriptor(message);
+    const filenameAttribute = attributes.find(a => a && a.fileName);
+    let kind = action ? "service" : (audio ? audio.kind : "document");
+    if (!action && !audio) {
+      if (mediaClass === "MessageMediaPhoto") kind = "photo";
+      else if (mediaClass === "MessageMediaWebPage") kind = "webpage";
+      else if (mediaClass === "MessageMediaPoll") kind = "poll";
+      else if (mediaClass === "MessageMediaContact") kind = "contact";
+      else if (mediaClass.includes("Geo") || mediaClass.includes("Venue")) kind = "location";
+      else if (attributes.some(a => String(a.className).includes("Sticker"))) kind = "sticker";
+      else if (attributes.some(a => String(a.className).includes("Video"))) kind = "video";
+    }
+    const item = {
+      kind,
+      content_type: audio ? audio.contentType : String(value(document, "mimeType",
+        kind === "photo" ? "image/jpeg" : "application/octet-stream")),
+      filename: audio ? audio.filename : String(value(filenameAttribute, "fileName",
+        "telegram-" + String(value(message, "id", "")) + (kind === "photo" ? ".jpg" : ".bin"))),
+      provider_ref: String(value(message, "id", "")),
+    };
+    if (audio) item.transcription_status = "not_requested";
+    const label = action ? "service: " + String(value(action, "className", "event")) : kind;
+    return { body: visible || "[Telegram " + label + "]", attachments: [item] };
+  }
   const attachment = {
     kind: audioResult.kind,
     content_type: audioResult.contentType,
