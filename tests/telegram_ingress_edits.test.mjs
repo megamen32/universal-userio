@@ -15,7 +15,7 @@ test("EditedMessage event builder is imported from its own module", () => {
   // EditedMessage from there crashes the connector with a SyntaxError.
   assert.match(
     source,
-    /import \{ NewMessage \} from "telegram\/events\/index\.js";/,
+    /import \{(?=[^}]*\bNewMessage\b)(?![^}]*\bEditedMessage\b)[^}]*\} from "telegram\/events\/index\.js";/,
   );
   assert.match(
     source,
@@ -35,7 +35,7 @@ test("edit handler is attached beside the new-message handler before backfill", 
 
 test("edit ingestion never reschedules agent delivery", () => {
   const ingest = source.indexOf("async function ingestLive(");
-  const guard = source.indexOf("if (!isEdit)", ingest);
+  const guard = source.indexOf("if (!isEdit && !message.out)", ingest);
   const debounce = source.indexOf("debounceAgentDeliver(", ingest);
   assert.ok(ingest >= 0, "ingestLive exists");
   assert.ok(guard > ingest && debounce > guard, "debounceAgentDeliver stays behind the edit guard");

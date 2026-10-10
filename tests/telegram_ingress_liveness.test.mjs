@@ -15,7 +15,12 @@ test("live handler is attached before initial backfill", () => {
 });
 
 test("historical reconciliation cannot start Telegram media transcription", () => {
-  assert.match(source, /backfillDialogs[\s\S]*transcribeAudio: false/);
+  const reconcile = source.slice(source.indexOf("async function reconcileDialog("),
+    source.indexOf("async function ingestProviderState("));
+  const backfill = source.slice(source.indexOf("async function backfillDialogs("),
+    source.indexOf("async function ingestLive("));
+  assert.match(reconcile, /transcribeAudio: false/);
+  assert.match(backfill, /await reconcileDialog\(/);
   assert.match(source, /shouldTranscribe[\s\S]*transcribeTelegramAudio/);
 });
 

@@ -1611,6 +1611,25 @@ class SQLiteUserIOStore:
                     (user_id, message.source, message.sender, message.sender_name, now),
                 )
             for att in (message.attachments or ()):
+                if (message.reconciliation and att.get("kind") in {"voice", "audio"}
+                        and att.get("transcription_status") == "not_requested"):
+                    # A metadata-only history fetch must not erase an existing
+                    # transcript or replace the enriched body with its caption.
+                    prior = self._connection.execute("""SELECT transcript,transcription_status,transcription_model
+                        FROM message_attachments WHERE user_id=? AND source=? AND message_id=?
+                        AND kind=? AND provider_ref=? AND COALESCE(transcript,'')!='' LIMIT 1""",
+                        (user_id, message.source, message.message_id, att.get("kind"),
+                         str(att.get("provider_ref") or ""))).fetchone()
+                    if prior is not None:
+                        from dataclasses import replace
+                        att = {**att, **dict(prior)}
+                        transcript = str(prior["transcript"])
+                        caption = message.body
+                        if caption.startswith("[Telegram ") and caption.endswith("]"):
+                            caption = ""
+                        enriched = caption if caption.endswith(transcript) else (
+                            caption + "\n\n" + transcript if caption else transcript)
+                        message = replace(message, body=enriched)
                 self.upsert_attachment(
                     source=message.source, message_id=message.message_id, attachment=att,
                     user_id=user_id,
@@ -1638,7 +1657,9 @@ class SQLiteUserIOStore:
                     (user_id, message.source, message.message_id),
                 ).fetchone()
                 old_body = str(existing["body"] or "") if existing else ""
-                new_body = str(message.body or "").strip()
+                new_body = str(message.body or "")
+                if message.source != "telegram":
+                    new_body = new_body.strip()
                 old_placeholder = (not old_body.strip()) or (
                     old_body.strip().startswith("[") and old_body.strip().endswith("]")
                 )
@@ -2819,7 +2840,7 @@ class SQLiteUserIOStore:
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT source,message_id,conversation_id,sender,body,received_at,seen_at
+                SELECT source,message_id,conversation_id,sender,body,direction,received_at,seen_at,edited_at,provider_read
                 FROM messages WHERE {where} AND deleted_at IS NULL ORDER BY received_at DESC LIMIT 2
                 """,
                 values,

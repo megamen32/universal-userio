@@ -484,18 +484,81 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             break
         return result
 
+    def _refresh_history(self, chat: dict[str, Any]) -> dict[str, Any]:
+        """Reconcile a bounded, owned chat on its existing provider connection.
+
+        The ingress owns authentication and history ingestion. Reconciliation
+        never sends replies, marks Telegram messages read, or replays AI work.
+        """
+        account_ref = str(chat.get("account_ref") or "")
+        peer_id = str(chat.get("peer_id") or "")
+        account = next((item for item in self._store.accounts(user_id=self._user_id)
+                        if item["id"] == account_ref), None)
+        credential = os.environ.get("USERIO_API_TOKEN", "")
+        if not self._bridge_url or not credential:
+            return {"status": "cache_only", "fresh": False, "reason": "bridge_not_configured"}
+        if (not account or not account.get("enabled")
+                or "read" not in account.get("capabilities", [])
+                or account.get("provider") != "telegram"
+                or not peer_id.isascii() or not peer_id.lstrip("-").isdigit()):
+            return {"status": "cache_only", "fresh": False, "reason": "account_or_peer_unavailable"}
+        request = urllib.request.Request(
+            self._bridge_url + "/reconcile",
+            data=json.dumps({"account_id": account_ref, "peer_id": peer_id, "limit": 50}).encode(),
+            headers={"Authorization": "Bearer " + credential, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self._runner(request, timeout=25) as response:
+                receipt = json.loads(response.read(65536))
+            if receipt.get("account_id") != account_ref or str(receipt.get("peer_id")) != peer_id:
+                raise ValueError("unexpected reconciliation identity")
+            return {"status": "refreshed", "fresh": True, "history_limit": 50,
+                    "mirrored": int(receipt.get("mirrored", 0))}
+        except (OSError, ValueError, TypeError) as error:
+            # Exception bodies can contain provider details. Return a safe code,
+            # and explicitly distinguish cached history from verified freshness.
+            return {"status": "failed", "fresh": False,
+                    "error": type(error).__name__}
+
+    def _promote_author(self, message: dict[str, Any], chat: dict[str, Any]) -> dict[str, Any]:
+        result = self._promote_group_author(message)
+        author = result.get("author")
+        if not author and result.get("direction") == "outgoing":
+            account_ref = str(chat.get("account_ref") or "")
+            account = next((item for item in self._store.accounts(user_id=self._user_id)
+                            if item["id"] == account_ref), None)
+            if account:
+                author = {"id": account_ref.removeprefix("telegram:"),
+                          "name": str(account.get("display_name") or "Вы")}
+            else:
+                author = {"id": "", "name": "Вы"}
+        elif not author and str(chat.get("peer_id") or "").isdigit():
+            author = {"id": str(chat["peer_id"]), "name": str(result.get("sender") or "")}
+        if author:
+            result["author"] = author
+            if author.get("name"):
+                result["sender"] = author["name"]
+        return result
+
     def read(
         self, *, chat_id: str | None = None, message_id: str | None = None
     ) -> dict[str, Any]:
         result = super().read(chat_id=chat_id, message_id=message_id)
-        if "message" in result:
-            result["message"] = self._promote_group_author(result["message"])
         if "chat" in result:
+            sync = self._refresh_history(result["chat"])
+            if sync["fresh"]:
+                result = super().read(chat_id=chat_id)
+            result["sync"] = sync
             result["chat"] = dict(result["chat"])
             result["chat"]["messages"] = [
-                self._promote_group_author(message)
+                self._promote_author(message, result["chat"])
                 for message in result["chat"].get("messages", [])
             ]
+        if "message" in result:
+            conversation_id = str(result["message"].get("conversation_id") or "")
+            chat = self._store.conversation(conversation_id, user_id=self._user_id) or {}
+            result["message"] = self._promote_author(result["message"], chat)
         return result
 
     def download(self, *, file_ref: str) -> ChannelFile:

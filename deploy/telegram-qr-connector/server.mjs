@@ -519,7 +519,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     body: normalized.body.slice(0, 8000),
-    ...(attachments.length ? { attachments } : {}),
+    ...(attachments.length ? { attachments: attachments.map((attachment, idx) => ({ ...attachment, idx })) } : {}),
   };
 }
 
@@ -880,8 +880,12 @@ http.createServer(async (req, res) => {
       }));
       if (!detail.dialogs || !detail.dialogs.length) throw new Error("provider dialog is unavailable");
       const me = await item.client.getMe();
+      const requestedLimit = payload.limit == null ? 200 : Number(payload.limit);
+      if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 200) {
+        throw new Error("limit must be an integer from 1 to 200");
+      }
       const posted = await reconcileDialog("operator", item.client, item.accountId, null, me,
-        peer, chatKey, entityLabel(peer), detail.dialogs[0], 200);
+        peer, chatKey, entityLabel(peer), detail.dialogs[0], requestedLimit);
       res.writeHead(200, {"content-type":"application/json"});
       return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey, mirrored:posted}));
     } catch (error) {
