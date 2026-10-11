@@ -2328,12 +2328,13 @@ class SQLiteUserIOStore:
             ).fetchone()
             if row is None:
                 return None
+            history_order = 'message_id' if row['source'] == 'phone' else 'rowid'
             messages = self._connection.execute(
-                """
+                f"""
                 SELECT * FROM (
                     SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at,provider_read
                     FROM messages
-                    WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL ORDER BY received_at DESC,rowid DESC LIMIT 200
+                    WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL ORDER BY received_at DESC,{history_order} DESC LIMIT 200
                 ) ORDER BY received_at,message_id
                 """,
                 (user_id, conversation_id),
@@ -2372,6 +2373,7 @@ class SQLiteUserIOStore:
             "peer_id": str(row["peer_id"] or ""),
             "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
+            **({'phone_history': self._phone_history_cursor(row['id'], message_records, user_id)} if row['source']=='phone' else {}),
             **({"history": {
                 "status": "complete" if history_row["complete"] else "partial",
                 "oldest_id": int(history_row["oldest_id"]),
@@ -2379,6 +2381,39 @@ class SQLiteUserIOStore:
             } if history_row is not None else {"status": "unverified"}}
             if row["source"] == "telegram" else {}),
         }
+
+    def _phone_history_cursor(self, conversation_id: str, messages: list[dict], user_id: str) -> dict:
+        if not messages:
+            return {'oldest_id': '', 'has_more': False}
+        first = messages[0]
+        with self._lock:
+            more = self._connection.execute("SELECT 1 FROM messages WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL AND (received_at<? OR (received_at=? AND message_id<?)) LIMIT 1",
+                (user_id,conversation_id,first['received_at'],first['received_at'],first['message_id'])).fetchone()
+        return {'oldest_id': first['message_id'], 'has_more': more is not None}
+
+    def phone_history_page(self, conversation_id: str, *, before_message_id: str, limit: int = 100,
+                           user_id: str | None = None) -> dict:
+        """Read bounded older call entries from the same account/person only."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
+        user_id = self._user(user_id)
+        if type(limit) is not int or not 1 <= limit <= 100 or not before_message_id or len(before_message_id)>256:
+            raise ValueError('invalid phone history cursor')
+        with self._lock:
+            chat = self._connection.execute("SELECT source FROM conversations WHERE user_id=? AND id=?",(user_id,conversation_id)).fetchone()
+            if chat is None:
+                raise KeyError('conversation not found')
+            if chat['source'] != 'phone':
+                raise ValueError('phone history requires a phone conversation')
+            anchor = self._connection.execute("SELECT received_at FROM messages WHERE user_id=? AND conversation_id=? AND source='phone' AND message_id=? AND deleted_at IS NULL",(user_id,conversation_id,before_message_id)).fetchone()
+            if anchor is None:
+                raise ValueError('phone history cursor is not in this conversation')
+            rows = self._connection.execute("SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at,provider_read FROM messages WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL AND (received_at<? OR (received_at=? AND message_id<?)) ORDER BY received_at DESC,message_id DESC LIMIT ?",(user_id,conversation_id,anchor['received_at'],anchor['received_at'],before_message_id,limit)).fetchall()
+        messages = [dict(row) for row in reversed(rows)]
+        for message in messages:
+            attachments = self.attachments_for_message(source=message['source'],message_id=message['message_id'],user_id=user_id)
+            if attachments:
+                message['attachments'] = attachments
+        return {'conversation_id': conversation_id, 'messages': messages, **self._phone_history_cursor(conversation_id,messages,user_id)}
 
     def telegram_history_page(
         self, conversation_id: str, *, before_id: int, limit: int = 50,

@@ -9,11 +9,12 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { canEditMaxText, providerPeerLabel } from "./max-message"
 import { startInboxPolling } from "./inbox-poll"
+import { mergePhoneHistory } from "./phone-history"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
-type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
+type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
 type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
@@ -56,7 +57,7 @@ const channelIcon = (source: string) => {
   if (provider === "whatsapp") return <Phone className="size-4" />
   return <MessageCircle className="size-4" />
 }
-const displayChannel = (source: string) => providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
+const displayChannel = (source: string) => source === 'phone' ? 'Звонки' : providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 
 // A message is "mine" (right bubble) when it was authored by the sending
 // account chosen for the conversation ("отправка от"; auto = first platform
@@ -230,6 +231,11 @@ export function App() {
   const [newChatSource, setNewChatSource] = useState("sms")
   const [newChatPhone, setNewChatPhone] = useState("")
   const [sendBusy, setSendBusy] = useState(false)
+  const [phoneHistoryBusy, setPhoneHistoryBusy] = useState(false)
+  const phoneHistoryWindow = useRef('')
+  const phoneFollowLatest = useRef(true)
+  const transcriptRef = useRef<HTMLDivElement>(null)
+  const phoneHistoryScroll = useRef<{id:string; messageId:string; top:number; restore:boolean} | null>(null)
   const sendInFlight = useRef(false)
   const sendIntent = useRef<{key: string; id: string} | null>(null)
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
@@ -331,7 +337,9 @@ export function App() {
     const request = conversationRequest.current.begin()
     const result = await api<Conversation>(`/v1/conversations/${encodeURIComponent(id)}`)
     if (conversationRequest.current.isCurrent(request) && activeConversation.current === id) {
-      setConversation(result)
+      setConversation(previous => previous?.id === result.id && result.source === 'phone' && (phoneHistoryWindow.current === result.id || previous.messages.length > result.messages.length)
+        ? { ...result, messages: mergePhoneHistory(previous.messages, result.messages), phone_history: previous.phone_history }
+        : result)
       // A historical call link resolves to its person's retained canonical
       // dialogue. Keep the selected view and subsequent requests on that ID.
       if (result.id !== id) setSelectedChat(result.id)
@@ -356,6 +364,17 @@ export function App() {
   }, [])
   const bottomRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    const pending = phoneHistoryScroll.current
+    const viewport = transcriptRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+    if (pending && pending.id === conversation?.id) {
+      if (pending.restore && viewport) {
+        const anchor = [...viewport.querySelectorAll<HTMLElement>('[data-phone-message]')].find(element => element.dataset.phoneMessage === pending.messageId)
+        if (anchor) viewport.scrollTop += anchor.getBoundingClientRect().top - pending.top
+        phoneHistoryScroll.current = null
+      }
+      return
+    }
+    if (conversation?.source === 'phone' && phoneHistoryWindow.current === conversation.id && !phoneFollowLatest.current) return
     bottomRef.current?.scrollIntoView({ block: "end" })
   }, [conversation?.id, conversation?.messages.length, conversation?.drafts.length])
 
@@ -392,6 +411,9 @@ export function App() {
   useEffect(() => { if (userCapabilities.read) void refreshChats(); else { chatsRequest.current.begin(); setChats([]); setSelectedChat(""); setConversation(null) } }, [refreshChats, userCapabilities.read])
   useEffect(() => {
     activeConversation.current = userCapabilities.read ? selectedChat : ""
+    phoneHistoryWindow.current = ''
+    phoneFollowLatest.current = true
+    phoneHistoryScroll.current = null
     conversationRequest.current.begin()
     return () => { activeConversation.current = ""; conversationRequest.current.begin() }
   }, [selectedChat, userCapabilities.read])
@@ -444,6 +466,35 @@ export function App() {
     details.setAttribute("run", JSON.stringify(selectedRun))
     host.appendChild(details)
   }, [runsOpen, selectedRun])
+
+  const loadOlderPhoneCalls = async () => {
+    if (!conversation?.phone_history?.has_more || phoneHistoryBusy) return
+    const id = conversation.id
+    // Freeze the cursor's existing window before a poll can roll it forward.
+    phoneHistoryWindow.current = id
+    phoneFollowLatest.current = false
+    const viewport = transcriptRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+    const anchor = viewport && [...viewport.querySelectorAll<HTMLElement>('[data-phone-message]')].find(element => element.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top)
+    if (anchor?.dataset.phoneMessage) phoneHistoryScroll.current = { id, messageId: anchor.dataset.phoneMessage, top: anchor.getBoundingClientRect().top, restore: false }
+    setPhoneHistoryBusy(true)
+    try {
+      const page = await api<{ conversation_id: string; messages: Message[]; oldest_id: string; has_more: boolean }>(
+        `/v1/conversations/${encodeURIComponent(id)}/phone-history?before=${encodeURIComponent(conversation.phone_history.oldest_id)}`,
+      )
+      if (activeConversation.current === id && page.conversation_id === id) {
+        if (phoneHistoryScroll.current?.id === id) phoneHistoryScroll.current.restore = true
+        setConversation(current => current?.id === id ? { ...current,
+          messages: mergePhoneHistory(page.messages, current.messages),
+          phone_history: { oldest_id: page.oldest_id, has_more: page.has_more },
+        } : current)
+      }
+    } catch (error) {
+      if (activeConversation.current === id) {
+        phoneHistoryScroll.current = null
+        notify(`Не удалось загрузить ранние звонки: ${(error as Error).message}`)
+      }
+    } finally { setPhoneHistoryBusy(false) }
+  }
 
   const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
   const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
@@ -893,7 +944,11 @@ export function App() {
             <Button className="hidden size-8 md:inline-flex" variant="ghost" size="icon" onClick={closeChat} title="Закрыть диалог"><X className="size-4" /></Button>
           </div>
         </header>
-        <ScrollArea className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
+        <ScrollArea ref={transcriptRef} onScrollCapture={event => {
+          const viewport = event.target as HTMLElement
+          if (conversation.source === 'phone' && viewport.dataset.slot === 'scroll-area-viewport') phoneFollowLatest.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96
+        }} className="min-h-0 flex-1"><div className="mx-auto flex w-full max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
+          {conversation.phone_history?.has_more && <Button variant="outline" size="sm" className="self-center" disabled={phoneHistoryBusy} onClick={() => void loadOlderPhoneCalls()}>{phoneHistoryBusy ? 'Загружаю…' : 'Показать более ранние звонки'}</Button>}
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
             const system = message.direction === "system"
@@ -903,8 +958,8 @@ export function App() {
             return <Fragment key={`${message.source}:${message.message_id}`}>
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
               {system
-                ? <div className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
-                : <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение MAX" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} onAttachmentClick={openAttachment} />}{conversation.source === "max" && outgoing && canReply && canEditMaxText(message.attachments) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : ""}</p></div>}
+                ? <div data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
+                : <div data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение MAX" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} onAttachmentClick={openAttachment} />}{conversation.source === "max" && outgoing && canReply && canEditMaxText(message.attachments) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : ""}</p></div>}
             </Fragment>
           })}
           {conversation.drafts.filter(item => !(item.status === "approved" && conversation.messages.some(message =>

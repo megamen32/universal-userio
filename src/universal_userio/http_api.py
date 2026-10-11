@@ -1276,6 +1276,22 @@ def handler(
                     return
                 self._reply(200, result)
                 return
+            if path.startswith('/v1/conversations/') and path.endswith('/phone-history'):
+                if not service._store.capability_enabled('read', user_id=user_id):
+                    self._reply(403, {'error':'read_capability_disabled'})
+                    return
+                conversation_id = unquote(path.removeprefix('/v1/conversations/').removesuffix('/phone-history').strip('/'))
+                try:
+                    page = service._store.phone_history_page(conversation_id,
+                        before_message_id=query.get('before',[''])[0],limit=int(query.get('limit',['100'])[0]),user_id=user_id)
+                except KeyError:
+                    self._reply(404, {'error':'conversation not found'})
+                    return
+                except ValueError as error:
+                    self._reply(400, {'error':str(error)})
+                    return
+                self._reply(200, page)
+                return
             conversation_id = path.removeprefix("/v1/conversations/")
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})

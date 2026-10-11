@@ -188,3 +188,44 @@ def test_rollback_refuses_new_person_policy_or_summary_atomically(tmp_path,new_r
         cli.rollback(store,result['receipt'])
     assert store.resolve_conversation_id(ids[1])==ids[0]
     assert len(store.conversation(ids[0])['messages'])==2
+
+
+def test_phone_history_pages_expose_all_grouped_calls_without_duplicates(tmp_path):
+    store,svc=setup(tmp_path);peer=phone_peer_ref('phone100','+79991234567')
+    for n in range(225):
+        cid,_=svc.receive(InboxMessage('phone',f'call-{n:03}',f'uuid-{n}',f'call entry {n}',n//2+1,peer_id=peer),route_id='phone',account_ref='phone100')
+    conversation=store.conversation(cid)
+    assert len(conversation['messages'])==200
+    assert conversation['phone_history']['has_more'] is True
+    page=store.phone_history_page(cid,before_message_id=conversation['phone_history']['oldest_id'],limit=100)
+    assert len(page['messages'])==25 and page['has_more'] is False
+    all_messages=page['messages']+conversation['messages']
+    assert len({m['message_id'] for m in all_messages})==225
+    assert [m['body'] for m in all_messages]==[f'call entry {n}' for n in range(225)]
+    with pytest.raises(KeyError):store.phone_history_page(cid,before_message_id='call-224',user_id='other')
+    with pytest.raises(ValueError):store.phone_history_page(cid,before_message_id='not-this-history')
+
+
+def test_phone_history_http_uses_owned_read_capability_and_exact_cursor(tmp_path):
+    import json, threading
+    from http.server import ThreadingHTTPServer
+    from urllib.request import Request,urlopen
+    from urllib.error import HTTPError
+    from universal_userio.http_api import handler
+    store,svc=setup(tmp_path);peer=phone_peer_ref('phone100','+79991234567')
+    for n in range(3): cid,_=svc.receive(InboxMessage('phone',str(n),str(n),str(n),n+1,peer_id=peer),route_id='phone',account_ref='phone100')
+    other,other_token=store.create_user('phone-reader','correct horse battery staple')
+    server=ThreadingHTTPServer(('127.0.0.1',0),handler(svc,token='fixture-token'));thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    def get(bearer):
+        request=Request(f'http://127.0.0.1:{server.server_port}/v1/conversations/{cid}/phone-history?before=2&limit=1',headers={'Authorization':'Bearer '+bearer})
+        try:
+            with urlopen(request,timeout=3) as response:return response.status,json.load(response)
+        except HTTPError as e:return e.code,json.load(e)
+    try:
+        assert get('')[0]==401
+        assert get(other_token)[0]==404
+        status,page=get('fixture-token');assert status==200 and page['has_more'] is True
+        assert [m['message_id'] for m in page['messages']]==['1']
+        store.set_user_capability('read',False)
+        assert get('fixture-token')[0]==403
+    finally:server.shutdown();server.server_close();store.close()
