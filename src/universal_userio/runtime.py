@@ -241,7 +241,16 @@ def main() -> None:
             runtime_identity=runtime_identity,
         ),
     )
-    server.serve_forever()
+    # New interactive connections are user-scoped and do not share systemd
+    # Matrix/IMAP environment secrets. Legacy sidecars remain unaffected.
+    from .account_connections import UserAccountPoller
+    connected_poller = UserAccountPoller(service)
+    connected_poller.start()
+    try:
+        server.serve_forever()
+    finally:
+        connected_poller.stop.set()
+        server.server_close()
 
 
 if __name__ == "__main__":

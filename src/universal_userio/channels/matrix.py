@@ -4,16 +4,27 @@ import json, os, signal, threading, urllib.parse, urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+class _RejectRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError("Matrix redirects may not forward bearer tokens")
+
+
+def _matrix_open(request, timeout):
+    return urllib.request.build_opener(_RejectRedirect).open(request, timeout=timeout)
+
+
 @dataclass(frozen=True, slots=True)
 class MatrixMessage:
     room_id: str
     event_id: str
     sender: str
     body: str
+    received_at: float = 0.0
+    direction: str = "incoming"
 
 class MatrixReader:
-    def __init__(self, homeserver:str, token:str, room_ids:tuple[str,...], own_user_id:str, runner:Any=urllib.request.urlopen)->None:
-        self.homeserver=homeserver.rstrip('/'); self.token=token; self.room_ids=frozenset(room_ids); self.own_user_id=own_user_id; self.runner=runner
+    def __init__(self, homeserver:str, token:str, room_ids:tuple[str,...], own_user_id:str, runner:Any=_matrix_open, *, include_own:bool=False)->None:
+        self.homeserver=homeserver.rstrip('/'); self.token=token; self.room_ids=frozenset(room_ids); self.own_user_id=own_user_id; self.runner=runner; self.include_own=include_own
         if not self.homeserver or not self.token or not self.room_ids or not self.own_user_id: raise ValueError('matrix config incomplete')
     def poll(self,cursor:str|None,*,limit:int=100)->tuple[list[MatrixMessage],str]:
         q={'timeout':'0'}
@@ -25,11 +36,15 @@ class MatrixReader:
         if cursor is None: return [],nxt
         out=[]
         for room_id,room in rooms.items():
-            if room_id not in self.room_ids or not isinstance(room,dict): continue
+            if (room_id not in self.room_ids and '*' not in self.room_ids) or not isinstance(room,dict): continue
             timeline=room.get('timeline',{})
-            if timeline.get('limited') is True: raise RuntimeError('limited Matrix timeline')
+            # The initial join snapshot can be limited to recent events; this
+            # is fine for a new connection. Never silently skip later gaps.
+            if timeline.get('limited') is True and cursor: raise RuntimeError('limited Matrix timeline')
             for ev in timeline.get('events',[]):
-                if not isinstance(ev,dict) or ev.get('type')!='m.room.message' or ev.get('sender')==self.own_user_id: continue
+                if not isinstance(ev,dict) or ev.get('type')!='m.room.message' or (ev.get('sender')==self.own_user_id and not self.include_own): continue
+                timestamp=float(ev.get('origin_server_ts') or 0) / 1000
+                direction="outgoing" if ev.get('sender')==self.own_user_id else "incoming"
                 c=ev.get('content') or {}
                 relates=c.get('m.relates_to') or {}
                 if relates.get('rel_type')=='m.replace':
@@ -41,9 +56,9 @@ class MatrixReader:
                     if not (isinstance(body,str) and body and isinstance(original,str) and original):
                         continue
                     if len(out)>=limit: raise RuntimeError('Matrix batch exceeds limit')
-                    out.append(MatrixMessage(room_id,original,str(ev.get('sender') or ''),body))
+                    out.append(MatrixMessage(room_id,original,str(ev.get('sender') or ''),body,timestamp,direction))
                     continue
                 if c.get('msgtype')!='m.text' or not isinstance(c.get('body'),str): continue
                 if len(out)>=limit: raise RuntimeError('Matrix batch exceeds limit')
-                out.append(MatrixMessage(room_id,str(ev.get('event_id') or ''),str(ev.get('sender') or ''),c['body']))
+                out.append(MatrixMessage(room_id,str(ev.get('event_id') or ''),str(ev.get('sender') or ''),c['body'],timestamp,direction))
         return [m for m in out if m.event_id and m.sender],nxt

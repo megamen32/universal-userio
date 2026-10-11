@@ -23,6 +23,7 @@ import urllib.request
 from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
+from .account_connections import connect_matrix, connect_imap
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -70,6 +71,8 @@ def _public_account_source(account: Mapping[str, object], credential_ref: str) -
             match = re.fullmatch(r"gmail-(.+)", account_id, re.IGNORECASE)
             alias = match.group(1) if match else ""
         return "gmail" if alias == "gmail" else f"gmail:{alias}" if alias else provider
+    if provider in {"matrix", "email"} and account_id.startswith(provider + ":"):
+        return account_id
     if provider == "chatgpt" and account_id.startswith("chatgpt:"):
         return account_id
     return provider
@@ -854,17 +857,35 @@ def handler(
                     )
                     self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": "vkid_identity_only"})
                     return
+                if path in {"/v1/matrix/accounts", "/v1/imap/accounts"}:
+                    if principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "нужна авторизация пользователя с правом чтения"})
+                        return
+                    payload = self._json()
+                    if path == "/v1/matrix/accounts":
+                        account = connect_matrix(service, user_id, payload)
+                    else:
+                        account = connect_imap(service, user_id, payload)
+                    self._reply(201, {"accepted": True, **account})
+                    return
                 if path == "/v1/gmail/accounts":
+                    # Backward-compatible browser route, but a new mailbox must
+                    # belong to this web principal, NOT the host-wide Himalaya
+                    # config shared across other UserIO tenants.
+                    if principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "нужна авторизация пользователя с правом чтения"})
+                        return
                     payload = self._json()
                     email = str(payload.get("email") or "").strip().lower()
                     app_password = re.sub(r"\s+", "", str(payload.get("app_password") or ""))
-                    account_id, display_name = _connect_gmail_account(email, app_password)
-                    service._store.register_account(
-                        account_id=account_id, provider="gmail", display_name=display_name,
-                        can_read=True, can_reply=True, credential_ref=f"himalaya:{account_id.removeprefix('gmail-')}", enabled=True,
-                        user_id=user_id,
+                    account = connect_imap(
+                        service, user_id,
+                        {"host": "imap.gmail.com", "port": 993,
+                         "username": email, "password": app_password},
                     )
-                    self._reply(202, {"accepted": True, "account_id": account_id, "mode": "himalaya_imap_app_password"})
+                    self._reply(201, {"accepted": True, "account_id": account["id"],
+                                      "display_name": account["display_name"],
+                                      "mode": "user_owned_imap"})
                     return
                 if path == "/v1/reply-rules":
                     payload = self._json()
@@ -1033,14 +1054,20 @@ def handler(
                 body = _vk_connect_page(vkid_app_id).encode()
                 self._html(200, body)
                 return
+            if requested_path in {"/accounts/connect/new", "/matrix/connect/new", "/mail/connect/new"}:
+                if self._principal(allow_proxy=True) is None:
+                    self._redirect("/login")
+                    return
+                if self._static("/connect-accounts.html"):
+                    return
             if requested_path == "/gmail/connect/new":
                 if self._principal(allow_proxy=True) is None:
                     self._redirect("/login")
                     return
-                self._html(200, _gmail_connect_page().encode())
-                return
-            if requested_path == "/":
-                if self._principal(allow_proxy=True) is None:
+                if self._static("/connect-accounts.html"):
+                    return
+            if requested_path in {"/", "/welcome"}:
+                if requested_path == '/welcome' or self._principal(allow_proxy=True) is None:
                     if not self._static('/landing.html'):
                         self._html(200,'<!doctype html><html lang="ru"><title>UserIO</title><h1>Все ваши сообщения в одном месте</h1><a href="/login" style="display:inline-block;padding:24px 40px;font-size:28px">Личный кабинет</a><p><a href="/signup">Создать аккаунт</a></p></html>'.encode())
                     return
@@ -1450,9 +1477,23 @@ def handler(
                 return
             if path.startswith("/v1/accounts/"):
                 account_id = unquote(path.removeprefix("/v1/accounts/").strip("/"))
-                self._reply(200, {
-                    "deleted": service._store.delete_account(account_id, user_id=principal.user_id)
-                })
+                existing = next(
+                    (a for a in service._store.accounts(user_id=principal.user_id)
+                     if a["id"] == account_id), None,
+                )
+                deleted = service._store.delete_account(account_id, user_id=principal.user_id)
+                if deleted and existing and existing["provider"] in {"matrix", "email"}:
+                    ref = str(existing.get("credential_ref") or "")
+                    if ref.startswith("connector:"):
+                        from .account_connections import ConnectorSecrets
+                        try:
+                            ConnectorSecrets().delete(ref, user_id=principal.user_id,
+                                                      provider=str(existing["provider"]))
+                        except (OSError, ValueError, PermissionError):
+                            # Credentials are no longer referenced or polled.
+                            # An orphan is safer than accidental deletion.
+                            pass
+                self._reply(200, {"deleted": deleted})
                 return
             if path.startswith("/v1/drafts/"):
                 draft_id = path.removeprefix("/v1/drafts/").strip("/")

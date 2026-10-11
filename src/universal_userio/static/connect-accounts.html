@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Добавить аккаунт · UserIO</title>
+<style>
+:root{font:16px system-ui,sans-serif;color-scheme:dark;background:#101923;color:#e9eff5}
+*{box-sizing:border-box}body{margin:0 auto;max-width:780px;padding:28px 20px 80px}
+a{color:#8cc1ff;text-decoration:none}h1{font-size:25px;letter-spacing:-.5px;margin:24px 0 8px}
+p{color:#abb9c8;line-height:1.5}.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:9px;margin:24px 0}
+.choices a,.choices button{font:inherit;text-align:left;border:1px solid #3b4f61;border-radius:12px;background:#1a2837;padding:13px;color:#f4f9fd;cursor:pointer}
+.choices a:hover,.choices button:hover,.choices .active{border-color:#7bb8ff;background:#243b53}
+form{display:none;max-width:520px;padding:22px;border:1px solid #34495b;border-radius:16px;background:#172534}
+form.active{display:block}form h2{margin:0 0 12px;font-size:20px}
+label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:block;margin-top:6px;width:100%;padding:12px;border:1px solid #566778;border-radius:9px;background:#0d1a26;color:white;font:inherit}
+.submit{margin-top:18px;background:#307fdf;border:0;border-radius:10px;color:white;padding:12px 18px;font:600 15px system-ui;cursor:pointer}
+.submit:disabled{opacity:.5;cursor:wait}.hint{font-size:13px;margin:8px 0 0}
+#status{min-height:24px;margin-top:12px;color:#ccdce9;white-space:pre-wrap}
+.small{font-size:13px}.connected{margin-top:30px}.connected h2{font-size:19px}
+.connected .account{display:flex;align-items:center;gap:14px;justify-content:space-between;
+  padding:11px 0;border-bottom:1px solid #2e4355;font-size:14px}
+.connected button{font:inherit;padding:7px 11px;border-radius:9px;border:1px solid #53697b;
+  color:#f3f7fc;background:transparent;cursor:pointer}
+</style></head>
+<body>
+<a href="/">← Назад в UserIO</a>
+<h1>Добавить аккаунт</h1>
+<p>Подключения принадлежат только вашему пользователю UserIO. Данные входа не публикуются в списке аккаунтов.</p>
+<nav class="choices" aria-label="Тип аккаунта">
+<button type="button" data-open="matrix">Matrix</button>
+<button type="button" data-open="imap">Почта IMAP</button>
+<a href="/gmail/connect/new">Gmail</a>
+<a href="/vk/connect/new">ВКонтакте</a>
+<a href="/telegram-qr/new">Telegram</a>
+<a href="/whatsapp-qr/new">WhatsApp</a>
+</nav>
+<form id="matrix">
+<h2>Подключить Matrix</h2>
+<label>Адрес Matrix-сервера<input name="homeserver" type="url" value="https://chat.bezrabotnyi.com" required autocomplete="url"></label>
+<label>Ваш Matrix ID<input name="user_id" placeholder="@bezrabotnyi:chat.bezrabotnyi.com" autocomplete="username"></label>
+<p class="hint">Для SSO Matrix ID можно не указывать: определим его после входа.</p>
+<button class="submit" type="button" id="matrix-sso">Войти через Matrix SSO ↗</button>
+<p class="hint">Или подключите аккаунт по паролю / токену:</p>
+<label>Пароль Matrix<input name="password" type="password" autocomplete="current-password"></label>
+<details><summary class="small">Есть готовый access token вместо пароля?</summary>
+<label>Matrix access token<input name="access_token" type="password" autocomplete="off"></label>
+<p class="hint">Укажите пароль или токен, не оба сразу.</p></details>
+<p class="hint">После входа проверяем Matrix ID через сервер. Существующие аккаунты других пользователей не меняются.</p>
+<button class="submit" type="submit">Подключить Matrix</button>
+</form>
+<form id="imap">
+<h2>Подключить почту IMAP</h2>
+<label>IMAP-сервер<input name="host" placeholder="imap.example.com" required autocomplete="off"></label>
+<label>Порт TLS<input name="port" type="number" min="1" max="65535" value="993" required></label>
+<label>Адрес почты / логин IMAP<input name="username" type="email" placeholder="you@example.com" required autocomplete="username"></label>
+<label>Пароль приложения / IMAP<input name="password" type="password" required autocomplete="new-password"></label>
+<p class="hint">IMAP только через TLS. Письма загружаются без установки отметки «прочитано». Отправка SMTP пока не подключается.</p>
+<button class="submit" type="submit">Подключить почту</button>
+</form>
+<p id="status" role="status" aria-live="polite"></p>
+<section class="connected" aria-label="Подключённые аккаунты"><h2>Ваши подключения</h2><div id="connected-list">Загружаю…</div></section>
+<script>
+const forms={matrix:document.getElementById('matrix'),imap:document.getElementById('imap')};
+async function connectedAccounts(){
+ const container=document.getElementById('connected-list');
+ try{
+  const response=await fetch('/v1/accounts');
+  if(!response.ok)throw Error('Не удалось загрузить подключения');
+  const result=await response.json();
+  container.textContent='';
+  const accounts=result.accounts||[];
+  if(!accounts.length){container.textContent='Подключений пока нет.';return;}
+  for(const account of accounts){
+    const row=document.createElement('div');row.className='account';
+    const title=document.createElement('span');
+    const label=account.provider==='email'?'IMAP':account.provider==='gmail'?'Gmail':
+      account.provider==='matrix'?'Matrix':account.provider==='vk'?'ВКонтакте':account.provider;
+    title.textContent=label+': '+account.display_name;
+    row.append(title);
+    const managed=account.id.startsWith('matrix:')||account.id.startsWith('email:')||
+      account.id.startsWith('vk:');
+    if(managed){
+      const remove=document.createElement('button');remove.type='button';remove.textContent='Отключить';
+      remove.onclick=async()=>{
+        if(!confirm('Отключить '+account.display_name+'? Сохранённая история останется в UserIO.'))return;
+        remove.disabled=true;
+        try{
+          const deleted=await fetch('/v1/accounts/'+encodeURIComponent(account.id),{method:'DELETE'});
+          if(!deleted.ok)throw Error('Не удалось отключить');
+          await connectedAccounts();
+        }catch(error){alert(error.message);remove.disabled=false;}
+      };
+      row.append(remove);
+    }
+    container.append(row);
+  }
+ }catch(error){container.textContent=error.message||'Ошибка';}
+}
+connectedAccounts();
+function show(key){
+ Object.entries(forms).forEach(([type,form])=>form.classList.toggle('active',type===key));
+ document.querySelectorAll('[data-open]').forEach(button=>
+   button.classList.toggle('active',button.dataset.open===key));
+ document.getElementById('status').textContent='';
+ history.replaceState(null,'',key==='matrix'?'/matrix/connect/new':'/mail/connect/new');
+}
+document.querySelectorAll('[data-open]').forEach(button=>button.onclick=()=>show(button.dataset.open));
+const originalPath=location.pathname;
+const originalParams=new URLSearchParams(location.search);
+show(originalPath.startsWith('/matrix')?'matrix':'imap');
+if(originalPath.startsWith('/gmail')){
+  forms.imap.querySelector('[name="host"]').value='imap.gmail.com';
+}
+const ssoStoreKey='userio-matrix-sso-pending-v1';
+document.getElementById('matrix-sso').onclick=()=>{
+ try{
+   const form=forms.matrix;
+   const homeserver=new URL(form.elements.homeserver.value);
+   if(homeserver.protocol!=='https:' || homeserver.username || homeserver.password ||
+      homeserver.search || (homeserver.pathname && homeserver.pathname!=='/'))
+     throw Error('Укажите HTTPS-адрес Matrix-сервера');
+   const state=crypto.randomUUID();
+   sessionStorage.setItem(ssoStoreKey,JSON.stringify({
+     state,homeserver:homeserver.origin,user_id:form.elements.user_id.value.trim(),
+     expires:Date.now()+10*60*1000
+   }));
+   const callback=new URL('/matrix/connect/new',location.origin);
+   callback.searchParams.set('matrix_state',state);
+   const url=new URL('/_matrix/client/v3/login/sso/redirect',homeserver.origin);
+   url.searchParams.set('redirectUrl',callback.href);
+   location.assign(url.href);
+ }catch(error){document.getElementById('status').textContent=error.message;}
+};
+if(originalParams.has('loginToken')){
+ const status=document.getElementById('status');
+ const saved=sessionStorage.getItem(ssoStoreKey);
+ sessionStorage.removeItem(ssoStoreKey);
+ (async()=>{
+   try{
+     const state=JSON.parse(saved||'null');
+     if(!state || state.expires<Date.now() || state.state!==originalParams.get('matrix_state'))
+       throw Error('Сессия Matrix SSO истекла. Начните вход заново.');
+     status.textContent='Подключаю Matrix после SSO…';
+     const response=await fetch('/v1/matrix/accounts',{
+       method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({homeserver:state.homeserver,user_id:state.user_id,
+         login_token:originalParams.get('loginToken')})});
+     const account=await response.json();
+     if(!response.ok)throw Error(account.error||'SSO не удалось завершить');
+     status.textContent='Аккаунт '+account.display_name+' подключён.';
+     setTimeout(()=>location.assign('/'),1000);
+   }catch(error){status.textContent=error.message;}
+ })();
+}
+for(const [kind,form] of Object.entries(forms)){
+ form.addEventListener('submit',async event=>{
+   event.preventDefault();
+   const status=document.getElementById('status');
+   const button=form.querySelector('button[type="submit"]');
+   const data=Object.fromEntries(new FormData(form));
+   if(kind==='imap')data.port=Number(data.port);
+   if(kind==='matrix' && !data.password && !data.access_token){status.textContent='Нужен пароль или токен.';return;}
+   button.disabled=true;status.textContent='Проверяю подключение…';
+   try{
+     const response=await fetch(kind==='matrix'?'/v1/matrix/accounts':'/v1/imap/accounts',{
+       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+     const result=await response.json();
+     if(!response.ok)throw new Error(result.error||'Не удалось подключить аккаунт');
+     form.reset();
+     status.textContent='Аккаунт '+result.display_name+' подключён. Возвращаюсь в UserIO…';
+     setTimeout(()=>location.assign('/'),900);
+   }catch(error){status.textContent=error.message||'Ошибка подключения';}
+   finally{button.disabled=false;}
+ });
+}
+</script></body></html>

@@ -36,7 +36,7 @@ const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   return response.json() as Promise<T>
 }
 
-const providerForSource = (source: string) => source === "email" || source.startsWith("gmail") ? "gmail" : source.startsWith("chatgpt") ? "chatgpt" : source
+const providerForSource = (source: string) => source === "email" || source.startsWith("email:") || source.startsWith("gmail") ? "gmail" : source.startsWith("matrix:") ? "matrix" : source.startsWith("chatgpt") ? "chatgpt" : source
 const sourceForAccount = (account: Account) => {
   if (account.source) return account.source
   if (account.provider === "gmail") {
@@ -876,7 +876,8 @@ export function App() {
   const sidebar = <>
     <header className="flex items-center gap-3 px-4 pb-3 pt-4"><div className="grid size-9 place-items-center rounded-xl bg-[#2f80ed] text-white"><Inbox className="size-5" /></div><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">UNIVERSAL USERIO</p><h1 className="truncate text-base font-semibold">Все сообщения</h1></div><Button className="ml-auto md:hidden" variant="ghost" size="icon" onClick={() => setDrawerOpen(false)} title="Закрыть"><X /></Button></header>
     <ScrollArea className="min-h-0 flex-1 px-2">
-      <Button className="mb-3 h-11 w-full justify-start rounded-xl" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><span className="grid size-7 place-items-center rounded-lg bg-[#2f80ed]/10 text-[#2f80ed]"><Inbox className="size-4" /></span><span className="ml-2 text-left"><span className="block text-sm font-medium">Все аккаунты</span><span className="block text-[10px] text-muted-foreground">единая лента и поиск</span></span></Button>
+      <Button className="mb-2 h-11 w-full justify-start rounded-xl" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><span className="grid size-7 place-items-center rounded-lg bg-[#2f80ed]/10 text-[#2f80ed]"><Inbox className="size-4" /></span><span className="ml-2 text-left"><span className="block text-sm font-medium">Все аккаунты</span><span className="block text-[10px] text-muted-foreground">единая лента и поиск</span></span></Button>
+      <Button className="mb-3 h-10 w-full justify-start rounded-xl border border-dashed" variant="outline" onClick={() => window.location.assign("/accounts/connect/new")}><Plus className="mr-2 size-4" /> Добавить аккаунт</Button>
       {platforms.map((platform) => {
         const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === platform)
         const platformUnread = unreadByPlatform[platform] || 0
@@ -893,7 +894,8 @@ export function App() {
               <input className="size-3.5 opacity-50 group-hover:opacity-100" aria-label={`Показать ${item.display_name}`} title="Показывать в общей ленте" type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} />
             </div>
           })}
-          {platform === "gmail" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/gmail/connect/new")}><Plus className="size-3.5" /> Добавить Gmail</Button>}
+          {platform === "gmail" && <><Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/mail/connect/new")}><Plus className="size-3.5" /> Добавить почту (IMAP)</Button><Button className="h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/gmail/connect/new")}><Plus className="size-3.5" /> Gmail</Button></>}
+          {platform === "matrix" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/matrix/connect/new")}><Plus className="size-3.5" /> Добавить Matrix</Button>}
           {platform === "telegram" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/telegram-qr/new")}><Plus className="size-3.5" /> Добавить Telegram</Button>}
           {platform === "vk" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/vk/connect/new")}><Plus className="size-3.5" /> Добавить VK</Button>}
           {platform === "sms" && <a className="mt-1 block rounded px-2 py-2 text-xs hover:bg-muted" href="/sms-gateway/agent/download" download>＋ Подключить SMS · скачать APK</a>}
