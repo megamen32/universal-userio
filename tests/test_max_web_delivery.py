@@ -127,6 +127,38 @@ def test_edit_updates_mirror_same_id_no_new_arrival_and_other_user_denied(tmp_pa
     with pytest.raises(ValueError): svc.edit_max_message(conv,message_id='max-0-999',body='wrong',expected_body='before')
 
 
+def test_max_edit_removes_old_link_preview_and_remains_editable(tmp_path):
+    store,t,svc,conv=setup(tmp_path)
+    store.upsert_attachment(source='max',message_id='max-0-123',
+        attachment={'kind':'share','provider_ref':'fixture'},user_id=store.default_user_id)
+    row=svc.edit_max_message(conv,message_id='max-0-123',body='after',expected_body='before')
+    assert store.attachments_for_message(source='max',message_id='max-0-123') == []
+    svc.edit_max_message(conv,message_id='max-0-123',body='again',expected_body='after')
+    assert store.conversation(conv)['messages'][0]['body']=='again'
+
+
+def test_sent_max_receipt_is_mirrored_before_the_web_refresh(tmp_path):
+    store,t,svc,conv=setup(tmp_path)
+    svc.max_client.get_message=lambda **kw: {'id':124,'sender':77,'text':'hello',
+        'time':1700000002000,'attaches':[{'_type':'SHARE','url':'https://example.com'}]}
+    svc.send_manual_message(conv,body='hello',request_id='mirror-request-00001')
+    current=store.conversation(conv)
+    assert any(m['message_id']=='max-0-124' and m['body']=='hello' and m['direction']=='outgoing'
+               for m in current['messages'])
+    assert current['drafts'][0]['status']=='approved'
+    assert store.workspace_events(after=0)['events']==[]
+
+
+def test_max_mirror_read_failure_does_not_replay_or_fail_an_accepted_send(tmp_path):
+    store,t,svc,conv=setup(tmp_path)
+    def unavailable(**kw): raise TimeoutError('provider read delayed')
+    svc.max_client.get_message=unavailable
+    first=svc.send_manual_message(conv,body='hello',request_id='mirror-request-00001')
+    second=svc.send_manual_message(conv,body='hello',request_id='mirror-request-00001')
+    assert first.status==second.status=='approved' and first.receipt==second.receipt=='124'
+    assert len([f for f in t.sent if f['opcode']==64])==1
+
+
 def test_http_normal_human_send_and_edit(tmp_path):
     store,t,svc,conv=setup(tmp_path)
     session=store.create_oauth_session(store.default_user_id)

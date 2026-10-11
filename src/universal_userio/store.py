@@ -1629,6 +1629,14 @@ class SQLiteUserIOStore:
                     "INSERT OR REPLACE INTO contact_names (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)",
                     (user_id, "max", f"chat:{account_ref}:{message.peer_id}", message.conversation_title, now),
                 )
+            if message.source == "max" and (inserted or previous is not None):
+                # MAX projects the complete provider attachment snapshot. An
+                # edited URL can replace or remove SHARE; upsert-only retained
+                # the old preview after the native message no longer had it.
+                self._connection.execute(
+                    "DELETE FROM message_attachments WHERE user_id=? AND source='max' AND message_id=?",
+                    (user_id, message.message_id),
+                )
             for att in (message.attachments or ()):
                 if (message.reconciliation and att.get("kind") in {"voice", "audio"}
                         and att.get("transcription_status") == "not_requested"):

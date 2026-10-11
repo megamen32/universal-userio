@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { canEditMaxText, providerPeerLabel } from "./max-message"
+import { startInboxPolling } from "./inbox-poll"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number }
@@ -318,6 +319,7 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [search, account, activeChannel, userCapabilities.read])
 
+  const inboxPollingBusy = useRef(false)
   const loadConversation = useCallback(async (id: string) => {
     if (activeConversation.current !== id) return
     const request = conversationRequest.current.begin()
@@ -385,6 +387,12 @@ export function App() {
   // The callback fetches external state before updating the view.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (selectedChat && userCapabilities.read) void loadConversation(selectedChat) }, [loadConversation, selectedChat, userCapabilities.read])
+  useEffect(() => {
+    if (!userCapabilities.read || sendBusy || editingMessage) return
+    return startInboxPolling(async () => {
+      await Promise.allSettled([refreshChats(), ...(selectedChat ? [loadConversation(selectedChat)] : [])])
+    }, () => document.visibilityState === "visible", setTimeout, clearTimeout, inboxPollingBusy)
+  }, [editingMessage, loadConversation, refreshChats, selectedChat, sendBusy, userCapabilities.read])
   useEffect(() => {
     const requestGate = secretaryRequest.current
     requestGate.reset()
@@ -843,7 +851,7 @@ export function App() {
               {secretary?.triage && secretary.triage.event_seq !== secretary.conversation.event_seq && <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">Показан разбор предыдущего сообщения. Запустите новый разбор для последнего входящего.</p>}
               {secretary?.triage?.triage ? <><p className="mt-1 text-sm">{secretary.triage.triage.reason_ru || "Сообщение разобрано."}</p>{secretary.triage.triage.action_summary && <p className="mt-1 text-xs text-muted-foreground">{secretary.triage.triage.action_summary}</p>}</> : <p className="mt-1 text-xs text-muted-foreground">Разбор последнего входящего сообщения ещё не запускался.</p>}
               {secretary?.deep && secretary.deep.event_seq !== secretary.conversation.event_seq && <p className="mt-1 text-[11px] text-muted-foreground">Глубокий разбор относится к предыдущему входящему сообщению.</p>}
-              {!!secretary?.owner_messages_after_current?.length && <p className="mt-1 text-xs text-muted-foreground">После этого входящего вы уже писали в Telegram. Секретарь учитывает отправленные ответы.</p>}
+              {!!secretary?.owner_messages_after_current?.length && <p className="mt-1 text-xs text-muted-foreground">После этого входящего вы уже отвечали в этом диалоге. Секретарь учитывает отправленные ответы.</p>}
               <p className="mt-1 text-[11px] text-muted-foreground">Оценить важность: приоритет и нужен ли ответ. Подробный анализ: отдельная сессия с разбором и планом.</p>
               {secretary?.deep?.result && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 text-sm">{secretary.deep.result}</p>}
               {secretary?.deep?.error && <p className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{secretary.deep.error}</p>}

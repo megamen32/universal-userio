@@ -1055,7 +1055,29 @@ class UserIOService:
         except DeliveryNotSubmittedError:
             self._store.release_draft_send(draft_id, user_id=resolved_user_id)
             raise
-        return self._store.approve(draft_id, receipt, user_id=resolved_user_id)
+        approved = self._store.approve(draft_id, receipt, user_id=resolved_user_id)
+        # Persist acceptance first. A read-side outage must not invalidate a
+        # real receipt or cause another outbound write. MAX's listener can be
+        # delayed, so hydrate this exact sent message before the web refresh.
+        conversation = self._store.conversation(approved.conversation_id, user_id=resolved_user_id)
+        if conversation and conversation["source"] == "max" and self.max_client is not None:
+            try:
+                from .max_ingress import message_envelope, _own_id
+                from .adapters import inbox_message_from_envelope
+                peer = str(conversation.get("peer_id") or conversation["sender"])
+                row = self.max_client.get_message(chat_id=peer, message_id=receipt)
+                if str(row.get("id")) != str(receipt) or str(row.get("sender")) != _own_id(self.max_client):
+                    raise ValueError("MAX receipt read did not match the sent message")
+                envelope = message_envelope(row, chat_id=peer, own_id=_own_id(self.max_client),
+                    kind=str(conversation.get("conversation_kind") or "direct"),
+                    reconciliation=True, title=str(conversation.get("display_name") or ""))
+                if envelope is not None:
+                    self.receive(inbox_message_from_envelope(envelope, received_at=float(envelope["received_at"])),
+                        route_id=str(conversation["route_id"]), user_id=resolved_user_id,
+                        account_ref=str(conversation.get("account_ref") or "max"))
+            except Exception as error:
+                _LOG.warning("Accepted MAX receipt mirror is pending: %s", type(error).__name__)
+        return approved
 
     def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id)
