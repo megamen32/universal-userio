@@ -41,6 +41,8 @@ TOOL_SPECS = (
     ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
+        "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "history_limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.channels.download", "Download a file when its adapter supports it.", _schema({
@@ -309,10 +311,22 @@ class UserIOMcpSurface:
             if name == "userio.channels.read":
                 ignored_chats = self._ignored_chats(arguments)
                 adapter = channels.adapter(self._optional(arguments, "channel"))
-                result = adapter.read(
-                    chat_id=self._optional(arguments, "chat_id"),
-                    message_id=self._optional(arguments, "message_id"),
-                )
+                before_id = arguments.get("before_id")
+                history_limit = arguments.get("history_limit")
+                if before_id is not None or history_limit is not None:
+                    if self._optional(arguments, "channel") != "telegram" or before_id is None:
+                        raise ValueError("history pagination requires channel=telegram and before_id")
+                    result = adapter.read(
+                        chat_id=self._optional(arguments, "chat_id"),
+                        message_id=self._optional(arguments, "message_id"),
+                        before_id=before_id,
+                        history_limit=50 if history_limit is None else history_limit,
+                    )
+                else:
+                    result = adapter.read(
+                        chat_id=self._optional(arguments, "chat_id"),
+                        message_id=self._optional(arguments, "message_id"),
+                    )
                 record = result.get("chat") or result.get("message") or {}
                 conversation_id = str(record.get("id") or record.get("conversation_id") or "")
                 if conversation_id in ignored_chats:

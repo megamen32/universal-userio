@@ -19,3 +19,11 @@ export function confirmedDeletedIds(requestedIds, messages) {
   if (!requestedIds.every(id => byId.has(id))) return [];
   return requestedIds.filter(id => byId.get(id).className === "MessageEmpty");
 }
+
+
+// Native dialog unread_count includes messages beyond the local mirror window.
+export function providerUnreadCount(dialog) {
+  const raw = dialog && (dialog.unreadCount ?? (dialog.dialog && dialog.dialog.unreadCount));
+  const count = Number(raw);
+  return raw != null && Number.isSafeInteger(count) && count >= 0 ? count : null;
+}

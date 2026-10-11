@@ -110,6 +110,20 @@ class SQLiteUserIOStore:
             self._connection.execute("""CREATE TABLE IF NOT EXISTS telegram_read_state (
                 user_id TEXT NOT NULL, account_ref TEXT NOT NULL, peer_id TEXT NOT NULL,
                 inbox_max INTEGER NOT NULL DEFAULT 0, outbox_max INTEGER NOT NULL DEFAULT 0,
+                unread_count INTEGER, unread_observed_at REAL,
+                PRIMARY KEY(user_id,account_ref,peer_id))""")
+            read_state_cols = {str(row["name"]) for row in self._connection.execute(
+                "PRAGMA table_info(telegram_read_state)")}
+            if "unread_count" not in read_state_cols:
+                self._connection.execute(
+                    "ALTER TABLE telegram_read_state ADD COLUMN unread_count INTEGER")
+            if "unread_observed_at" not in read_state_cols:
+                self._connection.execute(
+                    "ALTER TABLE telegram_read_state ADD COLUMN unread_observed_at REAL")
+            self._connection.execute("""CREATE TABLE IF NOT EXISTS telegram_history_state (
+                user_id TEXT NOT NULL, account_ref TEXT NOT NULL, peer_id TEXT NOT NULL,
+                oldest_id INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0,
+                fetched_count INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL,
                 PRIMARY KEY(user_id,account_ref,peer_id))""")
             self._backfill_workspace_events()
             self.maintain_conversation_summaries()
@@ -1691,7 +1705,10 @@ class SQLiteUserIOStore:
     def telegram_mirror_state(
         self, *, account_ref: str, peer_id: str, user_id: str,
         read_inbox_max_id: int | None = None, read_outbox_max_id: int | None = None,
+        unread_count: int | None = None, unread_observed_at: float | None = None,
         deleted_ids: list[int] | None = None, history_ids: list[int] | None = None,
+        scan_before_id: int | None = None, scan_oldest_id: int | None = None,
+        scan_has_more: bool | None = None, scan_fetched: int | None = None,
     ) -> dict[str, object]:
         """Apply native read/deletion facts; absence in a short history is only a probe candidate.
 
@@ -1703,18 +1720,52 @@ class SQLiteUserIOStore:
         for value in (read_inbox_max_id, read_outbox_max_id):
             if value is not None and (type(value) is not int or value < 0):
                 raise ValueError("read watermark must be a nonnegative integer")
+        if unread_count is not None and (type(unread_count) is not int or not 0 <= unread_count <= 2_147_483_647):
+            raise ValueError("native unread count must be a nonnegative integer")
+        if unread_observed_at is not None and (
+            type(unread_observed_at) not in (int, float) or
+            not 0 < float(unread_observed_at) < 10**11
+        ):
+            raise ValueError("unread observation timestamp is invalid")
+        if unread_count is not None and unread_observed_at is None:
+            unread_observed_at = time.time()
         for values in (deleted_ids, history_ids):
             if values is not None and (not isinstance(values, list) or len(values) > 200
                     or any(type(v) is not int or v <= 0 for v in values)):
                 raise ValueError("provider IDs must contain at most 200 positive integers")
+        if scan_before_id is not None:
+            if (type(scan_before_id) is not int or not 0 <= scan_before_id <= 2_147_483_647
+                    or type(scan_oldest_id) is not int or not 0 <= scan_oldest_id <= 2_147_483_647
+                    or type(scan_has_more) is not bool or type(scan_fetched) is not int
+                    or not 0 <= scan_fetched <= 200
+                    or (scan_fetched == 0 and (scan_oldest_id != 0 or scan_has_more))
+                    or (scan_fetched > 0 and scan_oldest_id == 0)
+                    or (scan_before_id > 0 and scan_oldest_id >= scan_before_id)):
+                raise ValueError("invalid Telegram history scan page")
+        elif any(x is not None for x in (scan_oldest_id, scan_has_more, scan_fetched)):
+            raise ValueError("history scan metadata requires scan_before_id")
         changed = 0
         missing: list[int] = []
+        history_status: dict[str, object] | None = None
         with self._lock, self._connection:
             self._connection.execute("""INSERT INTO telegram_read_state
-                (user_id,account_ref,peer_id,inbox_max,outbox_max) VALUES (?,?,?,?,?)
+                (user_id,account_ref,peer_id,inbox_max,outbox_max,unread_count,unread_observed_at)
+                VALUES (?,?,?,?,?,?,?)
                 ON CONFLICT(user_id,account_ref,peer_id) DO UPDATE SET
-                  inbox_max=MAX(inbox_max,excluded.inbox_max),outbox_max=MAX(outbox_max,excluded.outbox_max)""",
-                (user_id,account_ref,peer_id,read_inbox_max_id or 0,read_outbox_max_id or 0))
+                  inbox_max=MAX(inbox_max,excluded.inbox_max),
+                  outbox_max=MAX(outbox_max,excluded.outbox_max),
+                  unread_count=CASE
+                    WHEN excluded.unread_count IS NOT NULL AND
+                      (telegram_read_state.unread_observed_at IS NULL OR
+                       excluded.unread_observed_at >= telegram_read_state.unread_observed_at)
+                    THEN excluded.unread_count ELSE telegram_read_state.unread_count END,
+                  unread_observed_at=CASE
+                    WHEN excluded.unread_count IS NOT NULL AND
+                      (telegram_read_state.unread_observed_at IS NULL OR
+                       excluded.unread_observed_at >= telegram_read_state.unread_observed_at)
+                    THEN excluded.unread_observed_at ELSE telegram_read_state.unread_observed_at END""",
+                (user_id,account_ref,peer_id,read_inbox_max_id or 0,read_outbox_max_id or 0,
+                 unread_count, unread_observed_at))
             conversation = self._connection.execute("""SELECT id FROM conversations
                 WHERE user_id=? AND source='telegram' AND account_ref=? AND peer_id=?""",
                 (user_id, account_ref, peer_id)).fetchone()
@@ -1745,7 +1796,71 @@ class SQLiteUserIOStore:
                     (*params, min(history_ids), max(history_ids))).fetchall()
                 known = set(history_ids)
                 missing = [int(r["provider_id"]) for r in rows if int(r["provider_id"]) not in known]
-        return {"changed": changed, "missing_ids": missing}
+            if scan_before_id is not None:
+                existing_history = self._connection.execute("""SELECT oldest_id,complete,fetched_count
+                    FROM telegram_history_state WHERE user_id=? AND account_ref=? AND peer_id=?""",
+                    (user_id,account_ref,peer_id)).fetchone()
+                sequential = (
+                    existing_history is None and scan_before_id == 0 or
+                    existing_history is not None and not existing_history["complete"] and
+                    (scan_before_id == int(existing_history["oldest_id"]) or
+                     scan_before_id == 0 and int(existing_history["fetched_count"]) == 0)
+                )
+                if sequential:
+                    previous_count = int(existing_history["fetched_count"]) if existing_history else 0
+                    next_oldest = scan_oldest_id or (
+                        int(existing_history["oldest_id"]) if existing_history else 0)
+                    self._connection.execute("""INSERT INTO telegram_history_state
+                        (user_id,account_ref,peer_id,oldest_id,complete,fetched_count,updated_at)
+                        VALUES (?,?,?,?,?,?,?)
+                        ON CONFLICT(user_id,account_ref,peer_id) DO UPDATE SET
+                        oldest_id=excluded.oldest_id, complete=excluded.complete,
+                        fetched_count=excluded.fetched_count, updated_at=excluded.updated_at""",
+                        (user_id,account_ref,peer_id,next_oldest,int(not scan_has_more),
+                         previous_count + scan_fetched,time.time()))
+                status = self._connection.execute("""SELECT oldest_id,complete,fetched_count,updated_at
+                    FROM telegram_history_state WHERE user_id=? AND account_ref=? AND peer_id=?""",
+                    (user_id,account_ref,peer_id)).fetchone()
+                if status is not None:
+                    history_status = {
+                        "oldest_id":int(status["oldest_id"]), "complete":bool(status["complete"]),
+                        "fetched_count":int(status["fetched_count"]),
+                        "updated_at":float(status["updated_at"]),
+                        "scan_advanced":bool(sequential),
+                    }
+        return {"changed": changed, "missing_ids": missing,
+                **({"history": history_status} if history_status is not None else {})}
+
+    def telegram_unread_snapshot(
+        self, *, account_ref: str, dialogs: list[dict[str, object]],
+        observed_at: float, user_id: str,
+    ) -> dict[str, object]:
+        """Refresh provider unread totals without fetching any message bodies.
+
+        Validate the entire account-scoped batch before applying any changes.
+        """
+        if (not account_ref.startswith("telegram:") or not isinstance(dialogs, list)
+                or len(dialogs) > 200 or type(observed_at) not in (int, float)
+                or not 0 < float(observed_at) < 10**11):
+            raise ValueError("invalid Telegram unread snapshot")
+        for d in dialogs:
+            if not isinstance(d, dict) or not str(d.get("peer_id", "")).lstrip("-").isdigit():
+                raise ValueError("invalid Telegram unread peer")
+            value = d.get("unread_count")
+            if type(value) is not int or not 0 <= value <= 2_147_483_647:
+                raise ValueError("invalid Telegram unread count")
+            for key in ("read_inbox_max_id", "read_outbox_max_id"):
+                mark = d.get(key)
+                if mark is not None and (type(mark) is not int or mark < 0):
+                    raise ValueError("invalid Telegram read watermark")
+        for d in dialogs:
+            self.telegram_mirror_state(
+                account_ref=account_ref, peer_id=str(d["peer_id"]), user_id=user_id,
+                unread_count=int(d["unread_count"]), unread_observed_at=float(observed_at),
+                read_inbox_max_id=d.get("read_inbox_max_id"),
+                read_outbox_max_id=d.get("read_outbox_max_id"),
+            )
+        return {"count": len(dialogs), "observed_at": float(observed_at)}
 
     def create_conversation(
         self, source: str, sender: str, *, user_id: str | None = None
@@ -2174,6 +2289,11 @@ class SQLiteUserIOStore:
                 "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
                 (user_id, row["source"], row["sender"]),
             ).fetchone()
+            history_row = None
+            if row["source"] == "telegram" and row["account_ref"] and row["peer_id"]:
+                history_row = self._connection.execute("""SELECT oldest_id,complete,fetched_count
+                    FROM telegram_history_state WHERE user_id=? AND account_ref=? AND peer_id=?""",
+                    (user_id,row["account_ref"],row["peer_id"])).fetchone()
         message_records = [dict(item) for item in messages]
         for item in message_records:
             attachments = self.attachments_for_message(
@@ -2191,7 +2311,46 @@ class SQLiteUserIOStore:
             "peer_id": str(row["peer_id"] or ""),
             "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
+            **({"history": {
+                "status": "complete" if history_row["complete"] else "partial",
+                "oldest_id": int(history_row["oldest_id"]),
+                "fetched_count": int(history_row["fetched_count"]),
+            } if history_row is not None else {"status": "unverified"}}
+            if row["source"] == "telegram" else {}),
         }
+
+    def telegram_history_page(
+        self, conversation_id: str, *, before_id: int, limit: int = 50,
+        user_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        """One provider-ID cursor page from an owned local Telegram mirror.
+
+        Provider reconciliation precedes this query. Does not change receipts.
+        """
+        if (type(before_id) is not int or not 1 <= before_id <= 2_147_483_647 or
+                type(limit) is not int or not 1 <= limit <= 100):
+            raise ValueError("invalid Telegram history page")
+        user_id = self._user(user_id)
+        locator = "CAST(substr(message_id,length(rtrim(message_id,'0123456789'))+1) AS INTEGER)"
+        with self._lock:
+            chat = self._connection.execute("""SELECT id FROM conversations
+                WHERE user_id=? AND id=? AND source='telegram'""",
+                (user_id,conversation_id)).fetchone()
+            if chat is None:
+                raise KeyError("Telegram chat not found")
+            rows = self._connection.execute(f"""SELECT source,message_id,sender,body,direction,
+                received_at,seen_at,edited_at,provider_read FROM messages
+                WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL
+                AND {locator}>0 AND {locator}<?
+                ORDER BY {locator} DESC LIMIT ?""",
+                (user_id,conversation_id,before_id,limit)).fetchall()
+        results = [dict(row) for row in reversed(rows)]
+        for result in results:
+            attachments = self.attachments_for_message(
+                source="telegram",message_id=str(result["message_id"]),user_id=user_id)
+            if attachments:
+                result["attachments"] = attachments
+        return results
 
     def set_conversation_account(
         self, conversation_id: str, account_ref: str, *, user_id: str | None = None
@@ -3908,14 +4067,22 @@ class SQLiteUserIOStore:
                         ORDER BY received_at DESC,rowid DESC LIMIT 1) AS preview,
                        (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id AND deleted_at IS NULL
                         ORDER BY received_at DESC,rowid DESC LIMIT 1) AS last_at,
-                       (SELECT COUNT(*) FROM messages WHERE user_id=c.user_id
-                        AND conversation_id=c.id AND direction='incoming' AND deleted_at IS NULL
-                        AND COALESCE(provider_read,seen_at IS NOT NULL)=0) AS unread_count,
+                       COALESCE(
+                        CASE WHEN c.source='telegram' THEN trs.unread_count END,
+                        (SELECT COUNT(*) FROM messages WHERE user_id=c.user_id
+                         AND conversation_id=c.id AND direction='incoming' AND deleted_at IS NULL
+                         AND COALESCE(provider_read,seen_at IS NOT NULL)=0)) AS unread_count,
+                       CASE WHEN c.source='telegram' AND trs.unread_count IS NOT NULL
+                         THEN 'telegram' ELSE 'local_mirror' END AS unread_source,
+                       trs.unread_observed_at AS unread_observed_at,
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
                         AND source=c.source AND sender=c.sender) AS display_name,
                        (SELECT MAX(received_at) FROM messages
                         WHERE user_id=c.user_id AND source=c.source) AS account_last_at
-                FROM conversations c WHERE c.user_id=? {source_sql}
+                FROM conversations c LEFT JOIN telegram_read_state trs
+                  ON trs.user_id=c.user_id AND trs.account_ref=c.account_ref
+                  AND trs.peer_id=c.peer_id AND c.source='telegram'
+                WHERE c.user_id=? {source_sql}
                 ORDER BY last_at DESC, c.updated_at DESC LIMIT ?
                 """,
                 [self._user(user_id), *values, limit],

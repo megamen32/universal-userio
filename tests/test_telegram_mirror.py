@@ -158,3 +158,74 @@ def test_registered_ingress_seed_can_apply_state_but_personal_token_cannot(mirro
         server.shutdown()
         server.server_close()
         thread.join(2)
+
+
+def test_native_unread_count_wins_over_partial_local_mirror(mirror):
+    store, service, ingest = mirror
+    cid, _ = ingest(42, 42, reconciliation=True)
+    user = store.default_user_id
+    assert store.conversations(source="telegram")[0]["unread_count"] == 1
+    original_seen = store.conversation(cid)["messages"][0]["seen_at"]
+    store.telegram_mirror_state(
+        account_ref=ACCOUNT, peer_id=PEER, user_id=user,
+        unread_count=477, unread_observed_at=1234567890.0,
+        read_inbox_max_id=30,
+    )
+    item = store.conversations(source="telegram")[0]
+    assert item["unread_count"] == 477
+    assert item["unread_source"] == "telegram"
+    assert item["unread_observed_at"] == 1234567890.0
+    assert store.conversation(cid)["messages"][0]["seen_at"] == original_seen
+    # Historical reconciliation does not invent a new unread item.
+    ingest(20, 20, reconciliation=True)
+    assert store.conversations(source="telegram")[0]["unread_count"] == 477
+    # A genuine provider zero is authoritative, not a missing value.
+    store.telegram_mirror_state(
+        account_ref=ACCOUNT, peer_id=PEER, user_id=user,
+        unread_count=0, unread_observed_at=1234567900.0,
+    )
+    assert store.conversations(source="telegram")[0]["unread_count"] == 0
+    # A delayed stale snapshot and a watermark-only update cannot undo it.
+    store.telegram_mirror_state(
+        account_ref=ACCOUNT, peer_id=PEER, user_id=user,
+        unread_count=99, unread_observed_at=1234567895.0,
+    )
+    store.telegram_mirror_state(
+        account_ref=ACCOUNT, peer_id=PEER, user_id=user,
+        read_inbox_max_id=100,
+    )
+    assert store.conversations(source="telegram")[0]["unread_count"] == 0
+    # Other Telegram accounts cannot mutate this account's native count.
+    store.telegram_mirror_state(
+        account_ref="telegram:other", peer_id=PEER, user_id=user,
+        unread_count=5, unread_observed_at=1234567999.0,
+    )
+    assert store.conversations(source="telegram")[0]["unread_count"] == 0
+
+@pytest.mark.parametrize("bad", [True, False, -1, 1.5, "42", 2**31])
+def test_native_unread_rejects_invalid_provider_values(mirror, bad):
+    store, _, _ = mirror
+    with pytest.raises(ValueError, match="native unread"):
+        store.telegram_mirror_state(
+            account_ref=ACCOUNT, peer_id=PEER, user_id=store.default_user_id,
+            unread_count=bad,
+        )
+
+def test_native_unread_existing_db_migrates(tmp_path):
+    import sqlite3
+    db = tmp_path / "legacy.sqlite3"
+    original = SQLiteUserIOStore(db)
+    original.close()
+    with sqlite3.connect(db) as con:
+        con.execute("DROP TABLE telegram_read_state")
+        con.execute("""CREATE TABLE telegram_read_state(
+            user_id TEXT NOT NULL, account_ref TEXT NOT NULL, peer_id TEXT NOT NULL,
+            inbox_max INTEGER NOT NULL DEFAULT 0, outbox_max INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(user_id,account_ref,peer_id))""")
+    reloaded = SQLiteUserIOStore(db)
+    try:
+        columns={r["name"] for r in reloaded._connection.execute(
+            "PRAGMA table_info(telegram_read_state)")}
+        assert {"unread_count","unread_observed_at"} <= columns
+    finally:
+        reloaded.close()

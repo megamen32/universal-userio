@@ -13,7 +13,7 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
-import { mirrorMetadata, confirmedDeletedIds } from "./mirror-metadata.mjs";
+import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 
 const port = Number(process.env.PORT || 18095);
@@ -30,6 +30,7 @@ const env2faPassword = (process.env.TELEGRAM_2FA_PASSWORD || process.env.USERIO_
 const routeId = (process.env.USERIO_TELEGRAM_ROUTE_ID || "telegram").trim();
 const syncDialogs = Number(process.env.TG_SYNC_DIALOGS || 20);
 const syncPerDialog = Number(process.env.TG_SYNC_PER_DIALOG || 5);
+const unreadDialogLimit = Math.min(200, Math.max(20, Number(process.env.TG_UNREAD_DIALOGS || 100)));
 const syncRetrySeconds = Number(process.env.TG_SYNC_RETRY_SECONDS || 30);
 const slots = new Map();
 const syncs = new Map();
@@ -523,8 +524,17 @@ async function envelope(chatKey, label, message, client, self, options) {
   };
 }
 
-async function reconcileDialog(slot, client, accountId, labels, self, peer, chatKey, label, dialog, limit) {
-  const messages = await client.getMessages(peer, { limit: Math.min(200, Math.max(1, limit)) });
+async function reconcileDialog(slot, client, accountId, labels, self, peer, chatKey, label, dialog, limit, beforeId = 0, scan = false) {
+  const pageLimit = Math.min(200, Math.max(1, limit));
+  // offsetId is exclusive; GetHistory never modifies Telegram read receipts.
+  const messages = await client.getMessages(peer, {
+    limit: pageLimit, ...(beforeId ? { offsetId: beforeId } : {}),
+  });
+  const unreadObservedAt = Date.now() / 1000;
+  const ids = messages.filter(m => m && Number.isSafeInteger(Number(m.id)) && Number(m.id) > 0)
+    .map(m => Number(m.id));
+  const oldestId = ids.length ? Math.min(...ids) : 0;
+  const hasMore = messages.length === pageLimit && oldestId > 0;
   let posted = 0;
   for (const message of messages) {
     if (!message || !message.date) continue;
@@ -534,11 +544,17 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
     await postInbox(accountId, value);
     posted += 1;
   }
+  const unread = providerUnreadCount(dialog);
   const state = await postUserIO("/v1/telegram/mirror-state", {
     account_id: accountId, peer_id: chatKey,
     read_inbox_max_id: Number(dialog && dialog.readInboxMaxId || 0),
     read_outbox_max_id: Number(dialog && dialog.readOutboxMaxId || 0),
+    ...(unread === null ? {} : { unread_count: unread, unread_observed_at: unreadObservedAt }),
     history_ids: messages.filter(m => m && m.date).map(m => Number(m.id)),
+    ...(scan ? {
+      scan_before_id: beforeId, scan_oldest_id: oldestId,
+      scan_has_more: hasMore, scan_fetched: messages.length,
+    } : {}),
   });
   if (state.missing_ids && state.missing_ids.length) {
     const requested = state.missing_ids;
@@ -553,7 +569,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
     if (deleted.length) await postUserIO("/v1/telegram/mirror-state",
       {account_id:accountId, peer_id:chatKey, deleted_ids:deleted});
   }
-  return posted;
+  return { posted, fetched: messages.length, oldest_id: oldestId, has_more: hasMore };
 }
 
 async function ingestProviderState(slot, client, accountId, update) {
@@ -581,6 +597,24 @@ async function ingestProviderState(slot, client, accountId, update) {
   }
 }
 
+async function refreshUnreadSnapshot(client, accountId) {
+  const dialogs = await client.getDialogs({ limit: unreadDialogLimit });
+  const observedAt = Date.now() / 1000;
+  const rows = dialogs.flatMap(dialog => {
+    const raw = dialog.dialog || dialog;
+    const unread = providerUnreadCount(raw);
+    if (unread === null || !String(dialog.id || "").replace(/^-/, "").match(/^\d+$/)) return [];
+    return [{
+      peer_id: String(dialog.id), unread_count: unread,
+      read_inbox_max_id: Number(raw.readInboxMaxId || 0),
+      read_outbox_max_id: Number(raw.readOutboxMaxId || 0),
+    }];
+  });
+  return postUserIO("/v1/telegram/unread-snapshot", {
+    account_id: accountId, dialogs: rows, observed_at: observedAt,
+  });
+}
+
 async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, self, limit) {
   const dialogs = await client.getDialogs({ limit: limit || syncDialogs });
   let chats = 0;
@@ -593,11 +627,11 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
         if (!labelPeers.idPeers.has(chatKey)) labelPeers.idPeers.set(chatKey, dialog.entity);
         if (dialog.entity && !labelPeers.labelPeers.has(label)) labelPeers.labelPeers.set(label, dialog.entity);
       }
-      const posted = await reconcileDialog(slot, client, accountId, dialogLabels, self,
+          const page = await reconcileDialog(slot, client, accountId, dialogLabels, self,
         dialog.entity, chatKey, label, dialog.dialog, syncPerDialog);
       chats += 1;
       setSync(slot, { status: `backfill ${chats}/${dialogs.length}`, chats, lastSyncAt: Date.now() });
-      if (posted) console.log(`sync ${slot}: ${label} +${posted} messages`);
+      if (page.posted) console.log(`sync ${slot}: ${label} +${page.posted} messages`);
       await new Promise((resolve) => setTimeout(resolve, 250));
     } catch (error) {
       console.error(`sync ${slot} dialog error:`, (error && error.message) || error);
@@ -668,7 +702,9 @@ async function syncAccount(slot) {
         ingestProviderState(slot, client, accountId, update).catch(error =>
           console.error(`sync ${slot} state error:`, error.message || error));
       }, new Raw({}));
-      const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
+          const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
+          await refreshUnreadSnapshot(client, accountId).catch(error =>
+            console.error(`unread snapshot startup: ${error.message || error}`));
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
       // GramJS 2.26 has no runUntilDisconnected; the client keeps itself
@@ -679,9 +715,11 @@ async function syncAccount(slot) {
       for (let beat = 1; ; beat += 1) {
         await new Promise((resolve) => setTimeout(resolve, 60000));
         await client.getMe();
-        if (beat % 5 === 0) {
-          await backfillDialogs(slot, client, accountId, dialogLabels, (liveSlots.get(slot) || {}).labelPeers || null, me, 20);
-        }
+            if (beat % 5 === 0) {
+              await refreshUnreadSnapshot(client, accountId).catch(error =>
+                console.error(`unread snapshot periodic: ${error.message || error}`));
+              await backfillDialogs(slot, client, accountId, dialogLabels, (liveSlots.get(slot) || {}).labelPeers || null, me, 20);
+            }
         setSync(slot, { status: "live", lastError: "", lastSyncAt: Date.now() });
       }
     } catch (error) {
@@ -880,14 +918,24 @@ http.createServer(async (req, res) => {
       }));
       if (!detail.dialogs || !detail.dialogs.length) throw new Error("provider dialog is unavailable");
       const me = await item.client.getMe();
-      const requestedLimit = payload.limit == null ? 200 : Number(payload.limit);
+      const requestedLimit = payload.limit == null ? 200 : payload.limit;
       if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 200) {
         throw new Error("limit must be an integer from 1 to 200");
       }
-      const posted = await reconcileDialog("operator", item.client, item.accountId, null, me,
-        peer, chatKey, entityLabel(peer), detail.dialogs[0], requestedLimit);
+          const beforeId = payload.before_id == null ? 0 : payload.before_id;
+          if (!Number.isSafeInteger(beforeId) || beforeId < 0 || beforeId > 2147483647) {
+            throw new Error("before_id must be a nonnegative Telegram message ID");
+          }
+          const scan = payload.scan === true;
+          if (payload.scan != null && typeof payload.scan !== "boolean") {
+            throw new Error("scan must be a boolean");
+          }
+          const page = await reconcileDialog("operator", item.client, item.accountId, null, me,
+            peer, chatKey, entityLabel(peer), detail.dialogs[0], requestedLimit, beforeId, scan);
       res.writeHead(200, {"content-type":"application/json"});
-      return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey, mirrored:posted}));
+      return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey,
+            mirrored:page.posted, fetched:page.fetched, oldest_id:page.oldest_id,
+            has_more:page.has_more, scan}));
     } catch (error) {
       res.writeHead(400, {"content-type":"application/json"});
       return res.end(JSON.stringify({error:String(error.message || error)}));

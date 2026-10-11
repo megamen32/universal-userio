@@ -304,6 +304,7 @@ def test_message_direction_is_preserved_in_conversation(tmp_path) -> None:
             "received_at": 1.0,
             "seen_at": None,
             "edited_at": None,
+            "provider_read": None,
         }
     ]
 

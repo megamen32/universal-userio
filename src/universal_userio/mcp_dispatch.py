@@ -51,10 +51,22 @@ class UserIOToolDispatcher:
             if name == "userio.channels.read":
                 ignored_chats = self._ignored_chats(arguments)
                 adapter = channels.adapter(self._optional(arguments, "channel"))
-                result = adapter.read(
-                    chat_id=self._optional(arguments, "chat_id"),
-                    message_id=self._optional(arguments, "message_id"),
-                )
+                before_id = arguments.get("before_id")
+                history_limit = arguments.get("history_limit")
+                if before_id is not None or history_limit is not None:
+                    if self._optional(arguments, "channel") != "telegram" or before_id is None:
+                        raise ValueError("history pagination requires channel=telegram and before_id")
+                    result = adapter.read(
+                        chat_id=self._optional(arguments, "chat_id"),
+                        message_id=self._optional(arguments, "message_id"),
+                        before_id=before_id,
+                        history_limit=50 if history_limit is None else history_limit,
+                    )
+                else:
+                    result = adapter.read(
+                        chat_id=self._optional(arguments, "chat_id"),
+                        message_id=self._optional(arguments, "message_id"),
+                    )
                 record = result.get("chat") or result.get("message") or {}
                 conversation_id = str(
                     record.get("id") or record.get("conversation_id") or ""

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {bodyAndAttachments} from '../deploy/telegram-qr-connector/transcription.mjs';
+import {providerUnreadCount} from '../deploy/telegram-qr-connector/mirror-metadata.mjs';
 
 test('plain Telegram text preserves whitespace', () => {
   assert.deepEqual(bodyAndAttachments({id:1,message:'  original\n'},null),
@@ -28,4 +29,13 @@ test('history voice metadata survives without a transcription call', () => {
   assert.equal(r.body,'[Telegram voice]');
   assert.equal(r.attachments[0].kind,'voice');
   assert.equal(r.attachments[0].transcription_status,'not_requested');
+});
+
+
+test('provider dialog count takes precedence over partial cached history', () => {
+  assert.equal(providerUnreadCount({unreadCount:477}),477);
+  assert.equal(providerUnreadCount({dialog:{unreadCount:376}}),376);
+  assert.equal(providerUnreadCount({unreadCount:0}),0);
+  assert.equal(providerUnreadCount({unreadCount:null}),null);
+  assert.equal(providerUnreadCount({unreadCount:-1}),null);
 });

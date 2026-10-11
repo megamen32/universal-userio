@@ -66,6 +66,8 @@ TOOL_SPECS = (
                 "channel": CHANNEL_SCHEMA,
                 "chat_id": {"type": "string"},
                 "message_id": {"type": "string"},
+                "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+                "history_limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "ignored_chats": IGNORED_CHATS_SCHEMA,
             }
         ),

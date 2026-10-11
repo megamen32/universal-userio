@@ -484,7 +484,10 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             break
         return result
 
-    def _refresh_history(self, chat: dict[str, Any]) -> dict[str, Any]:
+    def _refresh_history(
+        self, chat: dict[str, Any], *, before_id: int | None = None,
+        history_limit: int = 50,
+    ) -> dict[str, Any]:
         """Reconcile a bounded, owned chat on its existing provider connection.
 
         The ingress owns authentication and history ingestion. Reconciliation
@@ -504,7 +507,10 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             return {"status": "cache_only", "fresh": False, "reason": "account_or_peer_unavailable"}
         request = urllib.request.Request(
             self._bridge_url + "/reconcile",
-            data=json.dumps({"account_id": account_ref, "peer_id": peer_id, "limit": 50}).encode(),
+            data=json.dumps({
+                "account_id": account_ref, "peer_id": peer_id, "limit": history_limit,
+                **({"before_id": before_id} if before_id is not None else {}),
+            }).encode(),
             headers={"Authorization": "Bearer " + credential, "Content-Type": "application/json"},
             method="POST",
         )
@@ -513,8 +519,11 @@ class TelegramChannelAdapter(StoredChannelAdapter):
                 receipt = json.loads(response.read(65536))
             if receipt.get("account_id") != account_ref or str(receipt.get("peer_id")) != peer_id:
                 raise ValueError("unexpected reconciliation identity")
-            return {"status": "refreshed", "fresh": True, "history_limit": 50,
-                    "mirrored": int(receipt.get("mirrored", 0))}
+            return {"status": "refreshed", "fresh": True, "history_limit": history_limit,
+                    "mirrored": int(receipt.get("mirrored", 0)),
+                    **({"oldest_id": int(receipt["oldest_id"]),
+                        "has_more": bool(receipt["has_more"])}
+                       if "oldest_id" in receipt and "has_more" in receipt else {})}
         except (OSError, ValueError, TypeError) as error:
             # Exception bodies can contain provider details. Return a safe code,
             # and explicitly distinguish cached history from verified freshness.
@@ -542,13 +551,22 @@ class TelegramChannelAdapter(StoredChannelAdapter):
         return result
 
     def read(
-        self, *, chat_id: str | None = None, message_id: str | None = None
+        self, *, chat_id: str | None = None, message_id: str | None = None,
+        before_id: int | None = None, history_limit: int = 50,
     ) -> dict[str, Any]:
+        if before_id is not None and (chat_id is None or message_id is not None or
+                type(before_id) is not int or not 1 <= before_id <= 2_147_483_647):
+            raise ValueError("Telegram history requires chat_id and valid before_id")
+        if type(history_limit) is not int or not 1 <= history_limit <= 100:
+            raise ValueError("Telegram history_limit must be between 1 and 100")
         result = super().read(chat_id=chat_id, message_id=message_id)
         if "chat" in result:
-            sync = self._refresh_history(result["chat"])
+            sync = self._refresh_history(result["chat"], before_id=before_id, history_limit=history_limit)
             if sync["fresh"]:
                 result = super().read(chat_id=chat_id)
+            if before_id is not None:
+                result["chat"]["messages"] = self._store.telegram_history_page(
+                    str(chat_id), before_id=before_id, limit=history_limit, user_id=self._user_id)
             result["sync"] = sync
             result["chat"] = dict(result["chat"])
             result["chat"]["messages"] = [

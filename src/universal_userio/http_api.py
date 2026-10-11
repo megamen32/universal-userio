@@ -692,6 +692,27 @@ def handler(
                     service._store.set_user_capability("send", enabled, user_id=user_id)
                     self._reply(200, {"send_enabled": enabled})
                     return
+                if path == "/v1/telegram/unread-snapshot":
+                    # Only authenticated Telegram ingress, never a dashboard read.
+                    if not principal.service_account and not (token and hmac.compare_digest(
+                            self.headers.get("Authorization", ""), f"Bearer {token}")):
+                        self._reply(403, {"error": "registered ingress required"})
+                        return
+                    payload = self._json()
+                    account_id = str(payload.get("account_id") or "").strip()
+                    if not account_id:
+                        raise ValueError("account_id required")
+                    target_user = service._store.ingress_user(
+                        source="telegram", account_id=account_id)
+                    if principal.service_account and target_user != user_id:
+                        self._reply(403, {"error": "account belongs to another user"})
+                        return
+                    result = service._store.telegram_unread_snapshot(
+                        account_ref=account_id, dialogs=payload.get("dialogs"),
+                        observed_at=payload.get("observed_at"), user_id=target_user,
+                    )
+                    self._reply(202, result)
+                    return
                 if path == "/v1/telegram/mirror-state":
                     # Only the registered ingress can attest provider read/deletion.
                     # A dashboard read is never Telegram send/read authority.
@@ -711,7 +732,13 @@ def handler(
                         account_ref=account_id, peer_id=str(payload.get("peer_id") or ""), user_id=target_user,
                         read_inbox_max_id=payload.get("read_inbox_max_id"),
                         read_outbox_max_id=payload.get("read_outbox_max_id"),
+                        unread_count=payload.get("unread_count"),
+                        unread_observed_at=payload.get("unread_observed_at"),
                         deleted_ids=payload.get("deleted_ids"), history_ids=payload.get("history_ids"),
+                        scan_before_id=payload.get("scan_before_id"),
+                        scan_oldest_id=payload.get("scan_oldest_id"),
+                        scan_has_more=payload.get("scan_has_more"),
+                        scan_fetched=payload.get("scan_fetched"),
                     )
                     self._reply(202, result)
                     return
