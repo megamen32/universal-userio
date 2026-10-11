@@ -12,10 +12,10 @@ import { startInboxPolling } from "./inbox-poll"
 import { mergePhoneHistory } from "./phone-history"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
-type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number }
+type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
-type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string }
+type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
 type SecretaryTriage = { event_seq: number; status: string; request_id: string; triage?: { decision?: string; importance?: number; urgency?: string; confidence?: number; reason_ru?: string; action_summary?: string; action_required?: boolean } }
@@ -308,7 +308,7 @@ export function App() {
     const params = new URLSearchParams()
     if (sourceFilter) params.set("source", sourceFilter)
     if (account) params.set("exact_source", "1")
-    if (account?.provider === "telegram") params.set("account_ref", account.id)
+    if (account && ["telegram", "sms", "phone"].includes(account.provider)) params.set("account_ref", account.id)
     const suffix = params.size ? `?${params.toString()}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     if (!chatsRequest.current.isCurrent(request)) return
@@ -323,7 +323,7 @@ export function App() {
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({ q: text, limit: "100" })
       if (sourceFilter) params.set("source", sourceFilter)
-      if (account?.provider === "telegram") params.set("account_ref", account.id)
+      if (account && ["telegram", "sms", "phone"].includes(account.provider)) params.set("account_ref", account.id)
       setSearching(true)
       void api<{ results: Chat[] }>(`/v1/search?${params.toString()}`)
         .then((data) => setSearchResults(data.results))
@@ -382,7 +382,7 @@ export function App() {
 
   const reloadAccounts = useCallback(async () => {
     const data = await api<{ accounts: Account[] }>("/v1/accounts")
-    setAccounts(data.accounts)
+    setAccounts(data.accounts.filter(item => item.enabled !== false))
   }, [])
   const loadCapabilities = useCallback(async () => {
     const reading = await api<{auto_read:boolean}>('/v1/preferences/reading')
@@ -859,7 +859,7 @@ export function App() {
   const visibleChats = (search.trim() ? searchResults : chats)
     .filter((chat) => platformVisibleInFeed(chat.source))
     .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) &&
-      (chat.source === "telegram" ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
+      (["telegram", "sms", "phone"].includes(item.provider) ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
     .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
   // Clearing on selectedChat guarantees we never leak text into the next reply.
@@ -887,7 +887,7 @@ export function App() {
             const visible = !hiddenAccounts.includes(item.id)
             const health = accountActivity(item)
             return <div key={item.id} className="group mb-1 flex items-center gap-1">
-              <Button className="min-w-0 flex-1 justify-start rounded-lg px-2" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}>
+              <Button data-account-id={item.id} className="min-w-0 flex-1 justify-start rounded-lg px-2" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}>
                 <Avatar className="size-7"><AvatarFallback className="text-[10px]">{initials(item.display_name)}</AvatarFallback></Avatar>
                 <span className="ml-2 min-w-0 flex-1 text-left"><span className="block truncate text-sm">{item.display_name}</span><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className={`inline-block size-1.5 rounded-full ${HEALTH_CLASS[health]}`} />{HEALTH_TITLE[health]}</span></span>
               </Button>
@@ -929,7 +929,7 @@ export function App() {
         <div key={viewKey}>
         {visibleChats.map((chat, chatIndex) => {
           const unread = chat.unread_count > 0
-          return <button key={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
+          return <button key={chat.id} data-conversation-id={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
           <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
         </button>
         })}
@@ -1006,7 +1006,7 @@ export function App() {
             </Fragment>
           })}
           {conversation.drafts.filter(item => !(item.status === "approved" && conversation.messages.some(message =>
-            message.message_id === item.outbox_receipt || (conversation.source === "max" && message.message_id.endsWith(`-${item.outbox_receipt}`))))).map((item) => {
+            message.message_id === item.outbox_receipt || (conversation.source === "sms" && message.outbox_receipt === item.outbox_receipt) || (conversation.source === "max" && message.message_id.endsWith(`-${item.outbox_receipt}`))))).map((item) => {
             const editing = editDraftId === item.id
             return <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-primary/90 px-4 py-3 text-sm text-primary-foreground shadow-sm md:max-w-[78%]">
               {editing

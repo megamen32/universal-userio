@@ -1179,7 +1179,7 @@ def handler(
                     source = _public_account_source(account, credential_ref)
                     account["source"] = source
                     account["last_message_at"] = service._store.latest_message_at(
-                        source, user_id=user_id,
+                        source, user_id=user_id, account_ref=str(account['id']) if account['provider'] in {'telegram','sms','phone'} else '',
                     )
                     visible = list(account.get("capabilities", []))
                     if not caps["read"]:

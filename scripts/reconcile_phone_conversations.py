@@ -16,7 +16,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from universal_userio.store import SQLiteUserIOStore
-from universal_userio.phone_grouping import cdr_peers, grouping_plan, apply_grouping
+from universal_userio.phone_grouping import cdr_peers, grouping_plan, apply_grouping, phone_label_changes
 
 REFERENCE_KEYS = {'messages': ('source', 'message_id'), 'drafts': ('id',), 'workspace_events': ('seq',)}
 CHAT_FIELDS = ('conversation_key', 'account_ref', 'peer_id', 'updated_at')
@@ -49,7 +49,9 @@ def indexed(items, keys):
 
 
 def apply_with_backup(store, plan, labels, state, call_peers):
-    if not plan['groups']:
+    with store._lock:
+        label_updates = phone_label_changes(store._connection, plan, labels)
+    if not plan['groups'] and not label_updates:
         return {'groups': 0, 'aliases_added': 0, 'unmatched': len(plan['unmatched']), 'changed': False}
     stamp = str(time.time_ns())
     backup = state / ('backup-' + stamp + '.sqlite3')
@@ -65,7 +67,7 @@ def apply_with_backup(store, plan, labels, state, call_peers):
         receipt = state / ('receipt-' + stamp + '.json')
         actual_labels = {g['peer_ref']: labels[g['peer_ref']] for g in plan['groups'] if g['peer_ref'] in labels}
         save(receipt, {'backup': str(backup), 'backup_sha256': digest(backup), 'plan': plan,
-                       'labels': actual_labels, 'at': time.time()})
+                       'labels': actual_labels, 'label_updates': label_updates, 'at': time.time()})
         with store._lock, store._connection:
             connection = store._connection
             connection.execute('BEGIN IMMEDIATE')
@@ -74,6 +76,8 @@ def apply_with_backup(store, plan, labels, state, call_peers):
             actual = grouping_plan(connection, user_id=plan['user_id'], account_ref=plan['account_ref'], call_peers=call_peers)
             if actual['groups'] != plan['groups']:
                 raise ValueError('phone conversation changed after backup; apply refused')
+            if phone_label_changes(connection, plan, labels) != label_updates:
+                raise ValueError('phone labels changed after backup; apply refused')
             for group in plan['groups']:
                 for table, keys in REFERENCE_KEYS.items():
                     if indexed(rows(dest, table, plan['user_id'], group['sources']), keys) != indexed(rows(connection, table, plan['user_id'], group['sources']), keys):
@@ -138,7 +142,16 @@ def rollback(store, receipt):
                     if current_name is None or current_name[0] != record['labels'][group['peer_ref']]:
                         raise ValueError('phone contact changed; scoped rollback must be reviewed')
                     connection.execute('DELETE FROM contact_names WHERE user_id=? AND source=? AND sender=?', contact_key)
-        return {'restored_groups': len(plan['groups'])}
+            for change in record.get('label_updates', []):
+                current = connection.execute("SELECT name FROM contact_names WHERE user_id=? AND source='phone' AND sender=?", (user, change['sender'])).fetchone()
+                if current is None or current[0] != change['name']:
+                    raise ValueError('phone contact changed; scoped rollback must be reviewed')
+                before = change['before']
+                if before is None:
+                    connection.execute("DELETE FROM contact_names WHERE user_id=? AND source='phone' AND sender=?", (user, change['sender']))
+                else:
+                    connection.execute("UPDATE contact_names SET name=?,updated_at=? WHERE user_id=? AND source='phone' AND sender=?", (before['name'], before['updated_at'], user, change['sender']))
+        return {'restored_groups': len(plan['groups']), 'restored_labels': len(record.get('label_updates', []))}
     finally:
         prior.close()
 
@@ -151,6 +164,7 @@ def main():
     parser.add_argument('--user-id', default='user_owner')
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--legacy-labels', help='Reviewed private captions for unmatched call IDs; never a phone mapping')
     parser.add_argument('--rollback')
     args = parser.parse_args()
     db = ''
@@ -169,6 +183,13 @@ def main():
             print(json.dumps(rollback(store, args.rollback)))
             return
         peers, labels = cdr_peers(args.cdr, args.account_ref)
+        if args.legacy_labels:
+            captions = json.loads(Path(args.legacy_labels).read_text())
+            if not isinstance(captions, dict) or any(not isinstance(k,str) or not isinstance(v,str) or not v.strip() or len(v)>200 for k,v in captions.items()):
+                raise ValueError('invalid legacy call captions')
+            if any(k.startswith('phone:v1:') for k in captions):
+                raise ValueError('legacy captions cannot override a real phone identity')
+            labels.update(captions)
         plan = store.group_phone_conversations(account_ref=args.account_ref, call_peers=peers, user_id=args.user_id, dry_run=True)
         plan_path = state / ('plan-' + str(time.time_ns()) + '.json')
         save(plan_path, plan)

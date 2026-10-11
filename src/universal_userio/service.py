@@ -180,6 +180,15 @@ class UserIOService:
             # chat. Sender identity must never become the destination of a reply.
             conversation_key = f"max:{account_ref}:{message.peer_id}"
         native_sms = message.source=='sms' and any(a['id']==account_ref and a.get('credential_ref')=='sms-native:default' for a in self._store.accounts(user_id=user_id))
+        if native_sms:
+            from .channels.sms_gateway import sms_address
+            message=replace(message,sender=sms_address(message.sender))
+            conversation_key=message.conversation_key
+        if message.outbox_receipt:
+            # Keep the native candidate through an in-flight approval race.
+            # The stored view exposes it only after exact approval validation.
+            if not native_sms or message.direction!='outgoing':
+                message=replace(message,outbox_receipt='')
         if message.source == 'sms' and account_ref.startswith('sms:') and not native_sms:
             conversation_key = f"sms:{account_ref}:{message.peer_id or message.sender}"
             if not message.message_id.startswith(account_ref+'|'):

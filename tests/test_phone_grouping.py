@@ -62,6 +62,26 @@ def test_phone_normalization_and_accounts_are_distinct():
     assert phone_peer_ref('phone100','+79991234567')!=phone_peer_ref('other-account','+79991234567')
 
 
+def test_actual_phone_number_is_visible_after_existing_grouping(tmp_path):
+    store,svc=setup(tmp_path)
+    cid,_=svc.receive(InboxMessage('phone','call','call','ended',1),route_id='phone')
+    peer=phone_peer_ref('phone100','+79991234567')
+    store.group_phone_conversations(account_ref='phone100',call_peers={'call':peer},labels={peer:'Телефон · ••••4567'})
+    store.group_phone_conversations(account_ref='phone100',call_peers={'call':peer},labels={peer:'Телефон · +79991234567'})
+    assert store.conversation(cid)['display_name']=='Телефон · +79991234567'
+    assert len(store.conversation(cid)['messages'])==1
+
+
+def test_cdr_label_uses_full_normalized_destination(tmp_path):
+    import csv
+    from universal_userio.phone_grouping import cdr_peers
+    p=tmp_path/'cdr.csv'
+    with p.open('w') as stream:
+        csv.writer(stream).writerow(['','','8 (999) 123-45-67','gateway-outbound','','','','AudioSocket','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa,127.0.0.1'])
+    peers,labels=cdr_peers(str(p),'phone100')
+    assert labels[peers['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa']]=='Телефон · +79991234567'
+
+
 def test_join_keeps_started_ended_entries_and_each_call_reply_unchanged(tmp_path):
     from universal_userio.agentcall_ingress import AgentCallEventProjector
     from universal_userio.adapters import inbox_message_from_envelope

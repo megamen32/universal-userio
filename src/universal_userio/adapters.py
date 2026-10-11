@@ -144,6 +144,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         edited_at=edited_at,
         provider_read=provider_read,
         conversation_title=str(payload.get("conversation_title") or "")[:256],
+        outbox_receipt=str(payload.get("outbox_receipt") or "")[:256],
     )
 
 
@@ -779,7 +780,9 @@ class AndroidSmsChannelAdapter(StoredChannelAdapter):
         if gateway is None or self._service.sms_user_id != self._user_id:
             raise AdapterNotSupported("Android SMS adapter is not configured for this UserIO user")
         native = next((a for a in self._store.accounts(user_id=self._user_id) if a['enabled'] and a.get('credential_ref')=='sms-native:default'),None)
-        for message in gateway.inbound():
+        # The maintained native ingress owns incremental system-store history.
+        # A passive MCP read must not use the empty notification queue instead.
+        for message in ([] if native is not None else gateway.inbound()):
             if not isinstance(message,InboxMessage):
                 message=InboxMessage('sms',message.message_id,message.sender,message.body,message.received_at)
             self._service.receive(message, route_id=self._service.sms_route_id, user_id=self._user_id,account_ref=native['id'] if native else '')

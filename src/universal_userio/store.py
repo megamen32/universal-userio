@@ -106,7 +106,7 @@ class SQLiteUserIOStore:
                 self._connection.execute(
                     "ALTER TABLE messages ADD COLUMN sender_is_bot INTEGER NOT NULL DEFAULT 0"
                 )
-            for name, definition in (("provider_read", "INTEGER"), ("deleted_at", "REAL")):
+            for name, definition in (("provider_read", "INTEGER"), ("deleted_at", "REAL"), ("outbox_receipt", "TEXT NOT NULL DEFAULT ''")):
                 if name not in message_columns:
                     self._connection.execute(f"ALTER TABLE messages ADD COLUMN {name} {definition}")
             self._connection.execute("""CREATE TABLE IF NOT EXISTS telegram_read_state (
@@ -1129,14 +1129,21 @@ class SQLiteUserIOStore:
             ).fetchone()
         return None if row is None else bool(row["can_reply"])
 
-    def latest_message_at(self, source: str, *, user_id: str | None = None) -> float | None:
+    def latest_message_at(self, source: str, *, user_id: str | None = None, account_ref: str = '') -> float | None:
         """Return message freshness for one exact provider source."""
         with self._lock:
             row = self._connection.execute(
-                "SELECT MAX(received_at) AS latest FROM messages WHERE user_id=? AND source=?",
-                (self._user(user_id), source),
+                "SELECT MAX(m.received_at) AS latest FROM messages m JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id WHERE m.user_id=? AND m.source=? AND (?='' OR c.account_ref=?)",
+                (self._user(user_id), source, account_ref, account_ref),
             ).fetchone()
         return None if row is None or row["latest"] is None else float(row["latest"])
+
+    def match_sms_receipt(self, receipt: str, *, account_ref: str, sender: str, body: str, user_id: str | None = None) -> str:
+        """Link a native sent-store message only to this exact approved reply."""
+        with self._lock:
+            row=self._connection.execute("""SELECT d.outbox_receipt FROM drafts d JOIN conversations c ON c.user_id=d.user_id AND c.id=d.conversation_id
+                WHERE d.user_id=? AND d.status='approved' AND d.outbox_receipt=? AND d.body=? AND c.source='sms' AND c.account_ref=? AND c.sender=?""", (self._user(user_id),receipt,body,account_ref,sender)).fetchone()
+        return str(row[0]) if row is not None else ''
 
     def delete_account(self, account_id: str, *, user_id: str | None = None) -> bool:
         with self._lock, self._connection:
@@ -1614,15 +1621,19 @@ class SQLiteUserIOStore:
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot,edited_at,provider_read)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot,edited_at,provider_read,outbox_receipt)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, message.source, message.message_id, conversation_id,
                     message.sender, message.body, message.direction, message.received_at,
-                    int(message.sender_is_bot), message.edited_at or None, message.provider_read,
+                    int(message.sender_is_bot), message.edited_at or None, message.provider_read, message.outbox_receipt,
                 ),
             ).rowcount == 1
+            if message.source=='sms' and message.provider_read is True:
+                self._connection.execute("UPDATE messages SET seen_at=COALESCE(seen_at,?) WHERE user_id=? AND source='sms' AND message_id=?", (message.received_at,user_id,message.message_id))
+            if message.source=='sms' and message.outbox_receipt:
+                self._connection.execute("UPDATE messages SET outbox_receipt=? WHERE user_id=? AND source='sms' AND message_id=? AND direction='outgoing' AND sender=? AND body=?", (message.outbox_receipt,user_id,message.message_id,message.sender,message.body))
             if inserted:
                 # A late history item can precede the cached temporal frontier
                 # even though its durable rowid is new. Rebuild that cache.
@@ -2336,7 +2347,7 @@ class SQLiteUserIOStore:
             messages = self._connection.execute(
                 f"""
                 SELECT * FROM (
-                    SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at,provider_read
+                    SELECT source,message_id,sender,body,direction,received_at,seen_at,edited_at,provider_read,outbox_receipt
                     FROM messages
                     WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL ORDER BY received_at DESC,{history_order} DESC LIMIT 200
                 ) ORDER BY received_at,message_id
@@ -2362,6 +2373,10 @@ class SQLiteUserIOStore:
                     (user_id,row["account_ref"],row["peer_id"])).fetchone()
         message_records = [dict(item) for item in messages]
         for item in message_records:
+            if item.get('outbox_receipt'):
+                item['outbox_receipt']=self.match_sms_receipt(str(item['outbox_receipt']),account_ref=str(row['account_ref']),sender=str(item['sender']),body=str(item['body']),user_id=user_id) if item['source']=='sms' else ''
+            if not item.get('outbox_receipt'):
+                item.pop('outbox_receipt',None)
             attachments = self.attachments_for_message(
                 source=str(item["source"]), message_id=str(item["message_id"]), user_id=user_id
             )

@@ -32,7 +32,10 @@ def cdr_peers(path: str, account_ref: str) -> tuple[dict[str, str], dict[str, st
             except ValueError:
                 continue
             candidates[call].add(peer)
-            labels[peer] = 'Телефон · ••••' + re.sub(r'\D', '', number)[-4:]
+            digits = re.sub(r'\D', '', number)
+            if len(digits) == 11 and digits.startswith('8'):
+                digits = '7' + digits[1:]
+            labels[peer] = 'Телефон · +' + digits
     # Conflicting CDR legs are not permission to choose one of the people.
     return {call: next(iter(peers)) for call, peers in candidates.items() if len(peers) == 1}, labels
 
@@ -81,6 +84,39 @@ def grouping_plan(connection, *, user_id: str, account_ref: str, call_peers: dic
     return {'user_id': user_id, 'account_ref': account_ref, 'groups': groups, 'unmatched': unknown}
 
 
+def phone_label_changes(connection, plan: dict, labels: dict[str, str]) -> list[dict]:
+    """Reveal only a CDR-backed number, keeping an operator's contact name."""
+    changes = []
+    for peer, label in labels.items():
+        if not peer.startswith('phone:v1:'):
+            # Operator-reviewed legacy diagnostics remain separate from real
+            # people: changing the caption never invents a destination.
+            row = connection.execute("SELECT 1 FROM conversations WHERE user_id=? AND source='phone' AND sender=? AND peer_id='' AND account_ref IN ('',?)", (plan['user_id'],peer,plan['account_ref'])).fetchone()
+            if row is None:
+                continue
+            old = connection.execute("SELECT * FROM contact_names WHERE user_id=? AND source='phone' AND sender=?", (plan['user_id'],peer)).fetchone()
+            if old is None or old['name'] != label:
+                changes.append({'sender':peer,'before':dict(old) if old is not None else None,'name':label})
+            continue
+        if not re.fullmatch(r'Телефон · \+\d{8,15}', label):
+            continue
+        exists = connection.execute("SELECT 1 FROM conversations WHERE user_id=? AND source='phone' AND account_ref=? AND peer_id=?", (plan['user_id'], plan['account_ref'], peer)).fetchone()
+        planned = any(group['peer_ref']==peer for group in plan['groups'])
+        if exists is None and not planned:
+            continue
+        sender = f"chat:{plan['account_ref']}:{peer}"
+        row = connection.execute("SELECT * FROM contact_names WHERE user_id=? AND source='phone' AND sender=?", (plan['user_id'], sender)).fetchone()
+        if row is None and exists is None:
+            continue  # A first grouping's inserted fallback has its own rollback.
+        old_name = str(row['name']) if row is not None else ''
+        number = label.removeprefix('Телефон · ')
+        if old_name.endswith(number):
+            continue
+        new_name = label if not old_name or old_name.startswith('Телефон · ') else old_name + ' · ' + number
+        changes.append({'sender': sender, 'before': dict(row) if row is not None else None, 'name': new_name})
+    return changes
+
+
 def apply_grouping(connection, plan: dict, labels: dict[str, str]) -> dict:
     """Caller owns one transaction. Move references, retain all old IDs as aliases."""
     user, account = plan['user_id'], plan['account_ref']
@@ -97,7 +133,9 @@ def apply_grouping(connection, plan: dict, labels: dict[str, str]) -> dict:
         connection.execute("UPDATE conversations SET conversation_key=?,account_ref=?,peer_id=?,updated_at=? WHERE user_id=? AND id=?", (group['conversation_key'],account,peer,max(c['updated_at'] for c in group['previous_conversations']),user,canonical))
         label = labels.get(peer)
         if label:
-            # Keep a name supplied by the actual provider/operator. A masked
-            # historical label is only a fallback for an unnamed person.
+            # Keep a provider/operator name; reveal a proven number below.
             connection.execute('INSERT OR IGNORE INTO contact_names(user_id,source,sender,name,updated_at) VALUES (?,\'phone\',?,?,?)', (user,f'chat:{account}:{peer}',label,time.time()))
-    return {'groups':len(plan['groups']), 'aliases_added':moved, 'unmatched':len(plan['unmatched'])}
+    changes = phone_label_changes(connection, plan, labels)
+    for change in changes:
+        connection.execute("INSERT OR REPLACE INTO contact_names(user_id,source,sender,name,updated_at) VALUES (?,'phone',?,?,?)", (user, change['sender'], change['name'], time.time()))
+    return {'groups':len(plan['groups']), 'aliases_added':moved, 'unmatched':len(plan['unmatched']), 'labels_updated':len(changes)}

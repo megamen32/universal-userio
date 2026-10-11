@@ -16,6 +16,18 @@ class SmsInboundMessage:
     body: str
     received_at: float
     device_id: str = ''
+    direction: str = 'incoming'
+    provider_read: bool | None = None
+    outbox_receipt: str = ''
+
+
+def sms_address(value: str) -> str:
+    """Keep short codes and sender names; normalize Russian phone formatting."""
+    value = value.strip()
+    digits = ''.join(c for c in value if c.isdigit())
+    if len(digits) == 11 and digits[0] in '78' and all(c.isdigit() or c in '+ ()-' for c in value):
+        return '+7' + digits[1:]
+    return value
 
 class AndroidSmsGatewayClient:
     def __init__(self, url: str, token: str, *, runner: Any = urllib.request.urlopen) -> None:
@@ -34,6 +46,22 @@ class AndroidSmsGatewayClient:
             if device_id and row_device != device_id: continue
             out.append(SmsInboundMessage(mid,sender,body,ts,row_device))
         return out
+    def history(self, *, after_id: int = 0, snapshot_id: int = 0, limit: int = 100) -> dict[str, Any]:
+        query=urllib.parse.urlencode({'after_id':after_id,'snapshot_id':snapshot_id,'limit':limit})
+        result=self._request('GET','/v1/history?'+query,timeout=35)
+        messages=[]
+        for item in result.get('messages',[]):
+            if item.get('direction') not in ('incoming','outgoing'):
+                continue  # Failed/outbox drafts are not delivered conversations.
+            mid=str(item.get('id') or '')
+            address=sms_address(str(item.get('contact_number') or ''))
+            body=item.get('body')
+            if not mid.startswith('sms-native:') or not address or not isinstance(body,str):
+                raise RuntimeError('Invalid native SMS history identity')
+            received=datetime.fromisoformat(str(item['receivedAt']).replace('Z','+00:00')).timestamp()
+            messages.append(SmsInboundMessage(mid,address,body,received,direction=item['direction'],provider_read=item.get('provider_read'),outbox_receipt=str(item.get('receipt_id') or '')))
+        result['messages']=messages
+        return result
     def send(self, *, to: str, body: str, device_id: str = '', idempotency_key: str = '') -> str:
         payload={'to':to,'body':body}
         if device_id: payload['device_id']=device_id
@@ -41,12 +69,12 @@ class AndroidSmsGatewayClient:
         if not isinstance(receipt,str) or not receipt: raise RuntimeError('Android SMS Gateway returned no accepted-message receipt')
         if result.get('status') not in {'accepted_by_android','queued_for_device'}: raise RuntimeError('Android SMS Gateway did not accept the message')
         return receipt
-    def _request(self, method: str, path: str, payload: Mapping[str,str] | None=None, *, idempotency_key: str = '') -> dict[str,Any]:
+    def _request(self, method: str, path: str, payload: Mapping[str,str] | None=None, *, idempotency_key: str = '', timeout: float = 8) -> dict[str,Any]:
         headers={'Authorization':f'Bearer {self._token}','Content-Type':'application/json'}
         if idempotency_key: headers['Idempotency-Key']=idempotency_key
         req=urllib.request.Request(self._url+path,data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode(),headers=headers,method=method)
         try:
-            with self._runner(req,timeout=8) as response: status,raw=int(response.status),response.read()
+            with self._runner(req,timeout=timeout) as response: status,raw=int(response.status),response.read()
         except urllib.error.HTTPError as error: raise RuntimeError(f'Android SMS Gateway returned HTTP {error.code}') from error
         except urllib.error.URLError as error: raise AdapterNotSupported(f'Android SMS Gateway is unavailable: {error.reason}') from error
         if status not in {200,202}: raise RuntimeError(f'Android SMS Gateway returned HTTP {status}')

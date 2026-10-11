@@ -116,13 +116,17 @@ class UserIOIngressClient:
         )
         self._json(req)
 
-    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str, received_at: float | None = None) -> None:
+    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str, received_at: float | None = None, direction: str | None = None, reconciliation: bool | None = None, provider_read: bool | None = None, outbox_receipt: str = '') -> None:
         payload = {
             "route_id": route_id,
             "account_id": account_id,
             "message": {"schema": "universal.inbox.message.v1", "source": source, "message_id": message_id, "sender": sender, "body": body},
         }
         if received_at is not None: payload['message']['received_at']=received_at
+        if direction is not None: payload['message']['direction']=direction
+        if reconciliation is not None: payload['message']['reconciliation']=reconciliation
+        if provider_read is not None: payload['message']['provider_read']=provider_read
+        if outbox_receipt: payload['message']['outbox_receipt']=outbox_receipt
         req = urllib.request.Request(
             self.base_url + "/v1/messages", data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},

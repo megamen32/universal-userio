@@ -30,6 +30,7 @@ class InboxMessage:
     # Provider read state is distinct from opening the local UserIO view.
     provider_read: bool | None = None
     conversation_title: str = ""
+    outbox_receipt: str = ""
 
     @property
     def conversation_key(self) -> str:
