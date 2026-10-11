@@ -1606,13 +1606,16 @@ class SQLiteUserIOStore:
                 (user_id, message.source, message.message_id, conversation_id)).fetchone()
             if previous is not None:
                 if (previous["direction"] != message.direction or previous["received_at"] != message.received_at
-                        or previous["edited_at"] != (message.edited_at or None)):
+                        or previous["edited_at"] != (message.edited_at or None)
+                        or (message.source=='sms' and message.reconciliation and previous['body']!=message.body)):
                     self._invalidate_message_summary(user_id, message.source, message.message_id)
                 self._connection.execute("""UPDATE messages SET direction=?,received_at=?,
                     provider_read=CASE WHEN provider_read=1 THEN 1 ELSE COALESCE(?,provider_read) END,sender_is_bot=?,edited_at=COALESCE(?,edited_at)
                     WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                     (message.direction, message.received_at, message.provider_read, int(message.sender_is_bot),
                      message.edited_at or None, user_id, message.source, message.message_id, conversation_id))
+                if message.source=='sms' and message.reconciliation and message.message_id.startswith('sms-native:'):
+                    self._connection.execute("UPDATE messages SET body=? WHERE user_id=? AND source='sms' AND message_id=? AND conversation_id=?", (message.body,user_id,message.message_id,conversation_id))
                 if message.direction != "incoming" or (message.sender_is_bot
                         and not self.workspace_policy(user_id=user_id)["defaults"]["telegram_bot"]):
                     self._connection.execute("""UPDATE workspace_events SET eligible=0

@@ -61,3 +61,16 @@ def test_native_history_arriving_during_send_links_after_approval(tmp_path):
     assert not store.conversation(cid)['messages'][-1].get('outbox_receipt')
     store.approve('sending','native-receipt')
     assert store.conversation(cid)['messages'][-1]['outbox_receipt']=='native-receipt'
+
+
+def test_native_sms_keeps_exact_whitespace_and_repairs_prior_trim(tmp_path):
+    from universal_userio.adapters import inbox_message_from_envelope
+    raw={'schema':'universal.inbox.message.v1','source':'sms','message_id':'sms-native:6','sender':'900','body':'\noriginal text ', 'reconciliation':True}
+    message=inbox_message_from_envelope(raw,received_at=1)
+    assert message.body=='\noriginal text '
+    store=SQLiteUserIOStore(tmp_path/'db');svc=UserIOService(store,object(),object())
+    aid='sms:s21';store.register_account(account_id=aid,provider='sms',display_name='S21',can_read=True,can_reply=True,credential_ref='sms-native:default')
+    cid,_=svc.receive(InboxMessage('sms','sms-native:6','900','original text',1,reconciliation=True),route_id='sms',account_ref=aid)
+    svc.receive(message,route_id='sms',account_ref=aid)
+    assert store.conversation(cid)['messages'][0]['body']=='\noriginal text '
+    assert len(store.conversation(cid)['messages'])==1
