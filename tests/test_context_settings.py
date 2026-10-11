@@ -540,3 +540,44 @@ def test_first_triage_returns_fresh_summary_with_original_anchor(tmp_path):
     result = service.triage_conversation_secretary(conversation_id=cid, actor="owner")
     assert result["summary"] == "Новая сводка."
     store.close()
+
+
+@pytest.mark.parametrize("late_after_snapshot", [False, True])
+def test_cache_distinguishes_existing_backfill_from_concurrent_late_history(tmp_path, late_after_snapshot):
+    """Fast unit: existing backfill falsely vetoes every save; expected1s/max10s."""
+    store = SQLiteUserIOStore(tmp_path / "backfill.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    for mid,at,direction in [("old",1.,"incoming"),("anchor",10.,"incoming"),("owner-after",20.,"outgoing"),("backfill",2.,"incoming")]:
+        cid,_ = service.receive(InboxMessage("telegram",mid,"contact",mid,at,
+            direction=direction,conversation_kind="direct",reconciliation=(mid=="backfill")),route_id="telegram")
+    work = store.conversation_summary_work(cid,through_message_id="anchor",through_message_source="telegram")
+    assert [x["message_id"] for x in work["new_messages"]] == ["old","anchor"]
+    if late_after_snapshot:
+        service.receive(InboxMessage("telegram","concurrent-old","contact","late",1.5,
+            conversation_kind="direct",reconciliation=True),route_id="telegram")
+    last=max(work["new_messages"],key=lambda x:x["message_rowid"])
+    extra=({"expected_history_highwater":work["history_highwater"]} if "history_highwater" in work else {})
+    saved=store.save_conversation_summary(cid,summary="known facts",expected_through_message_rowid=0,
+        through_message_rowid=last["message_rowid"],through_message_id=last["message_id"],
+        summarized_message_count=len(work["new_messages"]),expected_messages=work["new_messages"],**extra)
+    assert saved is (not late_after_snapshot)
+    assert (store.conversation_summary(cid,through_message_id="anchor") is not None) is (not late_after_snapshot)
+    store.close()
+
+
+def test_user_preference_read_waits_for_store_connection_lock(tmp_path):
+    """Fast unit: threaded SQLite preference lookup bypasses mutex; expected1s/max5s."""
+    import threading
+    store=SQLiteUserIOStore(tmp_path / "preference-lock.sqlite3")
+    store.set_user_preference("fixture","value")
+    started,done=threading.Event(),threading.Event();values=[]
+    def reader():
+        started.set();values.append(store.user_preference("fixture", user_id="user_owner"));done.set()
+    with store._lock:
+        worker=threading.Thread(target=reader);worker.start()
+        assert started.wait(1)
+        blocked=not done.wait(.05)
+    worker.join(timeout=1)
+    assert not worker.is_alive() and values==["value"]
+    store.close()
+    assert blocked

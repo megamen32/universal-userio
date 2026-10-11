@@ -299,6 +299,7 @@ class UserIOService:
                     int(work["summarized_message_count"]) + len(messages)
                 ),
                 expected_messages=messages,
+                expected_history_highwater=int(work["history_highwater"]),
                 user_id=user_id,
             )
             if saved:

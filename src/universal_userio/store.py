@@ -2370,10 +2370,11 @@ class SQLiteUserIOStore:
     # --- per-user AI (BYOK) ----------------------------------------------------
 
     def user_preference(self, key: str, *, user_id: str | None = None, default: str | None = None) -> str | None:
-        row = self._connection.execute(
-            "SELECT value FROM user_preferences WHERE user_id=? AND key=?",
-            (self._user(user_id), key),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT value FROM user_preferences WHERE user_id=? AND key=?",
+                (self._user(user_id), key),
+            ).fetchone()
         return default if row is None else str(row["value"])
 
     def set_user_preference(self, key: str, value: str, *, user_id: str | None = None) -> None:
@@ -2716,6 +2717,13 @@ class SQLiteUserIOStore:
                 upper_sql += " AND rowid<?"
                 parameters.append(int(blocked))
             parameters.append(100)
+            # Rows already present at snapshot time are not concurrent arrivals.
+            # They can lie beyond this page's immutable event frontier after a
+            # historical backfill; retain their arrival watermark separately.
+            history_highwater = int(self._connection.execute(
+                "SELECT COALESCE(MAX(rowid),0) FROM messages WHERE user_id=? AND conversation_id=?",
+                (user, conversation_id),
+            ).fetchone()[0])
             rows = self._connection.execute(
                 f"""SELECT rowid AS message_rowid,source,message_id,sender,body,direction,received_at
                    FROM messages
@@ -2738,6 +2746,7 @@ class SQLiteUserIOStore:
                 0 if cached is None else int(cached["summarized_message_count"])
             ),
             "new_messages": messages,
+            "history_highwater": history_highwater,
             "summary_token_budget": int(settings["summary_token_budget"]),
         }
 
@@ -2746,6 +2755,7 @@ class SQLiteUserIOStore:
         expected_through_message_rowid: int, through_message_rowid: int,
         through_message_id: str, summarized_message_count: int,
         expected_messages: list[dict[str, object]] | None = None,
+        expected_history_highwater: int | None = None,
         user_id: str | None = None,
     ) -> bool:
         user = self._user(user_id)
@@ -2761,16 +2771,20 @@ class SQLiteUserIOStore:
             or summarized_message_count <= 0
         ):
             raise ValueError("invalid conversation summary cursor")
+        if expected_history_highwater is not None and (
+                type(expected_history_highwater) is not int or expected_history_highwater < 0):
+            raise ValueError("invalid conversation summary history watermark")
         now = time.time()
         with self._lock, self._connection:
             # A provider edit can arrive while the AI is running, including on
             # the first page when there is no existing cache to invalidate.
             if expected_messages is not None:
                 newest_row = max(int(m["message_rowid"]) for m in expected_messages)
+                snapshot_highwater = max(newest_row, expected_history_highwater or 0)
                 latest_time = max(float(m["received_at"]) for m in expected_messages)
                 if self._connection.execute("""SELECT 1 FROM messages WHERE user_id=? AND conversation_id=?
                     AND rowid>? AND received_at<=? AND deleted_at IS NULL LIMIT 1""",
-                    (user, conversation_id, newest_row, latest_time)).fetchone():
+                    (user, conversation_id, snapshot_highwater, latest_time)).fetchone():
                     return False
                 for snapshot in expected_messages:
                     current = self._connection.execute(
