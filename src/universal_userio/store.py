@@ -287,6 +287,10 @@ class SQLiteUserIOStore:
                 identity_id TEXT,response_mode TEXT NOT NULL DEFAULT 'approve',updated_at REAL NOT NULL,
                 PRIMARY KEY(user_id,id),UNIQUE(user_id,conversation_key)
             );
+            CREATE TABLE IF NOT EXISTS phone_conversation_aliases (
+                user_id TEXT NOT NULL,old_id TEXT NOT NULL,canonical_id TEXT NOT NULL,
+                PRIMARY KEY(user_id,old_id)
+            );
             CREATE TABLE IF NOT EXISTS messages (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,sender TEXT NOT NULL,body TEXT NOT NULL,
@@ -1172,13 +1176,44 @@ class SQLiteUserIOStore:
             str(rule["route_id"]), str(rule["response_mode"]), identity_id
         ) if rule else ConversationPolicy(fallback_route_id, "approve", identity_id)
 
-    def conversation_id_for_key(self, conversation_key: str, *, user_id: str) -> str | None:
+    def conversation_id_for_key(self, conversation_key: str, *, user_id: str, account_ref: str | None = None) -> str | None:
         with self._lock:
             row = self._connection.execute(
                 "SELECT id FROM conversations WHERE user_id=? AND conversation_key=?",
                 (user_id, conversation_key),
             ).fetchone()
-        return None if row is None else str(row["id"])
+            if row is not None and account_ref is not None and conversation_key.startswith('phone:'):
+                scoped = self._connection.execute('SELECT account_ref FROM conversations WHERE user_id=? AND id=?',
+                    (user_id, self.resolve_conversation_id(str(row['id']), user_id=user_id))).fetchone()
+                if scoped is not None and scoped[0] not in ('', account_ref):
+                    row = None
+            if row is None and conversation_key.startswith("phone:"):
+                # Historical call UUID keys still resolve after grouping, even
+                # for the canonical call whose old key was replaced.
+                account_sql = ' AND c.account_ref IN (\'\',?)' if account_ref is not None else ''
+                values = [user_id, conversation_key[len('phone:'):]]
+                if account_ref is not None:
+                    values.append(account_ref)
+                row = self._connection.execute("SELECT m.conversation_id AS id FROM messages m JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id WHERE m.user_id=? AND m.source='phone' AND m.sender=?" + account_sql + ' LIMIT 1', values).fetchone()
+        return None if row is None else self.resolve_conversation_id(str(row["id"]), user_id=user_id)
+
+    def resolve_conversation_id(self, conversation_id: str, *, user_id: str | None = None) -> str:
+        with self._lock:
+            row = self._connection.execute("SELECT canonical_id FROM phone_conversation_aliases WHERE user_id=? AND old_id=?",
+                (self._user(user_id), conversation_id)).fetchone()
+        return str(row[0]) if row is not None else conversation_id
+
+    def group_phone_conversations(self, *, account_ref: str, call_peers: dict[str, str],
+                                  labels: dict[str, str] | None = None,
+                                  user_id: str | None = None, dry_run: bool = False) -> dict:
+        from .phone_grouping import grouping_plan, apply_grouping
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            plan = grouping_plan(self._connection, user_id=self._user(user_id),
+                                 account_ref=account_ref, call_peers=call_peers)
+            if dry_run:
+                return plan
+            return apply_grouping(self._connection, plan, labels or {})
 
     @staticmethod
     def _message_kind(message: InboxMessage) -> str:
@@ -1288,6 +1323,7 @@ class SQLiteUserIOStore:
         Policy changes never flip an old event back to eligible; a later allow
         applies only to messages ingested after that change.
         """
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         self._connection.execute(
             "UPDATE workspace_events SET eligible=0 WHERE user_id=? AND conversation_id=?",
             (user_id, conversation_id),
@@ -1336,6 +1372,7 @@ class SQLiteUserIOStore:
         conversation_kind: str = "", action: str = "", query: str = "",
         conversation_id: str = "", limit: int = 100, offset: int = 0,
     ) -> list[dict[str, object]]:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         if type(limit) is not int or not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
@@ -1370,7 +1407,9 @@ class SQLiteUserIOStore:
                   ON r.user_id=c.user_id AND r.conversation_id=c.id
                 LEFT JOIN workspace_exclusions x
                   ON x.user_id=c.user_id AND x.conversation_id=c.id
-                WHERE {' AND '.join(filters)} ORDER BY c.updated_at DESC,c.id LIMIT ? OFFSET ?""",
+                WHERE {' AND '.join(filters)}
+                  AND NOT EXISTS (SELECT 1 FROM phone_conversation_aliases a WHERE a.user_id=c.user_id AND a.old_id=c.id)
+                ORDER BY c.updated_at DESC,c.id LIMIT ? OFFSET ?""",
                 (*values, limit, offset)).fetchall()
         defaults = self.workspace_policy(user_id=user)["defaults"]
         result = []
@@ -1385,6 +1424,7 @@ class SQLiteUserIOStore:
     def evaluate_workspace_chat(
         self, *, conversation_id: str, user_id: str | None = None,
     ) -> dict[str, object]:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         conversation_id = self._workspace_conversation_id(conversation_id)
         row = next((r for r in self.workspace_chat_rules(user_id=user, conversation_id=conversation_id)
@@ -1406,6 +1446,7 @@ class SQLiteUserIOStore:
         self, *, conversation_id: str, source: str, message_id: str,
         user_id: str | None = None,
     ) -> dict[str, object]:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         chat = self.evaluate_workspace_chat(conversation_id=conversation_id, user_id=user)
         with self._lock:
@@ -1422,6 +1463,7 @@ class SQLiteUserIOStore:
         self, *, conversation_id: str, action: str, reason: str = "",
         user_id: str | None = None,
     ) -> dict[str, object]:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         conversation_id = self._workspace_conversation_id(conversation_id)
         if action not in {"ignore", "allow", "inherit"}:
@@ -1624,10 +1666,10 @@ class SQLiteUserIOStore:
                     """,
                     (user_id, message.source, message.sender, message.sender_name, now),
                 )
-            if message.source == "max" and message.conversation_title and account_ref and message.peer_id:
+            if message.source in {"max", "phone"} and message.conversation_title and account_ref and message.peer_id:
                 self._connection.execute(
                     "INSERT OR REPLACE INTO contact_names (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)",
-                    (user_id, "max", f"chat:{account_ref}:{message.peer_id}", message.conversation_title, now),
+                    (user_id, message.source, f"chat:{account_ref}:{message.peer_id}", message.conversation_title, now),
                 )
             if message.source == "max" and (inserted or previous is not None):
                 # MAX projects the complete provider attachment snapshot. An
@@ -1994,6 +2036,8 @@ class SQLiteUserIOStore:
         return None if row is None else dict(row)
 
     def add_draft(self, draft: ReplyDraft, *, user_id: str | None = None) -> None:
+        from dataclasses import replace
+        draft = replace(draft, conversation_id=self.resolve_conversation_id(draft.conversation_id, user_id=user_id))
         with self._lock, self._connection:
             self._connection.execute(
                 "INSERT INTO drafts(user_id,id,conversation_id,body,status,created_at) VALUES (?,?,?,?,?,?)",
@@ -2077,6 +2121,7 @@ class SQLiteUserIOStore:
             return True
 
     def delete_conversation(self, conversation_id: str, *, user_id: str | None = None) -> bool:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user_id = self._user(user_id)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -2262,7 +2307,7 @@ class SQLiteUserIOStore:
                        c.source,c.sender,c.identity_id,
                        COALESCE((SELECT name FROM contact_names n
                                  WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=
-                                   CASE WHEN c.source='max' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END), '') AS display_name
+                                   CASE WHEN c.source IN ('max','phone') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END), '') AS display_name
                 FROM drafts d JOIN conversations c
                   ON c.user_id=d.user_id AND c.id=d.conversation_id
                 WHERE d.user_id=? AND d.status='proposed'
@@ -2275,6 +2320,7 @@ class SQLiteUserIOStore:
     def conversation(
         self, conversation_id: str, *, user_id: str | None = None, text_limit: int | None = None
     ) -> dict[str, object] | None:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user_id = self._user(user_id)
         with self._lock:
             row = self._connection.execute(
@@ -2302,7 +2348,7 @@ class SQLiteUserIOStore:
             name_row = self._connection.execute(
                 "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
                 (user_id, row["source"], f"chat:{row['account_ref']}:{row['peer_id']}"
-                 if row["source"] == "max" else row["sender"]),
+                 if row["source"] in {"max", "phone"} and row["account_ref"] and row["peer_id"] else row["sender"]),
             ).fetchone()
             history_row = None
             if row["source"] == "telegram" and row["account_ref"] and row["peer_id"]:
@@ -2342,6 +2388,7 @@ class SQLiteUserIOStore:
 
         Provider reconciliation precedes this query. Does not change receipts.
         """
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         if (type(before_id) is not int or not 1 <= before_id <= 2_147_483_647 or
                 type(limit) is not int or not 1 <= limit <= 100):
             raise ValueError("invalid Telegram history page")
@@ -2371,8 +2418,12 @@ class SQLiteUserIOStore:
         self, conversation_id: str, account_ref: str, *, user_id: str | None = None
     ) -> bool:
         """Pin the reply account; a pending approval pins its existing account."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user_id = self._user(user_id)
         with self._lock, self._connection:
+            row = self._connection.execute('SELECT source,peer_id,account_ref FROM conversations WHERE user_id=? AND id=?', (user_id,conversation_id)).fetchone()
+            if row is not None and row['source']=='phone' and row['peer_id'].startswith('phone:v1:') and row['account_ref'] != account_ref.strip():
+                return False
             return self._connection.execute(
                 """UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?
                    AND (COALESCE(account_ref,'')=? OR NOT EXISTS (
@@ -2657,6 +2708,7 @@ class SQLiteUserIOStore:
         through_message_source: str = "", through_message_rowid: int | None = None,
         user_id: str | None = None,
     ) -> dict[str, object] | None:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         with self._lock, self._connection:
             self._purge_conversation_summaries(user_id=user)
@@ -2684,6 +2736,7 @@ class SQLiteUserIOStore:
         through_message_source: str = "", through_message_rowid: int | None = None,
         user_id: str | None = None,
     ) -> dict[str, object] | None:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         settings = self.context_settings(user_id=user)
         with self._lock, self._connection:
@@ -2773,6 +2826,7 @@ class SQLiteUserIOStore:
         expected_history_highwater: int | None = None,
         user_id: str | None = None,
     ) -> bool:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         settings = self.context_settings(user_id=user)
         text = _prefix_for_tokens(summary, int(settings["summary_token_budget"]))
@@ -2853,6 +2907,7 @@ class SQLiteUserIOStore:
         before_message_id: str = "", user_id: str | None = None,
         message_limit: int | None = None, token_limit: int | None = None,
     ) -> list[dict[str, object]]:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         if before_message_id:
             current_message_id = before_message_id
         settings = self.context_settings(user_id=user_id)
@@ -3446,6 +3501,7 @@ class SQLiteUserIOStore:
         self, conversation_id: str, *, user_id: str | None = None,
     ) -> dict[str, object]:
         """Return owner-facing triage and deep-analysis state for one exact chat."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         with self._lock:
             conversation = self._connection.execute(
@@ -3514,6 +3570,7 @@ class SQLiteUserIOStore:
     def owner_messages_after(self, conversation_id: str, message_id: str, *,
                              user_id: str | None = None) -> list[dict[str, object]]:
         """A bounded snapshot of replies the owner already sent, never read authority."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         with self._lock:
             anchor = self._message_anchor(user, conversation_id, message_id)
@@ -3558,6 +3615,7 @@ class SQLiteUserIOStore:
         actor: str, identity: dict[str, object] | None = None,
         user_id: str | None = None,
     ) -> dict[str, object]:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         request_id = self._triage_request_id(triage_request_id)
         actor = self._triage_actor(actor)
@@ -3612,6 +3670,7 @@ class SQLiteUserIOStore:
         user_id: str | None = None,
     ) -> dict[str, object]:
         """Create or reuse one immutable successor for a failed attempt."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user = self._user(user_id)
         if not isinstance(job_id, str) or not re.fullmatch(r"secretary-[a-f0-9]{32}", job_id):
             raise ValueError("invalid secretary retry job id")
@@ -3811,6 +3870,7 @@ class SQLiteUserIOStore:
         self, *, conversation_id: str, reason: str = "", user_id: str | None = None,
     ) -> dict[str, object]:
         """Exclude a known chat from future workspace claims without deleting it."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         scoped_user = self._user(user_id)
         conversation_id = self._workspace_conversation_id(conversation_id)
         if not isinstance(reason, str):
@@ -3853,6 +3913,7 @@ class SQLiteUserIOStore:
         self, *, conversation_id: str, user_id: str | None = None,
     ) -> bool:
         """Remove the hard deny and return a chat to its category default."""
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         scoped_user = self._user(user_id)
         conversation_id = self._workspace_conversation_id(conversation_id)
         with self._lock, self._connection:
@@ -4112,7 +4173,7 @@ class SQLiteUserIOStore:
                        trs.unread_observed_at AS unread_observed_at,
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
                         AND source=c.source AND sender=
-                          CASE WHEN c.source='max' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
+                          CASE WHEN c.source IN ('max','phone') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
                        activity.account_last_at AS account_last_at
                 FROM conversations c LEFT JOIN telegram_read_state trs
                   ON trs.user_id=c.user_id AND trs.account_ref=c.account_ref
@@ -4126,6 +4187,7 @@ class SQLiteUserIOStore:
                     GROUP BY user_id, source
                 ) AS activity ON activity.user_id=c.user_id AND activity.source=c.source
                 WHERE c.user_id=? {source_sql}
+                  AND NOT EXISTS (SELECT 1 FROM phone_conversation_aliases a WHERE a.user_id=c.user_id AND a.old_id=c.id)
                 ORDER BY last_at DESC, c.updated_at DESC LIMIT ?
                 """,
                 [self._user(user_id), self._user(user_id), *values, limit],

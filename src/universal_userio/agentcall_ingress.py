@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
+import re
 import socket
 import time
 import urllib.request
@@ -27,8 +29,9 @@ class AgentCallEventProjector:
     """Convert redacted AgentCall RPC events into canonical inbox envelopes."""
 
     sender_name: str = "AI phone call"
+    account_ref: str = "phone100"
 
-    def project(self, event: Mapping[str, Any]) -> dict[str, str] | None:
+    def project(self, event: Mapping[str, Any]) -> dict[str, Any] | None:
         kind = str(event.get("event") or "").strip().lower()
         call_id = str(event.get("callId") or "").strip()
         if (
@@ -44,7 +47,7 @@ class AgentCallEventProjector:
             event, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:24]
-        return {
+        message: dict[str, Any] = {
             "schema": "universal.inbox.message.v1",
             "source": "phone",
             "message_id": f"agentcall-{digest}",
@@ -53,6 +56,14 @@ class AgentCallEventProjector:
             "body": body[:_MAX_TEXT_CHARS],
             "direction": self._direction(kind, event),
         }
+        at = event.get("at")
+        if type(at) in {int, float} and math.isfinite(at) and at > 0:
+            message["received_at"] = float(at)
+        peer = str(event.get("peerRef") or "")
+        if event.get("accountRef") == self.account_ref and re.fullmatch(r"phone:v1:[0-9a-f]{64}", peer):
+            message["peer_id"] = peer
+            message["conversation_title"] = str(event.get("peerLabel") or "").strip()[:200]
+        return message
 
     @staticmethod
     def _direction(kind: str, event: Mapping[str, Any]) -> str:
@@ -159,7 +170,7 @@ class UserIOIngressClient:
         self.account_id = account_id
         self.timeout = timeout
 
-    def publish(self, message: Mapping[str, str]) -> None:
+    def publish(self, message: Mapping[str, Any]) -> None:
         payload: dict[str, object] = {
             "route_id": self.route_id,
             "message": dict(message),
@@ -225,10 +236,11 @@ def main() -> None:
             userio_url_from_environment(),
             bearer_token,
             route_id=os.environ.get("USERIO_PHONE_ROUTE_ID", "phone").strip() or "phone",
-            account_id=os.environ.get("USERIO_ACCOUNT_ID", "").strip(),
+            account_id=os.environ.get("USERIO_ACCOUNT_ID", "phone100").strip() or "phone100",
         ),
         AgentCallEventProjector(
-            os.environ.get("USERIO_PHONE_LABEL", "S21 AI call").strip()
+            os.environ.get("USERIO_PHONE_LABEL", "S21 AI call").strip(),
+            account_ref=os.environ.get("USERIO_ACCOUNT_ID", "phone100").strip() or "phone100",
         ),
     )
 

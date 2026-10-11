@@ -21,3 +21,10 @@ read-only. Producer fb4c5ff opt-in metadata prepared by R50, no gateway deployme
 Next UserIO source: transaction/aliases preserving old links and call identity,
 projector peer/account provenance, focused tests, backup/apply and actual UI.
 No calls or phone data mutation yet; no global service/AI unpause.
+
+Phone source now includes transactional exact CDR grouping, aliases, scoped
+backup/rollback and opt-in future producer mapping. Lifecycle and old links are
+covered by focused integration and normal HTTP tests. Independent review fixes
+preserve account identity and refuse rollback after policy/cache evolution.
+Next publish/install, consistent backup/apply, install producer snapshot opt-in
+only outside active calls, then actual historical UI read/reload/capture.

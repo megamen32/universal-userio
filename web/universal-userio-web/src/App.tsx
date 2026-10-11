@@ -330,7 +330,12 @@ export function App() {
     if (activeConversation.current !== id) return
     const request = conversationRequest.current.begin()
     const result = await api<Conversation>(`/v1/conversations/${encodeURIComponent(id)}`)
-    if (conversationRequest.current.isCurrent(request) && activeConversation.current === id) setConversation(result)
+    if (conversationRequest.current.isCurrent(request) && activeConversation.current === id) {
+      setConversation(result)
+      // A historical call link resolves to its person's retained canonical
+      // dialogue. Keep the selected view and subsequent requests on that ID.
+      if (result.id !== id) setSelectedChat(result.id)
+    }
   }, [])
   const loadSecretary = useCallback(async (id: string) => {
     const gate = secretaryRequest.current

@@ -179,6 +179,10 @@ class UserIOService:
             # Group participants and our own messages belong to the same provider
             # chat. Sender identity must never become the destination of a reply.
             conversation_key = f"max:{account_ref}:{message.peer_id}"
+        if message.source == "phone" and account_ref:
+            conversation_key = (f"phone:{account_ref}:{message.peer_id}"
+                if re.fullmatch(r"phone:v1:[0-9a-f]{64}", message.peer_id)
+                else f"phone:{account_ref}:call:{message.sender}")
         if message.source == "telegram":
             raw_ref = message.message_id.rsplit("|", 1)[-1]
             peer_id = message.peer_id or raw_ref.split(":", 1)[0]
@@ -190,8 +194,13 @@ class UserIOService:
             if peer_id.lstrip("-").isdigit() and account_ref:
                 conversation_key = f"telegram:{account_ref}:{peer_id}"
         conversation_id = self._store.conversation_id_for_key(
-            conversation_key, user_id=user_id
-        ) or "conv_" + hashlib.sha256(f"{user_id}\0{conversation_key}".encode()).hexdigest()[:24]
+            conversation_key, user_id=user_id,
+            account_ref=account_ref if message.source == 'phone' and account_ref else None,
+        )
+        if conversation_id is None and message.source == 'phone' and account_ref and not message.peer_id:
+            conversation_id = self._store.conversation_id_for_key(
+                message.conversation_key, user_id=user_id, account_ref=account_ref)
+        conversation_id = conversation_id or "conv_" + hashlib.sha256(f"{user_id}\0{conversation_key}".encode()).hexdigest()[:24]
         policy = self._store.policy_for(message, fallback_route_id=route_id, user_id=user_id)
         if not self._store.route_allowed(
             user_id=user_id, source=message.source, route_id=policy.route_id
@@ -890,6 +899,7 @@ class UserIOService:
     def create_manual_draft(
         self, conversation_id: str, *, body: str, user_id: str | None = None
     ) -> ReplyDraft:
+        conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
         if self._store.conversation(conversation_id, user_id=user_id) is None:
             raise KeyError("conversation not found")
         text = body.strip()
@@ -907,6 +917,7 @@ class UserIOService:
         Retain the normal durable delivery claim/receipt, but do not place this
         intent in the AI approval notification queue. Retries reuse its receipt.
         """
+        conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
         if not re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", request_id):
             raise ValueError("request_id is required")
         text = body.strip()
@@ -985,6 +996,7 @@ class UserIOService:
         self, conversation_id: str, message: InboxMessage, *, limit: int = 3,
         user_id: str | None = None,
     ) -> list[ReplyDraft]:
+        conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
         if limit < 1:
             raise ValueError("draft limit must be positive")
         if self._store.conversation(conversation_id, user_id=user_id) is None:

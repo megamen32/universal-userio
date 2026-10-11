@@ -48,7 +48,9 @@ def search_conversations(
                    m.body,m.received_at,m.seen_at,
                    c.sender,c.identity_id,c.account_ref,c.updated_at,
                    (SELECT name FROM contact_names
-                    WHERE user_id=c.user_id AND source=c.source AND sender=c.sender) AS display_name,
+                    WHERE user_id=c.user_id AND source=c.source AND sender=
+                      CASE WHEN c.source IN ('max','phone') AND c.account_ref!='' AND c.peer_id!=''
+                        THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
                    (SELECT COUNT(*) FROM messages um
                     WHERE um.user_id=c.user_id AND um.conversation_id=c.id AND um.seen_at IS NULL) AS unread_count
             FROM messages m
