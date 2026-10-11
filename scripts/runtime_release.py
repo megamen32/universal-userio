@@ -587,7 +587,7 @@ def _default_runner(argv: list[str]) -> None:
 def activate_services(*, runner: Callable[[list[str]], None] = _default_runner) -> None:
     runner(["systemctl", "daemon-reload"])
     runner(["systemctl", "reenable", "userio-gmail-ingress.service"])
-    runner(["systemctl", "reenable", "userio-matrix-ingress.service"])
+    # The legacy Matrix ingress remains disabled after the owner disconnects it.
     runner(["systemctl", "restart", "universal-userio.service"])
     runner(["systemctl", "restart", "userio-agentcall-ingress.service"])
 

@@ -9,7 +9,7 @@
    `.env.owner-seed` with `USERIO_SEED_USERNAME` and
    `USERIO_SEED_PASSWORD`, or point `USERIO_OWNER_SEED_FILE` at it.
 3. Install `deploy/universal-userio.service`, run `systemctl daemon-reload`, then `systemctl enable --now universal-userio`.
-4. Install and enable the native UserIO ingress units required for this host (`userio-gmail-ingress`, `userio-matrix-ingress`, `userio-sms-ingress`, or provider sidecars). Gmail and Matrix are enabled with `systemctl reenable`; their `WantedBy` and `PartOf` relationships make them start and restart with `universal-userio.service`. Universal Inbox is retired and is not a runtime dependency.
+4. Install and enable the native UserIO ingress units required for this host (`userio-gmail-ingress`, `userio-matrix-ingress`, `userio-sms-ingress`, or provider sidecars). Gmail keeps its release-managed startup. The legacy host-wide Matrix ingress must remain opt-in and is never re-enabled by a UserIO release; user-linked Matrix accounts now synchronize independently. Universal Inbox is retired and is not a runtime dependency.
 
 For Gmail owner notifications, add the existing project-scoped NoticePlace
 producer credential to `/etc/universal-userio.env` as
@@ -181,3 +181,15 @@ Users still connect from their own browser without editing any server config.
 Only Matrix/IMAP *read* connections have been implemented here: users must
 complete their own browser login. Never ask for their passwords or tokens in
 a chat, environment file, Git commit, or MCP result.
+
+
+### Browser extension credential safety
+
+Only the token-free MV3 ZIP at /vk-userio-extension-mv3.zip is supported.
+The old signed CRX was retired because it included a static operator bearer.
+The extension must be configured with the installing user's own UserIO token,
+never the service-wide USERIO_API_TOKEN. Use the sanitizer script before
+publishing any rebuilt ZIP and keep the regression test enabled. Users should
+review the extension's broad host permissions before installation. VK ID
+proves a VK identity but does not itself authorize VK message reading, and
+the browser extension reads the VK Web profile actually open in Chrome.
