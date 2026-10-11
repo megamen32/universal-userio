@@ -24,6 +24,7 @@ from collections import deque
 from typing import Any
 
 import websocket
+from ..contracts import DeliveryNotSubmittedError
 
 WS_URL = "wss://ws-api.oneme.ru/websocket"
 
@@ -33,9 +34,15 @@ OP_LOGIN = 19
 OP_GET_CHATS = 53
 OP_GET_HISTORY = 49
 OP_SEND = 64
+OP_EDIT = 67
+OP_GET_MESSAGE = 71
 OP_DISPATCH = 128
 
 _HEARTBEAT_INTERVAL = 25.0
+
+
+class MaxSendNotSubmittedError(DeliveryNotSubmittedError):
+    """Connection/authentication failed before any outgoing message command."""
 
 
 class MaxTransport:
@@ -247,7 +254,23 @@ class MaxClient:
         payload = self._roundtrip(32, {"contactIds": ids[:100]})
         return list((payload or {}).get("contacts") or [])
 
+    def _fresh_write_connection(self) -> None:
+        # websocket.connected is local state; an idle remote close does not
+        # necessarily clear it. Never reuse that socket for a user write.
+        self.close()
+        try:
+            self.connect()
+        except Exception as error:
+            raise MaxSendNotSubmittedError(
+                "Не удалось подключиться к MAX. Сообщение не отправлено; попробуйте ещё раз."
+            ) from error
+
     def send(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+        with self._lock:
+            self._fresh_write_connection()
+            return self._send_message(chat_id=chat_id, text=text)
+
+    def _send_message(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
         payload = self._roundtrip(
             OP_SEND,
             {
@@ -271,6 +294,39 @@ class MaxClient:
             "message_id": str(message_id),
             "receipt": "max-ws-accepted",
         }
+
+    def get_message(self, *, chat_id: int | str, message_id: int | str) -> dict[str, Any]:
+        payload = self._roundtrip(OP_GET_MESSAGE, {
+            "chatId": int(chat_id), "messageIds": [int(message_id)],
+        })
+        return next((row for row in (payload or {}).get("messages", [])
+                     if str(row.get("id")) == str(message_id)), {})
+
+    def edit(self, *, chat_id: int | str, message_id: int | str, text: str,
+             expected_text: str) -> dict[str, Any]:
+        with self._lock:
+            self._fresh_write_connection()
+            original = self.get_message(chat_id=chat_id, message_id=message_id)
+            own = str(((self.profile or {}).get("profile") or {}).get("contact", {}).get("id"))
+            if not original or str(original.get("sender")) != own:
+                raise ValueError("Можно изменять только свои сообщения MAX")
+            if original.get("text", "") != expected_text:
+                raise ValueError("Сообщение уже изменилось. Обновите диалог.")
+            if original.get("attaches") or original.get("elements"):
+                raise ValueError("Редактирование сообщений с вложениями пока недоступно")
+            payload = self._roundtrip(OP_EDIT, {
+                "chatId": int(chat_id), "messageId": int(message_id), "text": text,
+                "elements": [], "attachments": [],
+            })
+            result = (payload or {}).get("message") or {}
+            if str(result.get("id")) != str(message_id) or result.get("text") != text:
+                raise RuntimeError("MAX не подтвердил изменение. Обновите диалог; не повторяйте автоматически.")
+            # Some ACKs omit immutable origin fields. Fetch the authoritative
+            # provider row before projecting the edit into the local mirror.
+            row = self.get_message(chat_id=chat_id, message_id=message_id)
+            if not row or row.get("text") != text or str(row.get("sender")) != own:
+                raise RuntimeError("Не удалось проверить изменение в MAX. Обновите диалог.")
+            return row
 
     def dispatch(self, *, timeout: float = 25.0) -> dict[str, Any] | None:
         """Read one DISPATCH frame if it arrives before the timeout (and keep the heartbeat due)."""

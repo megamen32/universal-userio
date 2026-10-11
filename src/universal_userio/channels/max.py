@@ -41,7 +41,7 @@ class MaxChannel:
     """Universal MAX channel backed by one logged-in MaxClient session."""
 
     platform = "max"
-    capabilities = frozenset({"read", "send"})
+    capabilities = frozenset({"read", "send", "edit"})
 
     def __init__(self, client: object) -> None:
         self._client = client
@@ -144,7 +144,16 @@ class MaxChannel:
         raise AdapterNotSupported("max channel does not support delete_message")
 
     async def edit_message(self, chat: ChatRef, message: MessageRef, text: str) -> ChatMessage:
-        raise AdapterNotSupported("max channel does not support edit_message")
+        peer = _peer(chat)
+        ref = getattr(message, "id", message)
+        # Resolve the SDK's stable reference to the actual provider ID.
+        rows = await asyncio.to_thread(self._client.history, peer, backward=100)
+        raw = next((row for row in rows if stable_ref_id(str(row.get("id"))) == ref or str(row.get("id")) == str(ref)), None)
+        if raw is None:
+            raise ValueError("MAX message not found")
+        edited = await asyncio.to_thread(self._client.edit, chat_id=peer,
+            message_id=str(raw["id"]), text=text, expected_text=str(raw.get("text") or ""))
+        return self._to_message(peer, edited)
 
     async def react(self, chat: ChatRef, message: MessageRef, emoji: str) -> None:
         raise AdapterNotSupported("max channel does not support react")

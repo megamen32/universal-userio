@@ -161,7 +161,7 @@ def test_max_channel_from_env_requires_token(monkeypatch):
 
 
 def test_max_capabilities_registered():
-    assert channel_capabilities("max") == frozenset({"read", "send"})
+    assert channel_capabilities("max") == frozenset({"read", "send", "edit"})
 
 
 class _Generator:

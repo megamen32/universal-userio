@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import partial
 
-from .contracts import DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
+from .contracts import DeliveryNotSubmittedError, DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
 
 
@@ -57,6 +57,7 @@ class UserIOService:
         self.draft_notification_delay_seconds = max(0.0, float(draft_notification_delay_seconds))
         self._ai_image_loader = ai_image_loader or self._download_ai_image
         self._inbound_listeners: list[object] = []
+        self._manual_send_lock = threading.Lock()
 
     def _download_ai_image(
         self, *, source: str, message_id: str,
@@ -899,6 +900,65 @@ class UserIOService:
         self._notify_drafts_for_approval([draft], user_id=user_id)
         return draft
 
+    def send_manual_message(self, conversation_id: str, *, body: str,
+                            request_id: str, user_id: str | None = None) -> ReplyDraft:
+        """A human pressing Send authorizes exactly this body and recipient.
+
+        Retain the normal durable delivery claim/receipt, but do not place this
+        intent in the AI approval notification queue. Retries reuse its receipt.
+        """
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", request_id):
+            raise ValueError("request_id is required")
+        text = body.strip()
+        if not text:
+            raise ValueError("Сообщение не может быть пустым")
+        user = self._store._user(user_id)
+        draft_id = "draft_web_" + hashlib.sha256(f"{user}:{request_id}".encode()).hexdigest()
+        with self._manual_send_lock:
+            try:
+                draft = self._store.draft(draft_id, user_id=user)
+            except KeyError:
+                draft = ReplyDraft(draft_id, conversation_id, text, "proposed")
+                self._persist_reply_draft(draft, user_id=user)
+            if draft.body != text or draft.conversation_id != conversation_id:
+                raise ValueError("Этот запрос уже относится к другому сообщению")
+            if draft.status == "sending":
+                raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте это сообщение повторно.")
+        return self.approve(draft.id, user_id=user, expected_snapshot={
+            "expected_text": text, "expected_chat_id": conversation_id, "expected_attachments": [],
+        })
+
+    def edit_max_message(self, conversation_id: str, *, message_id: str, body: str,
+                         expected_body: str, user_id: str | None = None) -> dict:
+        user = self._store._user(user_id)
+        conv = self._store.conversation(conversation_id, user_id=user)
+        if not conv or conv["source"] != "max" or user != self.max_user_id or self.max_client is None:
+            raise DeliveryUnavailableError("Редактирование MAX недоступно для этого аккаунта")
+        if not self._store.send_enabled(user_id=user) or not self._store.route_allowed(
+                user_id=user, source="max", route_id=str(conv["route_id"])):
+            raise DeliveryUnavailableError("Изменение сообщений запрещено настройками аккаунта")
+        record = self._store.message(source="max", message_id=message_id, user_id=user)
+        peer = str(conv.get("peer_id") or conv["sender"])
+        prefix = f"max-{peer}-"
+        if not record or record["conversation_id"] != conversation_id or record["direction"] != "outgoing" or not message_id.startswith(prefix):
+            raise ValueError("Можно изменять только своё сообщение в этом диалоге")
+        raw_id = message_id[len(prefix):]
+        if not raw_id.isdigit() or not body.strip():
+            raise ValueError("Некорректное сообщение")
+        if record["body"] != expected_body:
+            raise ValueError("Сообщение уже изменилось. Обновите диалог.")
+        row = self.max_client.edit(chat_id=peer, message_id=raw_id, text=body.strip(), expected_text=expected_body)
+        from .max_ingress import message_envelope, _own_id
+        from .adapters import inbox_message_from_envelope
+        envelope = message_envelope(row, chat_id=peer, own_id=_own_id(self.max_client),
+                                    kind=str(conv.get("conversation_kind") or "direct"),
+                                    reconciliation=True, title=str(conv.get("display_name") or ""))
+        if envelope is None:
+            raise RuntimeError("MAX не вернул изменённое сообщение")
+        self.receive(inbox_message_from_envelope(envelope, received_at=record["received_at"]),
+                     route_id=str(conv["route_id"]), user_id=user, account_ref=str(conv.get("account_ref") or "max"))
+        return self._store.message(source="max", message_id=message_id, user_id=user)
+
     def _generator_for(self, user_id: str | None) -> object:
         """BYOK: a user's own endpoint/model/key wins over the server default."""
         resolved = self._store.default_user_id if user_id is None else user_id
@@ -971,9 +1031,16 @@ class UserIOService:
         resolved_user_id = self._store._user(user_id)
         if not self._store.send_enabled(user_id=resolved_user_id):
             raise DeliveryUnavailableError("outbound delivery is disabled by user policy")
-        draft = self._store.claim_draft_send(
-            draft_id, user_id=resolved_user_id, expected_snapshot=expected_snapshot,
-        )
+        if self._store.draft(draft_id, user_id=resolved_user_id).status == "sending":
+            raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте сообщение повторно.")
+        try:
+            draft = self._store.claim_draft_send(
+                draft_id, user_id=resolved_user_id, expected_snapshot=expected_snapshot,
+            )
+        except ValueError:
+            if self._store.draft(draft_id, user_id=resolved_user_id).status == "sending":
+                raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте сообщение повторно.") from None
+            raise
         if draft.status == "approved":
             return draft
         try:
@@ -983,7 +1050,11 @@ class UserIOService:
             raise
         # Once a provider may have accepted delivery, a timeout or receipt-store
         # failure is uncertain. Keep the durable claim; never retry blindly.
-        receipt = send()
+        try:
+            receipt = send()
+        except DeliveryNotSubmittedError:
+            self._store.release_draft_send(draft_id, user_id=resolved_user_id)
+            raise
         return self._store.approve(draft_id, receipt, user_id=resolved_user_id)
 
     def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):

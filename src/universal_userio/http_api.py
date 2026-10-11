@@ -786,6 +786,19 @@ def handler(
                     drafts = service.propose_from_conversation(conversation_id, user_id=user_id)
                     self._reply(202, {"drafts": [{"id": draft.id, "body": draft.body, "status": draft.status} for draft in drafts]})
                     return
+                if path.startswith("/v1/conversations/") and path.endswith("/send"):
+                    if principal.service_account:
+                        self._reply(403, {"error": "Используйте явное подтверждение черновика для автоматической отправки"})
+                        return
+                    if not service._store.capability_enabled("send", user_id=user_id):
+                        self._reply(403, {"error": "send_capability_disabled"})
+                        return
+                    conversation_id = unquote(path.removeprefix("/v1/conversations/").removesuffix("/send").strip("/"))
+                    payload = self._json()
+                    draft = service.send_manual_message(conversation_id, body=str(payload.get("body") or ""),
+                        request_id=str(payload.get("request_id") or ""), user_id=user_id)
+                    self._reply(200, {"id": draft.id, "status": draft.status, "receipt": draft.receipt})
+                    return
                 if path.startswith("/v1/conversations/") and path.endswith("/drafts"):
                     conversation_id = path.removeprefix("/v1/conversations/").removesuffix("/drafts").strip("/")
                     draft = service.create_manual_draft(
@@ -903,6 +916,8 @@ def handler(
                 self._reply(409, {"error": str(error)})
             except RuntimeError as error:
                 self._reply(502, {"error": str(error)})
+            except OSError:
+                self._reply(502, {"error": "Соединение прервалось. Результат отправки уточняется; не повторяйте сообщение автоматически."})
 
         def do_PATCH(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
@@ -911,6 +926,17 @@ def handler(
                 self._reply(401, {"error": "unauthorized"})
                 return
             try:
+                if path.startswith("/v1/conversations/") and "/messages/" in path:
+                    if principal.service_account or not service._store.capability_enabled("send", user_id=principal.user_id):
+                        self._reply(403, {"error": "Изменение сообщения доступно пользователю с правом отправки"})
+                        return
+                    conversation_id, message_id = path.removeprefix("/v1/conversations/").split("/messages/", 1)
+                    payload = self._json()
+                    message = service.edit_max_message(unquote(conversation_id), message_id=unquote(message_id),
+                        body=str(payload.get("body") or ""), expected_body=str(payload.get("expected_body") or ""),
+                        user_id=principal.user_id)
+                    self._reply(200, {"message": message})
+                    return
                 if path.startswith("/v1/drafts/"):
                     draft_id = path.removeprefix("/v1/drafts/").strip("/")
                     payload = self._json()
@@ -925,6 +951,8 @@ def handler(
                 self._reply(404, {"error": str(error)})
             except ValueError as error:
                 self._reply(400, {"error": str(error)})
+            except (RuntimeError, OSError):
+                self._reply(502, {"error": "Не удалось подтвердить изменение. Обновите диалог перед повтором."})
 
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)

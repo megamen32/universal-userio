@@ -11,8 +11,8 @@ import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; messages: Message[]; drafts: Draft[] }
-type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string }
-type Draft = { id: string; body: string; status: string }
+type Message = { source: string; message_id: string; sender: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string }
+type Draft = { id: string; body: string; status: string; outbox_receipt?: string }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
 type SecretaryTriage = { event_seq: number; status: string; request_id: string; triage?: { decision?: string; importance?: number; urgency?: string; confidence?: number; reason_ru?: string; action_summary?: string; action_required?: boolean } }
 type SecretaryDeep = { job_id: string; event_seq: number; status: "accepted" | "running" | "completed" | "failed"; session_id?: string; session_url?: string; result?: string; error?: string }
@@ -218,6 +218,14 @@ export function App() {
   const [newChatOpen, setNewChatOpen] = useState(false)
   const [newChatSource, setNewChatSource] = useState("sms")
   const [newChatPhone, setNewChatPhone] = useState("")
+  const [sendBusy, setSendBusy] = useState(false)
+  const sendInFlight = useRef(false)
+  const sendIntent = useRef<{key: string; id: string} | null>(null)
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null)
+  const [messageEditBody, setMessageEditBody] = useState("")
+  const [messageEditBusy, setMessageEditBusy] = useState(false)
+  const [approvingDraft, setApprovingDraft] = useState("")
+  const approvalInFlight = useRef(false)
   const [editDraftId, setEditDraftId] = useState("")
   const [editDraftBody, setEditDraftBody] = useState("")
   const [byokOpen, setByokOpen] = useState(false)
@@ -456,17 +464,41 @@ export function App() {
     }
   }
 
-  const submitDraft = async () => {
-    if (!conversation || !canReply || !draft.trim()) return
+  const sendManual = async () => {
+    if (!conversation || !canReply || !draft.trim() || sendInFlight.current) return
+    const id = conversation.id, text = draft.trim()
+    const key = JSON.stringify([id, text])
+    if (sendIntent.current?.key !== key) sendIntent.current = { key, id: crypto.randomUUID() }
+    sendInFlight.current = true
+    setSendBusy(true)
     try {
-      await api(`/v1/conversations/${conversation.id}/drafts`, { method: "POST", body: JSON.stringify({ body: draft }) })
-      setDraft("")
-      await loadConversation(conversation.id)
-      await refreshChats()
-      notify("Черновик создан — проверьте и нажмите «Отправить»")
+      await api(`/v1/conversations/${id}/send`, { method: "POST", body: JSON.stringify({ body: text, request_id: sendIntent.current.id }) })
+      setDraft(current => current.trim() === text ? "" : current)
+      sendIntent.current = null
+      notify("Отправлено")
+      // Delivery already succeeded. A later view refresh failure must never
+      // turn it into a send failure or invite another copy of the message.
+      await Promise.allSettled([loadConversation(id), refreshChats()])
     } catch (error) {
-      notify(`Не удалось создать черновик: ${(error as Error).message}`)
+      notify(`Не удалось отправить: ${(error as Error).message}`)
+    } finally {
+      sendInFlight.current = false
+      setSendBusy(false)
     }
+  }
+  const saveMessageEdit = async () => {
+    if (!conversation || !editingMessage || !messageEditBody.trim() || messageEditBusy) return
+    setMessageEditBusy(true)
+    try {
+      await api(`/v1/conversations/${conversation.id}/messages/${encodeURIComponent(editingMessage.message_id)}`, {
+        method: "PATCH", body: JSON.stringify({body: messageEditBody, expected_body: editingMessage.body}),
+      })
+      setEditingMessage(null)
+      notify("Сообщение изменено в MAX")
+      await Promise.allSettled([loadConversation(conversation.id), refreshChats()])
+    } catch (error) {
+      notify(`Не удалось изменить: ${(error as Error).message}`)
+    } finally { setMessageEditBusy(false) }
   }
   const createChat = async () => {
     const target = newChatPhone.trim()
@@ -673,14 +705,16 @@ export function App() {
     }
   }
   const approve = async (id: string) => {
-    if (!canReply) return
+    if (!canReply || approvalInFlight.current) return
+    approvalInFlight.current = true
+    setApprovingDraft(id)
     try {
       await api(`/v1/drafts/${id}/approve`, { method: "POST", body: "{}" })
-      if (conversation) await loadConversation(conversation.id)
-      notify("Отправляется…")
+      notify("Отправлено")
+      if (conversation) await Promise.allSettled([loadConversation(conversation.id)])
     } catch (error) {
       notify(`Не удалось отправить: ${(error as Error).message}`)
-    }
+    } finally { approvalInFlight.current = false; setApprovingDraft("") }
   }
   const markSeen = async () => { const message = conversation?.messages.filter(m => m.direction !== "outgoing").at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
   const toggleAccount = (id: string, visible: boolean) => {
@@ -818,20 +852,21 @@ export function App() {
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
               {system
                 ? <div className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
-                : <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : <MessageBody message={message} onAttachmentClick={openAttachment} />}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : ""}</p></div>}
+                : <div className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение MAX" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} onAttachmentClick={openAttachment} />}{conversation.source === "max" && outgoing && canReply && !message.attachments?.length && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : ""}</p></div>}
             </Fragment>
           })}
-          {conversation.drafts.map((item) => {
+          {conversation.drafts.filter(item => !(item.status === "approved" && conversation.messages.some(message =>
+            message.message_id === item.outbox_receipt || (conversation.source === "max" && message.message_id.endsWith(`-${item.outbox_receipt}`))))).map((item) => {
             const editing = editDraftId === item.id
             return <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-primary/90 px-4 py-3 text-sm text-primary-foreground shadow-sm md:max-w-[78%]">
               {editing
                 ? <div className="space-y-2"><textarea className="min-h-16 w-full rounded-lg bg-primary-foreground/10 p-2 text-foreground" value={editDraftBody} onChange={(event) => setEditDraftBody(event.target.value)} rows={3} /><div className="flex justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditDraftId(""); setEditDraftBody("") }}>Отмена</Button><Button size="sm" onClick={() => void saveDraftEdit(item.id)}>Сохранить</Button></div></div>
-                : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? "Черновик" : item.status === "approved" ? "Отправлено" : item.status === "rejected" ? "Отклонено" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}
+                : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? (item.id.startsWith("draft_web_") ? "Не отправлено" : "Черновик") : item.status === "approved" ? "Отправлено" : item.status === "rejected" ? "Отклонено" : item.status === "sending" ? "Результат отправки уточняется — не отправляйте повторно" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply || !!approvingDraft} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}
             </div>
           })}
           <div ref={bottomRef} />
         </div></ScrollArea>
-        <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]"><div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5"><Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void submitDraft() }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} /><Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button><Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply} onClick={() => void submitDraft()} size="icon" title="Создать черновик"><Send /></Button></div><p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? "Отправка только после явного подтверждения черновика." : "Только чтение."}</p></div></footer>
+        <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]"><div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5"><Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply || sendBusy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void sendManual() } }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} /><Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button><Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply || sendBusy || !draft.trim()} onClick={() => void sendManual()} size="icon" title="Отправить сообщение"><Send /></Button></div><p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? "Ваш текст отправляется сразу. Предложения ИИ — после вашего подтверждения." : "Только чтение."}</p></div></footer>
       </> : <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Открываю диалог…</div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>

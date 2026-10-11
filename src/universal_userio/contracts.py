@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 
+class DeliveryNotSubmittedError(RuntimeError):
+    """An adapter proves that failure occurred before provider submission."""
+
+
 @dataclass(frozen=True, slots=True)
 class InboxMessage:
     source: str
