@@ -14,17 +14,17 @@
 - Telegram 900000300: реальные сообщения, кэш и Fast Agent подтверждены 2026-10-11.
 - Общий механизм черновика/подтверждения/receipt существует.
 ### Active
-- [ ] MAX авторизация и сохраняемая серверная сессия.
-- [ ] MAX история и live события совпадают с приложением.
-- [ ] Черновик, явное подтверждение, одна реальная отправка и receipt.
-- [ ] Reconnect, dedup, ограниченная служба и операторский rollback.
+- [x] MAX авторизация и сохраняемая серверная сессия.
+- [x] MAX история и live события совпадают с приложением.
+- [x] Черновик, явное подтверждение, одна реальная отправка и receipt.
+- [x] Reconnect, dedup, ограниченная служба и операторский rollback.
 ### Out of Scope
 - Подмена личного аккаунта ботом: не читает личную переписку.
 - Постоянная автоматизация Android/браузера: пользователь отверг как основной транспорт.
 - Звонки и массовые отправки: не нужны для inbox.
 
 ## Context
-MAX adapter уже существует, но env token/device отсутствуют, unit не установлен. Локальный GSD создаётся именно в этом продукте; родительский Agent Projects Portfolio не изменяется.
+MAX adapter уже существует, но серверная авторизация установлена, unit работает; пять чатов/35 сообщений и одна подтверждённая отправка проверены. Локальный GSD создаётся именно в этом продукте; родительский Agent Projects Portfolio не изменяется.
 
 ## Constraints
 - Main, канонический checkout, чужой WIP сохраняется.
@@ -34,7 +34,7 @@ MAX adapter уже существует, но env token/device отсутств�
 ## Key Decisions
 | Decision | Rationale | Outcome |
 |---|---|---|
-| Server WebSocket personal session | Existing adapter and personal API projects; official HTTP API is bot-only | Pending live authentication |
+| Server WebSocket personal session | Existing adapter and personal API projects; official HTTP API is bot-only | Accepted: server identity and live exchange |
 | Sequential inline execution | One owner; no duplicate client/enrollment | Active |
 
 ## Evolution

@@ -1,4 +1,4 @@
 # State
-Milestone v1.0 MAX; owner 01a11747-7bb9-7bc0-8c0a-ce64db49105d.
-Phase 1: actual Android authorization reused; server account900000102/Nikita Rozanov confirmed, five chats. No SMS/QR auth completed or phone logout. Phase 2: history `from` fixed (33 messages), zero Saved Messages chat, incoming/outgoing/time/edit/media projection, exact chat grouping, seq/event buffering and heartbeat/reconnect repaired.
-Phase 3: focused checks green; publication/install and final live owner Saved Messages/read/draft/approve/reconnect remain. S21 lease released after initial inspection. No test send yet.
+Milestone v1.0 MAX accepted 2026-10-11. Owner01a11747-7bb9-7bc0-8c0a-ce64db49105d.
+Five chats/35 records parity, Saved Messages input, one MCP draft/explicit approval/provider/app readback, live ingestion and reconnect accepted. Phone lease free. Runtime source b51920935549220cf261f64cec31ad4401c8e1e8, ingress1131006 stable/enabled, no post-canary restart.
+Requirements6/6 verified. Byte media/calls/deep archive are explicit limits. No remaining task blocker. Evidence: .agents/tasks/20261011-max-userio{,-proof.json}; private .tmp/max-20261011/acceptance-proof.json.
