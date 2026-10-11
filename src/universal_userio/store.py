@@ -1743,7 +1743,7 @@ class SQLiteUserIOStore:
                 ).fetchone()
                 old_body = str(existing["body"] or "") if existing else ""
                 new_body = str(message.body or "")
-                if message.source != "telegram":
+                if message.source not in {"telegram", "sms"}:
                     new_body = new_body.strip()
                 old_placeholder = (not old_body.strip()) or (
                     old_body.strip().startswith("[") and old_body.strip().endswith("]")
