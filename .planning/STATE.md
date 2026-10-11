@@ -12,10 +12,17 @@ Real headed final batch e806 FINISH: normal account/person/older200→300 entrie
 Full chronological API paging accepted; exact viewport-anchor stability not
 claimed from firstVisible comparison and may be checked separately.
 
-Active direct requirements: default automatic read with per-user stealth opt-out;
-restore SMS gateway, rooted-S21 native path, public APK/connect onboarding for
-other phones. User-requested gateway worker owns gateway source/deploy/APK and
-phone lease; root owns common UserIO adapter/settings/UI. Native health/APK
-registration/no-op proven; new SMS delivery awaits explicit test recipient.
-Exmanager extra remote-delete scope cancelled before implementation/delete.
+Installed reading/SMS/landing continuation: per-user default auto-read and stealth
+persistent human UI proved; visible phone entries88 unseen→0 after normal toggle.
+Native S21 account binding retained, maintained SMS ingress active; ONE authorized
+SMS through normal UserIO exact approval independently received on owner Mac;
+lease released. APK1.1 public download remains available for other Android users.
+Public landing and huge cabinet CTA accepted; authenticated root immediately
+opens cabinet. Latest37bc cabinet links О сервисе→/welcome and GitHub installed;
+real normal browser roundtrip/reload preserves login, both visible. Own tabs and
+PNG copies cleaned; proof in .tmp/auto-read/cabinet-nav-browser-result.json.
+Cancelled Exmanager extra remote-delete scope unchanged; no deletion implemented.
+Remaining reading verification: provider-specific Telegram automatic-read positive
+live receipt (local visible read/stealth already accepted). Existing original
+Telegram mirror/cache/FastAgent outcome retained; no model replay needed.
 No parent/global AI unpause or unrelated historical provider replay.
