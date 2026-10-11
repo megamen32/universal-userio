@@ -1043,8 +1043,9 @@ def handler(
             if requested_path == "/download":
                 self._html(200, _download_page().encode())
                 return
+            # Only credential-free ZIPs are distributed. Obsolete signed CRX
+            # builds contained a baked operator token and must stay unavailable.
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
-                                  "/vk-userio-extension.crx", "/vk-userio-updates.xml",
                                   "/chatgpt-cdp-setup.zip"} and self._static(requested_path):
                 return
             if requested_path in {"/vk/connect/new", "/vk/callback"}:
@@ -1579,7 +1580,6 @@ def _download_page() -> str:
     <h2>Universal UserIO Agent <span class="tag">браузерное расширение</span></h2>
     <p>Захват VK Web (чаты, поиск, отправка) + универсальный агент сбора данных с сайтов через пользовательские сессии. Никаких куки и токенов сайтов наружу — только ваш настроенный UserIO.</p>
     <a class="btn" href="/vk-userio-extension-mv3.zip">Скачать для Chrome / Chromium (MV3)</a>
-    <a class="btn secondary" href="/vk-userio-extension.zip">Legacy MV2</a>
     <ol>
       <li>Распакуйте zip в постоянную папку.</li>
       <li>Откройте <code>chrome://extensions</code>, включите Developer mode → <b>Load unpacked</b> → выберите папку.</li>
@@ -1676,10 +1676,33 @@ def _dashboard_signup_page(error: str = "") -> str:
 def _vk_connect_page(app_id: str) -> str:
     safe_app_id = app_id.strip() or "0"
     return f'''<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Connect VK</title><style>body{{font:16px system-ui;max-width:560px;margin:10vh auto;padding:24px;background:#111;color:#eee}}#status{{margin-top:20px;color:#aaa}}a{{color:#8ab4f8}}</style></head>
-<body><h1>Connect VK</h1><p>VK ID links the account. Reading chats is enabled separately by the VK browser extension.</p>
-<div id="vk_auth"></div><p id="status">Waiting for VK ID…</p>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Подключить ВКонтакте — UserIO</title>
+<style>body{{font:16px system-ui;max-width:680px;margin:7vh auto;padding:24px;background:#111;color:#eee}}
+#status{{margin:18px 0;color:#aaa}}a{{color:#8ab4f8}}h2{{font-size:20px}}
+.card{{border:1px solid #343434;border-radius:14px;padding:18px;margin-top:25px;background:#1a1a1a}}
+.btn{{display:inline-block;background:#0878f6;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700}}
+li{{margin:8px 0}}code{{background:#252525;padding:2px 5px;border-radius:4px}}
+small{{color:#aaa;line-height:1.45}}</style></head>
+<body><p><a href="/accounts/connect/new">← Аккаунты UserIO</a></p>
+<h1>Подключить ВКонтакте</h1>
+<p><b>VK ID</b> подтверждает профиль, но сам по себе не разрешает читать переписки.
+Расширение читает открытую сессию VK в Chrome. Сверяйте, что VK Web открыт именно в нужном аккаунте.</p>
+<div id="vk_auth"></div><p id="status">Ожидание VK ID…</p>
+<section class="card">
+  <h2>Для чтения чатов установите расширение</h2>
+  <a class="btn" href="/vk-userio-extension-mv3.zip" download>Скачать расширение для Chrome (ZIP)</a>
+  <ol>
+    <li>Распакуйте ZIP в постоянную папку.</li>
+    <li>Откройте <code>chrome://extensions</code> в Chrome, включите режим разработчика и нажмите «Загрузить распакованное».</li>
+    <li>В настройках расширения выберите сервер <code>https://msg.bezrabotnyi.com</code>
+        и <b>личный</b> UserIO API-токен вашего пользователя. Общий серверный ключ использовать нельзя.</li>
+    <li>Откройте <a href="https://vk.com/im" target="_blank" rel="noreferrer">VK Мессенджер</a> в том же профиле Chrome.</li>
+  </ol>
+  <small>Важно: это универсальное расширение UserIO с широкими разрешениями на сайты.
+    Оно не устанавливается через магазин Chrome и не получает доступ к сообщениям через VK ID.
+    <a href="/download">Подробности об установке и разрешениях</a>.</small>
+</section>
 <script src="https://unpkg.com/@vkid/sdk@<3.0.0/dist-sdk/umd/index.js"></script>
 <script>
 (() => {{
@@ -1695,7 +1718,7 @@ def _vk_connect_page(app_id: str) -> str:
       VKID.Auth.exchangeCode(payload.code, payload.device_id)
         .then(result => VKID.Auth.userInfo(result.access_token))
         .then(info => fetch('/v1/vk/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{user_id:String(info.user_id), display_name:info.user_name || info.first_name || 'VK account'}})}}))
-        .then(response => {{ if (!response.ok) throw new Error('UserIO rejected account'); status.textContent = 'VK identity connected. Install the browser extension to read chats.'; }})
+        .then(response => {{ if (!response.ok) throw new Error('UserIO rejected account'); status.textContent = 'VK ID подтверждён. Для чтения сообщений скачайте и установите расширение ниже.'; }})
         .catch(error => {{ status.textContent = 'Could not connect VK'; console.error(error); }});
     }});
 }})();

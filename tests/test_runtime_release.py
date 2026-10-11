@@ -182,7 +182,6 @@ def test_activate_uses_argv_systemctl_in_safe_order() -> None:
     assert calls == [
         ["systemctl", "daemon-reload"],
         ["systemctl", "reenable", "userio-gmail-ingress.service"],
-        ["systemctl", "reenable", "userio-matrix-ingress.service"],
         ["systemctl", "restart", "universal-userio.service"],
         ["systemctl", "restart", "userio-agentcall-ingress.service"],
     ]
