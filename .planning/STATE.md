@@ -1,22 +1,23 @@
 # State
 
-Active v1.1, owner01a11747-7bb9-7bc0-8c0a-ce64db49105d.
-Direct human web Send/Enter, idempotent durable intent, fresh MAX write preflight,
-text edit/native same-ID projection: tested/published/installed daa2d758.
-First actual headed login exposed core224/256MiB reclaim/502 BEFOREsend/edit.
-Own unit84984+R38 persistent repair/docsbe671: samePID1640511,384/512MiB,
-fullPSIzero, publiclogin200. No global caps or foreign processes changed.
+Active UserIO owner01a11747-7bb9-7bc0-8c0a-ce64db49105d; canonical main.
+MAX v1.0 API/native acceptance retained. v1.1 human web delivery is now accepted:
+normal SavedMessages two receipts preserved, expanded Darья case closes reload
+and repeated URL editing. Source0281320/e5272c1 installed;41 backend+6 frontend,
+production build and independent review pass. Actual second new message
+117424240694747970 immediately visible/editable, URL→differentURL→plain SAME ID;
+native/local attachments empty, receipt preserved, normal full reload retains.
+Three stickers visible. Header56px desktop/mobile390, Escape preserves composer.
+OwnC002 closed TRUE/resource returned, sharedChrome preserved. Native/core
+identities remained stable through canary. Full proof in
+.agents/tasks/20261011-max-darya-links-call-grouping.md, private screenshots there.
+No earlier sends, models or original accepted checks replayed.
 
-Real owner login and broker marker passed. Frontend-only c9edb00 fixed the
-measured16,000px Radix chat-list overflow and was published/installed without
-restart. Normal MAX Saved Messages web Send/edit/Enter passed: native IDs
-117423883941596079 (same-ID edit),117423892275290138; two new messages, no
-duplicates, durable receipts/native bodies and visible screenshot agree.
-Only post-reload message capture and exact own136400 close remain. Reloadccfa
-timed out with page still interactive/rows0 before lease expiry19:21:38UTC;
-browser inputs stopped. R38 narrow120s request hit actual Herder turn-verification
-failure; Hub55 received the concrete routing gap. Never replay the accepted
-business actions. The failed original contact message is preserved/proposed
-after complete fresh no-delivery reconciliation.
-External FastAgent TokenPlan429 recorded; do not claim renewed AI acceptance or
-silently switch models. Full proof .agents/tasks/20261011-max-web-send-edit.md.
+Next direct human requirement: repeated calls to a person form one chronological
+conversation. Readonly complete preflight236 conversations:229 exact CDR UUID/peer
+matches→2people,7unknown retained;1441messages/14proposed drafts/369event IDs must
+remain intact. Policy/liveclaim conflicts0. Phone100 is genuinely registered,
+read-only. Producer fb4c5ff opt-in metadata prepared by R50, no gateway deployment.
+Next UserIO source: transaction/aliases preserving old links and call identity,
+projector peer/account provenance, focused tests, backup/apply and actual UI.
+No calls or phone data mutation yet; no global service/AI unpause.
