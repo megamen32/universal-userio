@@ -1149,12 +1149,16 @@ def handler(
                     self._reply(403, {"error": "read_capability_disabled"}); return
                 text = query.get("q", [""])[0].strip()
                 source = query.get("source", [""])[0].strip().lower() or None
+                account_ref = query.get("account_ref", [""])[0].strip() or None
+                if account_ref and len(account_ref) > 128:
+                    self._reply(400, {"error": "invalid account_ref"}); return
                 try:
                     limit = max(1, min(int(query.get("limit", ["100"])[0]), 500))
                 except ValueError:
                     limit = 100
                 self._reply(200, {"results": search_conversations(
-                    service._store, text, source=source, limit=limit, user_id=user_id,
+                    service._store, text, source=source, account_ref=account_ref,
+                    limit=limit, user_id=user_id,
                 )})
                 return
             if path == "/v1/drafts/pending":
@@ -1171,8 +1175,11 @@ def handler(
                     self._reply(403, {"error": "read_capability_disabled"}); return
                 source = query.get("source", [""])[0].strip().lower() or None
                 exact_source = query.get("exact_source", [""])[0].strip().lower() in {"1", "true", "yes"}
+                account_ref = query.get("account_ref", [""])[0].strip() or None
+                if account_ref and len(account_ref) > 128:
+                    self._reply(400, {"error": "invalid account_ref"}); return
                 conversations = service._store.conversations(
-                    source=source, exact_source=exact_source, user_id=user_id,
+                    source=source, exact_source=exact_source, account_ref=account_ref, user_id=user_id,
                 )
                 # If the latest message in a conversation is an attachment
                 # placeholder ([image], [document] …) replace it with the most

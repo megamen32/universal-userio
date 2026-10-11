@@ -19,6 +19,7 @@ def search_conversations(
     query: str,
     *,
     source: str | None = None,
+    account_ref: str | None = None,
     limit: int = 100,
     user_id: str | None = None,
     scan_limit: int = 50000,
@@ -36,6 +37,9 @@ def search_conversations(
         else:
             source_sql = " AND c.source=?"
             values.append(source)
+    if account_ref:
+        source_sql += " AND c.account_ref=?"
+        values.append(account_ref)
     values.append(max(100, min(int(scan_limit), 100000)))
     with store._lock:
         rows = store._connection.execute(

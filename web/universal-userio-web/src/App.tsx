@@ -296,6 +296,7 @@ export function App() {
     const params = new URLSearchParams()
     if (sourceFilter) params.set("source", sourceFilter)
     if (account) params.set("exact_source", "1")
+    if (account?.provider === "telegram") params.set("account_ref", account.id)
     const suffix = params.size ? `?${params.toString()}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     if (!chatsRequest.current.isCurrent(request)) return
@@ -310,6 +311,7 @@ export function App() {
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({ q: text, limit: "100" })
       if (sourceFilter) params.set("source", sourceFilter)
+      if (account?.provider === "telegram") params.set("account_ref", account.id)
       setSearching(true)
       void api<{ results: Chat[] }>(`/v1/search?${params.toString()}`)
         .then((data) => setSearchResults(data.results))
@@ -760,7 +762,8 @@ export function App() {
 
   const visibleChats = (search.trim() ? searchResults : chats)
     .filter((chat) => platformVisibleInFeed(chat.source))
-    .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) && chat.source === sourceForAccount(item)))
+    .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) &&
+      (chat.source === "telegram" ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
     .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
   // Clearing on selectedChat guarantees we never leak text into the next reply.
@@ -823,7 +826,7 @@ export function App() {
         <div key={viewKey}>
         {visibleChats.map((chat, chatIndex) => {
           const unread = chat.unread_count > 0
-          return <button key={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${Math.min(chatIndex * 18, 360)}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
+          return <button key={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
           <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
         </button>
         })}
