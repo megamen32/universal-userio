@@ -71,8 +71,10 @@ def _prefix_for_tokens(value: object, token_limit: int) -> str:
 
 def _cache_channel(source: object) -> str:
     value = str(source or "").strip().lower()
-    if value in {"mail", "email", "gmail"} or value.startswith("gmail:"):
+    if value in {"mail", "email", "gmail"} or value.startswith(("gmail:", "email:")):
         return "gmail"
+    if value.startswith("matrix:"):
+        return "matrix"
     if value == "chatgpt" or value.startswith("chatgpt:"):
         return "chatgpt"
     return value
@@ -1028,7 +1030,7 @@ class SQLiteUserIOStore:
     def route_allowed(self, *, user_id: str, source: str, route_id: str) -> bool:
         if user_id == self.default_user_id:
             return True
-        public_source = "mail" if source in {"mail", "email", "gmail"} or source.startswith("gmail:") else source
+        public_source = "mail" if source in {"mail", "email", "gmail"} or source.startswith(("gmail:", "email:")) else source
         with self._lock:
             row = self._connection.execute(
                 """
@@ -1242,7 +1244,7 @@ class SQLiteUserIOStore:
             return "group" if peer.endswith("@g.us") else (
                 "direct" if peer.endswith("@s.whatsapp.net") or peer.endswith("@lid") else "unknown")
         if message.source in {"mail", "email", "gmail", "sms", "phone", "chatgpt", "max"} or (
-            message.source.startswith("gmail:") or message.source.startswith("chatgpt:")):
+            message.source.startswith(("gmail:", "email:", "chatgpt:"))):
             return "direct"
         return "unknown"
 
@@ -1929,7 +1931,9 @@ class SQLiteUserIOStore:
         source, sender = source.strip(), sender.strip()
         if not source or not sender:
             raise ValueError("source and sender are required")
-        message_key = "email:" + sender.casefold() if source in {"mail", "email", "gmail"} or source.startswith("gmail:") else f"{source}:{sender}"
+        message_key = ("email:" + sender.casefold()
+                       if source in {"mail", "email", "gmail"} or source.startswith("gmail:")
+                       else f"{source}:{sender}")
         conversation_id = self.conversation_id_for_key(message_key, user_id=user_id)
         if conversation_id is None:
             conversation_id = "conv_" + hashlib.sha256(f"{user_id}\0{message_key}".encode()).hexdigest()[:24]
@@ -3111,7 +3115,7 @@ class SQLiteUserIOStore:
     ) -> dict[str, object] | None:
         where, values = "user_id=? AND message_id=?", [self._user(user_id), message_id]
         if source in {"mail", "email", "gmail"}:
-            where += " AND (source IN ('mail','email','gmail') OR source LIKE 'gmail:%')"
+            where += " AND (source IN ('mail','email','gmail') OR source LIKE 'gmail:%' OR source LIKE 'email:%')"
         elif source:
             where += " AND source=?"
             values.append(source)
@@ -4167,7 +4171,9 @@ class SQLiteUserIOStore:
         if not source:
             return "", []
         if source in {"mail", "email", "gmail"}:
-            return " AND (c.source IN ('mail','email','gmail') OR c.source LIKE 'gmail:%')", []
+            return " AND (c.source IN ('mail','email','gmail') OR c.source LIKE 'gmail:%' OR c.source LIKE 'email:%')", []
+        if source == "matrix":
+            return " AND (c.source='matrix' OR c.source LIKE 'matrix:%')", []
         return " AND c.source=?", [source]
 
     def conversations(

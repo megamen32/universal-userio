@@ -33,7 +33,9 @@ def search_conversations(
     if source:
         source = source.strip().lower()
         if source in {"mail", "email", "gmail"}:
-            source_sql = " AND (c.source IN ('mail','email','gmail') OR c.source LIKE 'gmail:%')"
+            source_sql = " AND (c.source IN ('mail','email','gmail') OR c.source LIKE 'gmail:%' OR c.source LIKE 'email:%')"
+        elif source == "matrix":
+            source_sql = " AND (c.source='matrix' OR c.source LIKE 'matrix:%')"
         else:
             source_sql = " AND c.source=?"
             values.append(source)

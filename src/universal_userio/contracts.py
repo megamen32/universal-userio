@@ -33,8 +33,14 @@ class InboxMessage:
 
     @property
     def conversation_key(self) -> str:
+        if self.source.startswith("email:"):
+            # IMAP conversations are private to one linked mailbox.
+            return self.source + ":" + self.sender.strip().casefold()
         if self.source == "email" or self.source == "gmail" or self.source.startswith("gmail:"):
             return "email:" + self.sender.strip().casefold()
+        if self.source.startswith("matrix:") and self.peer_id:
+            # Room identity, not the latest author, identifies a Matrix chat.
+            return self.source + ":" + self.peer_id
         return f"{self.source}:{self.sender}"
 
 

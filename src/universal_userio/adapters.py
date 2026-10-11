@@ -42,6 +42,8 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     if (
         source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail", "chatgpt", "max"}
         and not source.startswith("gmail:")
+        and not source.startswith("email:")
+        and not source.startswith("matrix:")
         and not source.startswith("chatgpt:")
     ):
         raise ValueError("unsupported message source")
@@ -361,7 +363,9 @@ class StoredChannelAdapter:
         if self.channel is None:
             return True
         if self.channel == "mail":
-            return source in {"mail", "email", "gmail"} or source.startswith("gmail:")
+            return source in {"mail", "email", "gmail"} or source.startswith(("gmail:", "email:"))
+        if self.channel == "matrix":
+            return source == "matrix" or source.startswith("matrix:")
         return source == self.channel
 
 
@@ -1472,4 +1476,6 @@ class UnifiedChannels(StoredChannelAdapter):
 
 
 def _public_channel(source: str) -> str:
-    return "mail" if source in {"mail", "email", "gmail"} or source.startswith("gmail:") else source
+    if source in {"mail", "email", "gmail"} or source.startswith(("gmail:", "email:")):
+        return "mail"
+    return "matrix" if source.startswith("matrix:") else source

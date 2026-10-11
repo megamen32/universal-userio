@@ -149,3 +149,35 @@ The canary uses a unique Matrix conversation sender and the unmapped route
 read-back from the live inbox. It reads the bearer in-process and never prints
 it. If install, activation, verification, or canary fails, run the receipt's
 `restore_argv`, activate both services again, and record the release as partial.
+
+## Multi-user account linking
+
+The authenticated UserIO sidebar has **Добавить аккаунт**. Matrix and generic
+IMAP accounts are registered against the active UserIO user, never against a
+host-wide systemd identity. The Matrix form supports homeserver password,
+one-time SSO login token exchange, or an existing access token. The mail form
+verifies IMAP over TLS and imports messages with readonly INBOX + BODY.PEEK[].
+For Gmail, use an App Password. These new connectors are read-only; SMTP
+sending and full Matrix send are not implied by the connect operation.
+VK uses its existing VK ID connect page and message access still depends on its
+separate browser extension.
+
+The connector stores credentials outside the Git tree in private
+`/var/lib/universal-userio/connected-secrets`, owner-only (0700, files 0600).
+The database contains only an opaque `connector:` reference, scoped to one
+UserIO principal. Its active Matrix room/history cursor and IMAP UID cursor are
+scoped to that principal and linked account. Disconnecting stops the connection
+and deletes its credential, but retains imported history. The existing
+system-wide Matrix and Himalaya sidecars are legacy and intentionally remain
+untouched until their accounts can be migrated by the owner.
+
+User-supplied Matrix/IMAP hosts must resolve to public IPs. On installations
+with *split-horizon DNS* that resolves a trusted Matrix homeserver to a private
+LAN IP, the operator may set `USERIO_MATRIX_TRUSTED_HOSTS` to a comma-separated
+list of **exact trusted Matrix hostnames** in the systemd service environment.
+This does not permit arbitrary LAN URLs, and it does not relax IMAP host checks.
+Users still connect from their own browser without editing any server config.
+
+Only Matrix/IMAP *read* connections have been implemented here: users must
+complete their own browser login. Never ask for their passwords or tokens in
+a chat, environment file, Git commit, or MCP result.
