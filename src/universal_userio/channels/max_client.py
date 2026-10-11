@@ -300,7 +300,9 @@ def dispatch_to_message(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     message = payload.get("message") if isinstance(payload.get("message"), dict) else payload
-    chat_id = payload.get("chatId") or message.get("chatId") or message.get("chat_id")
+    chat_id = next((value for value in (
+        payload.get("chatId"), message.get("chatId"), message.get("chat_id")
+    ) if value is not None), None)
     text = message.get("text")
     message_id = message.get("id")
     if chat_id is None or message_id is None or (

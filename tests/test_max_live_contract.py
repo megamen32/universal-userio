@@ -136,3 +136,22 @@ def test_max_title_is_chat_scoped_and_independent_of_participant(tmp_path):
     assert store.conversation(conv)['display_name'] == 'Команда'
     from universal_userio.adapters import UnifiedChannels
     assert UnifiedChannels(store,service,store.default_user_id).adapter('max').list()[0]['title'] == 'Команда'
+
+
+def test_live_saved_messages_dispatch_does_not_drop_chat_zero():
+    from universal_userio.channels.max_client import dispatch_to_message
+    r=dispatch_to_message({'chatId':0,'message':{'id':17,'sender':77,'time':1000,'text':'saved'}})
+    assert r is not None and r['chat_id'] == '0'
+
+
+def test_max_mcp_history_limit_bounds_cached_read_without_provider_calls(tmp_path):
+    from universal_userio.mcp_dispatch import UserIOToolDispatcher
+    from universal_userio.contracts import UserPrincipal
+    store=SQLiteUserIOStore(tmp_path/'db.sqlite');service=UserIOService(store,object(),object())
+    for i in range(3):
+        e=message_envelope({'id':i,'sender':7,'time':1000+i,'text':str(i)},chat_id='0',own_id='7')
+        conv,_=service.receive(inbox_message_from_envelope(e,received_at=1),route_id='max',account_ref='max')
+    d=UserIOToolDispatcher(store,service)
+    r=d.dispatch('userio.channels.read',{'channel':'max','chat_id':conv,'history_limit':1},
+                 principal=UserPrincipal(store.default_user_id,'owner','owner'))
+    assert r['ok'] and [m['body'] for m in r['chat']['messages']] == ['2']

@@ -53,7 +53,17 @@ class UserIOToolDispatcher:
                 adapter = channels.adapter(self._optional(arguments, "channel"))
                 before_id = arguments.get("before_id")
                 history_limit = arguments.get("history_limit")
-                if before_id is not None or history_limit is not None:
+                if (self._optional(arguments, "channel") == "max"
+                        and before_id is None and history_limit is not None):
+                    if type(history_limit) is not int or not 1 <= history_limit <= 100:
+                        raise ValueError("history_limit must be between 1 and 100")
+                    result = adapter.read(
+                        chat_id=self._optional(arguments, "chat_id"),
+                        message_id=self._optional(arguments, "message_id"),
+                    )
+                    if "chat" in result:
+                        result["chat"]["messages"] = result["chat"].get("messages", [])[-history_limit:]
+                elif before_id is not None or history_limit is not None:
                     if self._optional(arguments, "channel") != "telegram" or before_id is None:
                         raise ValueError("history pagination requires channel=telegram and before_id")
                     result = adapter.read(
