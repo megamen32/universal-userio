@@ -668,12 +668,34 @@ class UserIOService:
         )
         if not request_id:
             request_id = f"userio-web-triage-{event_seq}"
+        # An explicit owner request may repair an empty cache after its earlier
+        # summary failed, without repeating an already completed classification.
+        if (isinstance(current, dict) and current.get("status") == "completed"
+                and not overview.get("summary")):
+            generator = self._generator_for(resolved_user)
+            if not callable(getattr(generator, "triage_with_context", None)):
+                generator = self._generator
+            self._cached_summary_and_refresh(
+                conversation_id=conversation_id,
+                current_message_id=str(overview["conversation"]["message_id"]),
+                current_message_source=str(overview["conversation"].get("message_source") or ""),
+                generator=generator, user_id=resolved_user,
+            )
         result = self.triage_workspace_event(
             event_seq=event_seq, request_id=request_id, max_drafts=2,
             user_id=resolved_user, retry_failed=True,
         )
+        # Preserve the exact initial event snapshot if a newer message arrives,
+        # while returning the summary that this operation actually persisted.
+        summary = self._store.conversation_summary(
+            conversation_id,
+            through_message_id=str(overview["conversation"]["message_id"]),
+            through_message_source=str(overview["conversation"].get("message_source") or ""),
+            user_id=resolved_user,
+        )
         return {
             **overview,
+            "summary": str((summary or {}).get("summary") or ""),
             "triage": result,
             "actor": str(actor or "")[:128],
         }

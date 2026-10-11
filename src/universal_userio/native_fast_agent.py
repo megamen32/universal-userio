@@ -176,7 +176,11 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
                     })
                     parsed, _ = attached_llm.parse_structured_schema_response(cleaned, schema)
                     if parsed is None:
-                        raise ValueError("invalid native Fast Agent structured result")
+                        stop = getattr(response.stop_reason, "value", response.stop_reason)
+                        raise ValueError(
+                            "invalid native Fast Agent structured result "
+                            f"(stop_reason={stop}, text_chars={len(response.last_text() or '')})"
+                        )
                 return parsed
             response = await agent.generate(messages, params)
             text = response.last_text()

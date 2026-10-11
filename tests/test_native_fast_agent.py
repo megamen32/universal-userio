@@ -191,3 +191,15 @@ def test_native_read_more_budget_blocks_repeated_empty_fetch():
         assert anchors == [""]
         assert len(requests) == 3
         assert generator.last_native_run["read_calls"] == 1
+
+
+def test_native_summary_failure_reports_stop_reason_without_private_content():
+    """Focused integration: opaque cache parse error; expected2s/max30s, live0."""
+    with _provider_fixture([_answer({"wrong": "SECRET_SENTINEL"})]) as (endpoint, requests):
+        generator = FastAgentDraftGenerator(endpoint=endpoint, token="fixture-only")
+        with pytest.raises(ValueError) as failure:
+            generator.summarize_conversation(conversation_id="c", previous_summary="",
+                new_messages=[{"message_id":"1","body":"hello"}], token_budget=1200)
+        assert "stop_reason=endTurn" in str(failure.value)
+        assert "text_chars=" in str(failure.value)
+        assert "SECRET_SENTINEL" not in str(failure.value)

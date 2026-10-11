@@ -501,3 +501,42 @@ def test_summary_retention_is_enforced_on_read(tmp_path) -> None:
             (conversation_id,),
         )
     assert store.conversation_summary(conversation_id) is None
+
+
+def test_explicit_completed_triage_recovers_failed_cache_without_reclassifying(tmp_path):
+    """Fast unit: completed triage strands cache after failure; expected1s/max10s."""
+    class FlakySummary(Generator):
+        summary_calls = 0
+        triage_calls = 0
+        def summarize_conversation(self, **kwargs):
+            self.summary_calls += 1
+            if self.summary_calls == 1:
+                raise ValueError("temporary native schema failure")
+            return "Факты переписки сохранены."
+        def triage_with_context(self, **kwargs):
+            self.triage_calls += 1
+            return super().triage_with_context(**kwargs)
+    store = SQLiteUserIOStore(tmp_path / "recovery.sqlite3")
+    generator = FlakySummary();service = UserIOService(store, generator, Outbox())
+    cid = conversation(store, service)
+    first = service.triage_conversation_secretary(conversation_id=cid, actor="owner")
+    assert first["triage"]["status"] == "completed" and not first["summary"]
+    second = service.triage_conversation_secretary(conversation_id=cid, actor="owner")
+    assert second["summary"] == "Факты переписки сохранены."
+    assert second["conversation"] == first["conversation"]
+    assert second["triage"]["attempts"] == first["triage"]["attempts"] == 1
+    third = service.triage_conversation_secretary(conversation_id=cid, actor="owner")
+    assert third["summary"] == second["summary"]
+    assert generator.summary_calls == 2 and generator.triage_calls == 1
+    store.close()
+
+
+def test_first_triage_returns_fresh_summary_with_original_anchor(tmp_path):
+    """Fast unit: response keeps empty pre-analysis cache; expected1s/max10s."""
+    class Summarizer(Generator):
+        def summarize_conversation(self, **kwargs): return "Новая сводка."
+    store = SQLiteUserIOStore(tmp_path / "fresh.sqlite3")
+    service = UserIOService(store, Summarizer(), Outbox());cid = conversation(store, service)
+    result = service.triage_conversation_secretary(conversation_id=cid, actor="owner")
+    assert result["summary"] == "Новая сводка."
+    store.close()
