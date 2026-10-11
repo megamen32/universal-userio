@@ -22,7 +22,8 @@ opens cabinet. Latest37bc cabinet links О сервисе→/welcome and GitHub 
 real normal browser roundtrip/reload preserves login, both visible. Own tabs and
 PNG copies cleaned; proof in .tmp/auto-read/cabinet-nav-browser-result.json.
 Cancelled Exmanager extra remote-delete scope unchanged; no deletion implemented.
-Remaining reading verification: provider-specific Telegram automatic-read positive
-live receipt (local visible read/stealth already accepted). Existing original
-Telegram mirror/cache/FastAgent outcome retained; no model replay needed.
+Telegram automatic-read live account-bound acknowledgement accepted on existing
+900000101/peer900000300/cursor1983326, provider_acknowledged true; cursor was already
+native-read, no artificial unread state/new incoming manufactured. Local visible
+read/stealth accepted. Original mirror/cache/FastAgent retained, no model replay.
 No parent/global AI unpause or unrelated historical provider replay.
