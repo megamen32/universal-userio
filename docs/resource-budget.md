@@ -33,10 +33,12 @@ This budget applies to the server-100 production service and to test runs for
 this project. It was reviewed on 2026-10-04 against a 125 GiB / 104 CPU host
 with 45 GiB RAM available and 554 GiB free on the backing filesystem.
 
-The production `universal-userio.service` steady working set was 34 MiB with
-five tasks. Its enforced budget is:
+The initial2026-10-04 production working set was34MiB/five tasks; its
+128/256MiB core budget is historical. Normal web login on2026-10-11 exposed
+a larger native SDK working set and two automatic restarts at the old256MiB
+hard limit. The current enforced `universal-userio.service` budget is:
 
-- RAM soft/hard: `MemoryHigh=128M`, `MemoryMax=256M`;
+- RAM soft/hard: `MemoryHigh=384M`, `MemoryMax=512M`;
 - swap: `MemorySwapMax=64M`;
 - CPU: `CPUQuota=100%` (one CPU worth of time);
 - processes/tasks: `TasksMax=64`;
@@ -138,3 +140,26 @@ Rollback is the recorded original unit plus MemoryHigh128M through the same
 controller, only for a new verified unsafe change; do not reset a successful
 repair to the already proven bad limit as a test cleanup. Protected receipts
 stay under .tmp/pilot9-receiver-readiness; own task contains safe proof.
+
+## Core web login memory repair —2026-10-11
+
+Source84984a1 publishes the core unit384/512MiB. Owning operator applied one
+runtime property change before R38 took over persistent-control reconciliation.
+Subsequent daemon reload restored older persistent MemoryHigh224MiB while
+MemoryMax512MiB remained. Do not repeat the operator's change as a new
+experiment or restart the application to adopt it.
+
+R38 before-state: SAMEPID1640511/Invocation844631f20fc84858b99d808a3bd02961,
+memorypeak300978176B (287MiB), hard512MiB, oldsoft224MiB, swap49868800B,
+tasks2/64/CPU1, memoryhighcounter7622/OOM0. HostMemAvailable48776384KiB
+supports the explicit384/512MiB vector. Persistent native controller:
+`systemctl set-property universal-userio.service MemoryHigh=384M MemoryMax=512M`.
+It preserves the same process, CPU1/tasks64/swap64MiB/IOWeight50, Python bytes,
+auth and database. No global caps, manager-wide reload or foreign service
+restart is needed. R38 owns actualkernelreadback/ordinaryHTTPconsumer;
+send/edit headed acceptance remains with the UserIO operator.
+
+Protected receipts stay in Admin `.tmp/fleet-capacity-20261011/userio-core-budget`
+and UserIO `.tmp/max-web-budget-*.json`. Previous PID/restart count and initial502
+remain historical evidence; property adoption alone is not a completed
+web/business canary.
