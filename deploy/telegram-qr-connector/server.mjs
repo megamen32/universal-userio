@@ -34,6 +34,8 @@ const unreadDialogLimit = Math.min(200, Math.max(20, Number(process.env.TG_UNREA
 const syncRetrySeconds = Number(process.env.TG_SYNC_RETRY_SECONDS || 30);
 const slots = new Map();
 const syncs = new Map();
+const unreadRefreshTimers = new Map();
+const unreadRefreshLast = new Map();
 // Live delivery registry: slot -> { client, labelPeers: Map<chat label, entity>,
 // idPeers: Map<chat id, entity> } filled during dialog sync so POST /send can
 // route approved replies through the one process that owns each Telegram
@@ -579,8 +581,9 @@ async function ingestProviderState(slot, client, accountId, update) {
   if (inbox || outbox) {
     const peer = update.peer || new Api.PeerChannel({channelId:update.channelId});
     const chatKey = String(await client.getPeerId(peer, true));
-    await postUserIO("/v1/telegram/mirror-state", {account_id:accountId, peer_id:chatKey,
-      [inbox ? "read_inbox_max_id" : "read_outbox_max_id"]:Number(update.maxId)});
+      await postUserIO("/v1/telegram/mirror-state", {account_id:accountId, peer_id:chatKey,
+        [inbox ? "read_inbox_max_id" : "read_outbox_max_id"]:Number(update.maxId)});
+      scheduleUnreadCountRefresh(slot, client, accountId, chatKey, peer);
   } else if (name === "UpdateDeleteChannelMessages") {
     const peer = new Api.PeerChannel({channelId:update.channelId});
     await postUserIO("/v1/telegram/mirror-state", {account_id:accountId,
@@ -595,6 +598,45 @@ async function ingestProviderState(slot, client, accountId, update) {
         peer_id:chatKey, deleted_ids:update.messages.slice(0,200)});
     }
   }
+}
+
+async function refreshOneUnreadCount(client, accountId, chatKey, peer) {
+  const input = await client.getInputEntity(peer);
+  const detail = await client.invoke(new Api.messages.GetPeerDialogs({
+    peers: [new Api.InputDialogPeer({ peer: input })],
+  }));
+  const dialog = detail.dialogs && detail.dialogs[0];
+  if (!dialog) return;
+  const unread = providerUnreadCount(dialog);
+  if (unread === null) return;
+  await postUserIO("/v1/telegram/mirror-state", {
+    account_id: accountId, peer_id: chatKey, unread_count: unread,
+    unread_observed_at: Date.now() / 1000,
+    read_inbox_max_id: Number(dialog.readInboxMaxId || 0),
+    read_outbox_max_id: Number(dialog.readOutboxMaxId || 0),
+  });
+}
+
+function scheduleUnreadCountRefresh(slot, client, accountId, chatKey, peer) {
+  if (!peer || !chatKey) return;
+  const key = accountId + "|" + chatKey;
+  if (unreadRefreshTimers.has(key)) return;
+  const nextAllowed = (unreadRefreshLast.get(key) || 0) + 15000;
+  const delay = Math.max(2500, nextAllowed - Date.now());
+  const timer = setTimeout(async () => {
+    unreadRefreshTimers.delete(key);
+    unreadRefreshLast.set(key, Date.now());
+    if (unreadRefreshLast.size > 500) {
+      unreadRefreshLast.delete(unreadRefreshLast.keys().next().value);
+    }
+    try {
+      await refreshOneUnreadCount(client, accountId, chatKey, peer);
+    } catch (error) {
+      console.error("Telegram unread refresh:", (error && error.message) || error);
+    }
+  }, delay);
+  if (typeof timer.unref === "function") timer.unref();
+  unreadRefreshTimers.set(key, timer);
 }
 
 async function refreshUnreadSnapshot(client, accountId) {
@@ -660,6 +702,10 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   const inboxMessage = await envelope(chatKey, label, message, client, self, { accountId, chatEntity });
   if (!inboxMessage.body) return;
   const posted = await postInbox(accountId, inboxMessage);
+  if (!isEdit && !message.out) {
+    const peer = chatEntity || (live && live.labelPeers.idPeers.get(chatKey));
+    scheduleUnreadCountRefresh(slot, client, accountId, chatKey, peer);
+  }
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
   if (!isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
