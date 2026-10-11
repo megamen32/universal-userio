@@ -583,7 +583,7 @@ def test_gmail_account_lane_is_accepted_and_groups_by_sender(tmp_path) -> None:
     assert first_id == second_id
 
 
-def test_dashboard_redirects_to_login_and_message_data_remains_protected(tmp_path) -> None:
+def test_public_landing_has_visible_cabinet_and_message_data_remains_protected(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -591,10 +591,10 @@ def test_dashboard_redirects_to_login_and_message_data_remains_protected(tmp_pat
     try:
         with urlopen(f"http://127.0.0.1:{server.server_port}/") as response:
             page = response.read()
-            assert response.geturl().endswith("/login")
-        assert b"Universal UserIO" in page
-        assert b'name="username"' in page
-        assert b'name="password"' in page
+            assert response.geturl().endswith("/")
+        assert b"UserIO" in page or b"User.io" in page
+        assert 'Личный кабинет'.encode() in page and b'href="/login"' in page
+        assert b'name="password"' not in page
         try:
             urlopen(f"http://127.0.0.1:{server.server_port}/v1/inbox")
         except HTTPError as error:

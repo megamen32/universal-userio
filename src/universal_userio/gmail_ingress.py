@@ -100,6 +100,10 @@ class UserIOIngressClient:
         )
         self._json(req)
 
+    def accounts(self) -> list[dict]:
+        req=urllib.request.Request(self.base_url+'/v1/accounts',headers={'Authorization':f'Bearer {self.token}'})
+        return list(self._json(req).get('accounts',[]))
+
     def register_account(self, *, account_id: str, provider: str, display_name: str, can_read: bool = True, can_reply: bool = False, credential_ref: str = "") -> None:
         payload = {
             "id": account_id, "provider": provider, "display_name": display_name,
@@ -112,12 +116,13 @@ class UserIOIngressClient:
         )
         self._json(req)
 
-    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str) -> None:
+    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str, received_at: float | None = None) -> None:
         payload = {
             "route_id": route_id,
             "account_id": account_id,
             "message": {"schema": "universal.inbox.message.v1", "source": source, "message_id": message_id, "sender": sender, "body": body},
         }
+        if received_at is not None: payload['message']['received_at']=received_at
         req = urllib.request.Request(
             self.base_url + "/v1/messages", data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},

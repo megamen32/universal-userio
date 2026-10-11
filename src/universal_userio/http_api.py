@@ -675,6 +675,20 @@ def handler(
                     )
                     self._reply(200, {"ok": True, "marked": changed})
                     return
+                if path == '/v1/preferences/reading':
+                    payload = self._json()
+                    enabled = payload.get('auto_read')
+                    if not isinstance(enabled,bool): raise ValueError('auto_read must be a boolean')
+                    service._store.set_user_preference('auto_read','true' if enabled else 'false',user_id=user_id)
+                    self._reply(200,{'auto_read':enabled})
+                    return
+                if path.startswith('/v1/conversations/') and path.endswith('/read'):
+                    payload = self._json()
+                    automatic = payload.get('automatic',True)
+                    if not isinstance(automatic,bool): raise ValueError('automatic must be a boolean')
+                    cid = unquote(path.removeprefix('/v1/conversations/').removesuffix('/read').strip('/'))
+                    self._reply(200,service.read_conversation(conversation_id=cid,message_id=str(payload.get('message_id') or ''),automatic=automatic,user_id=user_id))
+                    return
                 if path == "/v1/preferences/capabilities":
                     payload = self._json()
                     updates = payload.get("capabilities", payload)
@@ -1027,7 +1041,8 @@ def handler(
                 return
             if requested_path == "/":
                 if self._principal(allow_proxy=True) is None:
-                    self._redirect("/login")
+                    if not self._static('/landing.html'):
+                        self._html(200,'<!doctype html><html lang="ru"><title>UserIO</title><h1>Все ваши сообщения в одном месте</h1><a href="/login" style="display:inline-block;padding:24px 40px;font-size:28px">Личный кабинет</a><p><a href="/signup">Создать аккаунт</a></p></html>'.encode())
                     return
                 if self._static(requested_path):
                     return
@@ -1115,6 +1130,9 @@ def handler(
                     ),
                 })
                 return
+            if path == '/v1/preferences/reading':
+                self._reply(200,{'auto_read':service._store.user_preference('auto_read',user_id=user_id,default='true')=='true'})
+                return
             if path == "/v1/preferences/capabilities":
                 self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})
                 return
@@ -1129,6 +1147,8 @@ def handler(
                 caps = service._store.user_capabilities(user_id=user_id)
                 for account in accounts:
                     credential_ref = str(account.pop("credential_ref", ""))
+                    if account.get('provider')=='sms':
+                        account['transport']='native' if credential_ref=='sms-native:default' else 'apk' if credential_ref.startswith('sms-agent:') else 'unconfigured'
                     source = _public_account_source(account, credential_ref)
                     account["source"] = source
                     account["last_message_at"] = service._store.latest_message_at(

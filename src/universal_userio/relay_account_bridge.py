@@ -177,3 +177,8 @@ class RelayAccountBridge:
 
     def react(self, **kwargs):
         return self.fallback.react(**kwargs)
+
+    def acknowledge(self, **kwargs):
+        if self.source_bound_pair(kwargs.get('account_ref',''),kwargs.get('chat_id','')):
+            raise ValueError('relay account does not support provider read receipts')
+        return self.fallback.acknowledge(**kwargs)

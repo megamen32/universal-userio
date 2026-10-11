@@ -67,7 +67,7 @@ Webpage-preview text handling mirrors
 
 `message.out` and `message.date` are preserved as direction and provider Unix
 time. Dialog inbox/outbox read maxima and live Raw read updates populate a
-separate provider-read field; opening UserIO never sends a Telegram read receipt.
+separate provider-read field; passive API/MCP history reads never send a Telegram read receipt. Human web viewing uses the opt-out read setting described below.
 Outgoing, edited and historical messages never schedule agent delivery.
 
 The existing reconciliation loop repairs recent history without notifying or
@@ -79,3 +79,16 @@ successful exact-ID absence or native deletion update creates a tombstone.
 Message/event/draft/receipt identities remain retained. No inferred deletion
 is made outside that range. Runtime Node budget224/256MiB (measured soft adjustment2026-10-09), CPU1, tasks64 and
 existing20-dialog/5-minute reconciliation cadence are unchanged.
+
+## Human web read receipts
+
+Authenticated `POST /read` takes exact `account_id`, numeric `peer_id` and a positive
+`max_id`; it uses the already connected account client and never falls back to a
+different account. Official Telegram `messages.readHistory` / `channels.readHistory`
+are selected from the actual input peer. No mentions-clearing call is added.
+UserIO's normal conversation read endpoint validates owner/account/message provenance
+and updates provider state using the native ID watermark only after acknowledgement.
+Web viewing defaults to automatic reading; the persistent per-user “Режим скрытности”
+setting disables it. API/MCP history fetching and background subscription remain
+read-only. MAX/SMS/phone currently record reading locally in UserIO; no unsupported
+external receipt is implied.

@@ -179,6 +179,11 @@ class UserIOService:
             # Group participants and our own messages belong to the same provider
             # chat. Sender identity must never become the destination of a reply.
             conversation_key = f"max:{account_ref}:{message.peer_id}"
+        native_sms = message.source=='sms' and any(a['id']==account_ref and a.get('credential_ref')=='sms-native:default' for a in self._store.accounts(user_id=user_id))
+        if message.source == 'sms' and account_ref.startswith('sms:') and not native_sms:
+            conversation_key = f"sms:{account_ref}:{message.peer_id or message.sender}"
+            if not message.message_id.startswith(account_ref+'|'):
+                message = replace(message,message_id=account_ref+'|'+message.message_id)
         if message.source == "phone" and account_ref:
             conversation_key = (f"phone:{account_ref}:{message.peer_id}"
                 if re.fullmatch(r"phone:v1:[0-9a-f]{64}", message.peer_id)
@@ -585,6 +590,37 @@ class UserIOService:
             "event_seq": event_seq, "request_id": request_id, "sent": True,
             "draft_id": approved.id, "receipt": approved.receipt, "idempotent": False,
         }
+
+    def read_conversation(self, *, conversation_id: str, message_id: str, automatic: bool = True, user_id: str | None = None) -> dict[str, object]:
+        user = self._store._user(user_id)
+        if not self._store.capability_enabled('read', user_id=user):
+            raise PermissionError('read_capability_disabled')
+        conversation = self._store.conversation(conversation_id, user_id=user)
+        if conversation is None: raise ValueError('conversation not found')
+        cursor = self._store.read_cursor(conversation_id, message_id, user_id=user)
+        if cursor is None or cursor['direction'] == 'outgoing': raise ValueError('exact incoming read cursor required')
+        if automatic and self._store.user_preference('auto_read',user_id=user,default='true') != 'true':
+            return {'changed':0,'skipped':'stealth','provider_acknowledged':False}
+        acknowledged = False
+        if conversation['source'] == 'telegram':
+            account = str(conversation.get('account_ref') or '')
+            peer = str(conversation.get('peer_id') or '')
+            accounts = self._store.accounts(user_id=user)
+            if not any(a['id']==account and a['enabled'] and 'read' in a['capabilities'] for a in accounts):
+                raise ValueError('read account is unavailable')
+            acknowledge = getattr(self.telegram_outbox,'acknowledge',None)
+            if not account or not peer or not callable(acknowledge): raise ValueError('account-bound read receipt unavailable')
+            raw_id = message_id.removeprefix(account+'|')
+            if ':' in raw_id:
+                id_peer,provider_id=raw_id.rsplit(':',1)
+                if id_peer!=peer: raise ValueError('read cursor peer mismatch')
+            else: provider_id=raw_id
+            if not provider_id.isdigit() or int(provider_id)<=0: raise ValueError('invalid Telegram read cursor')
+            acknowledge(account_ref=account,chat_id=peer,message_id=provider_id)
+            self._store.telegram_mirror_state(account_ref=account,peer_id=peer,user_id=user,read_inbox_max_id=int(provider_id))
+            acknowledged = True
+        changed = self._store.mark_read_through(conversation_id,message_id,user_id=user)
+        return {'changed':changed,'provider_acknowledged':acknowledged}
 
     def react_to_message(
         self, *, conversation_id: str, message_id: str, emoji: str,
@@ -1141,7 +1177,17 @@ class UserIOService:
         elif conversation["source"] == "sms":
             if self.sms_gateway is None or user_id != self.sms_user_id:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")
-            send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
+            account_ref = str(conversation.get('account_ref') or '')
+            if account_ref.startswith('sms:'):
+                account = next((a for a in self._store.accounts(user_id=user_id) if a['id']==account_ref and a['enabled'] and 'reply' in a['capabilities']),None)
+                ref=str(account.get('credential_ref') or '') if account else ''
+                if not account or (not ref.startswith('sms-agent:') and ref!='sms-native:default'):
+                    raise ValueError('SMS device account is unavailable')
+                device_id = ref.removeprefix('sms-agent:') if ref.startswith('sms-agent:') else ''
+                if ref.startswith('sms-agent:') and not device_id: raise ValueError('SMS device identity is missing')
+                send = partial(self.sms_gateway.send,to=str(conversation['sender']),body=draft.body,idempotency_key=draft.id,**({'device_id':device_id} if device_id else {}))
+            else:
+                send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
         elif conversation["source"] == "max":
             if self.max_client is None or user_id != self.max_user_id:
                 raise ValueError("MAX adapter is not configured for this UserIO user")

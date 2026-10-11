@@ -4269,6 +4269,22 @@ class SQLiteUserIOStore:
             out.setdefault(cid, body)
         return out
 
+    def read_cursor(self, conversation_id: str, message_id: str, *, user_id: str | None = None) -> dict | None:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
+        with self._lock:
+            row = self._connection.execute("SELECT rowid,received_at,direction FROM messages WHERE user_id=? AND conversation_id=? AND message_id=? AND deleted_at IS NULL", (self._user(user_id), conversation_id, message_id)).fetchone()
+            return dict(row) if row is not None else None
+
+    def mark_read_through(self, conversation_id: str, message_id: str, *, user_id: str | None = None) -> int:
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
+        cursor = self.read_cursor(conversation_id, message_id, user_id=user_id)
+        if cursor is None: raise ValueError("message does not belong to this conversation")
+        with self._lock, self._connection:
+            return self._connection.execute("""UPDATE messages SET seen_at=COALESCE(seen_at,?)
+                WHERE user_id=? AND conversation_id=? AND deleted_at IS NULL AND direction!='outgoing'
+                AND (received_at<? OR (received_at=? AND rowid<=?))
+                AND seen_at IS NULL""", (time.time(),self._user(user_id),conversation_id,cursor['received_at'],cursor['received_at'],cursor['rowid'])).rowcount
+
     def mark_seen(
         self, *, source: str, message_id: str, user_id: str | None = None
     ) -> bool:

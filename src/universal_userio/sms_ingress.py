@@ -12,16 +12,26 @@ from .gmail_ingress import UserIOIngressClient
 
 def poll_once(sink: UserIOIngressClient, gateway: AndroidSmsGatewayClient, *, user_source: str = "sms") -> int:
     delivered = 0
+    accounts=getattr(sink,'accounts',lambda:[])()
+    native=next((a for a in accounts if a.get('provider')=='sms' and a.get('enabled') and a.get('transport')=='native'),None)
     for message in gateway.inbound():
         sink.send_message(
             source=user_source,
-            account_id="sms",
+            account_id=native['id'] if native else 'sms',
             route_id="sms",
             message_id=message.message_id,
             sender=message.sender,
             body=message.body,
+            received_at=message.received_at,
         )
         delivered += 1
+    # Only registered accounts of the ingress principal; no second polling worker.
+    for account in accounts:
+        aid=str(account.get('id') or '')
+        if account.get('provider')!='sms' or not account.get('enabled') or 'read' not in account.get('capabilities',[]) or not aid.startswith('sms:') or account.get('transport')!='apk': continue
+        for message in gateway.inbound(device_id=aid.removeprefix('sms:')):
+            sink.send_message(source=user_source,account_id=aid,route_id='sms',message_id=message.message_id,sender=message.sender,body=message.body,received_at=message.received_at)
+            delivered += 1
     return delivered
 
 

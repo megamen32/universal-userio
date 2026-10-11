@@ -246,6 +246,15 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         return f"telegram-qr:{data.get('slot', '?')}:{data.get('message_id', 'sent')}:{draft_id}"
 
+    def acknowledge(self, *, account_ref: str, chat_id: str, message_id: str) -> dict[str, object]:
+        if not account_ref or not chat_id or not message_id.isdigit(): raise ValueError('exact account/peer/read cursor required')
+        request = urllib.request.Request(f'{self._base_url}/read',data=json.dumps({'account_id':account_ref,'peer_id':chat_id,'max_id':int(message_id)}).encode(),method='POST',headers={'Content-Type':'application/json','Authorization':f'Bearer {self._token}'})
+        with self._runner(request,timeout=self._timeout) as response:
+            result = json.loads(response.read())
+        if result.get('account_id') != account_ref or str(result.get('peer_id')) != chat_id or result.get('max_id') != int(message_id) or not result.get('ok'):
+            raise RuntimeError('read receipt identity mismatch')
+        return result
+
     def react(self, *, chat: str, chat_id: str, account_ref: str, message_id: str, emoji: str) -> dict[str, object]:
         if not (chat or chat_id) or not message_id or not emoji:
             raise ValueError("Telegram reaction requires chat or chat_id, message id and emoji")
@@ -765,8 +774,17 @@ class AndroidSmsChannelAdapter(StoredChannelAdapter):
         gateway = self._service.sms_gateway
         if gateway is None or self._service.sms_user_id != self._user_id:
             raise AdapterNotSupported("Android SMS adapter is not configured for this UserIO user")
+        native = next((a for a in self._store.accounts(user_id=self._user_id) if a['enabled'] and a.get('credential_ref')=='sms-native:default'),None)
         for message in gateway.inbound():
-            self._service.receive(message, route_id=self._service.sms_route_id, user_id=self._user_id)
+            if not isinstance(message,InboxMessage):
+                message=InboxMessage('sms',message.message_id,message.sender,message.body,message.received_at)
+            self._service.receive(message, route_id=self._service.sms_route_id, user_id=self._user_id,account_ref=native['id'] if native else '')
+        for account in self._store.accounts(user_id=self._user_id):
+            ref=str(account.get('credential_ref') or '')
+            if account['provider']!='sms' or not account['enabled'] or 'read' not in account['capabilities'] or not ref.startswith('sms-agent:'): continue
+            for row in gateway.inbound(device_id=ref.removeprefix('sms-agent:')):
+                message=InboxMessage('sms',row.message_id,row.sender,row.body,row.received_at)
+                self._service.receive(message,route_id=self._service.sms_route_id,user_id=self._user_id,account_ref=account['id'])
 
     def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
         self._sync()

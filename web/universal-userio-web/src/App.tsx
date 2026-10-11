@@ -256,6 +256,8 @@ export function App() {
   // conversation list. This keeps account metadata from being starved behind
   // duplicate initial list queries in React StrictMode.
   const [userCapabilities, setUserCapabilities] = useState<UserCapabilities>({ read: false, subscribe: false, download: false, send: false })
+  const [autoRead, setAutoRead] = useState(false)
+  const readAttempts = useRef(new Set<string>())
   const [runsOpen, setRunsOpen] = useState(false)
   const [aiRuns, setAiRuns] = useState<ByokLedgerRecord[]>([])
   const [aiTotals, setAiTotals] = useState<ByokLedgerTotals | null>(null)
@@ -383,6 +385,8 @@ export function App() {
     setAccounts(data.accounts)
   }, [])
   const loadCapabilities = useCallback(async () => {
+    const reading = await api<{auto_read:boolean}>('/v1/preferences/reading')
+    setAutoRead(reading.auto_read)
     const data = await api<{ capabilities: UserCapabilities }>("/v1/preferences/capabilities")
     setUserCapabilities(data.capabilities)
     return data.capabilities
@@ -411,6 +415,7 @@ export function App() {
   useEffect(() => { if (userCapabilities.read) void refreshChats(); else { chatsRequest.current.begin(); setChats([]); setSelectedChat(""); setConversation(null) } }, [refreshChats, userCapabilities.read])
   useEffect(() => {
     activeConversation.current = userCapabilities.read ? selectedChat : ""
+    readAttempts.current.clear()
     phoneHistoryWindow.current = ''
     phoneFollowLatest.current = true
     phoneHistoryScroll.current = null
@@ -795,7 +800,38 @@ export function App() {
       notify(`Не удалось отправить: ${(error as Error).message}`)
     } finally { approvalInFlight.current = false; setApprovingDraft("") }
   }
-  const markSeen = async () => { const message = conversation?.messages.filter(m => m.direction !== "outgoing").at(-1); if (message) { await api("/v1/inbox/seen", { method: "POST", body: JSON.stringify({ source: message.source, message_id: message.message_id }) }); await refreshChats(); await loadConversation(conversation!.id) } }
+  const markSeen = async () => {
+    const message = conversation?.messages.filter(m => m.direction !== 'outgoing').at(-1)
+    if (!message || !conversation) return
+    try { await api(`/v1/conversations/${encodeURIComponent(conversation.id)}/read`,{method:'POST',body:JSON.stringify({message_id:message.message_id,automatic:false})}); await refreshChats(); await loadConversation(conversation.id) }
+    catch(error){ notify(`Не удалось отметить прочитанным: ${(error as Error).message}`) }
+  }
+  const setStealth = async (enabled:boolean) => {
+    try { const result=await api<{auto_read:boolean}>('/v1/preferences/reading',{method:'POST',body:JSON.stringify({auto_read:!enabled})});setAutoRead(result.auto_read);readAttempts.current.clear() }
+    catch(error){notify(`Не удалось сохранить настройку: ${(error as Error).message}`)}
+  }
+  useEffect(() => {
+    if(!autoRead||!userCapabilities.read||!conversation) return
+    const id=conversation.id,viewport=transcriptRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+    if(!viewport) return
+    let timer:ReturnType<typeof setTimeout>|undefined,disposed=false
+    const scan=()=>{
+      if(document.visibilityState!=='visible'||viewport.getBoundingClientRect().height<=0) return
+      const bounds=viewport.getBoundingClientRect()
+      const visible=[...viewport.querySelectorAll<HTMLElement>('[data-read-message]')].filter(el=>{const r=el.getBoundingClientRect();return r.bottom>bounds.top&&r.top<bounds.bottom&&r.width>0})
+      const message=visible.map(el=>conversation.messages.find(m=>m.message_id===el.dataset.readMessage)).filter((m):m is Message=>!!m&&m.direction!=='outgoing'&&(!m.seen_at||(conversation.source==='telegram'&&(m.provider_read===false||m.provider_read===0)))).at(-1)
+      if(!message) return
+      const key=id+'|'+message.message_id
+      if(readAttempts.current.has(key))return
+      readAttempts.current.add(key)
+      void api(`/v1/conversations/${encodeURIComponent(id)}/read`,{method:'POST',body:JSON.stringify({message_id:message.message_id,automatic:true})}).then(()=>{if(!disposed)void Promise.allSettled([refreshChats(),loadConversation(id)])}).catch(()=>{ /* No background retry loop; explicit view can retry. */ })
+    }
+    const schedule=()=>{if(timer)clearTimeout(timer);timer=setTimeout(scan,500)}
+    const observer=new IntersectionObserver(schedule,{root:viewport,threshold:0.2})
+    viewport.querySelectorAll('[data-read-message]').forEach(el=>observer.observe(el))
+    viewport.addEventListener('scroll',schedule);document.addEventListener('visibilitychange',schedule);schedule()
+    return ()=>{disposed=true;if(timer)clearTimeout(timer);observer.disconnect();viewport.removeEventListener('scroll',schedule);document.removeEventListener('visibilitychange',schedule)}
+  },[autoRead,conversation,loadConversation,refreshChats,userCapabilities.read])
   const toggleAccount = (id: string, visible: boolean) => {
     const next = visible ? hiddenAccounts.filter((item) => item !== id) : Array.from(new Set([...hiddenAccounts, id]))
     setHiddenAccounts(next)
@@ -860,6 +896,7 @@ export function App() {
           {platform === "gmail" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/gmail/connect/new")}><Plus className="size-3.5" /> Добавить Gmail</Button>}
           {platform === "telegram" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/telegram-qr/new")}><Plus className="size-3.5" /> Добавить Telegram</Button>}
           {platform === "vk" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/vk/connect/new")}><Plus className="size-3.5" /> Добавить VK</Button>}
+          {platform === "sms" && <a className="mt-1 block rounded px-2 py-2 text-xs hover:bg-muted" href="/sms-gateway/agent/download" download>＋ Подключить SMS · скачать APK</a>}
           {platform === "whatsapp" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus className="size-3.5" /> Добавить WhatsApp</Button>}
         </div>
       })}
@@ -868,7 +905,7 @@ export function App() {
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон / кошелёк</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={openContextSettings}><SlidersHorizontal className="size-4" /> Контекст ИИ</Button>
-      <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
+      <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Настройки чтения</summary><label className="flex cursor-pointer items-center justify-between gap-2 py-2"><span>Режим скрытности</span><input aria-label="Режим скрытности" type="checkbox" checked={!autoRead} onChange={event => void setStealth(event.target.checked)} /></label><p className="pb-2">В режиме скрытности просмотр не отмечает сообщения прочитанными. Без него открытый диалог отмечается прочитанным в UserIO и, для Telegram, у собеседника.</p></details><details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
       <form method="post" action="/auth/logout"><Button type="submit" className="w-full justify-start" variant="ghost" size="sm"><LogOut /> Выйти</Button></form>
     </div>
   </>
@@ -958,8 +995,8 @@ export function App() {
             return <Fragment key={`${message.source}:${message.message_id}`}>
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
               {system
-                ? <div data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
-                : <div data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение MAX" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} onAttachmentClick={openAttachment} />}{conversation.source === "max" && outgoing && canReply && canEditMaxText(message.attachments) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : ""}</p></div>}
+                ? <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
+                : <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение MAX" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} onAttachmentClick={openAttachment} />}{conversation.source === "max" && outgoing && canReply && canEditMaxText(message.attachments) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : ""}</p></div>}
             </Fragment>
           })}
           {conversation.drafts.filter(item => !(item.status === "approved" && conversation.messages.some(message =>

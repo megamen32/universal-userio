@@ -15,4 +15,4 @@ class Sink:
 def test_sms_ingress_posts_gateway_messages_to_userio():
     sink=Sink()
     assert poll_once(sink, Gateway()) == 1
-    assert sink.calls == [{"source":"sms","account_id":"sms","route_id":"sms","message_id":"sms-1","sender":"+15550001111","body":"hello"}]
+    assert sink.calls == [{"source":"sms","account_id":"sms","route_id":"sms","message_id":"sms-1","sender":"+15550001111","body":"hello","received_at":1.0}]

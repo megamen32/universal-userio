@@ -15,6 +15,7 @@ import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-de
 import { publicIngressState } from "./ingress-state.mjs";
 import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
+import { acknowledgeRead } from './read-receipt.mjs';
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -944,6 +945,13 @@ http.createServer(async (req, res) => {
     void startQr(created);
     res.writeHead(302, { Location: `${publicPrefix}/?slot=${created}` });
     return res.end();
+  }
+  if(url.pathname==='/read'&&req.method==='POST') {
+    if(!process.env.USERIO_API_TOKEN||req.headers.authorization!==`Bearer ${process.env.USERIO_API_TOKEN}`){res.writeHead(401,{'content-type':'application/json'});return res.end(JSON.stringify({error:'unauthorized'}));}
+    try {
+      const result=await acknowledgeRead({slots:liveSlots,Api,payload:await readJsonBody(req)});
+      res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify(result));
+    }catch(error){res.writeHead(400,{'content-type':'application/json'});return res.end(JSON.stringify({error:String(error.message||error)}));}
   }
   if (url.pathname === "/reconcile" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;

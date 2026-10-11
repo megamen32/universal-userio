@@ -1,0 +1,28 @@
+[Unit]
+Description=Universal UserIO native and APK SMS ingress
+After=network-online.target universal-userio.service android-sms-gateway.service
+Wants=network-online.target
+Requires=universal-userio.service android-sms-gateway.service
+PartOf=universal-userio.service
+
+[Service]
+Type=simple
+User=roomhacker
+WorkingDirectory=/opt/universal-userio
+EnvironmentFile=/etc/universal-userio.env
+Environment=PYTHONPATH=/opt/universal-userio/src
+Environment=USERIO_INGRESS_URL=http://127.0.0.1:18093
+ExecStart=/usr/bin/python3 -m universal_userio.sms_ingress
+Restart=on-failure
+RestartSec=3
+MemoryHigh=128M
+MemoryMax=192M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=32
+IOWeight=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target universal-userio.service
