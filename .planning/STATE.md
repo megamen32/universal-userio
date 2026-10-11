@@ -1,7 +1,17 @@
 # State
 
-Active v1.1: repair human web send and MAX editing, sole owner01a11747-7bb9-7bc0-8c0a-ce64db49105d.
-Prior v1.0 MCP/native-phone acceptance retained; web acceptance was incomplete.
-Confirmed stale idle socket BrokenPipe + durable sending claim, screenshot second approval refusal. Failed original Oleg draft retained; no automatic resend. Root-private .tmp/max-web-send-20261011 evidence includes native no-delivery reconciliation.
-Implemented direct human /send request idempotency, fresh write preflight, native message67 editing, same-ID mirror and web controls. Focused tests green, web build green. Headed lease requested from Mini owner R38; consumer not started.
-Next: final source review/publish/install, actual web Saved Messages send/edit/native readback/reload and scoped final proof publication.
+Active v1.1, owner01a11747-7bb9-7bc0-8c0a-ce64db49105d.
+Direct human web Send/Enter, idempotent durable intent, fresh MAX write preflight,
+text edit/native same-ID projection: tested/published/installed daa2d758.
+First actual headed login exposed core224/256MiB reclaim/502 BEFOREsend/edit.
+Own unit84984+R38 persistent repair/docsbe671: samePID1640511,384/512MiB,
+fullPSIzero, publiclogin200. No global caps or foreign processes changed.
+
+Same owned Mini target136400/sessionfleet55 parked. Wait ONLY current explicit
+human Yandex login window (R38); after fresh600 lease use literal read-only broker
+marker, normal protected login, MAX Saved Messages Send/edit/Enter/provider
+readback/reload/screenshot. No new tab, actor, MAX auth or old-contact send.
+Acceptance still open, provider sends/edits0. The failed original contact message
+is preserved/proposed after complete fresh no-delivery reconciliation.
+External FastAgent TokenPlan429 recorded; do not claim renewed AI acceptance or
+silently switch models. Full proof .agents/tasks/20261011-max-web-send-edit.md.
