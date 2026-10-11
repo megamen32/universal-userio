@@ -1624,6 +1624,11 @@ class SQLiteUserIOStore:
                     """,
                     (user_id, message.source, message.sender, message.sender_name, now),
                 )
+            if message.source == "max" and message.conversation_title and account_ref and message.peer_id:
+                self._connection.execute(
+                    "INSERT OR REPLACE INTO contact_names (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)",
+                    (user_id, "max", f"chat:{account_ref}:{message.peer_id}", message.conversation_title, now),
+                )
             for att in (message.attachments or ()):
                 if (message.reconciliation and att.get("kind") in {"voice", "audio"}
                         and att.get("transcription_status") == "not_requested"):
@@ -2248,7 +2253,8 @@ class SQLiteUserIOStore:
                 SELECT d.id,d.conversation_id,d.body,d.status,d.created_at,
                        c.source,c.sender,c.identity_id,
                        COALESCE((SELECT name FROM contact_names n
-                                 WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=c.sender), '') AS display_name
+                                 WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=
+                                   CASE WHEN c.source='max' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END), '') AS display_name
                 FROM drafts d JOIN conversations c
                   ON c.user_id=d.user_id AND c.id=d.conversation_id
                 WHERE d.user_id=? AND d.status='proposed'
@@ -2287,7 +2293,8 @@ class SQLiteUserIOStore:
             ).fetchall()
             name_row = self._connection.execute(
                 "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
-                (user_id, row["source"], row["sender"]),
+                (user_id, row["source"], f"chat:{row['account_ref']}:{row['peer_id']}"
+                 if row["source"] == "max" else row["sender"]),
             ).fetchone()
             history_row = None
             if row["source"] == "telegram" and row["account_ref"] and row["peer_id"]:
@@ -4090,7 +4097,8 @@ class SQLiteUserIOStore:
                          THEN 'telegram' ELSE 'local_mirror' END AS unread_source,
                        trs.unread_observed_at AS unread_observed_at,
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
-                        AND source=c.source AND sender=c.sender) AS display_name,
+                        AND source=c.source AND sender=
+                          CASE WHEN c.source='max' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
                        (SELECT MAX(received_at) FROM messages
                         WHERE user_id=c.user_id AND source=c.source) AS account_last_at
                 FROM conversations c LEFT JOIN telegram_read_state trs

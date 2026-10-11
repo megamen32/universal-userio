@@ -241,6 +241,12 @@ class MaxClient:
         messages = (payload or {}).get("messages")
         return list(messages) if isinstance(messages, list) else []
 
+    def contacts(self, ids: list[int]) -> list[dict[str, Any]]:
+        if not ids:
+            return []
+        payload = self._roundtrip(32, {"contactIds": ids[:100]})
+        return list((payload or {}).get("contacts") or [])
+
     def send(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
         payload = self._roundtrip(
             OP_SEND,

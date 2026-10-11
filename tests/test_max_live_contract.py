@@ -124,3 +124,15 @@ def test_projection_retains_provider_edit_time():
     e=message_envelope({'id':1,'sender':2,'time':1000,'updateTime':2000,'text':'edited'},
                        chat_id='3',own_id='4')
     assert inbox_message_from_envelope(e,received_at=1).edited_at == 2
+
+
+def test_max_title_is_chat_scoped_and_independent_of_participant(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'db.sqlite')
+    service=UserIOService(store,object(),object())
+    for sender in ['1','2','77']:
+        e=message_envelope({'id':sender,'sender':sender,'time':1000,'text':'t'},
+                           chat_id='-5',own_id='77',kind='group',title='Команда')
+        conv,_=service.receive(inbox_message_from_envelope(e,received_at=1),route_id='max',account_ref='max')
+    assert store.conversation(conv)['display_name'] == 'Команда'
+    from universal_userio.adapters import UnifiedChannels
+    assert UnifiedChannels(store,service,store.default_user_id).adapter('max').list()[0]['title'] == 'Команда'

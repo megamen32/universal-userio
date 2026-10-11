@@ -25,6 +25,7 @@ class InboxMessage:
     edited_at: float = 0.0
     # Provider read state is distinct from opening the local UserIO view.
     provider_read: bool | None = None
+    conversation_title: str = ""
 
     @property
     def conversation_key(self) -> str:

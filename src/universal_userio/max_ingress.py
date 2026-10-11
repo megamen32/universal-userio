@@ -34,7 +34,7 @@ def _own_id(client: MaxClient) -> str:
 
 
 def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direct",
-                     reconciliation: bool = False) -> dict | None:
+                     reconciliation: bool = False, title: str = "") -> dict | None:
     """Retain the provider origin; attachment tokens are never projected."""
     if row.get("id") is None:
         return None
@@ -66,6 +66,7 @@ def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direc
         "edited_at": (row.get("updateTime") or 0) / 1000,
         "direction": "outgoing" if row.get("out") or sender == own_id else "incoming",
         "conversation_kind": kind, "attachments": attachments,
+        "conversation_title": title,
         "reconciliation": reconciliation,
     }
 
@@ -81,12 +82,32 @@ class MaxIngressClient(UserIOIngressClient):
         self._json(request)
 
 
+def chat_catalog(client: MaxClient) -> tuple[list[dict], dict[str, str]]:
+    chats = client.chats(count=50)
+    own = _own_id(client)
+    ids = sorted({int(peer) for chat in chats for peer in (chat.get("participants") or {})
+                  if str(peer) != own})
+    users = client.contacts(ids) if hasattr(client, "contacts") else []
+    names = {}
+    for user in users:
+        options = user.get("names") or []
+        name = next((str(x.get("name")) for x in options if x.get("name")), "")
+        names[str(user.get("id"))] = name
+    titles = {}
+    for chat in chats:
+        cid = str(chat.get("id"))
+        other = next((str(k) for k in (chat.get("participants") or {}) if str(k) != own), "")
+        titles[cid] = str(chat.get("title") or ("Избранное" if cid == "0" else names.get(other)) or cid)
+    return chats, titles
+
+
 def backfill(sink: MaxIngressClient, client: MaxClient, *, depth: int = 30,
              route_id: str = "max", account_id: str = "max",
              stop: threading.Event | None = None) -> int:
     delivered = 0
     own = _own_id(client)
-    for chat in client.chats(count=50):
+    chats, titles = chat_catalog(client)
+    for chat in chats:
         if stop is not None and stop.is_set():
             break
         if chat.get("id") is None:
@@ -96,7 +117,7 @@ def backfill(sink: MaxIngressClient, client: MaxClient, *, depth: int = 30,
             "channel" if str(chat.get("type")) == "CHANNEL" else "direct")
         for row in sorted(client.history(chat_id, backward=depth), key=lambda m: m.get("time") or 0):
             envelope = message_envelope(row, chat_id=chat_id, own_id=own, kind=kind,
-                                        reconciliation=True)
+                                        reconciliation=True, title=titles.get(chat_id, ""))
             if envelope is not None:
                 sink.send_max_message(envelope=envelope, account_id=account_id, route_id=route_id)
                 delivered += 1
@@ -109,6 +130,7 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
     delay = 3
     ready = False
     kinds = {}
+    titles = {}
     while not stop.is_set():
         try:
             if not ready:
@@ -122,6 +144,7 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
                 kinds = {str(c["id"]): "group" if c.get("type") in {"CHAT", "GROUP"}
                          else "channel" if c.get("type") == "CHANNEL" else "direct"
                          for c in login.get("chats", []) if c.get("id") is not None}
+                _, titles = chat_catalog(client)
                 if depth:
                     backfill(sink, client, depth=depth, route_id=route_id, account_id=account_id, stop=stop)
                 ready, delay = True, 3
@@ -132,7 +155,8 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
                 continue
             row = dict((payload or {}).get("message") or payload)
             envelope = message_envelope(row, chat_id=message["chat_id"], own_id=_own_id(client),
-                                        kind=kinds.get(message["chat_id"], "unknown"))
+                                        kind=kinds.get(message["chat_id"], "unknown"),
+                                        title=titles.get(message["chat_id"], ""))
             if envelope is not None:
                 sink.send_max_message(envelope=envelope, account_id=account_id, route_id=route_id)
         except (TimeoutError, OSError, RuntimeError, ValueError, websocket.WebSocketException) as error:

@@ -141,6 +141,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         sender_is_bot=sender_is_bot,
         edited_at=edited_at,
         provider_read=provider_read,
+        conversation_title=str(payload.get("conversation_title") or "")[:256],
     )
 
 
@@ -787,6 +788,12 @@ class MaxChannelAdapter(StoredChannelAdapter):
     """
 
     channel = "max"
+
+    def list(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        chats = super().list(limit=limit)
+        names = {r["id"]: r.get("display_name") for r in self._store.conversations(
+            source="max", limit=max(1, min(limit, 100)), user_id=self._user_id)}
+        return [{**chat, "title": names.get(chat["id"]) or chat["title"]} for chat in chats]
 
     def download(self, *, file_ref: str) -> ChannelFile:
         raise AdapterNotSupported(
