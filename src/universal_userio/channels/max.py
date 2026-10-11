@@ -86,7 +86,8 @@ class MaxChannel:
         )
 
     async def list_chats(self) -> list[ChatSummary]:
-        rows = await asyncio.to_thread(self._client.chats)
+        from universal_userio.max_ingress import chat_catalog
+        rows, titles = await asyncio.to_thread(chat_catalog, self._client)
         summaries: list[ChatSummary] = []
         for row in rows:
             chat_id = str(row.get("id") or "")
@@ -95,7 +96,7 @@ class MaxChannel:
             summaries.append(
                 ChatSummary(
                     id=chat_id,
-                    title=str(row.get("title") or chat_id),
+                    title=titles.get(chat_id) or str(row.get("title") or chat_id),
                     username=None,
                     kind=_kind(row.get("type")),
                     unread_count=int(row.get("newMessages") or 0),

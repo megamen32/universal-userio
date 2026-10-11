@@ -9,6 +9,7 @@ import signal
 import threading
 import time
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 
 import websocket
 
@@ -30,7 +31,7 @@ def _client_from_env(source) -> MaxClient:
 
 
 def _own_id(client: MaxClient) -> str:
-    return str(((client.profile or {}).get("profile") or {}).get("contact", {}).get("id") or "")
+    return str(((getattr(client, "profile", None) or {}).get("profile") or {}).get("contact", {}).get("id") or "")
 
 
 def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direct",
@@ -47,9 +48,18 @@ def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direc
             "chat_id": chat_id, "message_id": str(row["id"]),
         }}
         for src, dst in [("fileId", "attachment_id"), ("photoId", "attachment_id"),
-                         ("videoId", "attachment_id"), ("name", "filename"), ("size", "size")]:
+                         ("videoId", "attachment_id"), ("stickerId", "attachment_id"),
+                         ("name", "filename"), ("size", "size")]:
             if src in item:
                 att[dst] = item[src]
+        if typ == "sticker":
+            # This is the public sticker thumbnail, not a signed file token.
+            url = str(item.get("url") or "")
+            parts = urlsplit(url)
+            if (parts.scheme == "https" and parts.netloc == "i.oneme.ru"
+                    and parts.path == "/getSmile"
+                    and set(parse_qs(parts.query)) <= {"smileId", "smileType"}):
+                att["src"] = url
         attachments.append(att)
     text = str(row.get("text") or "")
     if not text.strip() and not attachments:
@@ -99,6 +109,24 @@ def chat_catalog(client: MaxClient) -> tuple[list[dict], dict[str, str]]:
         other = next((str(k) for k in (chat.get("participants") or {}) if str(k) != own), "")
         titles[cid] = str(chat.get("title") or ("Избранное" if cid == "0" else names.get(other)) or cid)
     return chats, titles
+
+
+def resolve_chat_metadata(client: MaxClient, chat_id: str) -> tuple[str, str]:
+    """Resolve only the newly observed chat; never substitute a contact ID."""
+    chat = client.get_chat(chat_id)
+    if not chat:
+        return "unknown", ""
+    kind = ("group" if chat.get("type") in {"CHAT", "GROUP"} else
+            "channel" if chat.get("type") == "CHANNEL" else "direct")
+    if chat_id == "0":
+        return kind, "Избранное"
+    if chat.get("title"):
+        return kind, str(chat["title"])
+    other = [int(k) for k in (chat.get("participants") or {}) if str(k) != _own_id(client)]
+    users = client.contacts(other[:100]) if other else []
+    name = next((str(n["name"]) for u in users for n in u.get("names") or []
+                 if n.get("name")), "")
+    return kind, name
 
 
 def backfill(sink: MaxIngressClient, client: MaxClient, *, depth: int = 30,
@@ -153,6 +181,17 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
             message = dispatch_to_message(payload)
             if message is None:
                 continue
+            chat_id = message["chat_id"]
+            if hasattr(client, "get_chat") and (chat_id not in kinds or
+                    not titles.get(chat_id) or titles.get(chat_id) == chat_id):
+                try:
+                    kind, title = resolve_chat_metadata(client, chat_id)
+                    kinds[chat_id], titles[chat_id] = kind, title
+                except (TimeoutError, OSError, RuntimeError, ValueError,
+                        websocket.WebSocketException) as error:
+                    # Metadata must not discard the real message. Retry the
+                    # name lookup on the next event while retaining its origin.
+                    log.warning("MAX chat metadata pending: %s", type(error).__name__)
             row = dict((payload or {}).get("message") or payload)
             envelope = message_envelope(row, chat_id=message["chat_id"], own_id=_own_id(client),
                                         kind=kinds.get(message["chat_id"], "unknown"),

@@ -120,6 +120,36 @@ def test_reconnect_failure_is_bounded_and_shutdown_closes_own_socket():
     assert c.closed
 
 
+def test_first_message_from_new_chat_resolves_contact_before_projection():
+    stop=threading.Event()
+    class Client:
+        profile={'profile':{'contact':{'id':77}}}
+        def connect(self):return self.profile
+        def chats(self,**kw):return [{'id':0,'type':'DIALOG'}]
+        def contacts(self,ids):return [{'id':88,'names':[{'name':'Дарья'}]}] if ids else []
+        def get_chat(self,chat_id):
+            assert chat_id=='900';return {'id':900,'type':'DIALOG','participants':{'77':0,'88':0}}
+        def dispatch(self,**kw):return {'chatId':900,'message':{'id':1,'sender':88,'time':1000,'text':'hello'}}
+        def close(self):pass
+    class Sink:
+        def register_account(self,**kw):pass
+        def send_max_message(self,**kw):self.envelope=kw['envelope'];stop.set()
+    sink=Sink();run_loop(sink,Client(),depth=0,stop=stop)
+    assert sink.envelope['conversation_title']=='Дарья'
+    assert sink.envelope['conversation_kind']=='direct'
+    assert sink.envelope['peer_id']=='900' and sink.envelope['message_id']=='max-900-1'
+
+
+def test_sticker_projection_keeps_public_thumbnail_without_credentials():
+    e=message_envelope({'id':1,'sender':2,'time':1000,'text':'',
+        'attaches':[{'_type':'STICKER','stickerId':55,
+                     'url':'https://i.oneme.ru/getSmile?smileId=55&smileType=sticker',
+                     'token':'NEVER_PROJECT'}]},chat_id='3',own_id='4')
+    assert e['body']=='' and e['attachments'][0]['kind']=='sticker'
+    assert e['attachments'][0]['src']=='https://i.oneme.ru/getSmile?smileId=55&smileType=sticker'
+    assert 'NEVER_PROJECT' not in json.dumps(e)
+
+
 def test_projection_retains_provider_edit_time():
     e=message_envelope({'id':1,'sender':2,'time':1000,'updateTime':2000,'text':'edited'},
                        chat_id='3',own_id='4')

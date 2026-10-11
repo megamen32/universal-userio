@@ -59,6 +59,28 @@ def test_edit_conflicting_native_body_never_submits_edit():
     assert not any(f['opcode']==67 for f in t.sent)
 
 
+def test_edit_link_preview_uses_new_text_instead_of_retaining_old_preview():
+    t=Transport(); t.text='See https://example.com/old'
+    c=MaxClient('fixture','device',transport=t)
+    c.get_message=lambda **kw: {'id':123,'sender':77,'text':t.text,
+        'attaches':[{'_type':'SHARE','url':'https://example.com/old'}],
+        'elements':[{'type':'LINK','from':4,'length':23}]}
+    edited=c.edit(chat_id=0,message_id=123,text='See https://example.com/new',
+                  expected_text='See https://example.com/old')
+    assert edited['text']=='See https://example.com/new'
+    edit=next(f['payload'] for f in t.sent if f['opcode']==67)
+    assert edit['attachments']==[] and edit['elements']==[]
+
+
+def test_edit_link_and_real_media_does_not_drop_the_media():
+    t=Transport(); c=MaxClient('fixture','device',transport=t)
+    c.get_message=lambda **kw: {'id':123,'sender':77,'text':'before',
+        'attaches':[{'_type':'SHARE','url':'https://example.com'}, {'_type':'PHOTO','photoId':42}]}
+    with pytest.raises(ValueError,match='вложениями'):
+        c.edit(chat_id=0,message_id=123,text='after',expected_text='before')
+    assert not any(f['opcode']==67 for f in t.sent)
+
+
 def setup(tmp_path):
     store=SQLiteUserIOStore(tmp_path/'db.sqlite'); t=Transport(); c=MaxClient('fixture','device',transport=t)
     svc=UserIOService(store,object(),object(),max_client=c,max_user_id=store.default_user_id,max_manual_approve=True)

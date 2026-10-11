@@ -32,6 +32,7 @@ OP_PING = 1
 OP_INIT = 6
 OP_LOGIN = 19
 OP_GET_CHATS = 53
+OP_CHAT_INFO = 48
 OP_GET_HISTORY = 49
 OP_SEND = 64
 OP_EDIT = 67
@@ -248,6 +249,11 @@ class MaxClient:
         messages = (payload or {}).get("messages")
         return list(messages) if isinstance(messages, list) else []
 
+    def get_chat(self, chat_id: int | str) -> dict[str, Any]:
+        payload = self._roundtrip(OP_CHAT_INFO, {"chatIds": [int(chat_id)]})
+        return next((row for row in (payload or {}).get("chats", [])
+                     if str(row.get("id")) == str(chat_id)), {})
+
     def contacts(self, ids: list[int]) -> list[dict[str, Any]]:
         if not ids:
             return []
@@ -312,7 +318,11 @@ class MaxClient:
                 raise ValueError("Можно изменять только свои сообщения MAX")
             if original.get("text", "") != expected_text:
                 raise ValueError("Сообщение уже изменилось. Обновите диалог.")
-            if original.get("attaches") or original.get("elements"):
+            # SHARE is an automatically generated URL preview, not an uploaded
+            # file. The replacement text regenerates its links/formatting;
+            # copying old offsets or previews would retain the previous URL.
+            if any(not isinstance(item, dict) or item.get("_type") != "SHARE"
+                   for item in original.get("attaches") or []):
                 raise ValueError("Редактирование сообщений с вложениями пока недоступно")
             payload = self._roundtrip(OP_EDIT, {
                 "chatId": int(chat_id), "messageId": int(message_id), "text": text,
