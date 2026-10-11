@@ -4099,15 +4099,22 @@ class SQLiteUserIOStore:
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
                         AND source=c.source AND sender=
                           CASE WHEN c.source='max' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
-                       (SELECT MAX(received_at) FROM messages
-                        WHERE user_id=c.user_id AND source=c.source) AS account_last_at
+                       activity.account_last_at AS account_last_at
                 FROM conversations c LEFT JOIN telegram_read_state trs
                   ON trs.user_id=c.user_id AND trs.account_ref=c.account_ref
                   AND trs.peer_id=c.peer_id AND c.source='telegram'
+                -- Aggregate once per account source. The old scalar MAX() was
+                -- executed for every chat row (many full source scans) and
+                -- made switching accounts take several seconds.
+                LEFT JOIN (
+                    SELECT user_id, source, MAX(received_at) AS account_last_at
+                    FROM messages WHERE user_id=?
+                    GROUP BY user_id, source
+                ) AS activity ON activity.user_id=c.user_id AND activity.source=c.source
                 WHERE c.user_id=? {source_sql}
                 ORDER BY last_at DESC, c.updated_at DESC LIMIT ?
                 """,
-                [self._user(user_id), *values, limit],
+                [self._user(user_id), self._user(user_id), *values, limit],
             ).fetchall()
         return [dict(row) for row in rows]
 

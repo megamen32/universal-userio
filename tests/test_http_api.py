@@ -383,6 +383,38 @@ def test_conversations_are_sorted_by_latest_message_not_conversation_updated_at(
         server.server_close()
 
 
+def test_conversation_list_account_activity_keeps_per_source_max_timestamp(tmp_path) -> None:
+    """Account switching must keep native unread counts, source filters and account recency."""
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    service.receive(InboxMessage("telegram", "tg-1", "Alice", "first", 20.0),
+                    route_id="tg-reply")
+    service.receive(InboxMessage("telegram", "tg-2", "Bob", "second", 50.0),
+                    route_id="tg-reply")
+    service.receive(InboxMessage("telegram", "tg-3", "Alice", "latest", 80.0),
+                    route_id="tg-reply")
+    service.receive(InboxMessage("gmail", "mail-1", "Client", "email", 120.0),
+                    route_id="mail")
+    service.receive(InboxMessage("gmail:secondary", "mail-2", "Other", "other mail", 150.0),
+                    route_id="mail")
+
+    telegram = store.conversations(source="telegram")
+    assert len(telegram) == 2
+    assert all(row["account_last_at"] == 80.0 for row in telegram)
+    assert [row["last_at"] for row in telegram] == [80.0, 50.0]
+    assert [row["unread_count"] for row in telegram] == [2, 1]
+
+    gmail = store.conversations(source="gmail")
+    assert {row["source"] for row in gmail} == {"gmail", "gmail:secondary"}
+    assert {row["source"]: row["account_last_at"] for row in gmail} == {
+        "gmail": 120.0, "gmail:secondary": 150.0,
+    }
+    assert [row["source"] for row in store.conversations(
+        source="gmail", exact_source=True)] == ["gmail"]
+    assert len(store.conversations()) == 4
+    store.close()
+
+
 def test_conversation_media_endpoint_describes_attachment_placeholder(tmp_path) -> None:
     """The /media endpoint pins the contract for attachment bubbles: every
     adapter currently reports `available=false` because StoredChannelAdapter
