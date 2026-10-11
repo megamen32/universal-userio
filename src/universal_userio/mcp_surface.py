@@ -288,6 +288,13 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if name == "userio.channels.read" and arguments.get("channel") == "max":
+            # Keep the compatibility HTTP surface on the authoritative MAX
+            # reader, including its bounded cached-history contract.
+            from .mcp_dispatch import UserIOToolDispatcher
+            return UserIOToolDispatcher(self._store, self._service).dispatch(
+                name, arguments, principal=principal,
+            )
         user_id = principal.user_id
         channels = UnifiedChannels(self._store, self._service, user_id)
         try:

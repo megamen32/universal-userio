@@ -155,3 +155,8 @@ def test_max_mcp_history_limit_bounds_cached_read_without_provider_calls(tmp_pat
     r=d.dispatch('userio.channels.read',{'channel':'max','chat_id':conv,'history_limit':1},
                  principal=UserPrincipal(store.default_user_id,'owner','owner'))
     assert r['ok'] and [m['body'] for m in r['chat']['messages']] == ['2']
+    from universal_userio.mcp_surface import UserIOMcpSurface
+    r2=UserIOMcpSurface(store,service).dispatch(
+        'userio.channels.read', {'channel':'max','chat_id':conv,'history_limit':1},
+        principal=UserPrincipal(store.default_user_id,'owner','owner'))
+    assert r2 == r
