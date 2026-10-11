@@ -174,6 +174,10 @@ class UserIOService:
                 account_ref: str = "") -> tuple[str, bool]:
         user_id = self._store.default_user_id if user_id is None else user_id
         conversation_key = message.conversation_key
+        if message.source == "max" and account_ref and message.peer_id:
+            # Group participants and our own messages belong to the same provider
+            # chat. Sender identity must never become the destination of a reply.
+            conversation_key = f"max:{account_ref}:{message.peer_id}"
         if message.source == "telegram":
             raw_ref = message.message_id.rsplit("|", 1)[-1]
             peer_id = message.peer_id or raw_ref.split(":", 1)[0]

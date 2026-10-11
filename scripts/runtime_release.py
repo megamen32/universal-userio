@@ -38,6 +38,7 @@ _SERVICE_PATHS = {
     "deploy/userio-agentcall-ingress.service",
     "deploy/userio-gmail-ingress.service",
     "deploy/userio-matrix-ingress.service",
+    "deploy/userio-max-ingress.service",
 }
 _REQUIRED_PATHS = {"pyproject.toml", *_SERVICE_PATHS}
 _OBSOLETE_RUNTIME_PATHS = {"src/universal_userio/email.py"}

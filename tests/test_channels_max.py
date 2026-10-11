@@ -100,7 +100,9 @@ class ScriptedTransport:
 
     def recv(self, ws, timeout: float):
         opcode = self.sent[-1]["opcode"]
-        return json.loads(self.replies[opcode])
+        frame = json.loads(self.replies[opcode])
+        frame["seq"] = self.sent[-1]["seq"]
+        return frame
 
     def close(self, ws) -> None:
         return None
@@ -227,11 +229,11 @@ class FakeSink:
     def __init__(self) -> None:
         self.messages: list[dict] = []
 
-    def send_message(self, **kwargs) -> None:
-        self.messages.append(kwargs)
+    def send_max_message(self, **kwargs) -> None:
+        self.messages.append(kwargs["envelope"])
 
 
-def test_max_ingress_backfill_skips_own_and_empty_messages():
+def test_max_ingress_backfill_preserves_own_messages_and_provider_chat():
     class BackfillClient:
         profile = LOGIN_PAYLOAD  # own id 9001
 
@@ -247,8 +249,11 @@ def test_max_ingress_backfill_skips_own_and_empty_messages():
 
     sink = FakeSink()
     delivered = backfill(sink, BackfillClient(), depth=10)  # type: ignore[arg-type]
-    assert delivered == 1
+    assert delivered == 2
     assert sink.messages[0]["source"] == "max"
     assert sink.messages[0]["sender"] == "777"
     assert sink.messages[0]["body"] == "входящее"
     assert sink.messages[0]["message_id"] == "max-9001-1"
+    assert sink.messages[0]["peer_id"] == "9001"
+    assert sink.messages[1]["direction"] == "outgoing"
+    assert sink.messages[1]["reconciliation"] is True

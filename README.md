@@ -85,14 +85,17 @@ MCP call.
 
 MAX personal accounts have no official API, so the `max` channel speaks the
 same JSON WebSocket protocol (`wss://ws-api.oneme.ru/websocket`, protocol ver
-11) that web.max.ru itself uses, with a dedicated session token minted by the
-phone-number SMS login (protocol reference: community reverse-engineering
-docs). Set `USERIO_MAX_TOKEN` plus a stable `USERIO_MAX_DEVICE_ID` (a saved
-UUID identifies the UserIO device session across restarts); optionally point
+11) that web.max.ru itself uses. Reuse an authorized personal session and its
+exact stable device ID; the existing rooted Android authorization was verified
+on this transport without a browser or another SMS login. Set `USERIO_MAX_TOKEN`
+and `USERIO_MAX_DEVICE_ID` in the protected environment; optionally point
 `USERIO_MAX_SOCKS` at a `host:port` SOCKS5 proxy to egress from the phone's
 mobile IP. The `userio-max-ingress` service keeps one logged-in session,
-imports recent history once (`--backfill N`), streams new DISPATCH events into
-normal UserIO conversations, and heartbeats/reconnects on its own.
+imports up to 100 recent messages per chat on startup and reconnect (`--backfill N`),
+preserves outgoing messages, provider time, media references and exact chat IDs
+(including Saved Messages chat `0`), and streams new DISPATCH events into
+normal UserIO conversations. The history catch-up is bounded, not a complete
+archive of arbitrarily long outages. Older history needs explicit pagination.
 `userio.channels.send_draft` still only creates a draft; only
 `userio.draft.approve_send` sends the exact text through MSG_SEND, and the
 client reports server acceptance, not the peer's device delivery. Bind the
@@ -100,6 +103,12 @@ channel to the owner by default; set `USERIO_MAX_USER_ID` to another user's id
 only after binding that user's `max` channel route. Keep the session token in
 UserIO's private environment file only. Install with the `max` extra
 (`websocket-client`).
+
+The native ingress is bounded to 96/128 MiB, swap 0, one CPU and 16 tasks.
+Set `USERIO_MAX_MANUAL_APPROVE_ONLY=1` for the owner and enable
+`userio-max-ingress.service` after a verified rollback-first release. Authorization
+failures reconnect with bounded backoff; they do not silently reauthenticate.
+The unofficial protocol may change; see the current MAX milestone research.
 
 ## Universal channel adapters library (`universal_userio.channels`)
 

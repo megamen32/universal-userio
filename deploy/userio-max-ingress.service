@@ -11,11 +11,18 @@ WorkingDirectory=/opt/universal-userio
 EnvironmentFile=/etc/universal-userio.env
 Environment=PYTHONPATH=/opt/universal-userio/src
 Environment=USERIO_INGRESS_URL=http://127.0.0.1:18093
-ExecStart=/usr/bin/python3 -m universal_userio.max_ingress --backfill 10
+ExecStart=/opt/universal-userio/.venv/bin/python -m universal_userio.max_ingress --backfill 100
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
+MemoryHigh=96M
+MemoryMax=128M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=16
+IOWeight=50
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

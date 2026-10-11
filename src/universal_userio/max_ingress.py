@@ -1,19 +1,16 @@
-"""Continuous MAX (oneme.ru) ingress owned by Universal UserIO.
-
-Holds one logged-in MAX WebSocket session, turns DISPATCH events into normal
-UserIO conversations, and (with ``--backfill N``) imports the recent history of
-every chat once at startup.  Requires the same environment as the service
-side: ``USERIO_MAX_TOKEN``, ``USERIO_MAX_DEVICE_ID`` and the ingress sink
-``USERIO_INGRESS_URL`` + ``USERIO_API_TOKEN``.
-"""
+"""Permanent MAX session and bounded history/live projection into UserIO."""
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
 import threading
 import time
+import urllib.request
+
+import websocket
 
 from .channels.max_client import MaxClient, dispatch_to_message
 from .gmail_ingress import UserIOIngressClient
@@ -22,103 +19,154 @@ log = logging.getLogger("userio.max_ingress")
 
 
 def _client_from_env(source) -> MaxClient:
-    token = os.environ["USERIO_MAX_TOKEN"] if source is None else source["USERIO_MAX_TOKEN"]
-    device_id = (os.environ if source is None else source).get("USERIO_MAX_DEVICE_ID", "")
-    socks = str((os.environ if source is None else source).get("USERIO_MAX_SOCKS") or "")
-    socks_host, socks_port = "", 0
+    source = os.environ if source is None else source
+    token, device_id = source["USERIO_MAX_TOKEN"], source["USERIO_MAX_DEVICE_ID"]
+    socks = str(source.get("USERIO_MAX_SOCKS") or "")
+    host, port = "", 0
     if socks:
-        host, _, port = socks.rpartition(":")
-        socks_host, socks_port = host, int(port or 1080)
-    return MaxClient(token, device_id, socks_host=socks_host, socks_port=socks_port)
+        host, _, raw_port = socks.rpartition(":")
+        port = int(raw_port or 1080)
+    return MaxClient(token, device_id, socks_host=host, socks_port=port)
 
 
 def _own_id(client: MaxClient) -> str:
-    profile = client.profile or {}
-    contact = (profile.get("profile") or {}).get("contact") or {}
-    return str(contact.get("id") or "")
+    return str(((client.profile or {}).get("profile") or {}).get("contact", {}).get("id") or "")
 
 
-def backfill(sink: UserIOIngressClient, client: MaxClient, *, depth: int = 10, route_id: str = "max") -> int:
+def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direct",
+                     reconciliation: bool = False) -> dict | None:
+    """Retain the provider origin; attachment tokens are never projected."""
+    if row.get("id") is None:
+        return None
+    attachments = []
+    for item in row.get("attaches") or []:
+        if not isinstance(item, dict):
+            continue
+        typ = str(item.get("_type") or item.get("type") or "").lower()
+        att = {"kind": typ or "unknown", "provider_ref": {
+            "chat_id": chat_id, "message_id": str(row["id"]),
+        }}
+        for src, dst in [("fileId", "attachment_id"), ("photoId", "attachment_id"),
+                         ("videoId", "attachment_id"), ("name", "filename"), ("size", "size")]:
+            if src in item:
+                att[dst] = item[src]
+        attachments.append(att)
+    text = str(row.get("text") or "")
+    if not text.strip() and not attachments:
+        return None
+    timestamp = row.get("time")
+    if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        raise ValueError("MAX message has no provider timestamp")
+    sender = str(row.get("sender") if row.get("sender") is not None else chat_id)
+    return {
+        "schema": "universal.inbox.message.v1", "source": "max",
+        "message_id": f"max-{chat_id}-{row['id']}",
+        "sender": sender, "body": text, "peer_id": chat_id,
+        "received_at": timestamp / 1000,
+        "edited_at": (row.get("updateTime") or 0) / 1000,
+        "direction": "outgoing" if row.get("out") or sender == own_id else "incoming",
+        "conversation_kind": kind, "attachments": attachments,
+        "reconciliation": reconciliation,
+    }
+
+
+class MaxIngressClient(UserIOIngressClient):
+    def send_max_message(self, *, envelope: dict, account_id: str, route_id: str) -> None:
+        request = urllib.request.Request(
+            self.base_url + "/v1/messages",
+            data=json.dumps({"route_id": route_id, "account_id": account_id,
+                             "message": envelope}, ensure_ascii=False).encode(), method="POST",
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+        )
+        self._json(request)
+
+
+def backfill(sink: MaxIngressClient, client: MaxClient, *, depth: int = 30,
+             route_id: str = "max", account_id: str = "max",
+             stop: threading.Event | None = None) -> int:
     delivered = 0
     own = _own_id(client)
     for chat in client.chats(count=50):
-        chat_id = str(chat.get("id") or "")
-        if not chat_id:
+        if stop is not None and stop.is_set():
+            break
+        if chat.get("id") is None:
             continue
+        chat_id = str(chat["id"])
+        kind = "group" if str(chat.get("type")) in {"CHAT", "GROUP"} else (
+            "channel" if str(chat.get("type")) == "CHANNEL" else "direct")
         for row in sorted(client.history(chat_id, backward=depth), key=lambda m: m.get("time") or 0):
-            if own and str(row.get("sender") or "") == own:
-                continue
-            text = str(row.get("text") or "").strip()
-            if not text:
-                continue
-            sink.send_message(
-                source="max",
-                account_id="max",
-                route_id=route_id,
-                message_id=f"max-{chat_id}-{row.get('id')}",
-                sender=str(row.get("sender") or "") or chat_id,
-                body=text,
-            )
-            delivered += 1
+            envelope = message_envelope(row, chat_id=chat_id, own_id=own, kind=kind,
+                                        reconciliation=True)
+            if envelope is not None:
+                sink.send_max_message(envelope=envelope, account_id=account_id, route_id=route_id)
+                delivered += 1
     return delivered
 
 
-def run_loop(sink: UserIOIngressClient, client: MaxClient, *, route_id: str = "max") -> None:
-    own = _own_id(client)
-    log.info("MAX ingress ready; own user id: %s", own or "unknown")
-    while True:
+def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max",
+             account_id: str = "max", depth: int = 30, stop: threading.Event | None = None) -> None:
+    stop = stop or threading.Event()
+    delay = 3
+    ready = False
+    kinds = {}
+    while not stop.is_set():
         try:
-            payload = client.dispatch(timeout=25)
-        except (TimeoutError, OSError, RuntimeError) as error:
-            log.warning("MAX dispatch failed (%s); reconnecting", error)
+            if not ready:
+                login = client.connect()
+                if not _own_id(client):
+                    raise ValueError("MAX account identity missing")
+                names = (login.get("profile") or {}).get("contact", {}).get("names") or []
+                name = next((str(x.get("name")) for x in names if x.get("name")), "MAX")
+                sink.register_account(account_id=account_id, provider="max", display_name=name,
+                                      can_reply=True, credential_ref="env:USERIO_MAX_TOKEN")
+                kinds = {str(c["id"]): "group" if c.get("type") in {"CHAT", "GROUP"}
+                         else "channel" if c.get("type") == "CHANNEL" else "direct"
+                         for c in login.get("chats", []) if c.get("id") is not None}
+                if depth:
+                    backfill(sink, client, depth=depth, route_id=route_id, account_id=account_id, stop=stop)
+                ready, delay = True, 3
+                log.info("MAX identity and history ready")
+            payload = client.dispatch(timeout=1)
+            message = dispatch_to_message(payload)
+            if message is None:
+                continue
+            row = dict((payload or {}).get("message") or payload)
+            envelope = message_envelope(row, chat_id=message["chat_id"], own_id=_own_id(client),
+                                        kind=kinds.get(message["chat_id"], "unknown"))
+            if envelope is not None:
+                sink.send_max_message(envelope=envelope, account_id=account_id, route_id=route_id)
+        except (TimeoutError, OSError, RuntimeError, ValueError, websocket.WebSocketException) as error:
+            log.warning("MAX reconnect after %s", type(error).__name__)
             client.close()
-            time.sleep(3)
-            client.connect()
-            own = _own_id(client)
-            continue
-        if payload is None:
-            continue
-        message = dispatch_to_message(payload)
-        if message is None:
-            continue
-        if own and message["sender"] == own:
-            continue
-        sink.send_message(
-            source="max",
-            account_id="max",
-            route_id=route_id,
-            message_id=f"max-{message['chat_id']}-{message['message_id']}",
-            sender=message["sender"] or message["chat_id"],
-            body=message["text"],
-        )
+            ready = False
+            if stop.wait(delay):
+                break
+            delay = min(delay * 2, 30)
+    client.close()
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backfill", type=int, default=0, metavar="N",
-                        help="import the last N messages of every chat before listening")
-    parser.add_argument("--once", action="store_true", help="backfill and exit (no listener)")
+    parser.add_argument("--backfill", type=int, default=30, metavar="N")
+    parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
+    if not 0 <= args.backfill <= 100:
+        parser.error("backfill must be between 0 and 100")
     logging.basicConfig(level=os.environ.get("USERIO_LOG_LEVEL", "INFO"))
-    route_id = os.environ.get("USERIO_MAX_ROUTE_ID", "max").strip() or "max"
+    route = os.environ.get("USERIO_MAX_ROUTE_ID", "max").strip() or "max"
+    account = os.environ.get("USERIO_MAX_ACCOUNT_ID", "max").strip() or "max"
     client = _client_from_env(None)
-    sink = UserIOIngressClient(
-        os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"), os.environ["USERIO_API_TOKEN"]
-    )
-    client.connect()
-    if args.backfill:
-        delivered = backfill(sink, client, depth=args.backfill, route_id=route_id)
-        log.info("MAX backfill delivered %s messages", delivered)
-    if args.once:
-        client.close()
-        return 0
+    sink = MaxIngressClient(os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"),
+                            os.environ["USERIO_API_TOKEN"])
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     try:
-        run_loop(sink, client, route_id=route_id)
-    except KeyboardInterrupt:
-        pass
+        if args.once:
+            client.connect()
+            backfill(sink, client, depth=args.backfill, route_id=route, account_id=account, stop=stop)
+        else:
+            run_loop(sink, client, route_id=route, account_id=account, depth=args.backfill, stop=stop)
     finally:
         client.close()
     return 0

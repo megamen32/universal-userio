@@ -30,7 +30,7 @@ def _peer(chat: ChatRef) -> str:
 
 def _kind(raw: str) -> str:
     raw = str(raw or "").upper()
-    if raw.startswith("GROUP"):
+    if raw.startswith("GROUP") or raw == "CHAT":
         return "group"
     if raw.startswith("CHANNEL"):
         return "channel"
@@ -55,6 +55,8 @@ class MaxChannel:
         device_id = str(source.get("USERIO_MAX_DEVICE_ID") or "").strip()
         if not token:
             raise ValueError("USERIO_MAX_TOKEN is required for the max channel")
+        if not device_id:
+            raise ValueError("USERIO_MAX_DEVICE_ID is required for the max channel")
         socks_host, socks_port = "", 0
         socks = str(source.get("USERIO_MAX_SOCKS") or "").strip()
         if socks:
@@ -75,7 +77,12 @@ class MaxChannel:
             text=str(row.get("text") or ""),
             sender_id="" if sender is None else str(sender),
             date=date,
-            out=False,
+            out=bool(row.get("out")) or (
+                sender is not None and str(sender) == str(
+                    ((getattr(self._client, "profile", None) or {}).get("profile") or {})
+                    .get("contact", {}).get("id", "")
+                )
+            ),
         )
 
     async def list_chats(self) -> list[ChatSummary]:

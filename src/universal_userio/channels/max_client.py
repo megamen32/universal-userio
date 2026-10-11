@@ -8,10 +8,10 @@ Session lifecycle: INIT (opcode 6, deviceId + userAgent) -> LOGIN (opcode 19,
 access token) -> normal requests. Heartbeat PING (opcode 1) keeps the socket
 alive; DISPATCH (opcode 128) frames carry incoming events for the ingress.
 
-Protocol reference: community reverse-engineering docs
-(https://github.com/pr0bel1230/max-api-docs). The access token is the session
-token minted by the SMS login flow (VERIFICATION_REQUEST opcode 17 ->
-CODE_ENTER opcode 18); the Android app's native token is NOT valid here.
+Protocol references: https://github.com/MaxApiTeam/PyMax and
+https://github.com/pr0bel1230/max-api-docs. Reuse an authorized session and its
+stable device ID. Android authorization was verified on this transport; never
+assume that a token from another account or device is interchangeable.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import json
 import threading
 import time
 import uuid
+from collections import deque
 from typing import Any
 
 import websocket
@@ -74,7 +75,7 @@ class MaxTransport:
         except websocket.WebSocketTimeoutException:
             return None
         if not raw:
-            return None
+            raise ConnectionError("MAX socket closed")
         return json.loads(raw)
 
     @staticmethod
@@ -103,7 +104,8 @@ class MaxClient:
         self._app_version = app_version
         self._transport = transport or MaxTransport(socks_host=socks_host, socks_port=socks_port)
         self._ws: Any = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._pending: deque[dict[str, Any]] = deque()
         self._seq = 0
         self._profile: dict[str, Any] | None = None
         self._last_heartbeat = 0.0
@@ -119,6 +121,14 @@ class MaxClient:
         return bool(ws) and getattr(ws, "connected", False)
 
     def connect(self) -> dict[str, Any]:
+        with self._lock:
+            try:
+                return self._connect()
+            except Exception:
+                self.close()
+                raise
+
+    def _connect(self) -> dict[str, Any]:
         """INIT + LOGIN; returns the LOGIN payload (profile, chats, users)."""
         if self.connected():
             return self._profile or {}
@@ -195,17 +205,22 @@ class MaxClient:
         """Send one request and read frames until its ACK (cmd=1) or error (cmd=3)."""
         with self._lock:
             self._ensure()
-            self._send_envelope(opcode, payload)
+            seq = self._send_envelope(opcode, payload)
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 frame = self._transport.recv(self._ws, max(1.0, deadline - time.monotonic()))
                 if frame is None:
                     continue
-                if frame.get("opcode") == opcode and frame.get("cmd") in (1, 3):
+                if frame.get("opcode") == OP_DISPATCH:
+                    if len(self._pending) >= 1000:
+                        raise RuntimeError("MAX event buffer full; reconnect/catch up required")
+                    self._pending.append(frame.get("payload") or {})
+                if (frame.get("seq") == seq and frame.get("opcode") == opcode
+                        and frame.get("cmd") in (1, 3)):
                     if frame.get("cmd") == 3:
                         error = frame.get("payload") or {}
                         raise RuntimeError(
-                            f"MAX opcode {opcode} failed: {error.get('error') or error}"
+                            f"MAX opcode {opcode} failed: {error.get('error', 'provider-error')}"
                         )
                     return frame.get("payload")
             raise TimeoutError(f"MAX opcode {opcode} timed out after {timeout}s")
@@ -220,7 +235,8 @@ class MaxClient:
     def history(self, chat_id: int | str, *, backward: int = 30) -> list[dict[str, Any]]:
         payload = self._roundtrip(
             OP_GET_HISTORY,
-            {"chatId": int(chat_id), "backward": int(backward), "forward": 0},
+            {"chatId": int(chat_id), "from": int(time.time() * 1000),
+             "backward": max(1, min(int(backward), 100)), "forward": 0},
         )
         messages = (payload or {}).get("messages")
         return list(messages) if isinstance(messages, list) else []
@@ -239,15 +255,22 @@ class MaxClient:
                 "notify": True,
             },
         )
+        message_id = ((payload or {}).get("message") or {}).get("id")
+        if message_id is None or str(message_id) == "":
+            raise RuntimeError("MAX send returned no message receipt; do not retry")
+        if str((payload or {}).get("chatId", chat_id)) != str(chat_id):
+            raise RuntimeError("MAX send receipt belongs to another chat; do not retry")
         return {
             "chat_id": str((payload or {}).get("chatId") or chat_id),
-            "message_id": str(((payload or {}).get("message") or {}).get("id") or ""),
+            "message_id": str(message_id),
             "receipt": "max-ws-accepted",
         }
 
     def dispatch(self, *, timeout: float = 25.0) -> dict[str, Any] | None:
         """Read one DISPATCH frame if it arrives before the timeout (and keep the heartbeat due)."""
         with self._lock:
+            if self._pending:
+                return self._pending.popleft()
             self._ensure()
             self._heartbeat_if_due()
             deadline = time.monotonic() + timeout
@@ -257,8 +280,8 @@ class MaxClient:
                     continue
                 if frame.get("opcode") == OP_DISPATCH:
                     return frame.get("payload") or {}
-                if frame.get("opcode") == OP_PING:
-                    self._heartbeat_if_due(force=True)
+                # A PING ACK is not a new server request: replying to it would
+                # create an endless heartbeat feedback loop.
             return None
 
 
@@ -274,14 +297,19 @@ def dispatch_to_message(payload: Any) -> dict[str, Any] | None:
     chat_id = payload.get("chatId") or message.get("chatId") or message.get("chat_id")
     text = message.get("text")
     message_id = message.get("id")
-    if chat_id is None or message_id is None or not str(text or "").strip():
+    if chat_id is None or message_id is None or (
+        not str(text or "").strip() and not message.get("attaches")
+    ):
         return None
     sender = message.get("sender")
-    return {
+    result = {
         "chat_id": str(chat_id),
         "message_id": str(message_id),
         "sender": "" if sender is None else str(sender),
-        "text": str(text),
+        "text": str(text or ""),
         "time": message.get("time"),
-        "out": bool(message.get("out")) or sender is None,
+        "out": bool(message.get("out")),
     }
+    if message.get("attaches"):
+        result["attaches"] = message["attaches"]
+    return result

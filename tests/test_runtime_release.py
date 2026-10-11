@@ -51,6 +51,7 @@ def _source_repo(tmp_path: Path) -> Path:
         "deploy/userio-agentcall-ingress.service": "[Service]\nExecStart=/bin/true\n",
         "deploy/userio-gmail-ingress.service": "[Service]\nExecStart=/bin/true\n",
         "deploy/userio-matrix-ingress.service": "[Service]\nExecStart=/bin/true\n",
+        "deploy/userio-max-ingress.service": "[Service]\nExecStart=/bin/true\n",
     }
     for relative, body in files.items():
         target = source / relative
@@ -76,6 +77,7 @@ def test_manifest_requires_clean_exact_origin_commit_and_safe_tracked_files(tmp_
         "deploy/userio-agentcall-ingress.service",
         "deploy/userio-gmail-ingress.service",
         "deploy/userio-matrix-ingress.service",
+        "deploy/userio-max-ingress.service",
         "pyproject.toml",
         "src/universal_userio/__init__.py",
         "src/universal_userio/runtime.py",
