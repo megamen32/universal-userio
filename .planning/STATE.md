@@ -27,3 +27,16 @@ Telegram automatic-read live account-bound acknowledgement accepted on existing
 native-read, no artificial unread state/new incoming manufactured. Local visible
 read/stealth accepted. Original mirror/cache/FastAgent retained, no model replay.
 No parent/global AI unpause or unrelated historical provider replay.
+
+12 October SMS/phone correction: canonical source672537a published and installed,
+actual runtime manifestad645dd7 verified. Physical20SMS fully mirrored with exact
+bodies (including leading whitespace), dates, addresses, direction/readflags:
+15incoming/5outgoing. ONE native SMS S21 account02b; two disabled owned testaccounts
+removed through supported API, legacy messages/receipts preserved. GSM2SIP current
+notifications/archive16 do not cover full physical20; maintained native Termux
+historyAPI925ba85 is the complete source, no new Android worker/session.
+Phone physical view has2CDR-verified people with full numbers;9caption updates
+backed up. Human explicitly keeps4unrecoverable September targets in archive
+without number;3synthetic audio records remain archived without invented target.
+Source tests/review/build and native compare accepted; readonly SMS/phone headed
+capture pending finite Mini resource handback. No new SMS/call/model action.
