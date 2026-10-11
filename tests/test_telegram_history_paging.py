@@ -111,7 +111,7 @@ def test_mcp_history_read_fetches_exact_older_page_without_marking_seen(fixture)
         store, service, store.default_user_id,
         bridge_url="http://127.0.0.1:1234", runner=runner)
     result = adapter.read(chat_id=cid, before_id=10, history_limit=2)
-    assert requests == [{"account_id":ACCOUNT,"peer_id":PEER,"limit":2,"before_id":10}]
+    assert requests == [{"account_id":ACCOUNT,"peer_id":PEER,"limit":2,"scan":True,"before_id":10}]
     assert [m["body"] for m in result["chat"]["messages"]] == ["body-5", "body-6"]
     assert result["sync"]["oldest_id"] == 5
     assert result["sync"]["has_more"] is False

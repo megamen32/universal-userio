@@ -44,7 +44,7 @@ def test_explicit_read_refreshes_owned_history_and_promotes_actual_authors(mirro
     adapter = TelegramChannelAdapter(store, service, store.default_user_id,
         bridge_url="http://127.0.0.1:1234", runner=runner)
     result = adapter.read(chat_id=cid)
-    assert calls == [{"account_id":ACCOUNT,"peer_id":PEER,"limit":50}]
+    assert calls == [{"account_id":ACCOUNT,"peer_id":PEER,"limit":50,"scan":True}]
     assert result["sync"]["fresh"] is True
     assert [(m["body"], m["sender"]) for m in result["chat"]["messages"]] == [
         ("cached", "Peer"), ("owner reply", "Owner"), ("peer reply", "Peer")]

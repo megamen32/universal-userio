@@ -23,7 +23,7 @@ export function confirmedDeletedIds(requestedIds, messages) {
 
 // Native dialog unread_count includes messages beyond the local mirror window.
 export function providerUnreadCount(dialog) {
-  const raw = dialog && (dialog.unreadCount ?? (dialog.dialog && dialog.dialog.unreadCount));
+  const raw = dialog && (dialog.unreadCount != null ? dialog.unreadCount : (dialog.dialog && dialog.dialog.unreadCount));
   const count = Number(raw);
   return raw != null && Number.isSafeInteger(count) && count >= 0 ? count : null;
 }

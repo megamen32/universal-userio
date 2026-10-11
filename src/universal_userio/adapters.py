@@ -509,6 +509,7 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             self._bridge_url + "/reconcile",
             data=json.dumps({
                 "account_id": account_ref, "peer_id": peer_id, "limit": history_limit,
+                "scan": True,
                 **({"before_id": before_id} if before_id is not None else {}),
             }).encode(),
             headers={"Authorization": "Bearer " + credential, "Content-Type": "application/json"},
