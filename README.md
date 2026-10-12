@@ -38,7 +38,7 @@ Authorize channels separately; installation does not connect them.
 
 | I want to… | Open |
 | --- | --- |
-| Connect my accounts | [Telegram](docs/guide/telegram.md) · [MAX](docs/guide/max.md) · [Mail](docs/guide/gmail.md) · [More channels](docs/guide/channels.md) |
+| Connect my accounts | [Telegram](docs/guide/telegram.md) · [MAX](docs/guide/max.md) · [VK](docs/guide/vk.md) · [Mail](docs/guide/gmail.md) · [More channels](docs/guide/channels.md) |
 | Connect my Android | [SMS APK](docs/guide/phone.md) · [Calls](docs/guide/calls.md) |
 | Understand the assistant | [Secretary](docs/guide/secretary.md) · [Context & privacy](docs/guide/security.md) |
 | Build an integration | [MCP](docs/guide/mcp.md) · [HTTP](docs/guide/http-api.md) · [Adapter SDK](docs/adapter-sdk.md) |
@@ -46,5 +46,6 @@ Authorize channels separately; installation does not connect them.
 | Find a problem | [Troubleshooting](docs/guide/troubleshooting.md) · [FAQ](docs/guide/faq.md) · [Every document](docs/README.md) |
 
 Provider capabilities differ. Personal MAX/WhatsApp bridges are unofficial; IMAP
-and user-linked Matrix currently connect for reading. VK ID alone does not unlock
-private messages. [See supported paths and limitations](docs/guide/channels.md).
+and user-linked Matrix currently connect for reading. Personal VK Messenger now
+connects for server-side reading after one-time authorization; sending is pending.
+[See supported paths and limitations](docs/guide/channels.md).

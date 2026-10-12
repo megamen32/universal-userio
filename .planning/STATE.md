@@ -106,6 +106,8 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
+|261012-ogc|Personal VK ordinary authorization, server reading, maintained import and native direct-kind|2026-10-12|2c71175|Real fresh maskedwebform + native/persisted session/read/reload PASS; read-only|[proof](./quick/261012-ogc-connect-consented-vk-messenger-test-acco/SUMMARY.md)|
+|261012-pxe|Retain native image instead of overwriting with routing metadata|2026-10-12|3477df9|Actual generic MCP exact image bytes/SHA and stored history PASS; native Secretary independently accepted|[proof](./quick/261012-pxe-preserve-relay-media-when-routing-metada/SUMMARY.md)|
 |261012-j88|Named work groups, per-chat web analysis checkbox and sidebar/search status; quadratic search repaired|2026-10-12|640501d|Real web ON/reload/OFF/reload, OFF/ON search badges and exact reading baseline restore PASS|[proof](./quick/261012-j88-per-chat-secretary-switch-and-explicit-w/SUMMARY.md)|
 |261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager native read-only MAX10/Telegram3 PASS; encrypted resource installed|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
 |261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
@@ -191,3 +193,12 @@ and cancelled delete-six remain unchanged.
 ## Quick261012-pxe — relay media retention
 
 12October complete: first native media survives routing import/reconciliation. Actual generic MCP resolve/download/stored-history retain exact90835bytes/SHA; source3477df9 installed,21focusedPASS7.70s. No provider/model writes. VK ordinary onboarding and native Secretary acceptance remain independently pending.
+
+
+## Quick261012-ogc — VK personal read connection complete
+
+12October: native test200000000106, real ordinary directVKID login/querycallback+normalmaskedformF9ED accepted; fresh savedsession/newserverprocess, exactself6/cache/direct/reload and maintained import accepted.26focusedPASS5.99s. PersonalVK currentlyread-only; sending/automaticrefresh not claimed. Priorfailedauth/browsercases retained. PublicVKguide updated.
+
+## Native Secretary evidence — independent Exmanager ownership
+
+Root97 outcome20261012-userio-native-vision-live.json: actual source18→genericSDK→reply19 plus3same-ID edits accepted; PNG10/90835bytes exactSHA decoded by GLM correctly. UserIO projection repair3477 independently accepted. MAX native journey/fulltransport retirement remain pending with Exmanager; no UserIO/Exmanager mutualhold.

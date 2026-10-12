@@ -17,7 +17,7 @@
 - [Яндекс.Почта](guide/yandex.md) — Самостоятельное IMAP-подключение; SMTP отдельно.
 - [WhatsApp](guide/whatsapp.md) — Подключение личного WhatsApp через связанное устройство.
 - [MAX](guide/max.md) — Личный аккаунт через отдельный неофициальный коннектор.
-- [VK](guide/vk.md) — Подключение переписки из вашего авторизованного браузера.
+- [VK](guide/vk.md) — Одноразовый вход и серверное чтение личных чатов без постоянно открытого браузера.
 - [Matrix](guide/matrix.md) — Подключение собственного homeserver для чтения.
 - [Android SMS](guide/phone.md) — APK для Android с root и без root; native-архив отдельно.
 - [Звонки](guide/calls.md) — GSM2SIP, SIP/AgentCall и общая история по номеру.
