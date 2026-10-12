@@ -17,6 +17,8 @@ assume that a token from another account or device is interchangeable.
 from __future__ import annotations
 
 import json
+import logging
+import re
 import threading
 import time
 import uuid
@@ -253,6 +255,11 @@ class MaxClient:
                         and frame.get("cmd") in (1, 3)):
                     if frame.get("cmd") == 3:
                         error = frame.get("payload") or {}
+                        # Native error bodies can include private diagnostics.
+                        # Log only a dotted alphabetic protocol code and opcode.
+                        code = error.get('error')
+                        safe_code = code if isinstance(code, str) and re.fullmatch(r'[a-z_]+(?:\.[a-z_]+){1,5}', code) else 'unclassified'
+                        logging.getLogger(__name__).warning('MAX protocol refusal opcode=%s code=%s', opcode, safe_code)
                         raise RuntimeError(
                             f"MAX opcode {opcode} failed: {error.get('error', 'provider-error')}"
                         )
