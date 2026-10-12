@@ -84,6 +84,11 @@ reproduced MAX inclusive-history cursor regression is repaired in installed
 without duplicates or read acknowledgement. Original failure and admission
 refusal remain recorded separately.
 
+Current native sourcecf3b1179 is ACTIVE after complete normal build30063867;
+UserIO independently repeated affected read/media/history and private readonly
+checks on that version. Prior placement refusals are historical, not current
+waits. This does not substitute reads for the missing native model journey.
+
 Native MAX reasoning/reply and scoped Telegram adapter retirement are still
 Exmanager-owned gates after its current placement repair and installed SDK
 candidate. The existing business work and provider client remain intact. Source

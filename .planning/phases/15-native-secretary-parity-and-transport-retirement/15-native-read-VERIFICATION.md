@@ -45,15 +45,12 @@ loss or a new model failure.
   source6288120 published/installed/manifest verified; actual native Secretary
   third-page reread passed. Original live RED and prepayload75 remain separate.
 - Native MAX **reasoning/proposal/confirmation/reply** and rich progress still
-  need the Exmanager owner's new final consumer after its published SDK source
-  is installed. Existing rejected draft and old unknown sticker are not replayed.
-- Root97's sourcec077 compiled, but its normal connector candidate was rejected
-  because the retained `AGENT_REPOS_PATH` contains literal `${HOME}`. R38 owns
-  the supported same-root/inode-preserving placement and backup-budget repair.
-  The failed buildd3d917d3 is terminal; its existence is not a running wait.
-  A new actual R38 turn01a1320b was admitted, confirmed independently by Root97.
-  Its supported accounting repair8edf9a4d has now passed a real UserIO ordinary
-  consumer. Exmanager installation/business acceptance remains separate.
+  need the Exmanager owner's new final consumer on its installed SDK source.
+  Existing rejected draft and old unknown sticker are not replayed.
+- Prior placement/connector failures are historical, not current waits:
+  normal owner API now reports build30063867 complete/sourcecf3b1179 and the
+  actual agent active with that same source. UserIO independently read this
+  current state; no source upload, upgrade, token replacement or restart.
 - Dedicated Telegram retirement remains **unproven at runtime**. Source wiring,
   native reads and a compiled candidate do not satisfy the final retirement gate.
   Preserve business135, memory, current identities, private readonly resource,
@@ -63,3 +60,21 @@ Retained Telegram native Vision/stream proof remains in Exmanager outcome
 20261012-userio-native-vision-live.json: source18→SDK jobba0c0e5d succeeded→reply19
 and three same-ID edits; actual PNG10 was read. This supports the Telegram
 vertical, but final affected acceptance must follow the last migration/restart.
+
+## Fresh acceptance after native sourcecf3b1179 installation
+
+Private artifacts: `.tmp/native-v13-final-20261013/after-native-cf3/` and
+`native-owner-disposition.json`. Normal owner GET proves latest build30063867
+complete and agent ACTIVE/sourcecf3b1179; a compiled image or task note alone
+was not treated as installation. This is the current source at observation time.
+
+On that active native version, both exact messenger_actions capability reads,
+source/author/media resolve, Telegram document150bytes/body/SHA and MAX signed
+SDK image90258bytes/SHA matched again. MAX three-page history still reaches the
+known older source with six unique messages, real authors and no ACK. Existing
+separate private readonly tool still reads13 accounts including TG540 and MAX.
+Native events initialize at each current account head without dispatching old
+history; this does not certify a NEW inbound/model journey. Durable old sticker
+action7b017 remains sending with no receipt, not cleared or retried. All probes
+were reads: model0/send0/providerACK0/resource changes0. Exmanager source,
+business work and SDK/relay installation remained owned by Root97.
