@@ -23,7 +23,7 @@ import urllib.request
 from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
-from .account_connections import connect_matrix, connect_imap
+from .account_connections import connect_matrix, connect_imap, connect_vk_community
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -861,6 +861,16 @@ def handler(
                     result['server_url']=self._base_url().rstrip('/')+'/sms-gateway'
                     self._reply(201,result,{'Cache-Control':'no-store'})
                     return
+                if path == "/v1/vk/community/accounts":
+                    # Community Long Poll/API tokens may read that community,
+                    # not the linked VK ID user's personal inbox.
+                    if principal.service_account or not service._store.capability_enabled(
+                            "read", user_id=user_id):
+                        self._reply(403, {"error": "нужна авторизация пользователя"})
+                        return
+                    account = connect_vk_community(service, user_id, self._json())
+                    self._reply(201, {"accepted": True, **account}, {"Cache-Control": "no-store"})
+                    return
                 if path == "/v1/vk/native/accounts":
                     # VK ID applications normally cannot obtain personal
                     # messages permission. Do not accept or store their token
@@ -1102,7 +1112,8 @@ def handler(
                 body = _vk_connect_page(vkid_app_id).encode()
                 self._html(200, body)
                 return
-            if requested_path in {"/accounts/connect/new", "/matrix/connect/new", "/mail/connect/new"}:
+            if requested_path in {"/accounts/connect/new", "/matrix/connect/new", "/mail/connect/new",
+                                   "/vk/community/connect/new"}:
                 if self._principal(allow_proxy=True) is None:
                     self._redirect("/login")
                     return
@@ -1774,6 +1785,8 @@ small{{color:#aaa;line-height:1.45}}</style></head>
 <div id="vk_auth"></div><p id="status">Ожидание VK ID…</p>
 <section class="card">
   <h2>Для чтения чатов установите расширение</h2>
+  <p>Расширение читает открытую сессию VK в Chrome и может передавать в UserIO
+  переписки, видимые в этом профиле. Для работы Chrome должен оставаться запущенным.</p>
   <a class="btn" href="/vk-userio-extension-mv3.zip" download>Скачать расширение для Chrome (ZIP)</a>
   <ol>
     <li>Распакуйте ZIP в постоянную папку.</li>

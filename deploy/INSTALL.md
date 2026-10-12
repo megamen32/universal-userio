@@ -229,3 +229,33 @@ The runtime exposes only that exact public file; it does not serve the repositor
 `docs/` tree or private state. `/docs` and `/docs/index.html` are aliases.
 Rebuild and check documentation before the normal publish/rollback-first release.
 No Node build or extra documentation service is required.
+
+## VK community inboxes (multi-tenant, no extension)
+
+The "Добавить аккаунт" page has a separate "VK сообщество" option:
+`/vk/community/connect/new`. A UserIO principal enters their VK community
+(group) id and a **community-owned** token with messages read permission.
+The connector checks both `messages.getConversations` and, when available,
+`messages.getHistory` before saving the account as
+`vk:community:<numeric_group_id>`. This is distinct from
+`vk:<vk_id_user>`, which authenticates a VK ID but has no personal message
+permission.
+
+Every community account has its own owner-bound secret and independent
+per-conversation cursor. Its data is stored under that UserIO user, and is
+read by the **existing** bounded central `UserAccountPoller` inside
+`universal-userio.service`, not by a per-account systemd service.
+Community poll uses only two official read methods; no send/mark-read/edit/
+delete operations and no secret/token copies in the database or UI.
+It can synchronize conversations involving a VK community bot, not the
+private chats of a human VK ID.
+
+The initial import is limited to recent message pages. The connector
+records per-dialog checkpoints and refuses to skip unread history gaps that
+exceed its paging limit. Full old history is not certified. For sustained
+load, improve backlog fairness and metrics before moving beyond the
+16-account/4-concurrent-poller budget.
+
+The previous experimental **personal** VK API connector remains in
+`VIP/vk-messages-api` and is not activated by this feature; don't try to
+use a VK community token for personal messages.
