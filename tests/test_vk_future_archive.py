@@ -21,7 +21,9 @@ def test_vip_prototype_is_present_but_not_imported_by_production():
     assert "connect_vk_direct(" not in active
     assert "def poll_vk(" not in active
     assert "channels.vk_native" not in active
-    assert "'matrix','email','vk'" not in active
+    # The official VK *community* reader is not the archived personal reader.
+    assert "def poll_vk_community(" in active
+    assert "def poll_vk(" not in active
 
 
 def test_vkid_page_does_not_ask_for_unavailable_personal_messages_scope():

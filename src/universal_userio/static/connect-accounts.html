@@ -30,7 +30,8 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <button type="button" data-open="matrix">Matrix</button>
 <button type="button" data-open="imap">Почта IMAP</button>
 <a href="/gmail/connect/new">Gmail</a>
-<a href="/vk/connect/new">ВКонтакте</a>
+<a href="/vk/connect/new">VK личный (VK ID)</a>
+<button type="button" data-open="vk-community">VK сообщество</button>
 <a href="/telegram-qr/new">Telegram</a>
 <a href="/whatsapp-qr/new">WhatsApp</a>
 <a href="/connect-phone">Android · SMS и звонки</a>
@@ -58,10 +59,19 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <p class="hint">IMAP только через TLS. Письма загружаются без установки отметки «прочитано». Отправка SMTP пока не подключается.</p>
 <button class="submit" type="submit">Подключить почту</button>
 </form>
+<form id="vk-community">
+<h2>Подключить переписку VK-сообщества</h2>
+<p>Подключается только inbox сообщества/бота. Личные сообщения вашего VK ID остаются отдельно.</p>
+<label>Числовой ID сообщества<input name="group_id" inputmode="numeric" pattern="[0-9]+" required placeholder="123456789"></label>
+<label>Название аккаунта (необязательно)<input name="display_name" placeholder="Мой VK-бот"></label>
+<label>Токен сообщества с разрешением «Сообщения»<input name="access_token" type="password" autocomplete="off" required></label>
+<p class="hint">Токен хранится отдельно для вашего пользователя UserIO. Он не выводится в списке аккаунтов. Чтение без изменения статуса прочтения; отправка пока выключена.</p>
+<button class="submit" type="submit">Подключить VK-сообщество</button>
+</form>
 <p id="status" role="status" aria-live="polite"></p>
 <section class="connected" aria-label="Подключённые аккаунты"><h2>Ваши подключения</h2><div id="connected-list">Загружаю…</div></section>
 <script>
-const forms={matrix:document.getElementById('matrix'),imap:document.getElementById('imap')};
+const forms={matrix:document.getElementById('matrix'),imap:document.getElementById('imap'),'vk-community':document.getElementById('vk-community')};
 async function connectedAccounts(){
  const container=document.getElementById('connected-list');
  try{
@@ -74,7 +84,7 @@ async function connectedAccounts(){
   for(const account of accounts){
     const row=document.createElement('div');row.className='account';
     const title=document.createElement('span');
-    const label=account.provider==='email'?'IMAP':account.provider==='gmail'?'Gmail':
+    const label=account.id.startsWith('vk:community:')?'VK-сообщество':account.provider==='email'?'IMAP':account.provider==='gmail'?'Gmail':
       account.provider==='matrix'?'Matrix':account.provider==='vk'?'ВКонтакте':account.provider;
     title.textContent=label+': '+account.display_name;
     row.append(title);
@@ -103,12 +113,12 @@ function show(key){
  document.querySelectorAll('[data-open]').forEach(button=>
    button.classList.toggle('active',button.dataset.open===key));
  document.getElementById('status').textContent='';
- history.replaceState(null,'',key==='matrix'?'/matrix/connect/new':'/mail/connect/new');
+ history.replaceState(null,'',key==='matrix'?'/matrix/connect/new':key==='vk-community'?'/vk/community/connect/new':'/mail/connect/new');
 }
 document.querySelectorAll('[data-open]').forEach(button=>button.onclick=()=>show(button.dataset.open));
 const originalPath=location.pathname;
 const originalParams=new URLSearchParams(location.search);
-show(originalPath.startsWith('/matrix')?'matrix':'imap');
+show(originalPath.startsWith('/matrix')?'matrix':originalPath.startsWith('/vk/community')?'vk-community':'imap');
 if(originalPath.startsWith('/gmail')){
   forms.imap.querySelector('[name="host"]').value='imap.gmail.com';
 }
@@ -163,7 +173,7 @@ for(const [kind,form] of Object.entries(forms)){
    if(kind==='matrix' && !data.password && !data.access_token){status.textContent='Нужен пароль или токен.';return;}
    button.disabled=true;status.textContent='Проверяю подключение…';
    try{
-     const response=await fetch(kind==='matrix'?'/v1/matrix/accounts':'/v1/imap/accounts',{
+     const response=await fetch(kind==='matrix'?'/v1/matrix/accounts':kind==='vk-community'?'/v1/vk/community/accounts':'/v1/imap/accounts',{
        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
      const result=await response.json();
      if(!response.ok)throw new Error(result.error||'Не удалось подключить аккаунт');

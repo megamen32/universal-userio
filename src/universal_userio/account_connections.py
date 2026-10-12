@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from .service import UserIOService
 
 log = logging.getLogger("userio.account_connections")
-_PROVIDER_TYPES = frozenset({"matrix", "email"})
+_PROVIDER_TYPES = frozenset({"matrix", "email", "vk"})
 _ID_RE = re.compile(r"^[a-z0-9]{24,64}$")
 _HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,249}[a-z0-9]$")
 _MX_ID = re.compile(r"^@[^\s:]{1,255}:[a-zA-Z0-9.-]+(?::\d+)?$")
@@ -296,7 +296,7 @@ class UserAccountPoller:
                         accounts = [dict(r) for r in self.service._store._connection.execute(
                             """SELECT user_id,id,provider,credential_ref
                                FROM provider_accounts WHERE enabled=1
-                                 AND provider IN ('matrix','email')
+                                 AND provider IN ('matrix','email','vk')
                                  AND credential_ref LIKE 'connector:%'
                                ORDER BY user_id,id""",
                         )]
@@ -330,11 +330,103 @@ class UserAccountPoller:
                 self.poll_matrix(secret)
             elif account["provider"] == "email":
                 self.poll_imap(secret)
+            elif account["provider"] == "vk" and secret.get("kind") == "community":
+                self.poll_vk_community(secret)
         except Exception as exc:
             # Never log exception bodies: providers can echo submitted credentials.
             log.warning("connected %s account sync failed: %s",
                         account["provider"], type(exc).__name__)
 
+
+    def poll_vk_community(self, account: Mapping[str, str]) -> None:
+        from .channels.vk_community import VKCommunityReader
+
+        uid = account["user_id"]
+        ref = account["account_id"]
+        group = int(account["group_id"])
+        reader = VKCommunityReader(account["access_token"], group)
+        page_key = "vk-community:dialog-page:" + ref
+        offset = int(self.service._store.user_preference(page_key, user_id=uid) or "0")
+        page = reader.conversations(offset=offset, count=25)
+        name_map = {}
+        for row in page.get("profiles") or []:
+            if isinstance(row, dict) and type(row.get("id")) is int:
+                name_map[row["id"]] = (
+                    str(row.get("first_name") or "") + " " +
+                    str(row.get("last_name") or "")
+                ).strip()[:120]
+        results = page["items"]
+        next_offset = offset + len(results)
+        processed = 0
+        for index, item in enumerate(results):
+            if not isinstance(item, dict):
+                continue
+            conversation = item.get("conversation") or {}
+            peer = conversation.get("peer") or {}
+            peer_id = peer.get("id")
+            if type(peer_id) is not int or peer_id == 0:
+                continue
+            newest = ((item.get("last_message") or {}).get("id") or
+                      conversation.get("last_message_id"))
+            cursor_key = f"vk-community:message-cursor:{ref}:{peer_id}"
+            previous = int(self.service._store.user_preference(cursor_key, user_id=uid) or "0")
+            if type(newest) is not int or newest <= previous:
+                continue
+            if processed >= 5:
+                next_offset = offset + index
+                break
+            items = reader.history(peer_id, count=35)
+            pages = 1
+            # A busy dialog can have >35 new items since last sync. Never
+            # advance a cursor past messages not fetched from the provider.
+            while previous and pages <= 4:
+                earliest = min(
+                    (v["id"] for v in items if type(v.get("id")) is int),
+                    default=0,
+                )
+                if earliest <= previous or len(items) < pages * 35:
+                    break
+                if pages == 4:
+                    raise RuntimeError("VK community history gap exceeds catch-up budget")
+                older = reader.history(peer_id, offset=pages * 35, count=35)
+                items.extend(older)
+                pages += 1
+                if len(older) < 35:
+                    break
+            settings = conversation.get("chat_settings") or {}
+            title = (
+                str(settings.get("title") or "")[:120]
+                if isinstance(settings, dict) else ""
+            ) or name_map.get(peer_id, f"VK {peer_id}")
+            peer_type = str(peer.get("type") or "")
+            in_read = conversation.get("in_read")
+            for message in sorted(items, key=lambda r: r.get("id") or 0):
+                if type(message.get("id")) is not int or message["id"] <= previous:
+                    continue
+                inbox = vk_community_message(
+                    account_id=ref, group_id=group, peer_id=peer_id,
+                    row=message, title=title, peer_type=peer_type,
+                    in_read=in_read, reconciled=not previous,
+                )
+                if inbox is not None:
+                    self.service.receive(
+                        inbox, route_id="vk-community-read-only",
+                        user_id=uid, account_ref=ref,
+                    )
+            highest = max(
+                (row["id"] for row in items if type(row.get("id")) is int),
+                default=previous,
+            )
+            if highest > previous:
+                self.service._store.set_user_preference(
+                    cursor_key, str(highest), user_id=uid,
+                )
+            processed += 1
+        total = int(page.get("count") or len(results))
+        self.service._store.set_user_preference(
+            page_key, str(next_offset if results and next_offset < total else 0),
+            user_id=uid,
+        )
 
     def poll_matrix(self, account: Mapping[str, str]) -> None:
         uid, source = account["user_id"], account["account_id"]
@@ -436,3 +528,95 @@ class UserAccountPoller:
                     )
         except (imaplib.IMAP4.error, OSError, TimeoutError) as exc:
             raise RuntimeError("IMAP connection failed") from exc
+
+
+def connect_vk_community(
+    service: UserIOService, user_id: str, payload: Mapping[str, Any],
+    *, vault: ConnectorSecrets | None = None, reader_factory: Any = None,
+) -> dict[str, str]:
+    """Connect a consented VK community inbox, not the private VK profile."""
+    from .channels.vk_community import VKCommunityReader
+
+    raw_group = str(payload.get("group_id") or "").strip()
+    if not raw_group.isdecimal() or len(raw_group) > 16:
+        raise ValueError("укажите числовой ID сообщества VK")
+    group_id = int(raw_group)
+    if group_id <= 0:
+        raise ValueError("ID сообщества должен быть положительным")
+    token = str(payload.get("access_token") or "")
+    if not 10 <= len(token) <= 4096:
+        raise ValueError("укажите токен сообщества VK")
+    reader = (reader_factory or VKCommunityReader)(token, group_id)
+    snapshot = reader.conversations(count=1)
+    dialogs = snapshot.get("items") or []
+    if dialogs:
+        peer = (dialogs[0].get("conversation") or {}).get("peer") or {}
+        peer_id = peer.get("id")
+        if type(peer_id) is int and peer_id:
+            reader.history(peer_id, count=1)
+    account_id = f"vk:community:{group_id}"
+    name = str(payload.get("display_name") or f"VK сообщество #{group_id}")[:120]
+    storage = vault or ConnectorSecrets()
+    reference = storage.save({
+        "provider": "vk", "kind": "community", "user_id": user_id,
+        "account_id": account_id, "group_id": str(group_id),
+        "access_token": token,
+    })
+    old_account = next(
+        (item for item in service._store.accounts(user_id=user_id)
+         if item["id"] == account_id), None,
+    )
+    service._store.register_account(
+        account_id=account_id, provider="vk", display_name=name,
+        can_read=True, can_reply=False, enabled=True,
+        credential_ref=reference, user_id=user_id,
+    )
+    service._store.bind_channel_route(
+        user_id=user_id, source="vk", route_id="vk-community-read-only",
+    )
+    if old_account:
+        old_ref = str(old_account.get("credential_ref") or "")
+        if old_ref.startswith("connector:") and old_ref != reference:
+            try:
+                storage.delete(old_ref, user_id=user_id, provider="vk")
+            except (OSError, ValueError, PermissionError):
+                pass
+    return {"id": account_id, "display_name": name, "source": "vk",
+            "mode": "vk_community_messages_readonly"}
+
+
+def vk_community_message(
+    *, account_id: str, group_id: int, peer_id: int,
+    row: Mapping[str, Any], title: str = "", peer_type: str = "",
+    in_read: Any = None, reconciled: bool = False,
+) -> InboxMessage | None:
+    """Stable user/peer/message identity with VK-native read watermark."""
+    ident = row.get("id")
+    when = row.get("date")
+    if type(ident) is not int or ident <= 0 or type(when) is not int or when <= 0:
+        return None
+    body = str(row.get("text") or "")
+    attachments = row.get("attachments") or []
+    if not body and isinstance(attachments, list) and attachments:
+        body = "[Вложение VK]"
+    if not body:
+        return None
+    author = row.get("from_id")
+    outgoing = (row.get("out") == 1 or row.get("out") is True or
+                author == -group_id)
+    read = (ident <= in_read) if (
+        not outgoing and type(in_read) is int
+    ) else None
+    kind = "group" if peer_type == "chat" or peer_id >= 2_000_000_000 else (
+        "direct" if peer_type == "user" else "unknown"
+    )
+    edited = row.get("update_time")
+    return InboxMessage(
+        source="vk", message_id=f"{account_id}|{peer_id}:{ident}",
+        sender=str(author) if type(author) is int else str(peer_id),
+        body=body[:50_000], received_at=float(when), peer_id=str(peer_id),
+        direction="outgoing" if outgoing else "incoming",
+        conversation_kind=kind, conversation_title=title,
+        reconciliation=reconciled, provider_read=read,
+        edited_at=float(edited) if type(edited) in (int, float) else 0.0,
+    )
