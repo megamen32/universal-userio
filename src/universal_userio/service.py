@@ -1125,6 +1125,7 @@ class UserIOService:
                     "owner_account_ref": str(conversation.get("account_ref") or "")[:256],
                     "interlocutor_name": interlocutor[:320],
                     "conversation_name": str(conversation.get("display_name") or "")[:320],
+                    "conversation_kind": str(conversation.get("conversation_kind") or ""),
                 })
         elif callable(suggest_with_context):
             generated = suggest_with_context(conversation_id=conversation_id, latest_message=message, history=history, limit=limit)

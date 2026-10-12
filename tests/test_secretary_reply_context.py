@@ -191,3 +191,16 @@ def test_group_reply_addressee_is_current_author_not_group_title(tmp_path):
     assert context['actors']['interlocutor_name']=='Дарья Петрова'
     assert context['actors']['conversation_name']=='Рабочая группа'
     assert context['actors']['owner_name']=='Никита'
+
+
+def test_sticker_reaction_keeps_real_speakers_despite_shared_routing_label():
+    """Fast unit: old owner problem is not the interlocutor's, 1s/max10s."""
+    probe=Probe()
+    probe.suggest_with_actor_context(conversation_id='c',latest_message=InboxMessage('max','sticker','same-routing-ref','',3,attachments=({'kind':'sticker'},)),
+        history=[{'message_id':'owner-complaint','sender':'same-routing-ref','direction':'outgoing','body':'У меня не отображаются стикеры'}],limit=1,
+        actor_context={'owner_name':'Никита','interlocutor_name':'Дарья','conversation_kind':'direct'})
+    context=json.loads(probe.prompt[probe.prompt.index('{"conversation_id"'):])
+    assert context['history'][0]['sender_label']=='Никита'
+    assert context['latest_message']['sender_label']=='Дарья'
+    assert context['latest_message']['message_kind']=='sticker_reaction'
+    assert context['history'][0]['speaker_role']=='owner'

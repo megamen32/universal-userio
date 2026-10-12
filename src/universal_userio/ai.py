@@ -86,9 +86,20 @@ class OpenAICompatibleDraftGenerator:
     @classmethod
     def _reply_prompt(cls, *, conversation_id: str, latest_message: InboxMessage,
                       history: Sequence[dict[str, object]], actor_context: dict[str, str] | None = None) -> str:
+        actors = dict(actor_context or {})
+        group = actors.get("conversation_kind") in {"group", "channel"}
+        sticker_reaction = not latest_message.body.strip() and any(
+            isinstance(item, Mapping) and (item.get("kind") or item.get("unavailable_kind")) == "sticker"
+            for item in latest_message.attachments
+        )
         transcript = [{
             "message_id": str(entry.get("message_id") or "")[:256],
-            "sender_label": str(entry.get("sender") or "")[:320],
+            "sender_label": str(
+                (actors.get("owner_name") or "owner") if entry.get("direction") == "outgoing"
+                else (entry.get("sender_name") or entry.get("sender")) if group
+                else actors.get("interlocutor_name") or entry.get("sender")
+            )[:320],
+            "raw_sender_ref": str(entry.get("sender") or "")[:320],
             "speaker_role": "owner" if entry.get("direction") == "outgoing" else "interlocutor",
             "direction": str(entry.get("direction") or "incoming"),
             "body": str(entry.get("body") or "")[:4000],
@@ -100,15 +111,17 @@ class OpenAICompatibleDraftGenerator:
             "latest_message": {
                 "message_id": latest_message.message_id,
                 "speaker_role": "owner" if latest_message.direction == "outgoing" else "interlocutor",
-                "direction": latest_message.direction, "sender_label": latest_message.sender,
+                "direction": latest_message.direction,
+                "sender_label": actors.get("interlocutor_name") or latest_message.sender,
+                "message_kind": "sticker_reaction" if sticker_reaction else "message",
                 "body": latest_message.body[:8000], "received_at": latest_message.received_at,
                 "attachments": cls._attachment_hints(latest_message.attachments),
             },
             "history": transcript,
-            "actors": dict(actor_context or {}),
+            "actors": actors,
         }
         return (
-            "You write concise reply drafts for a human operator in the requested response format. "
+            "You write concise reply drafts as the real person who owns this inbox, in the requested response format. "
             "The owner is the user you write for; the interlocutor is the other speaker. "
             "Use direction/speaker_role, never a contact label, to distinguish them. "
             "Respond to latest_message, taking into account replies the owner already sent after it. "
@@ -116,6 +129,9 @@ class OpenAICompatibleDraftGenerator:
             "An attachment may have no text body; that does not mean the message was empty or failed. "
             "Use the attached pixels when available. If image_available is false, do not invent "
             "visual details or a delivery failure.\n"
+            "For sticker_reaction, respond briefly and naturally to the reaction. A sticker is not "
+            "a technical-support request. Do not turn an old problem described by the owner into "
+            "the interlocutor's problem, or repeat old troubleshooting questions.\n"
             + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         )
 
@@ -834,6 +850,8 @@ class OpenAICompatibleDraftGenerator:
             "Write as the owner, addressing the interlocutor who sent latest_message. "
             "Outgoing history contains the owner's earlier words, not questions from the interlocutor. "
             "Use actors.owner_name as your identity and actors.interlocutor_name as the addressee. "
+            "You are this real person, not a generic support assistant. Only offer troubleshooting "
+            "when the interlocutor's current message actually requests it. "
             "Do not adopt the interlocutor's name or gender; use gender-neutral phrasing if uncertain. "
             "Do not answer the owner or swap the two speakers. Respond to the latest incoming, "
             "not an older complaint or an older generated reply. "
