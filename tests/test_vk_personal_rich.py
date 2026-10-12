@@ -147,3 +147,12 @@ def test_file_upload_claim_is_not_replayed_after_transport_unknown(app,monkeypat
     for _ in range(2):
         with pytest.raises(Exception):service.send_manual_message(cid,body='',request_id='unknown-upload-send-123',user_id=user,upload_id=uploaded['upload_id'])
     assert len(calls)==1 and not Sender.sent
+
+
+def test_outgoing_vk_keeps_account_author_separate_from_peer_title(app,monkeypatch):
+    store,service,user,cid=prepare(app,monkeypatch)
+    from universal_userio.account_connections import vk_personal_message
+    m=vk_personal_message(account_id='vk:42',peer_id=111,row={'id':20,'from_id':42,'out':1,'date':1760000000,'text':'outgoing'},title='Иван собеседник',reconciled=True,peer_type='user')
+    assert m.sender_name=='' and m.conversation_title=='Иван собеседник'
+    service.receive(m,route_id='vk-personal-read-only',user_id=user,account_ref='vk:42')
+    assert store.conversation(cid,user_id=user)['display_name']=='Иван собеседник'

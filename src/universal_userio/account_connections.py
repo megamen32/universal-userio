@@ -832,7 +832,7 @@ def vk_personal_message(
     return InboxMessage(
         source="vk", message_id=f"{account_id}|{peer}:{message_id}",
         sender=str(row.get("from_id")) if type(row.get("from_id")) is int else peer,
-        sender_name=title, body=body[:50_000],
+        sender_name=title if str(row.get('from_id'))==peer else '', body=body[:50_000],
         attachments=tuple(vk_native_attachments(row)),
         received_at=float(received), direction="outgoing" if outgoing else "incoming",
         peer_id=peer, conversation_kind=("group" if peer_type == "chat" else "direct"

@@ -1699,7 +1699,7 @@ class SQLiteUserIOStore:
                     """,
                     (user_id, message.source, message.sender, message.sender_name, now),
                 )
-            if message.source in {"max", "phone"} and message.conversation_title and account_ref and message.peer_id:
+            if message.source in {"max", "phone", "vk"} and message.conversation_title and account_ref and message.peer_id:
                 self._connection.execute(
                     "INSERT OR REPLACE INTO contact_names (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)",
                     (user_id, message.source, f"chat:{account_ref}:{message.peer_id}", message.conversation_title, now),
@@ -2391,7 +2391,7 @@ class SQLiteUserIOStore:
                        c.source,c.sender,c.identity_id,
                        COALESCE((SELECT name FROM contact_names n
                                  WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=
-                                   CASE WHEN c.source IN ('max','phone') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END), '') AS display_name
+                                   CASE WHEN c.source IN ('max','phone','vk') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END), '') AS display_name
                 FROM drafts d JOIN conversations c
                   ON c.user_id=d.user_id AND c.id=d.conversation_id
                 WHERE d.user_id=? AND d.status='proposed'
@@ -2433,7 +2433,7 @@ class SQLiteUserIOStore:
             name_row = self._connection.execute(
                 "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
                 (user_id, row["source"], f"chat:{row['account_ref']}:{row['peer_id']}"
-                 if row["source"] in {"max", "phone"} and row["account_ref"] and row["peer_id"] else row["sender"]),
+                 if row["source"] in {"max", "phone", "vk"} and row["account_ref"] and row["peer_id"] else row["sender"]),
             ).fetchone()
             history_row = None
             if row["source"] == "telegram" and row["account_ref"] and row["peer_id"]:
@@ -4363,7 +4363,7 @@ class SQLiteUserIOStore:
                        trs.unread_observed_at AS unread_observed_at,
                        (SELECT name FROM contact_names WHERE user_id=c.user_id
                         AND source=c.source AND sender=
-                          CASE WHEN c.source IN ('max','phone') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
+                          CASE WHEN c.source IN ('max','phone','vk') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
                        activity.account_last_at AS account_last_at
                 FROM conversations c LEFT JOIN telegram_read_state trs
                   ON trs.user_id=c.user_id AND trs.account_ref=c.account_ref

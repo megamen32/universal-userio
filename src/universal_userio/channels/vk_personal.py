@@ -11,6 +11,7 @@ import json
 import re
 import uuid
 import mimetypes
+import logging
 import time
 import urllib.error
 import urllib.parse
@@ -189,8 +190,18 @@ class VKPersonalClient(VKPersonalReader):
         content=(f'--{boundary}\r\nContent-Disposition: form-data; name="'+('photo' if photo else 'file')+f'"; filename="{filename}"\r\nContent-Type: {mime_type}\r\n\r\n').encode()+data+f'\r\n--{boundary}--\r\n'.encode()
         req=urllib.request.Request(url,data=content,method='POST',headers={'Content-Type':'multipart/form-data; boundary='+boundary})
         try:
-            with self._opener(req,timeout=20) as response:result=json.loads(response.read(2_000_001))
+            with self._opener(req,timeout=20) as response:
+                raw=response.read(2_000_001)
+                try:result=json.loads(raw)
+                except (ValueError,UnicodeError):
+                    logging.getLogger(__name__).warning('VK file upload response invalid: HTTP%s type=%s bytes=%s',
+                        getattr(response,'status',None),getattr(response,'headers',{}).get('Content-Type',''),len(raw))
+                    raise
+        except urllib.error.HTTPError as error:
+            logging.getLogger(__name__).warning('VK file upload refused: HTTP%s',error.code)
+            raise DeliveryNotSubmittedError(f'VK отказал в загрузке файла (HTTP {error.code}); сообщение не отправлено') from error
         except (OSError,ValueError) as error:
+            logging.getLogger(__name__).warning('VK file upload failed before message send: %s',type(error).__name__)
             raise RuntimeError('Загрузка VK не подтверждена; не отправляйте повторно') from error
         if photo:
             saved=self._request('photos.saveMessagesPhoto',{k:result[k] for k in ('photo','server','hash')},mutation=True)
