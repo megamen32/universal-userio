@@ -86,6 +86,68 @@ def test_oauth_discovery_and_mcp_challenge(tmp_path) -> None:
         server.server_close()
 
 
+def test_oauth_uses_current_cabinet_session_but_requires_consent(tmp_path) -> None:
+    """Focused integration: signed-in cabinet -> consent -> exact user's code.
+
+    Detects repeated login and stale OAuth-account selection; expected 2s/max 10s.
+    """
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    current, _ = store.create_user("current-cabinet", "long-password")
+    previous, _ = store.create_user("previous-oauth", "other-password")
+    service = UserIOService(store, Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="service-token"))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        registration = _json(base, "/register", {
+            "redirect_uris": ["https://chatgpt.com/connector/oauth/test"],
+            "token_endpoint_auth_method": "none",
+        })
+        web_session = store.create_oauth_session(current.user_id)
+        old_session = store.create_oauth_session(previous.user_id)
+        headers = {"Cookie": f"userio_web_session={web_session}; userio_oauth_session={old_session}"}
+        values = {
+            "response_type": "code", "client_id": registration["client_id"],
+            "redirect_uri": "https://chatgpt.com/connector/oauth/test",
+            "state": "current-account-state", "code_challenge": _pkce("exact-verifier"),
+            "code_challenge_method": "S256",
+        }
+        with urlopen(_request(base + "/authorize?" + urlencode(values), headers=headers)) as response:
+            page = response.read().decode()
+        assert "current-cabinet" in page
+        assert "previous-oauth" not in page
+        assert 'type="password"' not in page
+        for consent in (None, "allow"):
+            form = dict(values)
+            if consent is not None:
+                form["consent"] = consent
+            try:
+                build_opener(NoRedirect()).open(_request(
+                    base + "/authorize", data=urlencode(form).encode(),
+                    headers={**headers, "Content-Type": "application/x-www-form-urlencoded"},
+                ))
+            except HTTPError as error:
+                if consent is None:
+                    assert error.code == 400
+                    assert json.loads(error.read())["error"] == "access_denied"
+                else:
+                    assert error.code == 302
+                    redirect = urlparse(error.headers["Location"])
+                    assert redirect.netloc == "chatgpt.com"
+                    query = parse_qs(redirect.query)
+                    assert query["state"] == ["current-account-state"]
+                    redeemed = store.redeem_oauth_code(
+                        code=query["code"][0], client_id=registration["client_id"],
+                        redirect_uri=values["redirect_uri"], code_challenge=_pkce("exact-verifier"),
+                    )
+                    assert redeemed is not None and redeemed[0] == current.user_id
+            else:
+                raise AssertionError("expected explicit refusal or callback redirect")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_oauth_pkce_dance_refresh_rotation_and_legacy_service_token(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     user, _ = service._store.create_user("connector-user", "long-password")

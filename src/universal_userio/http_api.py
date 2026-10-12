@@ -201,7 +201,9 @@ def handler(
             return None if morsel is None else service._store.oauth_session_user(morsel.value)
 
         def _oauth_session(self) -> UserPrincipal | None:
-            return self._cookie_principal("userio_oauth_session")
+            # Use the account currently selected in the cabinet, including
+            # after switching users; a short-lived prior consent is fallback.
+            return self._cookie_principal("userio_web_session") or self._cookie_principal("userio_oauth_session")
 
         def _basic_client(self) -> tuple[str, str] | None:
             value = self.headers.get("Authorization", "")
