@@ -68,13 +68,14 @@ class UserIOService:
         Provider URLs and references remain inside the adapter boundary.  The
         AI receives only validated bytes added by ``_hydrate_ai_images``.
         """
-        from .adapters import TelegramChannelAdapter, WhatsAppChannelAdapter
+        from .adapters import TelegramChannelAdapter, WhatsAppChannelAdapter, MaxChannelAdapter
         from .channels.core import AdapterNotSupported
 
         key = source.split(":", 1)[0]
         adapters = {
             "telegram": TelegramChannelAdapter,
             "whatsapp": WhatsAppChannelAdapter,
+            "max": MaxChannelAdapter,
         }
         adapter_type = adapters.get(key)
         if adapter_type is None:
@@ -85,7 +86,8 @@ class UserIOService:
             bounded = getattr(adapter, "download_for_ai", None)
             if not callable(bounded):
                 return None
-            return bounded(file_ref=file_ref, max_bytes=_AI_IMAGE_MAX_BYTES)
+            kwargs = {"attachment_idx": int(attachment.get("idx") or 0)} if key == "max" else {}
+            return bounded(file_ref=file_ref, max_bytes=_AI_IMAGE_MAX_BYTES, **kwargs)
         except (AdapterNotSupported, KeyError, ValueError, OSError):
             return None
 
@@ -157,6 +159,8 @@ class UserIOService:
                         safe.pop("kind", None)
                         safe.pop("content_type", None)
                         safe.pop("mime_type", None)
+                        safe["unavailable_kind"] = kind or "image"
+                        safe["image_available"] = False
                     if safe:
                         safe_attachments.append(safe)
             if safe_attachments:
@@ -1079,6 +1083,14 @@ class UserIOService:
         history = [*history, *self._store.owner_messages_after(
             conversation_id, message.message_id, user_id=user_id,
         )]
+        image_budget = [_AI_IMAGE_MAX_COUNT]
+        current_media = self._hydrate_ai_images([{
+            "source": message.source, "message_id": message.message_id,
+            "attachments": current_source.get("attachments") or [],
+        }], user_id=self._store._user(user_id), image_budget=image_budget)[0]
+        message = replace(message, attachments=tuple(current_media.get("attachments") or ()))
+        history = self._hydrate_ai_images(history, user_id=self._store._user(user_id),
+                                         image_budget=image_budget)
         if callable(suggest_with_context):
             generated = suggest_with_context(conversation_id=conversation_id, latest_message=message, history=history, limit=limit)
         elif callable(suggest_variants):

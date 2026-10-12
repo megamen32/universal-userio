@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import io
 import math
 import os
 import re
@@ -824,6 +825,49 @@ class MaxChannelAdapter(StoredChannelAdapter):
         raise AdapterNotSupported(
             "MAX adapter does not deliver attachments yet; media remains in the MAX app.",
         )
+
+    def download_for_ai(self, *, file_ref: str, max_bytes: int,
+                        attachment_idx: int = 0) -> ChannelFile:
+        """Read only the public thumbnail already displayed for an owned sticker."""
+        record = self._store.message(file_ref, source="max", user_id=self._user_id)
+        if record is None:
+            raise KeyError("MAX message not found")
+        item = next((a for a in record.get("attachments", [])
+                     if a.get("idx") == attachment_idx and a.get("kind") == "sticker"), None)
+        if not item:
+            raise AdapterNotSupported("MAX attachment has no public sticker thumbnail")
+        url = str(item.get("src") or "")
+        parsed = urllib.parse.urlsplit(url)
+        if (parsed.scheme != "https" or parsed.netloc != "i.oneme.ru"
+                or parsed.path != "/getSmile"
+                or not set(urllib.parse.parse_qs(parsed.query)) <= {"smileId", "smileType"}):
+            raise AdapterNotSupported("MAX sticker thumbnail is unavailable")
+        limit = min(max(1, max_bytes), 2 * 1024 * 1024)
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = response.read(limit + 1)
+        if not data or len(data) > limit:
+            raise AdapterNotSupported("MAX sticker thumbnail exceeds the image budget")
+        mime = ("image/png" if data.startswith(b"\x89PNG\r\n\x1a\n") else
+                "image/jpeg" if data.startswith(b"\xff\xd8\xff") else
+                "image/gif" if data.startswith((b"GIF87a", b"GIF89a")) else
+                "image/webp" if data.startswith(b"RIFF") and data[8:12] == b"WEBP" else "")
+        if not mime:
+            raise AdapterNotSupported("MAX thumbnail is not a supported image")
+        if mime == "image/gif":
+            # The existing Fast Agent dependency supplies Pillow. Send the
+            # first frame as PNG; inference need not consume an animation.
+            from PIL import Image
+            with Image.open(io.BytesIO(data)) as frame:
+                if frame.width * frame.height > 1024 * 1024:
+                    raise AdapterNotSupported("MAX thumbnail exceeds the pixel budget")
+                frame.seek(0)
+                output = io.BytesIO()
+                frame.convert("RGBA").save(output, format="PNG")
+                data = output.getvalue()
+            if len(data) > limit:
+                raise AdapterNotSupported("MAX first frame exceeds the image budget")
+            mime = "image/png"
+        return ChannelFile("max-sticker", mime, data)
 
 
 def _download_via_bridge(

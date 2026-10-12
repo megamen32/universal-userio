@@ -154,6 +154,32 @@ def test_native_reply_roles_source_and_stale_followup(tmp_path):
         assert changed["context_status"] == "stale"
 
 
+def test_native_reply_sees_sticker_pixels_and_not_provider_url(tmp_path):
+    """Focused integration: real draft SDK wire, 5s expected/max30s; no real model."""
+    from universal_userio.contracts import ChannelFile
+    from universal_userio.service import UserIOService
+    from universal_userio.store import SQLiteUserIOStore
+
+    calls=[]
+    def image_loader(**kwargs):
+        calls.append(kwargs)
+        return ChannelFile("sticker.png", "image/png", b"\x89PNG\r\n\x1a\nfixture")
+    with _provider_fixture([{"role":"assistant","content":"Весёлый тигр на стикере."}]) as (endpoint, requests):
+        generator=FastAgentDraftGenerator(endpoint=endpoint,token="fixture-only")
+        store=SQLiteUserIOStore(tmp_path/'sticker.sqlite3')
+        service=UserIOService(store,generator,object(),ai_image_loader=image_loader)
+        cid,_=service.receive(InboxMessage('max','sticker','peer','',1,attachments=(
+            {'kind':'sticker','content_type':'application/octet-stream',
+             'src':'https://i.oneme.ru/getSmile?smileId=1&smileType=1'},)),route_id='test')
+        service.propose_from_conversation(cid,limit=1)
+        assert len(calls)==1
+        assert requests[0]['model']=='MiniMax-M3'
+        wire=json.dumps(requests[0],ensure_ascii=False)
+        assert 'data:image/png;base64,' in wire
+        assert '"kind": "sticker"' in wire or '\\"kind\\":\\"sticker\\"' in wire
+        assert 'i.oneme.ru' not in wire
+
+
 def test_native_read_more_switches_to_m3_before_sending_new_image():
     anchors = []
 
