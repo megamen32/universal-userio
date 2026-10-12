@@ -56,3 +56,70 @@ Neither a shared browser profile nor a community bot token suffices.
 Radist's separate vk_direct QR API is a candidate fallback. It requires a
 company-scoped API key; cost and tenant isolation for a SaaS are not yet
 confirmed and are not used by this POC.
+
+## Correct exchange field mapping and stage separation
+
+Observed reference: Fast Messenger commit `f422b54`, Android entry point
+`LoginViewModel.kt` and request mapping in `OAuthRequest.kt`.
+This independently implemented POC uses only fixed VK API method names and
+argument shapes from the reference; it does not include GPLv3 source code.
+
+- `client_id=51453752`: the VK Messenger client identifier involved in the
+  OAuth attempt and the anonymous session request. VK API version in this
+  test is `5.263`.
+- `auth.getAnonymToken` with this client ID, **without client_secret**,
+  succeeded against the actual VK endpoint in a read-only preliminary test.
+  Fast Messenger sends `client_secret` as well. If the operator has an
+  authorized value, `VK_MESSENGER_CLIENT_SECRET` can supply it privately.
+  This observation does not establish that all VK clients work without it.
+- `auth.exchangeSilentAuthToken` request fields have an unintuitive
+  meaning: `access_token` is the **anonymous token** from the first step;
+  `token` is the short-lived **silent token** from the browser callback;
+  `uuid` is the UUID of **that exact authorization**, including an empty
+  UUID only if VK returned it empty. Never substitute another attempt's UUID.
+- Only after a *positive* exchange do we have a **user access token**.
+  Its `expires_in` is separately tracked; the input silent token's
+  `ttl=600` does not determine the resulting session lifetime.
+- A denied `auth.exchangeSilentAuthToken` is reported as an exchange denial;
+  a denied `messages.getConversations` or `messages.getHistory` is
+  reported as a **message permission** denial. The API method and numeric
+  error code are printed, not credentials or server response strings.
+- Only after a successful personal chat/history proof, the optional
+  `--inspect-common-token` can request `auth.getExchangeToken` and report
+  whether the expected account has a `common_token`. The token value is
+  neither returned nor saved, and its meaning as a refresh token is
+  **explicitly unverified**.
+
+## Binding attempts to a UserIO principal
+
+`attempts.py` is an experimental one-time, owner-bound state registry for
+a future UI. It produces a random `attempt_id` and OAuth `state`, records
+the authenticated UserIO user and optional expected VK user ID, expires in
+600 seconds, and enforces a matching callback state and single use.
+
+**It is intentionally NOT enabled as a production OAuth callback.**
+The observed `#payload=silent_token` URL lacked `state`; no experiment
+has established that this OAuth route actually echoes our supplied state.
+If it does not, an automatic server callback that *pretends* to have verified
+state would be unsafe. Our current private CLI flow instead requires the
+owner to paste the result into their own hidden terminal prompt, then validates
+the actual VK ID directly against VK. Any future browser/web UI needs a
+provider-supported state/callback binding or an explicit, authenticated,
+owner-confirmed manual-import flow. Never infer that possession of a VK ID
+by itself proves ownership of a callback.
+
+The proof does **not** yet demonstrate reading a personal VK account. That
+remains blocked on one fresh owner-authorized test, which cannot be completed
+with a previously posted or expired token.
+
+## Strict history gate added
+
+The POC now fails if VK returns an empty personal dialog list or if the
+selected conversation has no messages. A working profile or a success response
+from messages.getConversations alone will not count as a completed proof.
+
+For a known inactive conversation, optionally supply
+`--history-peer-id <NUMERIC_PEER_ID>`. The probe selects that peer for
+messages.getHistory rather than the latest chat. The ID is not a secret,
+but avoid copying an actual chat identifier into public issue reports.
+The check does not mutate provider read state and does not print message text.

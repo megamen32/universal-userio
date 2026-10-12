@@ -131,3 +131,129 @@ def test_vk_api_method_whitelist_rejects_any_send_or_read_change():
     for action in ("messages.send","messages.markAsRead","messages.delete","auth.logout"):
         with pytest.raises(ValueError, match="read-only"):
             proof.vk_call(action)
+
+
+def test_vk_silent_exchange_preserves_nonempty_uuid_and_reports_stages(monkeypatch):
+    from urllib.parse import quote
+    payload = {
+        "type": "silent_token",
+        "user": {"id": 46887791},
+        "token": "silently-issued-token-value",
+        "uuid": "same-auth-session-uuid",
+        "ttl": 600,
+    }
+    parsed = proof.parse_login_result(
+        "https://oauth.vk.ru/blank.html#payload=" +
+        quote(json.dumps(payload), safe="")
+    )
+    monkeypatch.delenv("VK_MESSENGER_CLIENT_SECRET", raising=False)
+    stages = []
+    calls = []
+    def api(method, **kwargs):
+        calls.append((method, kwargs))
+        if method == "auth.getAnonymToken":
+            assert kwargs == {"client_id": "51453752"}
+            return {"token": "anonymous-for-client-id"}
+        assert method == "auth.exchangeSilentAuthToken"
+        assert kwargs == {
+            "access_token": "anonymous-for-client-id",
+            "token": "silently-issued-token-value",
+            "uuid": "same-auth-session-uuid",
+        }
+        return {"access_token": "vk-personal-token-value", "user_id": 46887791,
+                "expires_in": 7200}
+    token, user, ttl = proof.resolve_user_access(
+        parsed, call=api, progress=stages.append,
+    )
+    assert token == "vk-personal-token-value"
+    assert user == "46887791"
+    assert ttl == 7200  # Distinct from original silent_token TTL 600.
+    assert stages == ["VK_ANONYMOUS_TOKEN_OK", "VK_PERSONAL_TOKEN_EXCHANGE_OK"]
+
+
+def test_vk_common_token_is_not_refresh_token_and_never_in_returned_data():
+    calls = []
+    def api(method, **kwargs):
+        calls.append(method)
+        assert method == "auth.getExchangeToken"
+        return {"users_exchange_tokens": [
+            {"user_id": 46887791, "common_token": "opaque-common-token-value"},
+            {"user_id": 88888888, "common_token": "different-account-token"},
+        ]}
+    result = proof.inspect_common_token(
+        "vk-personal-token-value", "46887791", call=api,
+    )
+    assert result == {
+        "matching_account_found": True,
+        "common_token_present": True,
+        "is_refresh_token_verified": False,
+    }
+    assert "opaque-common-token-value" not in json.dumps(result)
+    assert calls == ["auth.getExchangeToken"]
+
+
+def test_vk_exchange_denial_reports_method_without_sensitive_tokens():
+    class HTTPReply:
+        def __enter__(self):return self
+        def __exit__(self, *args):return False
+        def read(self, *_):return json.dumps({
+            "error": {"error_code": 100, "error_msg": "bad-token-should-never-echo"}
+        }).encode()
+    def opener(request, *, timeout):
+        return HTTPReply()
+    with pytest.raises(proof.VKRejected) as caught:
+        proof.vk_call(
+            "auth.exchangeSilentAuthToken",
+            opener=opener,
+            access_token="anonymous-for-client-id",
+            token="silently-issued-token-value",
+            uuid="same-auth-session-uuid",
+        )
+    assert caught.value.method == "auth.exchangeSilentAuthToken"
+    assert caught.value.code == 100
+    assert "silently-issued-token-value" not in str(caught.value)
+    assert "bad-token" not in str(caught.value)
+
+
+def test_no_personal_history_must_not_count_as_connected():
+    def api(method, **kwargs):
+        if method == "users.get":
+            return [{"id": 46887791}]
+        if method == "messages.getConversations":
+            return {"count": 0, "items": []}
+        raise AssertionError(method)
+    with pytest.raises(RuntimeError, match="No personal conversation"):
+        proof.verify_personal_reads("vk-personal-token-value", "46887791", call=api)
+
+
+def test_user_selected_dormant_peer_used_for_history():
+    seen=[]
+    def api(method, **kwargs):
+        seen.append(method)
+        if method == "users.get":
+            return [{"id": 46887791}]
+        if method == "messages.getConversations":
+            return {"count": 2, "items": [{"conversation": {"peer": {"id": 12}}}]}
+        if method == "messages.getHistory":
+            assert kwargs["peer_id"] == 321
+            return {"count": 1, "items": [{"id": 1, "date": 1500000000}]}
+        raise AssertionError(method)
+    result=proof.verify_personal_reads(
+        "vk-personal-token-value", "46887791", call=api, test_peer_id=321,
+    )
+    assert result["history_requested"] is True
+    assert result["sampled_history_messages"] == 1
+    assert seen == ["users.get", "messages.getConversations", "messages.getHistory"]
+
+
+def test_empty_personal_history_rejected_after_dialog_list():
+    def api(method, **kwargs):
+        if method == "users.get":
+            return [{"id": 46887791}]
+        if method == "messages.getConversations":
+            return {"count": 1, "items": [{"conversation": {"peer": {"id": 12}}}]}
+        if method == "messages.getHistory":
+            return {"count": 0, "items": []}
+        raise AssertionError(method)
+    with pytest.raises(RuntimeError, match="no history"):
+        proof.verify_personal_reads("vk-personal-token-value", "46887791", call=api)

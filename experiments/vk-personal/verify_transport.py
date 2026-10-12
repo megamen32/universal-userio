@@ -28,6 +28,7 @@ VERSION = "5.263"
 READ_METHODS = frozenset({
     "auth.getAnonymToken",
     "auth.exchangeSilentAuthToken",
+    "auth.getExchangeToken",
     "users.get",
     "messages.getConversations",
     "messages.getHistory",
@@ -37,9 +38,10 @@ TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{10,4096}$")
 
 
 class VKRejected(Exception):
-    def __init__(self, code: object):
+    def __init__(self, code: object, method: str = ""):
         self.code = code
-        super().__init__(f"VK API declined the operation: code {code}")
+        self.method = method
+        super().__init__(f"VK API denied {method}: code {code}")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -72,7 +74,7 @@ def vk_call(method: str, *, opener: Callable[..., Any] | None = None, **fields: 
     if not isinstance(parsed, dict):
         raise RuntimeError("Unexpected VK API response")
     if isinstance(parsed.get("error"), dict):
-        raise VKRejected(parsed["error"].get("error_code"))
+        raise VKRejected(parsed["error"].get("error_code"), method)
     result = parsed.get("response")
     if result is None:
         raise RuntimeError("VK API omitted response")
@@ -121,15 +123,29 @@ def parse_login_result(value: str) -> dict[str, str]:
             "uuid": uuid, "vk_id": str(vk_id), "ttl": str(ttl)}
 
 
-def resolve_user_access(parsed: dict[str, str], *, call: Callable[..., Any] = vk_call) -> tuple[str, str, int | None]:
+def resolve_user_access(
+    parsed: dict[str, str], *, call: Callable[..., Any] = vk_call,
+    progress: Callable[[str], None] | None = None,
+) -> tuple[str, str, int | None]:
     if parsed["kind"] == "access_token":
+        if progress:
+            progress("VK_USER_TOKEN_PROVIDED")
         return parsed["token"], parsed.get("vk_id", ""), None
-    anon = call("auth.getAnonymToken", client_id=CLIENT_ID)
+    # Fast Messenger also supplies client_secret here. For this app id, our
+    # real VK probe succeeded without it. An operator may set it via a private
+    # process environment if needed; never hardcode it or echo it to logs.
+    anonymous_parameters = {"client_id": CLIENT_ID}
+    client_secret = os.environ.get("VK_MESSENGER_CLIENT_SECRET")
+    if client_secret:
+        anonymous_parameters["client_secret"] = client_secret
+    anon = call("auth.getAnonymToken", **anonymous_parameters)
     if not isinstance(anon, dict):
         raise RuntimeError("VK anonymous token response is invalid")
     anon_token = str(anon.get("token") or "")
     if not TOKEN_PATTERN.fullmatch(anon_token):
         raise RuntimeError("VK did not provide an anonymous token")
+    if progress:
+        progress("VK_ANONYMOUS_TOKEN_OK")
     exchange = call("auth.exchangeSilentAuthToken",
                     access_token=anon_token, token=parsed["token"],
                     uuid=parsed.get("uuid") or "")
@@ -146,11 +162,15 @@ def resolve_user_access(parsed: dict[str, str], *, call: Callable[..., Any] = vk
     ttl = exchange.get("expires_in")
     if type(ttl) is not int or not 1 <= ttl <= 31_536_000:
         ttl = None
+    if progress:
+        progress("VK_PERSONAL_TOKEN_EXCHANGE_OK")
     return token, str(user_id), ttl
 
 
 def verify_personal_reads(
     access_token: str, expected_user: str = "", *, call: Callable[..., Any] = vk_call,
+    progress: Callable[[str], None] | None = None,
+    test_peer_id: int | None = None,
 ) -> dict[str, object]:
     user = call("users.get", access_token=access_token)
     if not isinstance(user, list) or not user or not isinstance(user[0], dict):
@@ -160,6 +180,8 @@ def verify_personal_reads(
         raise RuntimeError("VK returned an invalid personal ID")
     if expected_user and str(actual) != expected_user:
         raise RuntimeError("VK session belongs to a different user")
+    if progress:
+        progress("VK_PERSONAL_IDENTITY_OK")
     conversations = call(
         "messages.getConversations", access_token=access_token,
         offset=0, count=5, extended=0,
@@ -167,6 +189,8 @@ def verify_personal_reads(
     if not isinstance(conversations, dict) or not isinstance(conversations.get("items"), list):
         raise RuntimeError("VK did not return personal conversations")
     items = conversations["items"]
+    if progress:
+        progress("VK_PERSONAL_DIALOGS_OK")
     peer = None
     for item in items:
         if not isinstance(item, dict):
@@ -175,18 +199,55 @@ def verify_personal_reads(
         if type(key.get("id")) is int and key["id"]:
             peer = key["id"]
             break
-    history_count = 0
-    if peer is not None:
-        history = call(
-            "messages.getHistory", access_token=access_token,
-            peer_id=peer, count=10,
-        )
-        if not isinstance(history, dict) or not isinstance(history.get("items"), list):
-            raise RuntimeError("VK did not return the history of a personal chat")
-        history_count = len(history["items"])
+    if test_peer_id is not None:
+        if type(test_peer_id) is not int or test_peer_id == 0:
+            raise ValueError("History test peer ID must be a nonzero integer")
+        peer = test_peer_id
+    if peer is None:
+        raise RuntimeError("No personal conversation was found for history proof")
+    history = call(
+        "messages.getHistory", access_token=access_token,
+        peer_id=peer, count=10,
+    )
+    if not isinstance(history, dict) or not isinstance(history.get("items"), list):
+        raise RuntimeError("VK did not return the history of a personal chat")
+    history_count = len(history["items"])
+    if not history_count:
+        raise RuntimeError("The selected personal VK dialog has no history")
+    if progress:
+        progress("VK_PERSONAL_HISTORY_OK")
     return {"identity_match": True, "dialog_count": conversations.get("count"),
             "sampled_chats": len(items), "sampled_history_messages": history_count,
-            "history_requested": peer is not None}
+            "history_requested": True}
+
+
+def inspect_common_token(
+    access_token: str, expected_vk_id: str, *, call: Callable[..., Any] = vk_call,
+) -> dict[str, object]:
+    """Optional Fast Messenger follow-up. Never treat common_token as refresh_token."""
+    if not TOKEN_PATTERN.fullmatch(access_token):
+        raise ValueError("Personal VK bearer is invalid")
+    if not expected_vk_id.isdecimal():
+        raise ValueError("Expected VK user ID is missing")
+    response = call("auth.getExchangeToken", access_token=access_token)
+    values = response.get("users_exchange_tokens") if isinstance(response, dict) else None
+    if not isinstance(values, list):
+        raise RuntimeError("VK did not return exchange-token account metadata")
+    matches = [
+        v for v in values if isinstance(v, dict) and
+        v.get("user_id") == int(expected_vk_id)
+    ]
+    token_found = any(
+        TOKEN_PATTERN.fullmatch(str(value.get("common_token") or "")) is not None
+        for value in matches
+    )
+    # Do not expose or persist the opaque token: its intended lifetime and
+    # semantics remain unknown until tested against actual VK behavior.
+    return {
+        "matching_account_found": bool(matches),
+        "common_token_present": token_found,
+        "is_refresh_token_verified": False,
+    }
 
 
 def save_temporary_session(token: str, expected: str, expires: int | None, path: Path):
@@ -213,8 +274,12 @@ def save_temporary_session(token: str, expected: str, expires: int | None, path:
 def main():
     parser = argparse.ArgumentParser(description="One-time personal VK server transport proof")
     parser.add_argument("--expected-vk-id", default="", help="Expected integer VK ID")
+    parser.add_argument("--history-peer-id", type=int,
+                        help="Known old personal conversation for history proof")
     parser.add_argument("--resume", type=Path, help="Load 0600 proof session after process restart")
     parser.add_argument("--save", type=Path, help="Explicitly opt in to save token in private 0700 dir")
+    parser.add_argument("--inspect-common-token", action="store_true",
+                        help="Optional metadata-only VK common_token probe after read proof")
     parser.add_argument("--anonymous-probe", action="store_true", help="No user token needed")
     parser.add_argument("--clear-session", type=Path, help="Discard one saved proof token")
     args = parser.parse_args()
@@ -243,17 +308,23 @@ def main():
         raw = getpass.getpass("Paste a fresh VK authorization result (input hidden): ")
         parsed = parse_login_result(raw)
         raw = ""
-        token, actual, ttl = resolve_user_access(parsed)
+        token, actual, ttl = resolve_user_access(parsed, progress=print)
         parsed.clear()
     try:
-        result = verify_personal_reads(token, args.expected_vk_id or actual)
+        result = verify_personal_reads(
+            token, args.expected_vk_id or actual, progress=print,
+            test_peer_id=args.history_peer_id,
+        )
         print("PERSONAL_VK_TRANSPORT_PROOF", json.dumps(result, ensure_ascii=False))
+        if args.inspect_common_token:
+            metadata = inspect_common_token(token, args.expected_vk_id or actual)
+            print("VK_COMMON_TOKEN_METADATA", json.dumps(metadata))
         if args.save:
             save_temporary_session(token, actual, ttl, args.save)
             print("SESSION_SAVED_PRIVATELY", True, "TOKEN_NOT_PRINTED", True)
         return 0
     except VKRejected as error:
-        print("PERSONAL_VK_READ_DENIED_CODE", error.code)
+        print("VK_API_DENIED_METHOD", error.method, "ERROR_CODE", error.code)
         return 2
     finally:
         token = None
@@ -262,6 +333,9 @@ def main():
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except VKRejected as error:
+        print("VK_API_DENIED_METHOD", error.method, "ERROR_CODE", error.code)
+        raise SystemExit(2)
     except (ValueError, RuntimeError, FileNotFoundError) as error:
         print("PROOF_FAILED:", str(error), file=sys.stderr)
         raise SystemExit(1)
