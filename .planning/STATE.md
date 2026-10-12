@@ -186,3 +186,8 @@ change, pending replies preserved. Yandex positive-notification verification is
 now closed; prior SMTP554 remains historical. Exact viewport-anchor stability
 of older call history remains unproved; user-accepted unknown-number archive
 and cancelled delete-six remain unchanged.
+
+
+## Quick261012-pxe — relay media retention
+
+12October complete: first native media survives routing import/reconciliation. Actual generic MCP resolve/download/stored-history retain exact90835bytes/SHA; source3477df9 installed,21focusedPASS7.70s. No provider/model writes. VK ordinary onboarding and native Secretary acceptance remain independently pending.
