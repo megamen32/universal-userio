@@ -3,36 +3,66 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: executing
-last_updated: "2026-10-12T11:47:42.515Z"
+last_updated: "2026-10-12T20:18:28.829Z"
 last_activity: 2026-10-12
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 2
+  percent: 50
 ---
 
 # State
 
-**Current Phase:** 12
-**Current Phase Name:** Effective channel capabilities
+**Current Phase:** 14
+**Current Phase Name:** Telegram and MAX rich operations
 **Total Phases:** 4
 **Current Plan:** 01
 **Total Plans in Phase:** 1
 **Status:** executing
-**Progress:** [░░░░░░░░░░] 0%
-**Last Activity:** 2026-10-12
-**Last Activity Description:** Ordinary VK auth/read accepted; source-bound new-file staging installed1b44,46 checks and actual MAX203-byte exact download PASS. Native Secretary exported-document TG/MAX and retirement remain Root97 acceptance.
+**Progress:** 50%
 
-Current milestone v1.3 is directly authorized through deployed Telegram/MAX
-Secretary acceptance. Phase12 installed source and live scope proof accepted. Phases13/14 source
-refinements passed83 combined checks24.91s plus25 exact-index integration17.60s;
-b5ab9db installed/current40757; live881 capabilities and TG/MAX head initialize PASS.
-Phase15 native acceptance and retirement
-remain pending; no full migration is claimed.
-Exact sender881 reuses the existing provider client; private readonly resource
-stays unchanged. Generic sender uses a separate explicit account-bound scope.
+[█████░░░░░] — current milestone phase/plan completion (2/4)
+**Last Activity:** 2026-10-12
+**Last Activity Description:** Reconciled retained live evidence: phase12 and13 complete, phase14 ACT-01 accepted (25%), phase15 actual MAX Secretary/retirement pending. No runtime/provider replay.
+
+## Current acceptance and next action
+
+- Phase12: CAP-01–03 complete,3/3 (100%), installed HTTP/MCP discovery,
+  scoped-refusal and actual native preserved-sender proof.
+- Phase13: SRC-01–02/REPLY-01–02 complete,4/4 (100%), real Telegram native
+  source/media/reply/edit receipts plus bounded Telegram/MAX reads.
+- Phase14: ACT-01 complete; ACT-02–04 partial/live matrix missing,1/4 (25%).
+- Phase15: native MAX final parity/business preservation/transport retirement
+  remain Exmanager97-owned acceptance,0/3fullyclosed; actual TG vertical retained.
+- Milestone2/4plans (50%),8/14requirements (57% rounded). Original all-directory
+  progress includes historical phases and is not this milestone's percentage.
+
+Next route: resume [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md),
+reusing accepted receipts and filling only missing live matrix evidence. UserIO
+lead7bb owns provider/contracts; Exmanager lead97 owns SDK/native consumer and
+its retirement. Neither project waits on a generic whole-project hold.
+
+Additional open UserIO follow-ups: VK reactions/read acknowledgements/automatic
+session renewal and exact older-call-history scroll anchor. Owner and closure
+criteria: [ROADMAP remaining work](ROADMAP.md). Already accepted continuous SMS,
+call grouping/numbers, group authors, chat analysis switches, draft source/time,
+mail notices, Bearer/OAuth, landing/docs and VK rich web are explicitly closed
+there. Unknown-number archive is an accepted exception; delete-six was cancelled.
+
+Current v1.3 evidence includes installed source2544edc, source3477 media repair,
+native Telegram source18→reply19 plus3edits, scoped reader/native MAX stored reads,
+and MAX new-file203-byte exact download. Private readonly resource and existing
+sender881 remain unchanged. These acceptances do not claim the missing full MAX
+SDK journey or full transport retirement.
+
+## Historical records below
+
+The remaining text is a preserved append-only sequence of accepted results and
+superseded checkpoints. Historical “pending”, phase9/12/current-position and
+0% labels do not override the current frontmatter/position above. New source,
+provider actions, model calls or browser checks were not run for reconciliation.
 
 ## Historical accepted work (v1.2)
 
@@ -229,3 +259,20 @@ Per-chat titles/author separation and native document CDN redirect repaired.
 Own browser/copies removed, only first known-unsubmitted QA draft cleaned; old
 provider intents not replayed. Personal VK now supports text/photo/doc<=2MiB and
 repeat edits; reactions/readACK remain open. Exmanager milestone remains separate.
+
+
+## Preserved pre-reconciliation v1.3 checkpoint
+
+The following original source/test/readiness record is superseded by the current
+position above and retained without changing its historical results:
+
+**Last Activity Description:** Ordinary VK auth/read accepted; source-bound new-file staging installed1b44,46 checks and actual MAX203-byte exact download PASS. Native Secretary exported-document TG/MAX and retirement remain Root97 acceptance.
+
+Current milestone v1.3 is directly authorized through deployed Telegram/MAX
+Secretary acceptance. Phase12 installed source and live scope proof accepted. Phases13/14 source
+refinements passed83 combined checks24.91s plus25 exact-index integration17.60s;
+b5ab9db installed/current40757; live881 capabilities and TG/MAX head initialize PASS.
+Phase15 native acceptance and retirement
+remain pending; no full migration is claimed.
+Exact sender881 reuses the existing provider client; private readonly resource
+stays unchanged. Generic sender uses a separate explicit account-bound scope.
