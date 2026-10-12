@@ -30,6 +30,7 @@ from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
+from .personal_tokens import PersonalTokens
 from .search import search_conversations
 from .service import DeliveryUnavailableError, UserIOService
 
@@ -84,6 +85,7 @@ def handler(
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
     oauth = OAuthProvider(service._store)
+    personal_tokens = PersonalTokens(service._store)
     subscriptions = ResourceSubscriptionHub()
     supplied_identity = runtime_identity or {}
     public_runtime_identity = {
@@ -345,6 +347,11 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path == "/v1/personal-tokens":
+                    payload = self._json()
+                    self._reply(201, personal_tokens.create(user_id, payload.get("name", "")),
+                                headers={"Cache-Control": "no-store"})
+                    return
                 if path.startswith("/v1/workspace/secretary/deep-jobs/") and path.endswith("/progress"):
                     if not principal.service_account:
                         self._reply(403, {"error": "service account required"})
@@ -1077,6 +1084,9 @@ def handler(
             if requested_path == '/connect-phone':
                 if self._static('/connect-phone.html'):
                     return
+            if requested_path == "/connect-mcp":
+                if self._static("/connect-mcp.html"):
+                    return
             # Only credential-free ZIPs are distributed. Obsolete signed CRX
             # builds contained a baked operator token and must stay unavailable.
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
@@ -1114,6 +1124,10 @@ def handler(
                 return
             path = urlparse(self.path).path
             user_id = principal.user_id
+            if path == "/v1/personal-tokens":
+                self._reply(200, {"tokens": personal_tokens.list(user_id)},
+                            headers={"Cache-Control": "no-store"})
+                return
             if path == '/v1/sms/agent-binding':
                 if not token or not hmac.compare_digest(self.headers.get('Authorization',''),f'Bearer {token}'):
                     self._reply(403,{'error':'registered gateway required'})
@@ -1516,6 +1530,10 @@ def handler(
             principal = self._principal(allow_proxy=True)
             if principal is None:
                 self._reply(401, {"error": "unauthorized"})
+                return
+            if path.startswith("/v1/personal-tokens/"):
+                token_id = unquote(path.removeprefix("/v1/personal-tokens/"))
+                self._reply(200, {"revoked": personal_tokens.revoke(principal.user_id, token_id)})
                 return
             if path.startswith("/v1/accounts/"):
                 account_id = unquote(path.removeprefix("/v1/accounts/").strip("/"))

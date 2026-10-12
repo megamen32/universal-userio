@@ -82,8 +82,8 @@ def _is_managed_source(path: str) -> bool:
 
 
 def _source_identity(source: Path, remote_ref: str) -> str:
-    if _git(source, "status", "--porcelain=v1", "-z", "--untracked-files=all"):
-        raise ReleaseError("release requires a clean canonical worktree")
+    # Both manifest and installer read immutable published Git blobs, never
+    # working-tree bytes. Preserve unfinished edits without deploying them.
     branch = _git(source, "branch", "--show-current").decode().strip()
     if branch != "main":
         raise ReleaseError(f"canonical release branch must be main, got {branch or 'detached'}")

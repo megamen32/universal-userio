@@ -65,7 +65,7 @@ def _source_repo(tmp_path: Path) -> Path:
     return source
 
 
-def test_manifest_requires_clean_exact_origin_commit_and_safe_tracked_files(tmp_path: Path) -> None:
+def test_manifest_uses_published_commit_and_preserves_worktree_edits(tmp_path: Path) -> None:
     source = _source_repo(tmp_path)
 
     manifest = build_manifest(source)
@@ -85,8 +85,8 @@ def test_manifest_requires_clean_exact_origin_commit_and_safe_tracked_files(tmp_
         "src/universal_userio/runtime.py",
     ]
     (source / "src/universal_userio/runtime.py").write_text("dirty\n", encoding="utf-8")
-    with pytest.raises(ReleaseError, match="clean canonical worktree"):
-        build_manifest(source)
+    assert build_manifest(source) == manifest
+    assert (source / "src/universal_userio/runtime.py").read_text() == "dirty\n"
 
 
 def test_manifest_rejects_tracked_symlink(tmp_path: Path) -> None:
@@ -113,6 +113,7 @@ def test_prepare_install_verify_and_restore_are_allowlisted(tmp_path: Path) -> N
     manifest = build_manifest(source)
 
     rollback = prepare_rollback(manifest, runtime, unit_root, rollback_root)
+    (source / "src/universal_userio/runtime.py").write_text("UNPUBLISHED = True\n", encoding="utf-8")
     install = install_release(source, manifest, rollback, runtime, unit_root)
     verification = verify_release(source, manifest, runtime, unit_root)
 
@@ -126,6 +127,7 @@ def test_prepare_install_verify_and_restore_are_allowlisted(tmp_path: Path) -> N
         "verified": True,
     }
     assert (runtime / "src/universal_userio/runtime.py").read_text() == "IDENTITY = 'new'\n"
+    assert (source / "src/universal_userio/runtime.py").read_text() == "UNPUBLISHED = True\n"
     assert (runtime / ".env.owner-seed").read_text() == "PRIVATE-SENTINEL\n"
     assert json.loads((runtime / ".userio-release.json").read_text())["commit"] == manifest["commit"]
 
