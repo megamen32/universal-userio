@@ -226,6 +226,11 @@ def test_userio_secretary_http_is_owner_scoped_and_worker_token_stays_server_sid
         status, jobs = call("GET", jobs_path, "workspace-service-token")
         assert status == 200
         assert [job["job_id"] for job in jobs["jobs"]] == [job_id]
+        exact_path = f"/v1/workspace/secretary/deep-jobs/{job_id}"
+        assert call("GET", exact_path, user_token)[0] == 403
+        assert call("GET", exact_path, "workspace-service-token") == (200, {"job":jobs["jobs"][0]})
+        assert call("GET", "/v1/workspace/secretary/deep-jobs/secretary-" + "f"*32,
+                    "workspace-service-token")[0] == 404
 
         progress_path = f"/v1/workspace/secretary/deep-jobs/{job_id}/progress"
         assert call("POST", progress_path, user_token, {"phase": "running"})[0] == 403

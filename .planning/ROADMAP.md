@@ -28,7 +28,7 @@ Recovery uses existing acceptance receipts, not repeated provider actions.
 ## Phases
 
 - [x] **Phase 8: Everyday channels and AI connections** - One clear phone/SMS account, continuous sync, onboarding/docs, read preferences and usable Bearer/OAuth MCP connections.
-- [ ] **Phase 9: Secretary roles and draft provenance** - Reply suggestions distinguish the owner, retain the exact incoming source/time and show when context changed.
+- [x] **Phase 9: Secretary roles and draft provenance** - Reply suggestions distinguish the owner, retain the exact incoming source/time and show when context changed. (completed 2026-10-12)
 - [ ] **Phase 10: Timely work-chat and email notifications** - Restore maintained dispatcher credentials, remove proven queue delay, enable verified work chats and explain emails substantively.
 - [ ] **Phase 11: Final real-surface acceptance** - Audit all user requests against published source, installed runtime and actual user-surface evidence.
 
@@ -58,7 +58,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 09-01: Secretary roles and draft provenance
+- [x] 09-01: Secretary roles and draft provenance
 
 ### Phase 10: Timely work-chat and email notifications
 **Goal**: Restore maintained dispatcher credentials, remove proven queue delay, enable verified work chats and explain emails substantively.
@@ -91,7 +91,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |---|---|---|---|
 | 8. Everyday channels and AI connections | 1/1 | Complete | 2026-10-12 |
-| 9. Secretary roles and draft provenance | 0/1 | In progress | - |
+| 9. Secretary roles and draft provenance | 1/1 | Complete   | 2026-10-12 |
 | 10. Timely work-chat and email notifications | 0/1 | Not started | - |
 | 11. Final real-surface acceptance | 0/1 | Not started | - |
 

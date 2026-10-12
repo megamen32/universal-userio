@@ -1190,6 +1190,27 @@ def handler(
                     return
                 self._reply(200, {"jobs": jobs})
                 return
+            if path.startswith("/v1/workspace/secretary/deep-jobs/"):
+                if not principal.service_account:
+                    self._reply(403, {"error": "service account required"})
+                    return
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                if query:
+                    self._reply(400, {"error": "invalid secretary job query"})
+                    return
+                job_id = unquote(path.removeprefix("/v1/workspace/secretary/deep-jobs/"))
+                try:
+                    job = service._store.conversation_secretary_job(job_id, user_id=user_id)
+                except ValueError as error:
+                    self._reply(400, {"error": str(error)})
+                    return
+                except KeyError:
+                    self._reply(404, {"error": "secretary job not found"})
+                    return
+                self._reply(200, {"job": job})
+                return
             if path == "/v1/workspace/events":
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"})

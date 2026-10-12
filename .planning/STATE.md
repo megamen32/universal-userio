@@ -2,31 +2,31 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Reliable everyday communication
-current_phase: 09
-current_phase_name: Secretary roles and draft provenance
+current_phase: 10
+current_phase_name: Timely notifications and work chats
 current_plan: 01
 status: executing
-last_updated: "2026-10-12T04:15:22.993Z"
+last_updated: "2026-10-12T06:24:57.826Z"
 last_activity: 2026-10-12
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 2
+  percent: 50
 ---
 
 # State
 
-**Current Phase:** 09
-**Current Phase Name:** Secretary roles and draft provenance
+**Current Phase:** 10
+**Current Phase Name:** Timely notifications and work chats
 **Total Phases:** 4
 **Current Plan:** 01
 **Total Plans in Phase:** 1
 **Status:** executing
-**Progress:** [███░░░░░░░] 25%
+**Progress:** [█████░░░░░] 50%
 **Last Activity:** 2026-10-12
-**Last Activity Description:** ChatGPT OAuth accepted; secretary source/time/normal click/reload UI passed, but real sticker misclassified as empty. Media-context fix next; own test proposals/tab cleaned up.
+**Last Activity Description:** Secretary roles/source/time/sticker reaction accepted on real web; maintained notification recovery next.
 
 Current milestone v1.2: original SDK now recognizes phases 8–11 and phase 8
 complete. Historical accepted data below is retained; later entries supersede

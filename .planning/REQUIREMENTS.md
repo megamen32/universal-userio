@@ -10,9 +10,9 @@
 - [x] **DOC-01**: Short README, searchable documentation, explicit completely-free promise with BYOK/MCP explanation.
 - [x] **MCP-01**: Users create multiple named Bearer tokens and independently revoke them; Codex and existing GPTAdmin connection work.
 - [x] **MCP-02**: Install UserIO MCP plugin with OAuth through normal ChatGPT browser flow and read actual owned accounts.
-- [ ] **SEC-01**: Secretary distinguishes owner/interlocutor using direction and current source; owner followups remain visible to native Fast Agent.
-- [ ] **SEC-02**: AI drafts show creation time and exact source preview; clicking scrolls to that message.
-- [ ] **SEC-03**: Context changes mark drafts stale; old source-less drafts are labelled honestly without guessed provenance.
+- [x] **SEC-01**: Secretary distinguishes owner/interlocutor using direction and current source; owner followups remain visible to native Fast Agent.
+- [x] **SEC-02**: AI drafts show creation time and exact source preview; clicking scrolls to that message.
+- [x] **SEC-03**: Context changes mark drafts stale; old source-less drafts are labelled honestly without guessed provenance.
 - [ ] **NOTIFY-01**: Fix proven dispatcher authorization/queue delay through maintained service without broad policy unpause or accepted-action replay.
 - [ ] **WORK-01**: Discover actual owned working Telegram chats with Telegram Helper and enable existing AI/notification rules for future events.
 - [ ] **MAIL-01**: Email notifications explain substantive content, requested action and deadlines, using existing analysis/notification paths.

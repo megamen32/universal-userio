@@ -20,7 +20,7 @@ import urllib.request
 import uuid
 from email.utils import parseaddr
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping
 
 from . import chatgpt_sessions
@@ -182,12 +182,23 @@ class ByokBridgeGenerator:
         self._runner, self._timeout = runner, timeout
 
     def suggest_with_context(self, *, conversation_id: str, latest_message: InboxMessage,
-                             history: Sequence[dict[str, object]], limit: int) -> list[str]:
-        transcript = "\n".join(f"{entry.get('sender', 'contact')}: {entry.get('body', '')}" for entry in history[-20:])
-        prompt = (
-            "You write concise reply drafts for a human operator. Return only the proposed reply text. "
-            f"Conversation {conversation_id}; source={latest_message.source}.\nHistory:\n{transcript}"
-        )
+                             history: Sequence[dict[str, object]], limit: int,
+                             actor_context: dict[str, str] | None = None) -> list[str]:
+        from .ai import OpenAICompatibleDraftGenerator
+
+        def text_only_hints(attachments):
+            # The maintained /chat bridge accepts a text prompt, not images.
+            # Preserve attachment kind without claiming it received pixels.
+            return [dict(hint, image_available=False)
+                    for hint in OpenAICompatibleDraftGenerator._attachment_hints(attachments)]
+
+        current = replace(latest_message, attachments=tuple(text_only_hints(latest_message.attachments)))
+        context = [dict(entry, attachments=text_only_hints(entry.get("attachments"))) for entry in history[-20:]]
+        prompt = (OpenAICompatibleDraftGenerator._draft_instruction()
+                  + " Return only the proposed reply text.\n"
+                  + OpenAICompatibleDraftGenerator._reply_prompt(
+                      conversation_id=conversation_id, latest_message=current,
+                      history=context, actor_context=actor_context))
         drafts: list[str] = []
         for _ in range(max(1, limit)):
             text = self._chat(prompt)
@@ -196,6 +207,9 @@ class ByokBridgeGenerator:
             if len(drafts) >= limit:
                 break
         return drafts
+
+    def suggest_with_actor_context(self, *, actor_context: dict[str, str], **kwargs) -> list[str]:
+        return self.suggest_with_context(actor_context=actor_context, **kwargs)
 
     def _chat(self, prompt: str) -> str:
         payload = {
