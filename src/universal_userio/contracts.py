@@ -10,6 +10,17 @@ class DeliveryNotSubmittedError(RuntimeError):
     """An adapter proves that failure occurred before provider submission."""
 
 
+class ProviderAuthenticationRequiredError(RuntimeError):
+    """A known provider login refusal, distinct from an uncertain mutation."""
+
+    def __init__(self, provider: str, *, provider_code: str = '') -> None:
+        self.provider = provider
+        self.provider_code = provider_code
+        label = 'MAX' if provider == 'max' else 'мессенджера'
+        self.public_message = f'Авторизация {label} больше не принимается. Переподключите существующий аккаунт. История и уже отправленные сообщения сохранены.'
+        super().__init__('provider_authentication_required' + (f' ({provider_code})' if provider_code else ''))
+
+
 @dataclass(frozen=True, slots=True)
 class InboxMessage:
     source: str

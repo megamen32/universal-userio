@@ -24,6 +24,10 @@ class MaxMessengerProvider:
     @property
     def sender_id(self): return _own_id(self.client)
 
+    @property
+    def authentication_required(self):
+        return getattr(self.client, 'authentication_required', False) is True
+
     def _projection(self, row, peer_id, conversation_id, kind='unknown'):
         env=message_envelope(row,chat_id=peer_id,own_id=self.sender_id,kind=kind,reconciliation=True)
         if env is None: raise ValueError('actual MAX source unavailable')

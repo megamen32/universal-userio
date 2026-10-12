@@ -26,7 +26,7 @@ from collections import deque
 from typing import Any
 
 import websocket
-from ..contracts import DeliveryNotSubmittedError
+from ..contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequiredError
 
 WS_URL = "wss://ws-api.oneme.ru/websocket"
 
@@ -126,6 +126,7 @@ class MaxClient:
         self._seq = 0
         self._profile: dict[str, Any] | None = None
         self._last_heartbeat = 0.0
+        self.authentication_required = False
 
     # -- session -----------------------------------------------------------
 
@@ -147,6 +148,8 @@ class MaxClient:
 
     def _connect(self) -> dict[str, Any]:
         """INIT + LOGIN; returns the LOGIN payload (profile, chats, users)."""
+        if self.authentication_required:
+            raise ProviderAuthenticationRequiredError('max')
         if self.connected():
             return self._profile or {}
         ws = self._transport.connect(timeout=20)
@@ -188,6 +191,7 @@ class MaxClient:
         if not isinstance(login, dict) or not login.get("profile"):
             raise RuntimeError("MAX LOGIN rejected the session token")
         self._profile = login
+        self.authentication_required = False
         return login
 
     def close(self) -> None:
@@ -260,6 +264,9 @@ class MaxClient:
                         code = error.get('error')
                         safe_code = code if isinstance(code, str) and re.fullmatch(r'[a-z_]+(?:\.[a-z_]+){1,5}', code) else 'unclassified'
                         logging.getLogger(__name__).warning('MAX protocol refusal opcode=%s code=%s', opcode, safe_code)
+                        if opcode == OP_LOGIN and code == 'login.token':
+                            self.authentication_required = True
+                            raise ProviderAuthenticationRequiredError('max', provider_code='login.token')
                         raise RuntimeError(
                             f"MAX opcode {opcode} failed: {error.get('error', 'provider-error')}"
                         )

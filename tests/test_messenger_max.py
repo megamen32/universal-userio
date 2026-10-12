@@ -47,6 +47,46 @@ def setup(tmp_path):
     return store,t,service,cid,Messenger(store,service,store.owner())
 
 
+def test_max_login_refusal_reports_reconnect_keeps_history_and_blocks_new_claims(tmp_path):
+    """Focused integration expected1s/max5s: live opcode19 login.token.
+
+    Known authentication refusal must not look like an unknown write; cached
+    history/actions stay visible and no mutation or blind login retry occurs.
+    """
+    from universal_userio.messenger import dispatch
+    store,t,service,cid,api=setup(tmp_path)
+    pending=api.propose('max',cid,'max-0-123','reply',{'text':'unsent'},'auth-refusal-pending-1234')
+    old_send=t.send
+    def reject_login(ws,text):
+        frame=json.loads(text)
+        if frame['opcode']==19:
+            t.calls.append(frame)
+            t.frames.append(dict(frame,cmd=3,payload={'error':'login.token','private':'must-not-appear'}))
+        else:old_send(ws,text)
+    t.send=reject_login
+    args={'account_ref':'max','peer_id':'0','provider_message_id':'123'}
+    result=dispatch(store,service,store.owner(),'resolve',args)
+    assert result['error']=='provider_authentication_required'
+    assert result['reconnect_required'] is True and 'MAX' in result['message']
+    assert 'must-not-appear' not in json.dumps(result)
+    cap=api.capabilities('max')
+    assert cap['provider_status']=='authentication_required' and cap['history_mode']=='stored'
+    assert cap['operations']['read']['allowed'] and cap['operations']['history']['allowed']
+    for name in ('reply','edit','react','download','file_upload'):
+        assert cap['operations'][name]['supported'] and not cap['operations'][name]['allowed']
+        assert cap['operations'][name]['reason']=='provider_authentication_required'
+    page=api.history('max',cid,refresh=False)
+    assert page['messages'][0]['text']=='before' and page.get('provider_read_acknowledged',False) is False
+    again=dispatch(store,service,store.owner(),'resolve',args)
+    assert again['error']=='provider_authentication_required'
+    refused=dispatch(store,service,store.owner(),'approve',{'action_id':pending['id'],'expected_hash':pending['hash'],'confirm':True})
+    assert refused['error']=='provider_authentication_required'
+    assert api.get(pending['id'])['status']=='proposed' and api.get(pending['id'])['hash']==pending['hash']
+    assert sum(f['opcode']==19 for f in t.calls)==1
+    assert not any(f['opcode'] in {64,67,92,178} for f in t.calls)
+    store.close()
+
+
 def test_generic_reply_native_anchor_opaque_id_and_durable_projection(tmp_path):
     store,t,service,cid,api=setup(tmp_path)
     a=api.propose('max',cid,'max-0-123','reply',{'text':'fresh reply'},'one-max-reply-123456')

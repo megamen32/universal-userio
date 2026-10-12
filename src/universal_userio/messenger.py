@@ -11,7 +11,7 @@ import json
 import re
 import time
 
-from .contracts import DeliveryNotSubmittedError
+from .contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequiredError
 
 SCHEMA = 'userio.messenger.v1'
 OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
@@ -52,6 +52,7 @@ class Messenger:
         account = self._account(account_ref)
         provider = self._provider(account_ref)
         ops = getattr(provider, 'operations', ()) if provider is not None else ()
+        authentication_required = getattr(provider, 'authentication_required', False) is True
         result = {}
         for name in OPERATIONS:
             # All registered accounts have bounded stored reading; live
@@ -66,12 +67,15 @@ class Messenger:
             elif not self.store.capability_enabled(
                     'download' if name == 'download' else 'read' if name in READ_OPERATIONS else 'send', user_id=self.user):
                 reason = 'user_capability_disabled'
+            elif authentication_required and name not in {'read', 'history'}:
+                reason = 'provider_authentication_required'
             result[name] = {'supported': supported, 'allowed': supported and not reason, 'reason':reason}
             if name=='typing' and supported:
                 result[name]['stop_mode']=getattr(provider,'typing_stop_mode','provider_command')
         return {'schema':SCHEMA, 'account_ref':account_ref, 'channel':account['provider'],
                 'sender_id':getattr(provider, 'sender_id', ''),
-                'history_mode':'provider' if 'history' in ops else 'stored',
+                'history_mode':'provider' if 'history' in ops and not authentication_required else 'stored',
+                'provider_status':'authentication_required' if authentication_required else 'configured' if provider is not None else 'unconfigured',
                 'credential_scope':('messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
@@ -80,6 +84,8 @@ class Messenger:
     def _allow(self, account_ref, operation):
         capability = self.capabilities(account_ref)['operations'][operation]
         if not capability['allowed']:
+            if capability['reason'] == 'provider_authentication_required':
+                raise ProviderAuthenticationRequiredError(self._account(account_ref)['provider'])
             raise PermissionError(capability['reason'])
 
     def _conversation(self, account_ref, conversation_id):
@@ -148,6 +154,8 @@ class Messenger:
         if not isinstance(provider_message_id,str) or not re.fullmatch(r'[1-9][0-9]*',provider_message_id):
             raise ValueError('exact_provider_message_id_required')
         provider=self._provider(account_ref)
+        if getattr(provider, 'authentication_required', False) is True:
+            raise ProviderAuthenticationRequiredError(channel)
         if not callable(getattr(provider,'message',None)) or not callable(getattr(provider,'import_projection',None)):
             raise ValueError('provider_resolve_unavailable')
         channel=self._account(account_ref)['provider']
@@ -174,6 +182,8 @@ class Messenger:
         if type(refresh) is not bool: raise ValueError('refresh_must_be_boolean')
         if refresh:
             provider=self._provider(account_ref)
+            if getattr(provider, 'authentication_required', False) is True:
+                raise ProviderAuthenticationRequiredError(conv['source'])
             if not callable(getattr(provider,'history',None)) or not callable(getattr(provider,'import_projection',None)):
                 raise ValueError('provider_history_unavailable')
             page=provider.history(peer_id=conv['peer_id'],conversation_id=conv['id'],limit=limit,cursor=cursor)
@@ -467,6 +477,9 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
         if op == 'approve': return {'ok':True,'action':api.approve(**arguments)}
         raise KeyError('unknown_messenger_operation')
+    except ProviderAuthenticationRequiredError as error:
+        return {'ok':False,'error':'provider_authentication_required',
+                'message':error.public_message,'reconnect_required':True}
     except (KeyError, ValueError, PermissionError) as error:
         return {'ok':False,'error':str(error).strip("'")}
     except Exception as error:
