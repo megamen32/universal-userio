@@ -37,6 +37,7 @@ class VKPersonalReader:
             raise ValueError("VK не выдал пригодный токен")
         self._token = access_token
         self._opener = opener or urllib.request.build_opener(_RejectRedirect).open
+        self._file_opener = opener or urllib.request.build_opener(_NativeFileRedirect).open
         self._last_call = 0.0
 
     def call(self, method: str, **kwargs: object) -> Any:
@@ -214,7 +215,7 @@ class VKPersonalClient(VKPersonalReader):
         attachments=vk_native_attachments(row)
         if not 0<=index<len(attachments):raise ValueError('Вложение VK не найдено')
         att=attachments[index];_native_file_url(att['src'])
-        with self._opener(urllib.request.Request(att['src']),timeout=20) as response:
+        with self._file_opener(urllib.request.Request(att['src']),timeout=20) as response:
             data=response.read(2*1024*1024+1)
         if len(data)>2*1024*1024:raise ValueError('Вложение VK больше 2 МБ')
         return {**att,'data':data,'size':len(data)}
@@ -256,3 +257,12 @@ def vk_native_attachments(row):
 class _RejectRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise RuntimeError("VK API must not redirect access tokens")
+
+
+class _NativeFileRedirect(urllib.request.HTTPRedirectHandler):
+    """Native download CDN redirects carry no API token or authentication header."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _native_file_url(newurl)
+        if req.get_method()!='GET' or req.has_header('Authorization') or req.data:
+            raise ValueError('VK file redirect requires an unauthenticated native GET')
+        return super().redirect_request(req,fp,code,msg,headers,newurl)

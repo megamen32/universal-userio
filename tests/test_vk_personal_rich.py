@@ -156,3 +156,13 @@ def test_outgoing_vk_keeps_account_author_separate_from_peer_title(app,monkeypat
     assert m.sender_name=='' and m.conversation_title=='Иван собеседник'
     service.receive(m,route_id='vk-personal-read-only',user_id=user,account_ref='vk:42')
     assert store.conversation(cid,user_id=user)['display_name']=='Иван собеседник'
+
+
+def test_native_file_cdn_redirect_does_not_redirect_api_credentials():
+    from universal_userio.channels.vk_personal import _NativeFileRedirect,_RejectRedirect
+    from urllib.request import Request
+    req=Request('https://vk.com/doc42_77')
+    moved=_NativeFileRedirect().redirect_request(req,None,302,'Found',{},'https://ps.vkuser.net/document.txt')
+    assert moved.full_url=='https://ps.vkuser.net/document.txt' and not moved.has_header('Authorization')
+    with pytest.raises(ValueError):_NativeFileRedirect().redirect_request(req,None,302,'Found',{},'https://example.com/foreign')
+    with pytest.raises(RuntimeError):_RejectRedirect().redirect_request(Request('https://api.vk.ru/method/users.get',data=b'access_token=private'),None,302,'Found',{},'https://vk.com/')
