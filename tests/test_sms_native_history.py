@@ -74,3 +74,110 @@ def test_native_sms_keeps_exact_whitespace_and_repairs_prior_trim(tmp_path):
     svc.receive(message,route_id='sms',account_ref=aid)
     assert store.conversation(cid)['messages'][0]['body']=='\noriginal text '
     assert len(store.conversation(cid)['messages'])==1
+
+
+def test_new_phone_incoming_and_sent_arrive_after_initial_import_and_restart(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'db'); svc=UserIOService(store,object(),object())
+    aid='sms:s21'
+    store.register_account(account_id=aid,provider='sms',display_name='S21',can_read=True,can_reply=True,credential_ref='sms-native:default')
+    arrivals=[]
+    svc.add_inbound_listener(lambda user,cid,message:arrivals.append(message.message_id))
+    class Sink:
+        def accounts(self):return [{'id':aid,'provider':'sms','enabled':True,'transport':'native','capabilities':['read']}]
+        def cursor(self,key):return store.user_preference('source_cursor:'+key)
+        def set_cursor(self,key,value):store.set_user_preference('source_cursor:'+key,value)
+        def send_message(self,**kw):
+            svc.receive(InboxMessage(kw['source'],kw['message_id'],kw['sender'],kw['body'],kw['received_at'],direction=kw['direction'],reconciliation=kw['reconciliation'],provider_read=kw['provider_read']),route_id='sms',account_ref=aid)
+    class Gateway:
+        rows=[SmsInboundMessage('sms-native:20','900','old',20)]
+        def history(self,**kw):
+            rows=[m for m in self.rows if int(m.message_id.split(':')[-1])>kw['after_id']]
+            return {'messages':rows,'next_after_id':int(rows[-1].message_id.split(':')[-1]) if rows else kw['after_id'],'snapshot_id':22,'has_more':False}
+    gateway=Gateway()
+    assert poll_once(Sink(),gateway)==1
+    assert arrivals==[]
+    gateway.rows.extend([SmsInboundMessage('sms-native:21','900','new incoming',21),SmsInboundMessage('sms-native:22','900','sent on phone',22,direction='outgoing')])
+    assert poll_once(Sink(),gateway)==2
+    assert arrivals==['sms-native:21']
+    assert poll_once(Sink(),gateway)==0
+    cid=store.conversations(source='sms',account_ref=aid)[0]['id']
+    assert [(m['message_id'],m['direction']) for m in store.conversation(cid)['messages']]==[('sms-native:20','incoming'),('sms-native:21','incoming'),('sms-native:22','outgoing')]
+    assert json.loads(Sink().cursor('sms-native-history:'+aid))['after_id']==22
+
+
+def test_transient_history_or_partial_sink_failure_does_not_advance_cursor(tmp_path):
+    import pytest
+    store=SQLiteUserIOStore(tmp_path/'db'); svc=UserIOService(store,object(),object())
+    aid='sms:s21'
+    store.register_account(account_id=aid,provider='sms',display_name='S21',can_read=True,can_reply=True,credential_ref='sms-native:default')
+    key='sms-native-history:'+aid
+    baseline=json.dumps({'after_id':20,'snapshot_id':0,'initialized':True})
+    store.set_user_preference('source_cursor:'+key,baseline)
+    class Sink:
+        fail_on_second=True
+        def accounts(self):return [{'id':aid,'provider':'sms','enabled':True,'transport':'native','capabilities':['read']}]
+        def cursor(self,key):return store.user_preference('source_cursor:'+key)
+        def set_cursor(self,key,value):store.set_user_preference('source_cursor:'+key,value)
+        def send_message(self,**kw):
+            if self.fail_on_second and kw['message_id']=='sms-native:22':raise OSError('temporary sink failure')
+            svc.receive(InboxMessage(kw['source'],kw['message_id'],kw['sender'],kw['body'],kw['received_at'],direction=kw['direction'],reconciliation=kw['reconciliation']),route_id='sms',account_ref=aid)
+    class Gateway:
+        fail=True
+        def history(self,**kw):
+            if self.fail:raise TimeoutError('temporary phone outage')
+            return {'messages':[SmsInboundMessage('sms-native:21','900','incoming',21),SmsInboundMessage('sms-native:22','900','outgoing',22,direction='outgoing')],'next_after_id':22,'snapshot_id':22,'has_more':False}
+    sink=Sink(); gateway=Gateway()
+    with pytest.raises(TimeoutError):poll_once(sink,gateway)
+    assert sink.cursor(key)==baseline
+    gateway.fail=False
+    with pytest.raises(OSError):poll_once(sink,gateway)
+    assert sink.cursor(key)==baseline
+    sink.fail_on_second=False
+    assert poll_once(sink,gateway)==2
+    cid=store.conversations(source='sms',account_ref=aid)[0]['id']
+    assert len(store.conversation(cid)['messages'])==2
+    assert json.loads(sink.cursor(key))['after_id']==22
+
+
+def test_history_client_rechecks_pending_ids_with_native_deadline():
+    calls=[]
+    class Response:
+        status=200
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def read(self):return json.dumps({'messages':[],'pending_ids':[21],'next_after_id':22,'snapshot_id':22,'has_more':False}).encode()
+    def runner(request,timeout):
+        calls.append((request.full_url,timeout)); return Response()
+    client=AndroidSmsGatewayClient('http://gateway','token',runner=runner)
+    assert client.history(after_id=22,pending_ids=[21])['pending_ids']==[21]
+    assert 'pending_ids=21' in calls[0][0]
+    assert calls[0][1]==65
+
+
+def test_pending_phone_send_does_not_block_new_incoming_or_get_lost(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'db');svc=UserIOService(store,object(),object())
+    aid='sms:s21'; key='sms-native-history:'+aid
+    store.register_account(account_id=aid,provider='sms',display_name='S21',can_read=True,can_reply=True,credential_ref='sms-native:default')
+    store.set_user_preference('source_cursor:'+key,json.dumps({'after_id':20,'snapshot_id':0,'initialized':True}))
+    arrivals=[];svc.add_inbound_listener(lambda user,cid,message:arrivals.append(message.message_id))
+    class Sink:
+        def accounts(self):return [{'id':aid,'provider':'sms','enabled':True,'transport':'native','capabilities':['read']}]
+        def cursor(self,key):return store.user_preference('source_cursor:'+key)
+        def set_cursor(self,key,value):store.set_user_preference('source_cursor:'+key,value)
+        def send_message(self,**kw):svc.receive(InboxMessage(kw['source'],kw['message_id'],kw['sender'],kw['body'],kw['received_at'],direction=kw['direction'],reconciliation=kw['reconciliation']),route_id='sms',account_ref=aid)
+    class Gateway:
+        calls=[]
+        def history(self,**kw):
+            self.calls.append(kw)
+            if kw['after_id']==20:return {'messages':[SmsInboundMessage('sms-native:22','900','new incoming',22)],'pending_ids':[21],'next_after_id':22,'snapshot_id':22,'has_more':False}
+            assert kw['pending_ids']==[21]
+            return {'messages':[SmsInboundMessage('sms-native:21','900','late sent',21,direction='outgoing')],'pending_ids':[],'next_after_id':22,'snapshot_id':22,'has_more':False}
+    gateway=Gateway()
+    assert poll_once(Sink(),gateway)==1
+    state=json.loads(Sink().cursor(key));assert state['after_id']==22 and state['pending_ids']==[21]
+    assert arrivals==['sms-native:22']
+    assert poll_once(Sink(),gateway)==1
+    assert json.loads(Sink().cursor(key))['pending_ids']==[]
+    cid=store.conversations(source='sms',account_ref=aid)[0]['id']
+    assert [(m['message_id'],m['direction']) for m in store.conversation(cid)['messages']]==[('sms-native:21','outgoing'),('sms-native:22','incoming')]
+    assert arrivals==['sms-native:22']

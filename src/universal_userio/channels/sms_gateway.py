@@ -46,9 +46,21 @@ class AndroidSmsGatewayClient:
             if device_id and row_device != device_id: continue
             out.append(SmsInboundMessage(mid,sender,body,ts,row_device))
         return out
-    def history(self, *, after_id: int = 0, snapshot_id: int = 0, limit: int = 100) -> dict[str, Any]:
-        query=urllib.parse.urlencode({'after_id':after_id,'snapshot_id':snapshot_id,'limit':limit})
-        result=self._request('GET','/v1/history?'+query,timeout=35)
+    def history(self, *, after_id: int = 0, snapshot_id: int = 0, limit: int = 100,
+                pending_ids: list[int] | None = None) -> dict[str, Any]:
+        pending_ids = pending_ids or []
+        if len(pending_ids)>100 or any(type(i) is not int or i<=0 for i in pending_ids):
+            raise ValueError('Invalid pending native SMS IDs')
+        params={'after_id':after_id,'snapshot_id':snapshot_id,'limit':limit}
+        if pending_ids:
+            params['pending_ids']=','.join(map(str,pending_ids))
+        query=urllib.parse.urlencode(params)
+        # Snapshot/page/pending recheck share one bounded native request.
+        result=self._request('GET','/v1/history?'+query,timeout=65)
+        pending=result.get('pending_ids',[])
+        if not isinstance(pending,list) or len(pending)>100 or any(type(i) is not int or i<=0 for i in pending):
+            raise RuntimeError('Invalid pending native SMS response')
+        result['pending_ids']=pending
         messages=[]
         for item in result.get('messages',[]):
             if item.get('direction') not in ('incoming','outgoing'):

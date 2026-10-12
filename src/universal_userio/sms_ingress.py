@@ -19,11 +19,11 @@ def poll_once(sink: UserIOIngressClient, gateway: AndroidSmsGatewayClient, *, us
         cursor_key='sms-native-history:'+str(native['id'])
         raw=sink.cursor(cursor_key)
         state=json.loads(raw) if raw else {'after_id':0,'snapshot_id':0,'initialized':False}
-        page=gateway.history(after_id=int(state['after_id']),snapshot_id=int(state.get('snapshot_id',0)))
+        page=gateway.history(after_id=int(state['after_id']),snapshot_id=int(state.get('snapshot_id',0)),pending_ids=state.get('pending_ids',[]))
         for message in page['messages']:
             sink.send_message(source=user_source,account_id=str(native['id']),route_id='sms',message_id=message.message_id,sender=message.sender,body=message.body,received_at=message.received_at,direction=message.direction,reconciliation=not state['initialized'],provider_read=message.provider_read,outbox_receipt=message.outbox_receipt)
             delivered+=1
-        sink.set_cursor(cursor_key,json.dumps({'after_id':int(page['next_after_id']),'snapshot_id':int(page['snapshot_id']) if page['has_more'] else 0,'initialized':bool(state['initialized'] or not page['has_more'])}))
+        sink.set_cursor(cursor_key,json.dumps({'after_id':int(page['next_after_id']),'snapshot_id':int(page['snapshot_id']) if page['has_more'] else 0,'initialized':bool(state['initialized'] or not page['has_more']),'pending_ids':page.get('pending_ids',[])}))
         native_messages=[]
     else:
         native_messages=gateway.inbound()
