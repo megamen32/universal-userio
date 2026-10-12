@@ -54,3 +54,11 @@ no duplicates/samegeneration. Root GET-only, no manualimport/reset/UserIOsend.
 Enabled services survive restart; storedcursor replay/partialfailure tested.
 Gateway phone leaseFREE, previous47dda/import20/webacceptances retained.
 Source focused14PASS6.59s +gateway16PASS; no newfrontend/model build/providerreplay.
+
+Phone onboarding and group authors ACCEPTED: source34c6ba3/gateway703c125, real
+public guide/APK + nonowner normal enrollment/disconnect + Telegram200/MAX25 author
+labels captured. Own89AAB closed/native absent; remote own copies removed, root
+auth restored. Post-protocol gateway closure0e3354c proves deleted binding/401.
+Secretary role/source draft UI, dispatcher401/delay, work-chat allowlist, substantive
+email notifications remain ACTIVE. Attached documentation/short README refresh
+added to same owning task; no broad unpause or historical action replay.
