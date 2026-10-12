@@ -33,6 +33,7 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <a href="/vk/connect/new">ВКонтакте</a>
 <a href="/telegram-qr/new">Telegram</a>
 <a href="/whatsapp-qr/new">WhatsApp</a>
+<a href="/connect-phone">Android · SMS и звонки</a>
 </nav>
 <form id="matrix">
 <h2>Подключить Matrix</h2>
@@ -78,7 +79,7 @@ async function connectedAccounts(){
     title.textContent=label+': '+account.display_name;
     row.append(title);
     const managed=account.id.startsWith('matrix:')||account.id.startsWith('email:')||
-      account.id.startsWith('vk:');
+      account.id.startsWith('vk:')||account.id.startsWith('sms:user-');
     if(managed){
       const remove=document.createElement('button');remove.type='button';remove.textContent='Отключить';
       remove.onclick=async()=>{

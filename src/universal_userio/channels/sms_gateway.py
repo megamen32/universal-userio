@@ -81,7 +81,9 @@ class AndroidSmsGatewayClient:
         if not isinstance(receipt,str) or not receipt: raise RuntimeError('Android SMS Gateway returned no accepted-message receipt')
         if result.get('status') not in {'accepted_by_android','queued_for_device'}: raise RuntimeError('Android SMS Gateway did not accept the message')
         return receipt
-    def _request(self, method: str, path: str, payload: Mapping[str,str] | None=None, *, idempotency_key: str = '', timeout: float = 8) -> dict[str,Any]:
+    def enroll(self, *, user_id: str, device_id: str, account_id: str) -> dict[str, Any]:
+        return self._request('POST','/v1/agent/enroll',{'user_id':user_id,'device_id':device_id,'account_id':account_id},success_statuses=(200,201,202))
+    def _request(self, method: str, path: str, payload: Mapping[str,str] | None=None, *, idempotency_key: str = '', timeout: float = 8, success_statuses: tuple[int,...] = (200,202)) -> dict[str,Any]:
         headers={'Authorization':f'Bearer {self._token}','Content-Type':'application/json'}
         if idempotency_key: headers['Idempotency-Key']=idempotency_key
         req=urllib.request.Request(self._url+path,data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode(),headers=headers,method=method)
@@ -89,7 +91,7 @@ class AndroidSmsGatewayClient:
             with self._runner(req,timeout=timeout) as response: status,raw=int(response.status),response.read()
         except urllib.error.HTTPError as error: raise RuntimeError(f'Android SMS Gateway returned HTTP {error.code}') from error
         except urllib.error.URLError as error: raise AdapterNotSupported(f'Android SMS Gateway is unavailable: {error.reason}') from error
-        if status not in {200,202}: raise RuntimeError(f'Android SMS Gateway returned HTTP {status}')
+        if status not in success_statuses: raise RuntimeError(f'Android SMS Gateway returned HTTP {status}')
         result=json.loads(raw)
         if not isinstance(result,dict): raise RuntimeError('Android SMS Gateway returned invalid JSON')
         return result

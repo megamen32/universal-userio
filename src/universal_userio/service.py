@@ -1187,7 +1187,7 @@ class UserIOService:
                     chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body
                 )
         elif conversation["source"] == "sms":
-            if self.sms_gateway is None or user_id != self.sms_user_id:
+            if self.sms_gateway is None:
                 raise ValueError("Android SMS adapter is not configured for this UserIO user")
             account_ref = str(conversation.get('account_ref') or '')
             if account_ref.startswith('sms:'):
@@ -1197,8 +1197,14 @@ class UserIOService:
                     raise ValueError('SMS device account is unavailable')
                 device_id = ref.removeprefix('sms-agent:') if ref.startswith('sms-agent:') else ''
                 if ref.startswith('sms-agent:') and not device_id: raise ValueError('SMS device identity is missing')
+                if user_id != self.sms_user_id:
+                    prefix='user-'+hashlib.sha256(user_id.encode()).hexdigest()[:16]+'-'
+                    if not device_id.startswith(prefix) or account_ref!='sms:'+device_id:
+                        raise ValueError('SMS device is not bound to this UserIO user')
                 send = partial(self.sms_gateway.send,to=str(conversation['sender']),body=draft.body,idempotency_key=draft.id,**({'device_id':device_id} if device_id else {}))
             else:
+                if user_id != self.sms_user_id:
+                    raise ValueError('Android SMS adapter is not configured for this UserIO user')
                 send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
         elif conversation["source"] == "max":
             if self.max_client is None or user_id != self.max_user_id:

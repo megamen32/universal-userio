@@ -842,6 +842,15 @@ def handler(
                     )
                     self._reply(202, {"accepted": True})
                     return
+                if path == '/v1/sms/device-connect':
+                    if principal.service_account or not service._store.capability_enabled('read',user_id=user_id):
+                        self._reply(403, {'error':'Войдите в свой личный кабинет с правом чтения'})
+                        return
+                    from .phone_setup import connect_phone
+                    result=connect_phone(service,user_id,self._json())
+                    result['server_url']=self._base_url().rstrip('/')+'/sms-gateway'
+                    self._reply(201,result,{'Cache-Control':'no-store'})
+                    return
                 if path == "/v1/vk/native/accounts":
                     # VK ID alone has no message permission; verify both
                     # messages.getConversations and history before upgrading.
@@ -1062,6 +1071,9 @@ def handler(
             if requested_path == "/download":
                 self._html(200, _download_page().encode())
                 return
+            if requested_path == '/connect-phone':
+                if self._static('/connect-phone.html'):
+                    return
             # Only credential-free ZIPs are distributed. Obsolete signed CRX
             # builds contained a baked operator token and must stay unavailable.
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
@@ -1099,6 +1111,13 @@ def handler(
                 return
             path = urlparse(self.path).path
             user_id = principal.user_id
+            if path == '/v1/sms/agent-binding':
+                if not token or not hmac.compare_digest(self.headers.get('Authorization',''),f'Bearer {token}'):
+                    self._reply(403,{'error':'registered gateway required'})
+                    return
+                from .phone_setup import phone_binding
+                self._reply(200,phone_binding(service,query.get('user_id',[''])[0],query.get('account_id',[''])[0]))
+                return
             if path == "/v1/runtime":
                 self._reply(200, public_runtime_identity)
                 return
@@ -1594,6 +1613,14 @@ def _download_page() -> str:
 <main>
   <h1>Universal UserIO — загрузки</h1>
   <p class="lead">Скачайте коннектор, распакуйте и загрузите как unpacked-расширение в Chrome / Chromium / Brave. Для автоматизации используйте Agent Browser с тем же профилем Chrome, где уже выполнен вход.</p>
+
+  <div class="card">
+    <h2>Android — SMS и звонки</h2>
+    <p>SMS Agent APK для Android 8+ работает с root и без него. Привяжите телефон к своему личному кабинету и получите отдельный токен устройства. Для голосовых звонков есть отдельная инструкция GSM2SIP.</p>
+    <a class="btn" href="/connect-phone">Подключить свой телефон</a>
+    <a class="btn secondary" href="/sms-gateway/agent/download" download>Скачать SMS Agent APK</a>
+    <a class="btn secondary" href="/connect-phone#calls">Звонки: GSM2SIP и SIP</a>
+  </div>
 
   <div class="card">
     <h2>Universal UserIO Agent <span class="tag">браузерное расширение</span></h2>

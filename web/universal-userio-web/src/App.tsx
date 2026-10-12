@@ -898,7 +898,8 @@ export function App() {
           {platform === "matrix" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/matrix/connect/new")}><Plus className="size-3.5" /> Добавить Matrix</Button>}
           {platform === "telegram" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/telegram-qr/new")}><Plus className="size-3.5" /> Добавить Telegram</Button>}
           {platform === "vk" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/vk/connect/new")}><Plus className="size-3.5" /> Добавить VK</Button>}
-          {platform === "sms" && <a className="mt-1 block rounded px-2 py-2 text-xs hover:bg-muted" href="/sms-gateway/agent/download" download>＋ Подключить SMS · скачать APK</a>}
+          {platform === "sms" && <a className="mt-1 block rounded px-2 py-2 text-xs hover:bg-muted" href="/connect-phone#sms">＋ Подключить телефон · SMS и APK</a>}
+          {platform === "phone" && <a className="mt-1 block rounded px-2 py-2 text-xs hover:bg-muted" href="/connect-phone#calls">＋ Подключить звонки · инструкция</a>}
           {platform === "whatsapp" && <Button className="mt-1 h-8 w-full justify-start text-xs" variant="ghost" onClick={() => window.location.assign("/whatsapp-qr/new")}><Plus className="size-3.5" /> Добавить WhatsApp</Button>}
         </div>
       })}
