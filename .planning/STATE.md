@@ -38,5 +38,9 @@ historyAPI925ba85 is the complete source, no new Android worker/session.
 Phone physical view has2CDR-verified people with full numbers;9caption updates
 backed up. Human explicitly keeps4unrecoverable September targets in archive
 without number;3synthetic audio records remain archived without invented target.
-Source tests/review/build and native compare accepted; readonly SMS/phone headed
-capture pending finite Mini resource handback. No new SMS/call/model action.
+Source tests/review/build/native compare and real headed SMS/phone capture ACCEPTED.
+Normalauth ONE SMSaccount→nativeincoming/outgoing/receipt-dedup, phone2fullnumbers→
+main200entries/start18/end18→reload/reopen PASS. OnlyownC162 closedtrue/job8a467dd,
+remoteowncopies removed, R38receivedFINISH. Current SMS/number defect cycle closed;
+4unknown numbers remain archived by explicit human choice. No newSMS/call/model.
+Postcapture tracker/state publication preserves previously accepted results.
