@@ -13,6 +13,7 @@ from .contracts import DeliveryNotSubmittedError
 
 
 class MaxMessengerProvider:
+    typing_stop_mode = 'expires_automatically'
     account_ref = 'max'
     operations = frozenset({'reply','edit','react','sticker','file','file_upload','typing','download','history'})
 
@@ -41,7 +42,16 @@ class MaxMessengerProvider:
         if not row or str(row.get('id'))!=provider_message_id:raise ValueError('actual MAX source unavailable')
         chat=self.client.get_chat(peer_id)
         kind='group' if chat.get('type') in {'CHAT','GROUP'} else 'channel' if chat.get('type')=='CHANNEL' else 'direct' if chat.get('type')=='DIALOG' else 'unknown'
-        return self._projection(row,peer_id,conversation_id,kind)
+        projected=self._projection(row,peer_id,conversation_id,kind)
+        try:
+            projected['reaction_info']=self.client.reactions(chat_id=peer_id,message_id=provider_message_id)
+            projected['reaction_readback']={'status':'ready'}
+        except Exception:
+            # An auxiliary reaction read must not make normal text/media
+            # inaccessible. Its unavailable status must not become a pass.
+            projected['reaction_readback']={'status':'unavailable',
+                                           'reason':'provider_reaction_readback_unavailable'}
+        return projected
 
     def import_projection(self, projected, *, peer_id, conversation_id, kind='unknown'):
         s=projected['source'];a=projected['author']

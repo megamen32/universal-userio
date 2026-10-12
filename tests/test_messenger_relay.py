@@ -53,6 +53,26 @@ def case(tmp_path):
     store.close()
 
 
+def test_history_omits_unbindable_author_without_guessing_or_scope_relaxation(case):
+    import copy
+    _,_,_,provider,ref,peer,_,_=case
+    actual=provider.message(peer_id=peer,provider_message_id='77',conversation_id='fixture')
+    absent=copy.deepcopy(actual);absent['author']['id']=''
+    absent['source'].update(provider_message_id='1',message_id=ref+'|'+peer+':1')
+    absent['text']='';absent['media']=[]
+    def opener(req,**kwargs):
+        return Response(json.dumps({'messages':[actual,absent],'next_cursor':'older-1','partial':False}).encode())
+    provider.opener=opener
+    page=provider.history(peer_id=peer,conversation_id='fixture',limit=25)
+    assert len(page['messages'])==1 and page['messages'][0]['author']['id']=='42'
+    assert page['partial'] and page['omitted_count']==1 and page['next_cursor']=='older-1'
+    with pytest.raises(ValueError,match='provider_author_unavailable'):
+        provider._validated_projection(absent,peer,'fixture')
+    absent['source']['account_ref']='telegram:900000101'
+    with pytest.raises(ValueError,match='scope conflict'):
+        provider.history(peer_id=peer,conversation_id='fixture',limit=25)
+
+
 def test_resolve_real_source_sourcebound_hmac_and_actual_voice(case):
     store,service,api,provider,ref,peer,calls,options=case
     resolved=api.resolve(ref,peer,'77');cid=resolved['conversation_id']

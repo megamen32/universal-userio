@@ -59,6 +59,21 @@ def test_effective_caps_never_upgrade_readonly_or_other_account(case, legacy):
     assert not dispatch(case, 'capabilities', {'account_ref':'telegram:900000101'}, legacy=legacy)['ok']
 
 
+def test_reaction_removal_uses_same_approved_path_without_whitespace(case):
+    p, cid = case[2:4]
+    result = dispatch(case, 'propose', {'account_ref':p.account_ref,
+        'conversation_id':cid,'source_message_id':p.account_ref+'|-10042:77',
+        'action':'react','payload':{'emoji':''},'request_id':'remove-reaction-12345678'})
+    assert result['ok'], result
+    action=result['action']
+    sent=dispatch(case,'approve',{'action_id':action['id'],'expected_hash':action['hash'],'confirm':True})
+    assert sent['ok'] and sent['action']['status']=='accepted'
+    assert p.calls[-1]['payload']=={'emoji':''}
+    assert not dispatch(case,'propose',{'account_ref':p.account_ref,
+        'conversation_id':cid,'source_message_id':p.account_ref+'|-10042:77',
+        'action':'react','payload':{'emoji':' '},'request_id':'invalid-reaction-12345678'})['ok']
+
+
 def test_paged_history_exact_source_author_thread_and_opaque_id(case):
     store, service, provider, cid, source = case
     for n in range(78, 81): service.receive(replace(source, message_id=f'-10042:{n}', received_at=n),

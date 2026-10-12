@@ -31,6 +31,21 @@ file additionally allows `caption`; typing`{active}`. Media references must be
 actual messages in this owned conversation. Each provider advertises only
 implemented operations; unsupported file upload is not inferred from media reading.
 
+Reaction`{emoji:""}` removes the current account's reaction through the same
+immutable approval path; whitespace is invalid. MAX uses its native cancel
+command, not an empty emoji added to the message. Fresh MAX resolve includes
+`reaction_info` and `reaction_readback.status`; auxiliary read failure is
+explicitly unavailable and does not hide the message or imply zero reactions.
+MAX SavedMessages uses its actual peer`0`, not a guessed personal contact.
+
+Typing discovery includes `stop_mode`: `provider_command` for explicit native
+stop, or `expires_automatically` for MAX. MAX active=false submits no read ACK
+and relies on the short native indicator expiry; it does not claim immediate
+cancellation. Native/recipient observation is distinct from provider ACK.
+Telegram history omits only identity-unavailable records after scope/origin
+validation and reports partial; direct resolve of such a record still refuses
+to invent an author. Its provider cursor is retained.
+
 Provider IDs are opaque **strings**, including MAX IDs above the JavaScript
 safe-integer range. Do not substitute the SDK `stable_ref_id` hash. Telegram
 canonical message ID is `account_ref + '|' + peer_id + ':' + provider_id`.

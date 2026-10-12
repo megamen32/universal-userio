@@ -39,6 +39,8 @@ OP_EDIT = 67
 OP_GET_MESSAGE = 71
 OP_DISPATCH = 128
 OP_REACTION = 178
+OP_CANCEL_REACTION = 179
+OP_GET_REACTIONS = 180
 OP_TYPING = 65
 OP_FILE_UPLOAD = 87
 OP_FILE_READY = 136
@@ -218,7 +220,7 @@ class MaxClient:
         # A remote idle close can leave websocket.connected locally true.
         # Only these side-effect-free reads may reconnect and repeat once;
         # a lost mutation acknowledgement must remain UNKNOWN.
-        read_only = opcode in {OP_GET_CHATS, OP_CHAT_INFO, OP_GET_HISTORY, OP_GET_MESSAGE, 32}
+        read_only = opcode in {OP_GET_CHATS, OP_CHAT_INFO, OP_GET_HISTORY, OP_GET_MESSAGE, OP_GET_REACTIONS, 32}
         with self._lock:
             for attempt in range(2 if read_only else 1):
                 try:
@@ -402,11 +404,22 @@ class MaxClient:
         # PyMax AddReactionPayload / Opcode.MSG_REACTION =178.
         with self._lock:
             self._fresh_write_connection()
-            result=self._roundtrip(OP_REACTION,{'chatId':int(chat_id),'messageId':int(message_id),
-                'reaction':{'reactionType':'EMOJI','id':emoji}})
-            if not isinstance(result,dict) or not result.get('reactionInfo'):
+            payload={'chatId':int(chat_id),'messageId':int(message_id)}
+            if emoji: payload['reaction']={'reactionType':'EMOJI','id':emoji}
+            result=self._roundtrip(OP_REACTION if emoji else OP_CANCEL_REACTION,payload)
+            if not isinstance(result,dict) or not isinstance(result.get('reactionInfo'),dict):
                 raise RuntimeError('MAX did not return a reaction receipt; do not retry')
             return result
+
+    def reactions(self, *, chat_id: str, message_id: str) -> dict:
+        # Side-effect-free native read; IDs must be numbers on the wire.
+        result=self._roundtrip(OP_GET_REACTIONS,{'chatId':int(chat_id),
+                                              'messageIds':[int(message_id)]})
+        rows=result.get('messagesReactions') if isinstance(result,dict) else None
+        if not isinstance(rows,dict): raise ValueError('MAX reaction readback unavailable')
+        current=rows.get(str(message_id),{})
+        if not isinstance(current,dict): raise ValueError('invalid MAX reaction readback')
+        return current
 
     def typing(self, *, chat_id: str, active: bool) -> dict:
         # MSG_TYPING only starts an expiring indicator. A stop must not

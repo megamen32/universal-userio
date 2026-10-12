@@ -67,6 +67,8 @@ class Messenger:
                     'download' if name == 'download' else 'read' if name in READ_OPERATIONS else 'send', user_id=self.user):
                 reason = 'user_capability_disabled'
             result[name] = {'supported': supported, 'allowed': supported and not reason, 'reason':reason}
+            if name=='typing' and supported:
+                result[name]['stop_mode']=getattr(provider,'typing_stop_mode','provider_command')
         return {'schema':SCHEMA, 'account_ref':account_ref, 'channel':account['provider'],
                 'sender_id':getattr(provider, 'sender_id', ''),
                 'history_mode':'provider' if 'history' in ops else 'stored',
@@ -139,7 +141,9 @@ class Messenger:
 
     def resolve(self, account_ref, peer_id, provider_message_id):
         self._allow(account_ref,'read')
-        if not isinstance(peer_id,str) or not re.fullmatch(r'-?[1-9][0-9]*',peer_id):
+        channel=self._account(account_ref)['provider']
+        if not isinstance(peer_id,str) or not (re.fullmatch(r'-?[1-9][0-9]*',peer_id)
+                                              or peer_id=='0' and channel=='max'):
             raise ValueError('exact_peer_required')
         if not isinstance(provider_message_id,str) or not re.fullmatch(r'[1-9][0-9]*',provider_message_id):
             raise ValueError('exact_provider_message_id_required')
@@ -155,8 +159,11 @@ class Messenger:
         kind=p['source'].get('conversation_kind') or 'unknown'
         provider.import_projection(p,peer_id=peer_id,conversation_id=conversation_id,kind=kind)
         conv=self._conversation(account_ref,conversation_id)
+        projected=self._project(conv,self._message(conv,p['source']['message_id']))
+        if isinstance(p.get('reaction_info'),dict): projected['reaction_info']=p['reaction_info']
+        if isinstance(p.get('reaction_readback'),dict): projected['reaction_readback']=p['reaction_readback']
         return {'account_ref':account_ref,'conversation_id':conversation_id,
-                'message':self._project(conv,self._message(conv,p['source']['message_id'])),
+                'message':projected,
                 'fresh':True,'provider_read_acknowledged':False}
 
     def history(self, account_ref, conversation_id, *, limit=50, cursor='', refresh=False):
@@ -266,7 +273,8 @@ class Messenger:
             if not isinstance(payload.get('text'),str) or not payload['text'].strip() or len(payload['text'])>65536:
                 raise ValueError('text_required')
         if action=='edit' and not isinstance(payload.get('expected_text'),str): raise ValueError('expected_text_required')
-        if action=='react' and (not isinstance(payload.get('emoji'),str) or not 1<=len(payload['emoji'])<=16):
+        if action=='react' and (not isinstance(payload.get('emoji'),str) or len(payload['emoji'])>16
+                               or payload['emoji'] and not payload['emoji'].strip()):
             raise ValueError('emoji_required')
         if action in {'file','sticker'}:
             if not isinstance(payload.get('media_message_id'),str) or type(payload.get('attachment_index')) is not int:

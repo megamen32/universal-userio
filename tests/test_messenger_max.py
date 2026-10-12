@@ -4,6 +4,8 @@ Detects hashed-ID substitution, lost reply anchors, wrong-account mutation and
 same-ID repeated edit/projection regressions on the real provider adapter.
 """
 import json
+import pytest
+import websocket
 
 from universal_userio.channels.max_client import MaxClient
 from universal_userio.contracts import InboxMessage
@@ -29,6 +31,8 @@ class Transport:
         if op==67:
             row=self.rows[p['messageId']];row['text']=p['text'];row['updateTime']+=1000;result={'message':row}
         if op==178:result={'reactionInfo':{'reaction':p['reaction']}}
+        if op==179:result={'reactionInfo':{'totalCount':0}}
+        if op==180:result={'messagesReactions':{str(p['messageIds'][0]):{'totalCount':0}}}
         self.frames.append({'seq':f['seq'],'opcode':op,'cmd':1,'payload':result})
     def recv(self,ws,timeout):return self.frames.pop(0)
 
@@ -72,6 +76,7 @@ def test_generic_same_id_can_edit_again_after_previous_receipt(tmp_path):
 
 def test_bound_reaction_and_typing_never_mark_read(tmp_path):
     store,t,service,cid,api=setup(tmp_path)
+    assert api.capabilities('max')['operations']['typing']['stop_mode']=='expires_automatically'
     for action,payload in [('react',{'emoji':'👍'}),('typing',{'active':True}),('typing',{'active':False})]:
         a=api.propose(
             'max',cid,'max-0-123',action,payload,'max-rich-123456789-'+action+str(payload.get('active','reaction')))
@@ -82,6 +87,41 @@ def test_bound_reaction_and_typing_never_mark_read(tmp_path):
     assert not any(f['opcode']==92 for f in t.calls)
     store.close()
 
+
+
+def test_remove_reaction_uses_native_cancel_without_read_ack(tmp_path):
+    store,t,service,cid,api=setup(tmp_path)
+    action=api.propose('max',cid,'max-0-123','react',{'emoji':''},'max-remove-reaction-123456')
+    result=api.approve(action['id'],action['hash'],True)
+    assert result['status']=='accepted'
+    cancelled=[f for f in t.calls if f['opcode']==179]
+    assert len(cancelled)==1 and cancelled[0]['payload']=={'chatId':0,'messageId':123}
+    assert not any(f['opcode'] in {92,178} for f in t.calls)
+    store.close()
+
+
+def test_saved_messages_resolve_and_reaction_readback_use_native_zero_peer(tmp_path):
+    store,t,service,cid,api=setup(tmp_path)
+    resolved=api.resolve('max','0','123')
+    assert resolved['conversation_id']==cid
+    assert resolved['message']['reaction_info']=={'totalCount':0}
+    read=next(f for f in t.calls if f['opcode']==180)
+    assert read['payload']=={'chatId':0,'messageIds':[123]}
+    assert not any(f['opcode'] in {64,65,67,92,178,179} for f in t.calls)
+    store.close()
+
+
+@pytest.mark.parametrize('error',[ValueError('auxiliary read unavailable'),
+                                  websocket.WebSocketConnectionClosedException('auxiliary closed')])
+def test_auxiliary_reaction_read_failure_does_not_break_normal_source(tmp_path,error):
+    store,t,service,cid,api=setup(tmp_path)
+    def fail(**kwargs):raise error
+    service.max_client.reactions=fail
+    resolved=api.resolve('max','0','123')
+    assert resolved['message']['text']=='before'
+    assert resolved['message']['reaction_readback']['status']=='unavailable'
+    assert 'reaction_info' not in resolved['message']
+    store.close()
 
 
 def test_max_file_reference_has_stable_native_identity_and_no_upload(tmp_path):

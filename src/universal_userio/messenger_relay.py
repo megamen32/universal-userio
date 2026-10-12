@@ -82,8 +82,18 @@ class RelayMessengerProvider:
             'peer_id':peer_id,'conversation_id':conversation_id,'limit':limit,'cursor':cursor})
         rows=result.get('messages')
         if not isinstance(rows,list) or len(rows)>limit: raise ValueError('invalid provider history')
-        return {'messages':[self._validated_projection(m,peer_id,conversation_id) for m in rows],
-                'next_cursor':str(result.get('next_cursor') or ''),'partial':result.get('partial') is not False}
+        projected=[];omitted=0
+        for row in rows:
+            try: projected.append(self._validated_projection(row,peer_id,conversation_id))
+            except ValueError as error:
+                # A native record without a participant (e.g. a service
+                # message) cannot become an actionable user source. Keep
+                # normal history readable without guessing its author.
+                if str(error)!='provider_author_unavailable': raise
+                omitted+=1
+        return {'messages':projected,'omitted_count':omitted,
+                'next_cursor':str(result.get('next_cursor') or ''),
+                'partial':bool(omitted) or result.get('partial') is not False}
 
     def _validated_projection(self, projected, peer_id, conversation_id):
         if not isinstance(projected,dict): raise ValueError('actual provider source missing')
@@ -93,10 +103,11 @@ class RelayMessengerProvider:
         raw_id=s.get('provider_message_id')
         if (not isinstance(raw_id,str) or not raw_id.isdigit()
                 or s.get('message_id')!=self.account_ref+'|'+peer_id+':'+raw_id
-                or s.get('direction') not in {'incoming','outgoing'} or not a.get('id')
+                or s.get('direction') not in {'incoming','outgoing'}
                 or not isinstance(projected.get('text'),str)
                 or type(projected.get('at')) not in (int,float) or projected['at']<=0):
             raise ValueError('invalid provider projection origin')
+        if not a.get('id'): raise ValueError('provider_author_unavailable')
         return projected
 
     def import_projection(self, projected, *, peer_id, conversation_id, kind='group'):
