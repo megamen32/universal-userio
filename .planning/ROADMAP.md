@@ -4,7 +4,7 @@
 
 - ✅ **v1.0 MAX personal account** — Phases 1–3, accepted 2026-10-11.
 - ✅ **v1.1 Human web send, MAX editing and phone conversations** — Phases 4–7, accepted 2026-10-12.
-- 🚧 **v1.2 Reliable everyday communication** — Phases 8–11, active.
+- ✅ **v1.2 Reliable everyday communication** — Phases 8–11, delivered 2026-10-12.
 
 <details><summary>Accepted v1.0/v1.1 history</summary>
 

@@ -91,20 +91,20 @@ Phone onboarding and group authors ACCEPTED: source34c6ba3/gateway703c125, real
 public guide/APK + nonowner normal enrollment/disconnect + Telegram200/MAX25 author
 labels captured. Own89AAB closed/native absent; remote own copies removed, root
 auth restored. Post-protocol gateway closure0e3354c proves deleted binding/401.
-Secretary role/source draft UI, dispatcher401/delay, work-chat allowlist, substantive
-email notifications remain ACTIVE. Attached documentation/short README refresh
+Historical checkpoint before phases9–11 acceptance: secretary role/source draft UI, dispatcher401/delay, work-chat allowlist and substantive
+email notifications were still active; they are now accepted below. Attached documentation/short README refresh
 added to same owning task; no broad unpause or historical action replay.
 
 ### Quick Tasks Completed
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
-|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO installed live read/refused-write/revoke PASS; Exmanager native callback owned Root|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
+|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager scoped resource installed/accounts PASS, conversation selection incomplete|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
 |261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
 
 Documentation accepted through actual headed BFFE consumer/owncleanup. Core
 1727408/files verified. Existing explicit AgentCall ingress stop predates docs;
-fullsystemd not claimed/Root24humanStop preserved. Next: secretary roles/latest
+fullsystemd not claimed/Root24humanStop preserved. The following next-step list is historical and superseded by final acceptance: secretary roles/latest
 anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clarity.
 
 ## Historical checkpoint (superseded by final acceptance below)
@@ -138,3 +138,28 @@ numbers stay archived by explicit user decision; cancelled delete-six remains
 cancelled. Source, installed identity, actual provider and user-surface proofs
 are linked from phases10/11 summaries. Planning files are retained; no new
 project, milestone, browser, phone operation or historical intent was created.
+
+## GSD Progress reconciliation — 2026-10-12
+
+Original progress queries confirm current milestone phases8–11 complete (4/4),
+15 requirements accepted, no queued GSD todos, pause or reported UAT debt.
+The bar8/8 includes four retained historical plan directories; current milestone
+is4/4. Milestone header was corrected from active to delivered.
+
+New quick261012-hj3 is separate from v1.2: read-only UserIO implementation and
+live read/refused-write/revoke passed. Exmanager outcome
+`/home/roomhacker/agents-projects/exmanager/.agents/tasks/outcomes/20261012-userio-readonly-activation.json`
+now proves encrypted app-specific readonly resource installed (HTTP200), no
+parent credential bound, no core restart/send/mark-read, and actual native
+accounts MAX+Telegram900000101 read. Its conversation consumer is incomplete:
+`owned telegram conversation not found in bounded page`. Exmanager owner
+01a11197 must resolve bounded conversation selection and capture actual MAX and
+Telegram conversation reads. This is not a current UserIO auth401 or a completed
+Exmanager consumer. Foreign Exmanager WIP is preserved.
+
+Remaining verification boundaries: positive live incoming Yandex notification
+has not been proved (controlled SMTP delivery rejected before inbox); exact
+history viewport-anchor stability has not been proved. Four old unknown phone
+numbers stay archived by explicit user choice; delete-six is cancelled, not a
+remaining task. Formal milestone archival was not performed, and no new
+milestone or implementation was started by this progress request.
