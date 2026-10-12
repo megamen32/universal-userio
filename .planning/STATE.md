@@ -99,7 +99,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
-|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager scoped resource installed/accounts PASS, conversation selection incomplete|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
+|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager scoped resource/accounts/Telegram10 PASS; MAX validator fix build/install pending|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
 |261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
 
 Documentation accepted through actual headed BFFE consumer/owncleanup. Core
@@ -151,11 +151,13 @@ live read/refused-write/revoke passed. Exmanager outcome
 `/home/roomhacker/agents-projects/exmanager/.agents/tasks/outcomes/20261012-userio-readonly-activation.json`
 now proves encrypted app-specific readonly resource installed (HTTP200), no
 parent credential bound, no core restart/send/mark-read, and actual native
-accounts MAX+Telegram900000101 read. Its conversation consumer is incomplete:
-`owned telegram conversation not found in bounded page`. Exmanager owner
-01a11197 must resolve bounded conversation selection and capture actual MAX and
-Telegram conversation reads. This is not a current UserIO auth401 or a completed
-Exmanager consumer. Foreign Exmanager WIP is preserved.
+accounts MAX+Telegram900000101 read. The initial bounded-page observer failure
+was resolved by its owner. Latest native Telegram read returns10 real messages.
+Remaining MAX read was refused inside Exmanager validUserIOChannel before
+reaching UserIO; Root01a11197 reproduced/fixed its absent max value and is running
+its bounded SDK build/install. Native MAX conversation capture remains pending.
+No new issuance/resource replacement or UserIO repair is needed. This is not a
+current UserIO auth401 or a completed Exmanager consumer. Foreign WIP preserved.
 
 Remaining verification boundaries: positive live incoming Yandex notification
 has not been proved (controlled SMTP delivery rejected before inbox); exact

@@ -17,3 +17,5 @@ UserIO-owned route acceptance passed. Exmanager Root owns final named token issu
 ## Cross-project progress update
 
 Read-only activation outcome in Exmanager proves normal encrypted resource update200 and native owned MAX/Telegram account enumeration. No parent credential bound to app, no sends/mark-read/core restart. Native conversation verification remains incomplete because its bounded page selector did not find the owned Telegram conversation. Root01a11197 owns that observer/consumer step; UserIO source and runtime remain unchanged. Do not label this unresolved selection as a UserIO401 or repeat issuance/canaries.
+
+Latest Exmanager owner result supersedes initial selection failure: native Telegram returned10 real messages; MAX was locally rejected by its validUserIOChannel enum before UserIO. Owner reproduced RED and repaired enum, bounded SDK build/install in progress. Final native MAX read remains pending; no repeat issuance or UserIO changes required.
