@@ -64,3 +64,29 @@ def test_group_and_foreign_accounts_never_supply_a_private_sender_identity(tmp_p
     assert service._triage_actor_context({**event, "conversation_kind": "group"}, store._user(None)) is None
     assert service._triage_actor_context({**event, "direction": "outgoing"}, store._user(None)) is None
     assert service._triage_actor_context({**event, "peer_id": "100"}, store._user(None)) is None
+
+
+def test_max_automatic_triage_resolves_registered_owner_and_current_contact(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'max.sqlite3')
+    store.register_account(account_id='max',provider='max',display_name='Никита',can_read=True,can_reply=True,credential_ref='test-only')
+    generator=Generator();service=UserIOService(store,generator,Outbox())
+    cid,_=service.receive(InboxMessage('max','current','Дарья','Спасибо!',1791789000,
+                                     peer_id='200',conversation_kind='direct'),route_id='test',account_ref='max')
+    seq=store.workspace_events()['events'][0]['seq']
+    service.triage_workspace_event(event_seq=seq,request_id='max-actor-test')
+    assert generator.input['actor_context']['receiver_display_name']=='Никита'
+    assert generator.input['actor_context']['sender_display_name']=='Дарья'
+
+
+def test_mail_automatic_triage_resolves_exact_registered_himalaya_alias(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'mail.sqlite3')
+    store.register_account(account_id='gmail-owner',provider='gmail',display_name='Никита · owner@example.test',
+                           can_read=True,can_reply=True,credential_ref='himalaya:owner')
+    generator=Generator();service=UserIOService(store,generator,Outbox())
+    cid,_=service.receive(InboxMessage('gmail:owner','mail-1','partner@example.test','Письмо',1791789000,
+                                     conversation_kind='direct'),route_id='gmail:owner',account_ref='owner')
+    seq=store.workspace_events()['events'][0]['seq']
+    service.triage_workspace_event(event_seq=seq,request_id='mail-actor-test')
+    actors=generator.input['actor_context']
+    assert actors['receiver_account_id']=='gmail-owner'
+    assert actors['sender_display_name']=='partner@example.test'

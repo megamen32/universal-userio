@@ -92,3 +92,15 @@ Web viewing defaults to automatic reading; the persistent per-user “Режим
 setting disables it. API/MCP history fetching and background subscription remain
 read-only. MAX/SMS/phone currently record reading locally in UserIO; no unsupported
 external receipt is implied.
+
+## Account-bound folder metadata
+
+Protected `GET /folders?account_id=telegram:<id>&folder_ids=10,15` reads only the
+selected existing connected account, verifies its actual identity and returns
+folder title, marked include/pinned/excluded peer IDs, category flags and
+mute/read/archive exclusions. It never sends, marks read, imports sessions or
+starts another client. These are filter rules, not a guessed complete folder
+membership; apply all flags and exclusions before changing UserIO chat policy.
+Telegram Helper's older folder summary exposes only counts, which is insufficient
+for this selection. Original source-first TL/Android/tweb/installed GramJS gate
+and focused exact-account metadata checks are retained with the owning release.

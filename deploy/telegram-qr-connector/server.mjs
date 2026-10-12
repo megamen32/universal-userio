@@ -16,6 +16,7 @@ import { publicIngressState } from "./ingress-state.mjs";
 import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
+import { readDialogFolders } from './dialog-folders.mjs';
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -955,6 +956,22 @@ http.createServer(async (req, res) => {
       const result=await acknowledgeRead({slots:liveSlots,Api,payload:await readJsonBody(req)});
       res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify(result));
     }catch(error){res.writeHead(400,{'content-type':'application/json'});return res.end(JSON.stringify({error:String(error.message||error)}));}
+  }
+  if (url.pathname === "/folders" && req.method === "GET") {
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== `Bearer ${process.env.USERIO_API_TOKEN}`) {
+      res.writeHead(401, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"unauthorized"}));
+    }
+    try {
+      const result=await readDialogFolders({slots:liveSlots,Api,
+        accountId:url.searchParams.get("account_id"),
+        folderIds:(url.searchParams.get("folder_ids")||"").split(",").map(Number)});
+      res.writeHead(200,{"content-type":"application/json"});
+      return res.end(JSON.stringify(result));
+    } catch(error) {
+      res.writeHead(400,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:String(error.message||"folder metadata unavailable")}));
+    }
   }
   if (url.pathname === "/reconcile" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;

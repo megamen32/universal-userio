@@ -8,6 +8,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -183,6 +184,7 @@ class OpenAICompatibleDraftGenerator:
             "history": messages,
             "max_drafts": max_drafts,
             "direction": latest_message.direction,
+            "received_at_utc": datetime.fromtimestamp(latest_message.received_at, timezone.utc).isoformat(),
             "actor_context": actor_context,
             "cached_summary": str(cached_summary or "")[:12000] or None,
         }
@@ -209,6 +211,12 @@ class OpenAICompatibleDraftGenerator:
             "An incoming message from a different registered account is not a self-sent message, "
             "even if an old contact label resembles the owner's name. Use the resolved sender "
             "label for identity; still judge importance normally and do not automatically notify.\n"
+            "receiver_display_name is the owner you write for; sender_display_name is the interlocutor. "
+            "Outgoing history contains the owner's words, incoming history the interlocutor's. "
+            "Do not turn an old problem described by the owner into the interlocutor's request. "
+            "A text-free sticker is a reaction, not a new troubleshooting request. "
+            "Current message/direction and current attached pixels take precedence over mistakes "
+            "in an older cached summary. Resolve relative dates using received_at_utc; never invent a year.\n"
             "owner_messages_after_current, when present, are replies the owner already sent after "
             "the selected incoming message. Assess the current need for action using those replies; "
             "do not propose repeating an answer already sent. A reply alone is not proof of read status.\n"

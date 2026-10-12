@@ -269,6 +269,26 @@ class UserIOService:
 
     def _triage_actor_context(self, event: dict[str, object], user_id: str) -> dict[str, str] | None:
         """Resolve a direct peer only from this user's registered account IDs."""
+        if event.get("source") != "telegram" and event.get("direction") == "incoming":
+            conversation = self._store.conversation(str(event.get("conversation_id") or ""), user_id=user_id) or {}
+            account_ref = str(event.get("account_ref") or "")
+            accounts = self._store.accounts(user_id=user_id)
+            matches = [account for account in accounts if account["id"] == account_ref
+                       or (str(event.get("source") or "").split(":", 1)[0] in {"gmail", "email"}
+                           and account.get("credential_ref") == "himalaya:" + account_ref)]
+            if len(matches) != 1:
+                return None
+            sender = str(conversation.get("display_name") or event.get("sender") or "")
+            if event.get("conversation_kind") in {"group", "channel"}:
+                current = next((message for message in conversation.get("messages", [])
+                                if message.get("message_id") == event.get("message_id")), {})
+                sender = str(current.get("sender_name") or event.get("sender") or "")
+            return {
+                "sender_display_name": sender[:320],
+                "receiver_account_id": str(matches[0]["id"]),
+                "receiver_display_name": str(matches[0]["display_name"])[:320],
+                "conversation_kind": str(event.get("conversation_kind") or ""),
+            }
         if (event.get("source") != "telegram" or event.get("direction") != "incoming"
                 or event.get("conversation_kind") != "direct"):
             return None
