@@ -203,9 +203,9 @@ experimental user-facing messages scope request has been disabled. The old
 POST /v1/vk/native/accounts endpoint now returns HTTP 409 without accepting
 a token or registering any account. This is an intentional fail-closed boundary.
 
-The proof-of-concept VK API reader and shared UserAccountPoller code remain
-unused unless a separately supported and verified authorization transport is
-provided. A future MAX-like connector would need a consented VK website session
+The proof-of-concept VK API reader, one-account enrollment, polling
+and simulated tests have been moved into VIP/vk-messages-api/. None are loaded
+by the active UserIO runtime or added to its account poller. A future MAX-like connector would need a consented VK website session
 or an officially approved messaging integration, independently validated for
 history, live updates, and read-state safety. Do not ask users to hand over
 session cookies, VK ID tokens or passwords in chat. Verify account identity,
