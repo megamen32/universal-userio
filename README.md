@@ -47,5 +47,5 @@ Authorize channels separately; installation does not connect them.
 
 Provider capabilities differ. Personal MAX/WhatsApp bridges are unofficial; IMAP
 and user-linked Matrix currently connect for reading. Personal VK Messenger now
-connects for server-side reading after one-time authorization; sending is pending.
+connects for server-side reading and text sending after one-time authorization.
 [See supported paths and limitations](docs/guide/channels.md).
