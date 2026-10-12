@@ -1341,10 +1341,15 @@ def handler(
                     limit = max(1, min(int(query.get("limit", ["100"])[0]), 500))
                 except ValueError:
                     limit = 100
-                self._reply(200, {"results": search_conversations(
+                results = search_conversations(
                     service._store, text, source=source, account_ref=account_ref,
                     limit=limit, user_id=user_id,
-                )})
+                )
+                for entry in results:
+                    entry["analysis_policy"] = service._store.evaluate_workspace_chat(
+                        conversation_id=str(entry["id"]), user_id=user_id,
+                    )
+                self._reply(200, {"results": results})
                 return
             if path == "/v1/drafts/pending":
                 if not service._store.capability_enabled("read", user_id=user_id):

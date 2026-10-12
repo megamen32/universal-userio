@@ -95,3 +95,7 @@ def test_sidebar_policy_metadata_matches_effective_chat_rules(policy_http):
     assert policies[ids["max"]]["conversation_kind"] == "group"
     assert policies[ids["telegram"]]["allowed"] is False
     assert policies[ids["gmail"]]["conversation_kind"] == "direct"
+    status, search = request("GET", "/v1/search?q=retained")
+    assert status == 200
+    search_policies = {row["id"]: row["analysis_policy"] for row in search["results"]}
+    assert search_policies == policies
