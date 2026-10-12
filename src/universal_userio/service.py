@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -269,8 +270,10 @@ class UserIOService:
 
     def _triage_actor_context(self, event: dict[str, object], user_id: str) -> dict[str, str] | None:
         """Resolve a direct peer only from this user's registered account IDs."""
-        if event.get("source") != "telegram" and event.get("direction") == "incoming":
+        if (event.get("source") != "telegram" or event.get("conversation_kind") in {"group", "channel"}) and event.get("direction") == "incoming":
             conversation = self._store.conversation(str(event.get("conversation_id") or ""), user_id=user_id) or {}
+            if not conversation:
+                return None
             account_ref = str(event.get("account_ref") or "")
             accounts = self._store.accounts(user_id=user_id)
             matches = [account for account in accounts if account["id"] == account_ref
@@ -283,6 +286,22 @@ class UserIOService:
                 current = next((message for message in conversation.get("messages", [])
                                 if message.get("message_id") == event.get("message_id")), {})
                 sender = str(current.get("sender_name") or event.get("sender") or "")
+                for attachment in self._store.attachments_for_message(
+                    source=str(event.get("source") or ""), message_id=str(event.get("message_id") or ""), user_id=user_id,
+                ):
+                    if attachment.get("kind") != "telegram_routing":
+                        continue
+                    try:
+                        author = json.loads(str(attachment.get("provider_ref") or "{}"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(author, dict):
+                        continue
+                    name = str(author.get("author_name") or "")
+                    if name and (author.get("author_resolved") is True or name != author.get("group_name")):
+                        sender = name
+                    elif author.get("author_username"):
+                        sender = "@" + str(author["author_username"]).lstrip("@")
             return {
                 "sender_display_name": sender[:320],
                 "receiver_account_id": str(matches[0]["id"]),

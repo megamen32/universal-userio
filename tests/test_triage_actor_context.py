@@ -90,3 +90,22 @@ def test_mail_automatic_triage_resolves_exact_registered_himalaya_alias(tmp_path
     actors=generator.input['actor_context']
     assert actors['receiver_account_id']=='gmail-owner'
     assert actors['sender_display_name']=='partner@example.test'
+
+
+def test_telegram_group_triage_uses_current_author_not_group_as_person(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'group-triage.sqlite3')
+    register(store,'telegram:100','Никита')
+    generator=Generator();service=UserIOService(store,generator,Outbox())
+    import json
+    routing={'kind':'telegram_routing','provider_ref':json.dumps({'group_name':'Рабочая группа','author_name':'Дарья Петрова','author_resolved':True,'author_id':'900'})}
+    cid,_=service.receive(InboxMessage('telegram','group-9','900','Проверьте договор',1791789000,
+                                     sender_name='Дарья Петрова',attachments=(routing,),peer_id='-1007',conversation_kind='group',
+                                     conversation_title='Рабочая группа'),route_id='telegram',account_ref='telegram:100')
+    store.set_workspace_chat_rule(conversation_id=cid,action='allow')
+    service.receive(InboxMessage('telegram','group-10','900','Уточняю срок',1791789001,
+                                 sender_name='Дарья Петрова',attachments=(routing,),peer_id='-1007',conversation_kind='group',
+                                 conversation_title='Рабочая группа'),route_id='telegram',account_ref='telegram:100')
+    seq=store.workspace_events()['events'][0]['seq']
+    service.triage_workspace_event(event_seq=seq,request_id='group-actor-test')
+    assert generator.input['actor_context']['sender_display_name']=='Дарья Петрова'
+    assert generator.input['actor_context']['receiver_display_name']=='Никита'

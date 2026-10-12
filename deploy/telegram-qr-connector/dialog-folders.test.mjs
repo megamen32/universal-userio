@@ -20,3 +20,12 @@ test('missing/wrong connected identity refuses before folder RPC',async()=>{
  await assert.rejects(readDialogFolders({slots,Api,accountId:'telegram:540',folderIds:[15]}));
  assert.equal(called,0);
 });
+test('resolves only explicit nonexcluded peers through same client and emits identity metadata',async()=>{
+ let batch;
+ const client={getMe:async()=>({id:540}),getPeerId:async p=>String(p.id),
+ invoke:async()=>({filters:[{id:15,title:{text:'Work'},includePeers:[{id:'188'},{id:'999'}],pinnedPeers:[],excludePeers:[{id:'999'}]}]}),
+ getEntity:async peers=>{batch=peers;return [{firstName:'Олег',lastName:'Карпов',phone:'PRIVATE',accessHash:'PRIVATE'}];}};
+ const result=await readDialogFolders({slots:new Map([['one',{accountId:'telegram:540',client}]]),Api,accountId:'telegram:540',folderIds:[15],resolve:true});
+ assert.deepEqual(batch,[{id:'188'}]);assert.deepEqual(result.dialogs,[{peer_id:'188',name:'Олег Карпов',conversation_kind:'direct'}]);
+ assert.ok(!JSON.stringify(result).includes('PRIVATE'));
+});

@@ -965,7 +965,8 @@ http.createServer(async (req, res) => {
     try {
       const result=await readDialogFolders({slots:liveSlots,Api,
         accountId:url.searchParams.get("account_id"),
-        folderIds:(url.searchParams.get("folder_ids")||"").split(",").map(Number)});
+        folderIds:(url.searchParams.get("folder_ids")||"").split(",").map(Number),
+        resolve:url.searchParams.get("resolve")==="1"});
       res.writeHead(200,{"content-type":"application/json"});
       return res.end(JSON.stringify(result));
     } catch(error) {

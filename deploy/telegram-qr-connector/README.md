@@ -104,3 +104,9 @@ membership; apply all flags and exclusions before changing UserIO chat policy.
 Telegram Helper's older folder summary exposes only counts, which is insufficient
 for this selection. Original source-first TL/Android/tweb/installed GramJS gate
 and focused exact-account metadata checks are retained with the owning release.
+`resolve=1` additionally batches only explicitly included/pinned, nonexcluded
+InputPeers through the same client. It returns marked peer ID, name and kind,
+without phone/access-hash/session values or message text. Category flags remain
+separate; this option does not silently turn an automatic “all groups” filter
+into a UserIO allow-all policy. Missing known chats can then use the existing
+exact-account `/reconcile` history route; historical ingestion remains silent.
