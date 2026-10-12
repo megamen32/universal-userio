@@ -23,12 +23,23 @@ def connect_phone(service: Any, user_id: str, payload: dict[str, Any]) -> dict[s
         raise ValueError('Укажите название телефона')
     if service.sms_gateway is None:
         raise ValueError('Подключение Android временно недоступно')
-    # The gateway issues a phone-only credential, never a UserIO/operator token.
-    issued = service.sms_gateway.enroll(user_id=user_id, device_id=device_id, account_id=account_id)
-    if issued.get('gateway_device_id') != alias or issued.get('account_id') != account_id:
-        raise ValueError('Шлюз вернул другую привязку телефона')
+    previous = next((a for a in service._store.accounts(user_id=user_id) if a['id']==account_id), None)
+    # The gateway verifies this authoritative binding before issuing a token.
     service._store.register_account(account_id=account_id, provider='sms', display_name='SMS · '+label,
         can_read=True, can_reply=True, credential_ref='sms-agent:'+alias, enabled=True, user_id=user_id)
+    try:
+        issued = service.sms_gateway.enroll(user_id=user_id, device_id=device_id, account_id=account_id)
+        if issued.get('gateway_device_id') != alias or issued.get('account_id') != account_id:
+            raise ValueError('Шлюз вернул другую привязку телефона')
+    except Exception:
+        if previous is None:
+            service._store.delete_account(account_id, user_id=user_id)
+        else:
+            service._store.register_account(account_id=account_id, provider=previous['provider'],
+                display_name=previous['display_name'], can_read='read' in previous['capabilities'],
+                can_reply='reply' in previous['capabilities'], credential_ref=previous['credential_ref'],
+                enabled=previous['enabled'], user_id=user_id)
+        raise
     service._store.bind_channel_route(user_id=user_id, source='sms', route_id='sms')
     return {'account_id':account_id, 'device_id':device_id, 'device_token':issued['device_token'],
             'token_returned_once':True, 'display_name':'SMS · '+label}

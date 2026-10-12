@@ -55,6 +55,26 @@ def test_other_user_cannot_select_operator_native_phone(tmp_path):
     assert gw.sends==[]
 
 
+def test_first_phone_enrollment_has_real_binding_and_failure_restores_metadata(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'db');gw=Gateway()
+    svc=UserIOService(store,object(),object(),sms_gateway=gw)
+    user,_=store.create_user('first-phone','password-123')
+    def enroll(**kw):
+        assert phone_binding(svc,kw['user_id'],kw['account_id'])['registered']
+        raise ValueError('gateway unavailable')
+    gw.enroll=enroll
+    with pytest.raises(ValueError,match='gateway unavailable'):
+        connect_phone(svc,user.user_id,{'device_id':'android-first'})
+    assert store.accounts(user_id=user.user_id)==[]
+    account='sms:'+phone_device_alias(user.user_id,'android-first')
+    store.register_account(account_id=account,provider='sms',display_name='Original',
+        can_read=True,can_reply=False,credential_ref='sms-agent:'+account[4:],enabled=False,user_id=user.user_id)
+    before=store.accounts(user_id=user.user_id)
+    with pytest.raises(ValueError,match='gateway unavailable'):
+        connect_phone(svc,user.user_id,{'device_id':'android-first','display_name':'changed'})
+    assert store.accounts(user_id=user.user_id)==before
+
+
 def test_enroll_client_accepts_created_response_and_exact_subject():
     calls=[]
     class Response:
