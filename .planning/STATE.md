@@ -128,8 +128,9 @@ bots retain their separate restriction. Owner chose task notifications: threshol
 0.85→0.5, confidence unchanged. Existing hard exclusions/other accounts retained.
 Maintained dispatcher credential/lane/idempotency repaired without cursor reset.
 
-Yandex SMTP rejected the controlled mail before inbox delivery; Gmail delivery
-was positively verified. Stable native UID head-first polling now avoids the
+The initial Yandex control was rejected before delivery; later owner-authorized
+Yandex Inbox delivery and corrected notifications are accepted below. Gmail
+delivery was also positively verified. Stable native UID head-first polling now avoids the
 large-list timeout and preserves dedup. Maintained Matrix gap catch-up installed
 and verified: messages88→124/cursor advanced, no new authorization or send.
 
@@ -159,9 +160,9 @@ its bounded SDK build/install. Native MAX conversation capture remains pending.
 No new issuance/resource replacement or UserIO repair is needed. This is not a
 current UserIO auth401 or a completed Exmanager consumer. Foreign WIP preserved.
 
-Remaining verification boundaries: positive live incoming Yandex notification
-has not been proved (controlled SMTP delivery rejected before inbox); exact
-history viewport-anchor stability has not been proved. Four old unknown phone
+Remaining verification boundary: exact history viewport-anchor stability has
+not been proved. Positive Yandex notification was subsequently accepted below;
+the earlier SMTP rejection remains historical. Four old unknown phone
 numbers stay archived by explicit user choice; delete-six is cancelled, not a
 remaining task. Formal milestone archival was not performed, and no new
 milestone or implementation was started by this progress request.
