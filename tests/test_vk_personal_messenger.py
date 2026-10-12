@@ -183,7 +183,7 @@ def test_browser_oauth_login_ui_is_scoped_to_user_and_does_not_ask_password():
     body=(Path(__file__).parents[1]/"src/universal_userio/static/connect-accounts.html").read_text()
     assert 'data-open="vk-personal"' in body
     assert 'id="vk-personal"' in body
-    assert "client_id=51453752" in body
+    assert "https://id.vk.ru/auth?app_id=51453752" in body
     assert "/v1/vk/personal/accounts" in body
     assert "VK Мессенджер" in body
     assert "authorization" in body
