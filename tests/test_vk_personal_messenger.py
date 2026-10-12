@@ -168,7 +168,7 @@ def test_personal_api_requires_owner_and_real_permission(app,monkeypatch):
         status,created=post(owner_token)
         assert status==201
         assert created["id"]=="vk:42"
-        assert created["mode"]=="vk_personal_messages_readonly"
+        assert created["mode"]=="vk_personal_messages"
         assert "access_token" not in json.dumps(created)
         assert not any(a["id"]=="vk:42" for a in store.accounts())
         assert any(a["id"]=="vk:42" for a in store.accounts(user_id=other))

@@ -461,5 +461,14 @@ def dispatch(store, service, principal, name, arguments):
         raise KeyError('unknown_messenger_operation')
     except (KeyError, ValueError, PermissionError) as error:
         return {'ok':False,'error':str(error).strip("'")}
-    except Exception:
+    except Exception as error:
+        # Safe diagnostic location only: never log provider bodies, tokens or
+        # signed URLs. Preserve the durable outcome rather than hiding where
+        # an unexpected read/projection error occurred.
+        import logging, os
+        tb=error.__traceback__
+        while tb and tb.tb_next: tb=tb.tb_next
+        logging.getLogger(__name__).warning('Messenger %s failed at %s:%s (%s)',op,
+            os.path.basename(tb.tb_frame.f_code.co_filename) if tb else 'unknown',
+            tb.tb_lineno if tb else 0,type(error).__name__)
         return {'ok':False,'error':'provider_result_unknown_read_action_status'}

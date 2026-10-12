@@ -752,7 +752,7 @@ def connect_vk_personal(
     service._store.register_account(
         account_id=account_id, provider="vk",
         display_name=str(payload.get("display_name") or f"VK {actual}")[:120],
-        can_read=True, can_reply=False, credential_ref=reference, user_id=user_id,
+        can_read=True, can_reply=True, credential_ref=reference, user_id=user_id,
     )
     service._store.bind_channel_route(user_id=user_id, source="vk", route_id="vk-personal-read-only")
     if old_account:
@@ -763,7 +763,47 @@ def connect_vk_personal(
             except (OSError, ValueError, PermissionError):
                 pass
     return {"id": account_id, "source": "vk", "display_name": str(payload.get("display_name") or f"VK {actual}")[:120],
-            "mode": "vk_personal_messages_readonly"}
+            "mode": "vk_personal_messages"}
+
+
+def _vk_personal_client(service, conversation, user_id):
+    from .channels.vk_personal import VKPersonalClient
+    account_ref=str(conversation.get('account_ref') or '')
+    account=next((a for a in service._store.accounts(user_id=user_id)
+                  if a['id']==account_ref and a['provider']=='vk' and a['enabled']
+                  and 'reply' in a['capabilities']),None)
+    if account is None or not account_ref.startswith('vk:') or not account_ref[3:].isdecimal():
+        raise ValueError('Личный аккаунт VK не разрешает отправку')
+    secret=ConnectorSecrets().load(account['credential_ref'],user_id=user_id,provider='vk')
+    if (secret.get('kind'),secret.get('account_id'),secret.get('user_id'),secret.get('vk_user_id'))!=('personal',account_ref,user_id,account_ref[3:]):
+        raise ValueError('VK credential account binding mismatch')
+    return VKPersonalClient(secret['access_token']),int(account_ref[3:])
+
+
+def prepare_vk_reply(service, conversation, draft, *, user_id):
+    client,expected=_vk_personal_client(service,conversation,user_id)
+    peer=str(conversation.get('peer_id') or '')
+    if not re.fullmatch(r'-?[1-9][0-9]*',peer): raise ValueError('VK recipient is missing')
+    if client.identity()!=expected: raise ValueError('Токен принадлежит другому аккаунту VK')
+    if not draft.body.strip() or len(draft.body)>4096:
+        raise ValueError('Сообщение VK должно содержать от 1 до 4096 символов')
+    import hashlib
+    key='\0'.join((user_id,conversation['account_ref'],peer,draft.id))
+    random_id=(int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],'big')&0x7fffffff) or 1
+    return lambda:client.send(int(peer),draft.body,random_id)
+
+
+def reconcile_vk_receipt(service, conversation, receipt, *, user_id):
+    client,expected=_vk_personal_client(service,conversation,user_id)
+    row=client.message(int(receipt))
+    peer=int(conversation['peer_id'])
+    if row.get('peer_id')!=peer or row.get('from_id')!=expected or row.get('out')!=1:
+        raise ValueError('VK sent receipt account/peer conflict')
+    message=vk_personal_message(row=row,account_id=conversation['account_ref'],peer_id=peer,
+        peer_type='chat' if conversation.get('conversation_kind')=='group' else 'user',
+        title=conversation.get('display_name') or '',reconciled=True)
+    if message is None: raise ValueError('VK sent receipt has no actual message')
+    service.receive(message,route_id=conversation['route_id'],user_id=user_id,account_ref=conversation['account_ref'])
 
 def vk_personal_message(
     *, account_id: str, peer_id: int, row: Mapping[str, Any],

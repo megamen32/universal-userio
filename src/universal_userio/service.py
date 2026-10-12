@@ -1237,6 +1237,12 @@ class UserIOService:
         # real receipt or cause another outbound write. MAX's listener can be
         # delayed, so hydrate this exact sent message before the web refresh.
         conversation = self._store.conversation(approved.conversation_id, user_id=resolved_user_id)
+        if conversation and conversation['source']=='vk' and str(conversation.get('account_ref') or '').startswith('vk:'):
+            try:
+                from .account_connections import reconcile_vk_receipt
+                reconcile_vk_receipt(self,conversation,receipt,user_id=resolved_user_id)
+            except Exception as error:
+                _LOG.warning('Accepted VK receipt mirror is pending: %s',type(error).__name__)
         if conversation and conversation["source"] == "max" and self.max_client is not None:
             try:
                 from .max_ingress import message_envelope, _own_id
@@ -1266,6 +1272,9 @@ class UserIOService:
         ):
             raise ValueError("route is not assigned to user")
         source = str(conversation["source"])
+        if source=='vk' and str(conversation.get('account_ref') or '').startswith('vk:'):
+            from .account_connections import prepare_vk_reply
+            return prepare_vk_reply(self,conversation,draft,user_id=user_id)
         if source == "gmail" or source.startswith("gmail:"):
             if self.gmail_outbox is None:
                 raise DeliveryUnavailableError("Gmail delivery is not configured")

@@ -1,8 +1,9 @@
-"""Read-only VK personal-messages API, limited to consented user tokens.
+"""VK personal-messages API, limited to consented user tokens.
 
 Use only a user-authorized VK Messenger access token that has been independently
 verified against messages.getConversations and messages.getHistory. It sends
-no messages and never marks conversations read.
+no messages. The separate client sends only an explicitly approved message;
+neither reader nor sender marks conversations read.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Callable
+from ..contracts import DeliveryNotSubmittedError
 
 
 class VKPermissionDenied(ValueError):
@@ -30,8 +32,11 @@ class VKPersonalReader:
         self._last_call = 0.0
 
     def call(self, method: str, **kwargs: object) -> Any:
-        if method not in {"users.get", "messages.getConversations", "messages.getHistory", "messages.getLongPollServer"}:
+        if method not in {"users.get", "messages.getConversations", "messages.getHistory", "messages.getLongPollServer", "messages.getById"}:
             raise ValueError("VK method not allowed in read-only connector")
+        return self._request(method, kwargs)
+
+    def _request(self, method: str, kwargs: dict, *, mutation=False) -> Any:
         # Respect a small per-session VK API budget without holding the
         # shared UserIO database lock while waiting.
         elapsed = time.monotonic() - self._last_call
@@ -62,6 +67,8 @@ class VKPersonalReader:
         error = response.get("error")
         if isinstance(error, dict):
             code = error.get("error_code")
+            if mutation and type(code) is int:
+                raise DeliveryNotSubmittedError(f"VK не отправил сообщение (код {code}). Проверьте доступ аккаунта к переписке.")
             if code in (5, 7, 15, 20, 27, 28):
                 raise VKPermissionDenied(
                     "VK не выдал доступ к личным сообщениям: нужен "
@@ -107,6 +114,30 @@ class VKPersonalReader:
         if not all(isinstance(result.get(k), (str, int)) for k in ("server", "key", "ts")):
             raise RuntimeError("VK Long Poll ответ некорректен")
         return result
+
+    def message(self, message_id: int) -> dict[str, Any]:
+        if type(message_id) is not int or message_id<=0:
+            raise ValueError('VK exact message ID required')
+        result=self.call('messages.getById',message_ids=message_id)
+        rows=result.get('items') if isinstance(result,dict) else None
+        row=next((r for r in rows or [] if isinstance(r,dict) and r.get('id')==message_id),None)
+        if row is None: raise ValueError('VK не вернул отправленное сообщение')
+        return row
+
+
+class VKPersonalClient(VKPersonalReader):
+    def send(self, peer_id: int, text: str, random_id: int) -> str:
+        if type(peer_id) is not int or peer_id==0:
+            raise ValueError('VK exact peer ID required')
+        if not isinstance(text,str) or not text.strip() or len(text)>4096:
+            raise ValueError('Сообщение VK должно содержать от 1 до 4096 символов')
+        if type(random_id) is not int or not 0<random_id<2**31:
+            raise ValueError('VK stable random ID required')
+        # VKCOM schema: user-token messages.send, random_id deduplicates sends.
+        result=self._request('messages.send',{'peer_id':peer_id,'message':text,'random_id':random_id},mutation=True)
+        if type(result) is not int or result<=0:
+            raise RuntimeError('VK не подтвердил отправку. Не повторяйте сообщение; обновите диалог.')
+        return str(result)
 
 
 class _RejectRedirect(urllib.request.HTTPRedirectHandler):

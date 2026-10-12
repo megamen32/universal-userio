@@ -942,7 +942,7 @@ def handler(
                     if existing and str(existing.get("credential_ref") or "").startswith("connector:"):
                         # Never downgrade an already authorized direct VK read
                         # session when the user signs in with ordinary VK ID.
-                        mode = "vk_personal_messages_readonly"
+                        mode = "vk_personal_messages" if "reply" in existing["capabilities"] else "vk_personal_messages_readonly"
                     else:
                         service._store.register_account(
                             account_id=f"vk:{external_id}", provider="vk", display_name=display_name,
