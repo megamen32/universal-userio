@@ -44,3 +44,13 @@ main200entries/start18/end18→reload/reopen PASS. OnlyownC162 closedtrue/job8a4
 remoteowncopies removed, R38receivedFINISH. Current SMS/number defect cycle closed;
 4unknown numbers remain archived by explicit human choice. No newSMS/call/model.
 Postcapture tracker/state publication preserves previously accepted results.
+
+Continuous SMS synchronization ACCEPTED on12October: UserIO2a930f3 installed,
+gateway254599b installed/d95909c outcome published. Fixed gateway10s disconnect
+and missed pending-outbox→sent with bounded pending-ID recheck in existingcursor.
+ONE new realselfSMS yieldednative21outgoing+22incoming, both automatically
+imported by enableddaemon after18–19sec; cursor20→22/pending[], three later reads
+no duplicates/samegeneration. Root GET-only, no manualimport/reset/UserIOsend.
+Enabled services survive restart; storedcursor replay/partialfailure tested.
+Gateway phone leaseFREE, previous47dda/import20/webacceptances retained.
+Source focused14PASS6.59s +gateway16PASS; no newfrontend/model build/providerreplay.
