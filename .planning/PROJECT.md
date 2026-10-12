@@ -18,11 +18,11 @@
 - SMS: один нативный аккаунт, полные сообщения и постоянная синхронизация; APK/инструкции для чужих rooted/unrooted Android.
 - Компактный интерфейс, авторы групп, landing/cabinet/GitHub, read/stealth, короткий README и 27 разделов документации.
 - Несколько персональных Bearer-токенов, независимый revoke, существующий GPTAdmin; реальный UserIO OAuth-плагин ChatGPT на Mac M1 прочитал 13 аккаунтов.
-### Active
-- [ ] Секретарь различает автора/собеседника и показывает точный исходник, время и актуальность черновика.
-- [ ] Устранить подтверждённую задержку/401 dispatcher, включить реальные рабочие чаты через существующую политику.
-- [ ] Уведомления почты объясняют содержание и требуемое действие.
-- [ ] Итоговый original GSD acceptance gate с реальным consumer proof всех оставшихся требований.
+### Delivered in v1.2
+- [x] Секретарь различает автора/собеседника и показывает точный исходник, время и актуальность черновика.
+- [x] Устранить подтверждённую задержку/401 dispatcher, включить реальные рабочие чаты через существующую политику.
+- [x] Уведомления почты объясняют содержание и требуемое действие.
+- [x] Итоговый original GSD acceptance gate с реальным consumer proof всех оставшихся требований.
 ### Out of Scope
 - Подмена личного аккаунта ботом: не читает личную переписку.
 - Постоянная автоматизация Android/браузера: пользователь отверг как основной транспорт.
@@ -45,4 +45,4 @@ GSD уже инициализирован в этом продукте, native r
 ## Evolution
 После фазы обновлять требования по реальному consumer proof; после milestone пересматривать статус и решения.
 
-Last updated: 2026-10-12 after live ChatGPT OAuth acceptance and historical GSD reconciliation.
+Last updated: 2026-10-12 after actual secretary/work/mail acceptance and maintained Matrix catch-up. Source/runtime/provider/user-surface boundaries remain explicit in phase summaries.

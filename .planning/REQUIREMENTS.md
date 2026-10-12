@@ -13,10 +13,10 @@
 - [x] **SEC-01**: Secretary distinguishes owner/interlocutor using direction and current source; owner followups remain visible to native Fast Agent.
 - [x] **SEC-02**: AI drafts show creation time and exact source preview; clicking scrolls to that message.
 - [x] **SEC-03**: Context changes mark drafts stale; old source-less drafts are labelled honestly without guessed provenance.
-- [ ] **NOTIFY-01**: Fix proven dispatcher authorization/queue delay through maintained service without broad policy unpause or accepted-action replay.
-- [ ] **WORK-01**: Discover actual owned working Telegram chats with Telegram Helper and enable existing AI/notification rules for future events.
-- [ ] **MAIL-01**: Email notifications explain substantive content, requested action and deadlines, using existing analysis/notification paths.
-- [ ] **ACCEPT-01**: Every remaining requirement has source/runtime/user-surface evidence and original GSD planning/progress is recognized.
+- [x] **NOTIFY-01**: Fix proven dispatcher authorization/queue delay through maintained service without broad policy unpause or accepted-action replay.
+- [x] **WORK-01**: Discover actual owned working Telegram chats with Telegram Helper and enable existing AI/notification rules for future events.
+- [x] **MAIL-01**: Email notifications explain substantive content, requested action and deadlines, using existing analysis/notification paths.
+- [x] **ACCEPT-01**: Every remaining requirement has source/runtime/user-surface evidence and original GSD planning/progress is recognized.
 
 ## Traceability
 
@@ -30,13 +30,13 @@
 | DOC-01 | Phase 8 | Accepted |
 | MCP-01 | Phase 8 | Accepted |
 | MCP-02 | Phase 8 | Accepted |
-| SEC-01 | Phase 9 | Pending real acceptance |
-| SEC-02 | Phase 9 | Pending real acceptance |
-| SEC-03 | Phase 9 | Pending real acceptance |
-| NOTIFY-01 | Phase 10 | Pending real acceptance |
-| WORK-01 | Phase 10 | Pending real acceptance |
-| MAIL-01 | Phase 10 | Pending real acceptance |
-| ACCEPT-01 | Phase 11 | Pending real acceptance |
+| SEC-01 | Phase 9 | Accepted |
+| SEC-02 | Phase 9 | Accepted |
+| SEC-03 | Phase 9 | Accepted |
+| NOTIFY-01 | Phase 10 | Accepted |
+| WORK-01 | Phase 10 | Accepted |
+| MAIL-01 | Phase 10 | Accepted |
+| ACCEPT-01 | Phase 11 | Accepted |
 
 ## Evidence and exceptions
 

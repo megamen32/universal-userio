@@ -29,14 +29,14 @@ Recovery uses existing acceptance receipts, not repeated provider actions.
 
 - [x] **Phase 8: Everyday channels and AI connections** - One clear phone/SMS account, continuous sync, onboarding/docs, read preferences and usable Bearer/OAuth MCP connections.
 - [x] **Phase 9: Secretary roles and draft provenance** - Reply suggestions distinguish the owner, retain the exact incoming source/time and show when context changed. (completed 2026-10-12)
-- [ ] **Phase 10: Timely work-chat and email notifications** - Restore maintained dispatcher credentials, remove proven queue delay, enable verified work chats and explain emails substantively.
-- [ ] **Phase 11: Final real-surface acceptance** - Audit all user requests against published source, installed runtime and actual user-surface evidence.
+- [x] **Phase 10: Timely work-chat and email notifications** - Restore maintained dispatcher credentials, remove proven queue delay, enable verified work chats and explain emails substantively. (completed 2026-10-12)
+- [x] **Phase 11: Final real-surface acceptance** - Audit all user requests against published source, installed runtime and actual user-surface evidence. (completed 2026-10-12)
 
 ## Phase Details
 
 ### Phase 8: Everyday channels and AI connections
 **Goal**: One clear phone/SMS account, continuous sync, onboarding/docs, read preferences and usable Bearer/OAuth MCP connections.
-**Depends on**: Phase 7
+**Depends on**: v1.1 accepted baseline (archived)
 **Requirements**: [SMS-01, PHONE-01, GUIDE-01, GROUP-01, WEB-01, DOC-01, MCP-01, MCP-02]
 **Success Criteria** (what must be TRUE):
   1. New native SMS arrive automatically and old test accounts are absent.
@@ -71,7 +71,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 10-01: Timely work-chat and email notifications
+- [x] 10-01: Timely work-chat and email notifications
 
 ### Phase 11: Final real-surface acceptance
 **Goal**: Audit all user requests against published source, installed runtime and actual user-surface evidence.
@@ -84,7 +84,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 11-01: Final real-surface acceptance
+- [x] 11-01: Final real-surface acceptance
 
 ## Progress
 
@@ -92,17 +92,17 @@ Plans:
 |---|---|---|---|
 | 8. Everyday channels and AI connections | 1/1 | Complete | 2026-10-12 |
 | 9. Secretary roles and draft provenance | 1/1 | Complete   | 2026-10-12 |
-| 10. Timely work-chat and email notifications | 0/1 | Not started | - |
-| 11. Final real-surface acceptance | 0/1 | Not started | - |
+| 10. Timely work-chat and email notifications | 1/1 | Complete   | 2026-10-12 |
+| 11. Final real-surface acceptance | 1/1 | Complete   | 2026-10-12 |
 
 ## Delivery graph
 
 ```mermaid
 flowchart LR
   H["v1.0–v1.1 accepted"] --> P8["8 Channels, docs, Bearer/OAuth ✓"]
-  P8 --> P9["9 Roles and draft provenance: live acceptance pending"]
-  P9 --> P10["10 Work chats, email, notification delay"]
-  P10 --> P11["11 Final acceptance gate"]
+  P8 --> P9["9 Roles and draft provenance ✓"]
+  P9 --> P10["10 Work chats, email, notification delivery ✓"]
+  P10 --> P11["11 Real acceptance audit ✓"]
 ```
 
 Percentages refer to completed plans, never to inferred runtime health.

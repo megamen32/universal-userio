@@ -3,7 +3,7 @@ phase: 09-secretary-context
 plan: 01
 subsystem: ai
 requires:
-  - phase: 08-accepted-delivery
+  - phase: 08-everyday-connections
     provides: working chat surface and provider source receipts
 provides:
   - native reply roles and current sticker reactions

@@ -11,9 +11,16 @@ numbers and unchanged start/end chronology. Existing headed/native evidence in
 milestones/v1.1-STATE-before-reconciliation.md. Unknown numbers remain archived
 by explicit human decision. Exact viewport-anchor stability was not claimed.
 
-## v1.2 Reliable everyday communication — active
-Phases 8–11. Phase 8 accepted daily SMS/phone onboarding/site/docs and
-Bearer/ChatGPT OAuth results are retained. Phase 9 draft provenance currently
-source-tested/build-ready, live acceptance pending. Phase 10 notification delay,
-working-chat rules and substantive mail remain unfinished; Phase 11 final gate
-must not report complete until their real user-surface evidence exists.
+## v1.2 Reliable everyday communication — delivered 2026-10-12
+Phases 8–11 have completed plans and real consumer evidence. Native continuous
+SMS/person calls, onboarding/auth/docs and Bearer/ChatGPT OAuth remain accepted.
+Secretary source/time/current reaction passed on the real web. Actual work and
+mail received native analysis and delivered notifications, with the owner's
+explicit chat selection and notification preference. Maintained Matrix history
+catch-up also advanced the real cursor without resetting it.
+
+See phase summaries and final verification under `.planning/phases/`. SMTP
+rejection of the controlled Yandex-bound mail remains a negative provider result,
+not a claim of Yandex incoming delivery. Current planning files stay initialized
+and inspectable; this delivery does not archive/delete requirements or create
+another milestone/tag. Old failed captures and accepted side effects are retained.
