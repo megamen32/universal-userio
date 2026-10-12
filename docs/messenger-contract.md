@@ -15,6 +15,7 @@ The HTTP and stdio surfaces share `mcp_catalog.MESSENGER_SPECS`.
 
 | Tool | Inputs | Result |
 |---|---|---|
+| `userio.messenger.events` | `account_ref`, optional `after` nonnegative integer, `limit`1–100 | Account-scoped incoming live events with canonical message, seq and analysis eligibility. Omit after to initialize at head without dispatching history; persist next_cursor. No read ACK or model call |
 | `userio.messenger.capabilities` | `account_ref` | Actual configured provider/account/credential intersection: each operation has `supported`, `allowed`, `reason` |
 | `userio.messenger.resolve` | `account_ref`, `peer_id`, `provider_message_id` | Actual source fetched on the current provider client and imported normally; canonical `conversation_id`, source and author. No fake conversation or read ACK |
 | `userio.messenger.history` | `account_ref`, `conversation_id`, `limit`1–100, optional `cursor`, `refresh`false | Chronological page; stored mode is partial/unverified, provider mode returns its actual cursor and freshness. Cursors belong to that mode/account/conversation |
@@ -154,3 +155,59 @@ exact approved reply, durable receipt, same-ID repeated edit, then supported
 rich actions. Capture provider/recipient and native SDK results before retirement.
 Only the Exmanager owner changes its transport and SDK files. Retain native
 memory, roles, business tasks, current identities, old receipts and rollback.
+
+
+## Normal live ingress and generic consumer cursor
+
+The authenticated service publisher uses `POST /v1/messages` on the existing
+UserIO ingress (loopback18093 or public HTTPS). The existing service credential
+resolves the registered account's ingress owner; personal sender credentials
+cannot impersonate ingress or manage tokens.
+
+```json
+{
+  "route_id": "telegram",
+  "account_id": "telegram:900000103",
+  "message": {
+    "schema": "universal.inbox.message.v1",
+    "source": "telegram",
+    "message_id": "telegram:900000103|-1009000002001:123",
+    "sender": "456",
+    "peer_id": "-1009000002001",
+    "conversation_kind": "group",
+    "direction": "incoming",
+    "body": "Exact untrimmed provider text",
+    "received_at": 1791800000,
+    "edited_at": 0,
+    "provider_reply_to": "",
+    "provider_thread_id": "",
+    "reconciliation": false,
+    "attachments": []
+  }
+}
+```
+
+Append actual media references in their native order with kind, attachment_id,
+content_type, filename and size. Optional last `telegram_routing` attachment
+contains author_id/name/first_name/last_name/username as JSON provider_ref.
+All IDs remain decimal strings. Never insert provider tokens, access hashes or
+private URLs. Do not insert ASR transcript into this raw-source ingress body;
+read actual image/voice content separately via messenger.media. That read sends
+its exact attachment_index to the provider. History and recovery use
+reconciliation=true and do not create new business dispatch.
+
+`messenger.events` is the account transport feed. Personal Secretary analysis
+eligibility is carried as metadata; native Airlock authorization/roles still
+apply before the SDK dispatches a source. It does not change personal analysis
+preferences or automate approvals. Initial polling without after returns an
+empty batch plus the current account head; subsequent explicit cursors deliver
+only live incoming non-deleted, non-reconciled sources. Account filtering is
+before LIMIT. The SDK persists the returned cursor and its native source dedup.
+
+MAX uses the same source/action tools. Its existing client reads actual message
+and bounded timestamp history pages without read ACK; tied native timestamps
+are conservatively partial. File/photo sends reuse actual native references
+from this conversation, without upload URLs/local paths. Media reads use actual
+provider CDN bytes: bounded first-frame images, UTF-8 text files or the existing
+Whisper service for audio. Unsupported formats return a readable status instead
+of invented content. These source checks alone do not certify live delivery.

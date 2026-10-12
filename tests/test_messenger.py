@@ -173,3 +173,37 @@ def test_media_binding_uses_provider_id_not_label_or_timestamp(case):
         'attachment_id':'900719925474099333','attachment_index':0})
     projected['at']=999.123;projected['author']['name']='new display name'
     assert api._media_hash(projected,0)==a['envelope']['media_hash']
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_events_account_cursor_initializes_without_replay_and_preserves_origin(case, legacy):
+    store,service,p,cid,source=case
+    args={'account_ref':p.account_ref,'limit':1}
+    first=dispatch(case,'events',args,legacy=legacy)
+    assert first['ok'] and first['events']==[] and first['initialized']
+    after=first['next_cursor']
+    store.register_account(account_id='telegram:900000101',provider='telegram',display_name='private',
+                           can_read=True,can_reply=True,credential_ref='fixture')
+    service.receive(replace(source,message_id='-10042:78'),route_id='telegram',account_ref='telegram:900000101')
+    service.receive(replace(source,message_id='-10042:79',reconciliation=True),route_id='telegram',account_ref=p.account_ref)
+    service.receive(replace(source,message_id='-10042:80',direction='outgoing'),route_id='telegram',account_ref=p.account_ref)
+    service.receive(replace(source,message_id='-10042:81',body='  exact wire text\n'),route_id='telegram',account_ref=p.account_ref)
+    page=dispatch(case,'events',{**args,'after':after},legacy=legacy)
+    assert page['ok'] and len(page['events'])==1 and not page['has_more']
+    event=page['events'][0]
+    assert event['message']['source']['provider_message_id']=='81'
+    assert event['message']['source']['thread_id']=='70'
+    assert event['message']['author']['id']=='42'
+    assert event['message']['text']=='  exact wire text\n'
+    assert page['next_cursor']>after and page['provider_read_acknowledged'] is False
+    assert dispatch(case,'events',{**args,'after':page['next_cursor']},legacy=legacy)['events']==[]
+    assert not dispatch(case,'events',{**args,'after':True},legacy=legacy)['ok']
+    assert p.calls==[]
+
+
+def test_telegram_ingress_preserves_raw_source_whitespace(case):
+    from universal_userio.adapters import inbox_message_from_envelope
+    wire={'schema':'universal.inbox.message.v1','source':'telegram','message_id':'-10042:88',
+          'sender':'42','body':'  exact body\n','received_at':1700000000,'peer_id':'-10042'}
+    msg=inbox_message_from_envelope(wire,received_at=1)
+    assert msg.body==wire['body']

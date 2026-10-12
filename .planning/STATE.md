@@ -8,7 +8,7 @@ last_activity: 2026-10-12
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 1
+  total_plans: 3
   completed_plans: 0
   percent: 0
 ---
@@ -23,11 +23,13 @@ progress:
 **Status:** executing
 **Progress:** [░░░░░░░░░░] 0%
 **Last Activity:** 2026-10-12
-**Last Activity Description:** v1.3 generic messenger implementation; native SDK owner integrates separately, request135 preserved.
+**Last Activity Description:** f19 installed account-bound scope proven; native SDK9214 source installed with separate encrypted sender, raw/events/rich UserIO refinements verified83+25; native acceptance still pending.
 
 Current milestone v1.3 is directly authorized through deployed Telegram/MAX
-Secretary acceptance. Phase12 source implementation and source-bound action
-vertical are underway; no live retirement or full migration is claimed.
+Secretary acceptance. Phase12 installed source and live scope proof accepted. Phases13/14 source
+refinements passed83 combined checks24.91s plus25 exact-index integration17.60s;
+source publication/install follows. Phase15 native acceptance and retirement
+remain pending; no full migration is claimed.
 Exact sender881 reuses the existing provider client; private readonly resource
 stays unchanged. Generic sender uses a separate explicit account-bound scope.
 

@@ -19,6 +19,8 @@ class Transport:
     def send(self,ws,text):
         f=json.loads(text);self.calls.append(f);p=f['payload'];op=f['opcode'];result={'ready':True}
         if op==19:result={'profile':{'contact':{'id':77}}}
+        if op==49:result={'messages':sorted([r for r in self.rows.values() if r['time']<p['from']],key=lambda r:r['time'],reverse=True)[:p['backward']]}
+        if op==48:result={'chats':[{'id':p['chatIds'][0],'type':'DIALOG'}]}
         if op==71:result={'messages':[self.rows[i] for i in p['messageIds'] if i in self.rows]}
         if op==64:
             row={'id':'900719925474099311','sender':'77','text':p['message']['text'],'time':1700000002000,
@@ -78,4 +80,73 @@ def test_bound_reaction_and_typing_never_mark_read(tmp_path):
     assert reaction['payload']=={'chatId':0,'messageId':123,'reaction':{'reactionType':'EMOJI','id':'👍'}}
     assert len([f for f in t.calls if f['opcode']==65])==1
     assert not any(f['opcode']==92 for f in t.calls)
+    store.close()
+
+
+
+def test_max_file_reference_has_stable_native_identity_and_no_upload(tmp_path):
+    store,t,service,cid,api=setup(tmp_path)
+    row={'id':'124','sender':'77','text':'file source','time':1700000003000,
+         'attaches':[{'_type':'FILE','fileId':900719925474099333,'name':'fixture.txt','size':8}]}
+    t.rows[124]=row
+    from universal_userio.max_ingress import message_envelope
+    from universal_userio.adapters import inbox_message_from_envelope
+    msg=inbox_message_from_envelope(message_envelope(row,chat_id='0',own_id='77',reconciliation=True),received_at=1)
+    service.receive(msg,route_id='max',account_ref='max')
+    a=api.propose('max',cid,'max-0-123','file',{'media_message_id':'max-0-124','attachment_index':0,'caption':'existing file'},'max-file-reference-123456')
+    accepted=api.approve(a['id'],a['hash'],True)
+    assert accepted['status']=='accepted'
+    send=next(f['payload']['message'] for f in t.calls if f['opcode']==64)
+    assert send['attaches']==[{'_type':'FILE','fileId':900719925474099333}]
+    assert send['text']=='existing file' and send['link']['messageId']==123
+    assert not any(f['opcode']==87 for f in t.calls)
+    assert api.approve(a['id'],a['hash'],True)['receipt']==accepted['receipt']
+    assert sum(f['opcode']==64 for f in t.calls)==1
+    store.close()
+
+
+def test_max_missing_attachment_stays_proposed_without_provider_write(tmp_path):
+    store,t,service,cid,api=setup(tmp_path)
+    t.rows[124]={'id':'124','sender':'77','text':'file source','time':1700000003000,'attaches':[]}
+    service.receive(InboxMessage('max','max-0-124','77','file source',1700000003,peer_id='0',direction='outgoing',
+        attachments=({'kind':'file','attachment_id':'1234'},)),route_id='max',account_ref='max')
+    a=api.propose('max',cid,'max-0-123','file',{'media_message_id':'max-0-124','attachment_index':0},'max-denied-file-123456')
+    import pytest
+    with pytest.raises(Exception):api.approve(a['id'],a['hash'],True)
+    assert api.get(a['id'])['status']=='proposed'
+    assert not any(f['opcode']==64 for f in t.calls)
+    store.close()
+
+
+
+def test_max_provider_refresh_preserves_raw_source_and_cursor_scope(tmp_path):
+    store,t,service,cid,api=setup(tmp_path)
+    provider=service.messenger_providers['max']
+    projected=provider.message(peer_id='0',provider_message_id='123',conversation_id=cid)
+    assert projected['author']['id']=='77' and projected['source']['direction']=='outgoing'
+    provider.import_projection(projected,peer_id='0',conversation_id=cid,kind='direct')
+    for n in range(124,128):t.rows[n]={'id':str(n),'sender':'88','text':'  wire '+str(n)+'\n','time':1700000000000+n*1000}
+    first=api.history('max',cid,limit=2,refresh=True)
+    assert [m['source']['provider_message_id'] for m in first['messages']]==['126','127']
+    assert first['messages'][0]['text']=='  wire 126\n' and first['next_cursor']
+    second=api.history('max',cid,limit=2,cursor=first['next_cursor'],refresh=True)
+    assert [m['source']['provider_message_id'] for m in second['messages']]==['124','125']
+    assert api.events('max',after=0)['events']==[]  # refresh must not dispatch history
+    assert not any(f['opcode'] in {64,92} for f in t.calls)
+    store.close()
+
+
+def test_max_photo_media_uses_actual_attachment_and_bytes_without_urls(tmp_path,monkeypatch):
+    store,t,service,cid,api=setup(tmp_path)
+    t.rows[123]['attaches']=[{'_type':'PHOTO','photoId':987,'baseUrl':'https://i.mycdn.me/native','photoToken':'private-fixture'}]
+    from universal_userio import messenger_max_media as reader
+    seen=[]
+    def read(client,**args):
+        seen.append(args)
+        return {'kind':'photo','status':'ready','image':{'mimeType':'image/png','dataBase64':'eA=='}}
+    monkeypatch.setattr(reader,'read_attachment',read)
+    result=api.media('max',cid,'max-0-123')
+    assert result['content']['image']['dataBase64']=='eA=='
+    assert seen[0]['attachment']['photoId']==987
+    assert 'private-fixture' not in json.dumps(result)
     store.close()

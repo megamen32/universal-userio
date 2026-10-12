@@ -242,10 +242,10 @@ class MaxClient:
         chats = (payload or {}).get("chats")
         return list(chats) if isinstance(chats, list) else []
 
-    def history(self, chat_id: int | str, *, backward: int = 30) -> list[dict[str, Any]]:
+    def history(self, chat_id: int | str, *, backward: int = 30, before: int | None = None) -> list[dict[str, Any]]:
         payload = self._roundtrip(
             OP_GET_HISTORY,
-            {"chatId": int(chat_id), "from": int(time.time() * 1000),
+            {"chatId": int(chat_id), "from": before if before is not None else int(time.time() * 1000),
              "backward": max(1, min(int(backward), 100)), "forward": 0},
         )
         messages = (payload or {}).get("messages")
@@ -280,9 +280,9 @@ class MaxClient:
 
     def _send_message(self, *, chat_id: int | str, text: str,
                       reply_to: str = '', cid: int | None = None,
-                      sticker: dict | None = None) -> dict[str, Any]:
+                      sticker: dict | None = None, attaches: list | None = None) -> dict[str, Any]:
         message = {'text':text, 'cid':cid if cid is not None else int(time.time()*1000),
-                   'elements':[], 'attaches':[]}
+                   'elements':[], 'attaches':list(attaches or [])}
         if reply_to: message['link']={'type':'REPLY','messageId':int(reply_to)}
         if sticker is not None:
             message['stickerId']=int(sticker['stickerId'])
@@ -307,7 +307,7 @@ class MaxClient:
         }
 
     def send_bound(self, *, chat_id: str, text: str, reply_to: str, cid: int,
-                   sticker: dict | None = None) -> dict:
+                   sticker: dict | None = None, attaches: list | None = None) -> dict:
         """Already approved operation; same transport and authorization.
 
         ReplyLink follows PyMax MessageService/ReplyLink. Sticker fields follow
@@ -315,7 +315,20 @@ class MaxClient:
         """
         with self._lock:
             self._fresh_write_connection()
-            return self._send_message(chat_id=chat_id,text=text,reply_to=reply_to,cid=cid,sticker=sticker)
+            return self._send_message(chat_id=chat_id,text=text,reply_to=reply_to,cid=cid,sticker=sticker,attaches=attaches)
+
+    def media_reference(self, *, chat_id: str, message_id: str, attachment: dict) -> dict:
+        """Fetch download metadata for the exact native source; never copy a token."""
+        typ=str(attachment.get('_type') or '')
+        if typ=='FILE':
+            return self._roundtrip(88,{'chatId':int(chat_id),'messageId':int(message_id),
+                                     'fileId':attachment['fileId']}) or {}
+        if typ in {'AUDIO','VIDEO'}:
+            value=attachment.get('videoId') or attachment.get('audioId')
+            if value is None: raise ValueError('native media id unavailable')
+            return self._roundtrip(83,{'chatId':int(chat_id),'messageId':int(message_id),'videoId':value,
+                                     **({'token':attachment['token']} if attachment.get('token') else {})}) or {}
+        raise ValueError('native media reference unsupported')
 
     def react(self, *, chat_id: str, message_id: str, emoji: str) -> dict:
         # PyMax AddReactionPayload / Opcode.MSG_REACTION =178.

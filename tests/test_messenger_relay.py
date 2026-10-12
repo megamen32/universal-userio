@@ -81,3 +81,16 @@ def test_provider_denial_or_unknown_keeps_correct_durable_state(case,status,erro
     if state=='sending':
         with pytest.raises(ValueError):api.approve(a['id'],a['hash'],True)
         assert len(calls)==1
+
+
+
+def test_media_read_passes_exact_attachment_index(case):
+    store,service,api,provider,ref,peer,calls,options=case
+    cid=api.resolve(ref,peer,'77')['conversation_id']
+    old=provider.opener;seen=[]
+    def opener(req,**kwargs):
+        if req.data and req.full_url.endswith('/message'):seen.append(json.loads(req.data))
+        return old(req,**kwargs)
+    provider.opener=opener
+    api.media(ref,cid,ref+'|'+peer+':77',attachment_index=1)
+    assert seen[-1]['read_media'] and seen[-1]['attachment_index']==1

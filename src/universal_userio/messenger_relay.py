@@ -68,10 +68,10 @@ class RelayMessengerProvider:
     @property
     def sender_id(self): return str(self._caps.get('sender_id') or '')
 
-    def message(self, *, peer_id, provider_message_id, conversation_id, read_media=False):
+    def message(self, *, peer_id, provider_message_id, conversation_id, read_media=False, attachment_index=0):
         result=self._request('POST','/userio/messenger/message',{'account_ref':self.account_ref,
             'peer_id':peer_id,'provider_message_id':provider_message_id,'conversation_id':conversation_id,
-            'read_media':read_media})
+            'read_media':read_media,'attachment_index':attachment_index})
         p=self._validated_projection(result.get('message'),peer_id,conversation_id)
         if p['source']['provider_message_id']!=provider_message_id:
             raise ValueError('provider message identity conflict')
@@ -140,7 +140,7 @@ class RelayMessengerProvider:
     def media(self, projected, *, attachment_index=0):
         s=projected['source']
         p=self.message(peer_id=s['peer_id'],provider_message_id=s['provider_message_id'],
-                       conversation_id=s['conversation_id'],read_media=True)
+                       conversation_id=s['conversation_id'],read_media=True,attachment_index=attachment_index)
         if p['source']['provider_message_id']!=s['provider_message_id']:
             raise ValueError('provider media source conflict')
         content=p.get('content')

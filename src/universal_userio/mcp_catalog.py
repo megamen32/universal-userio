@@ -314,6 +314,10 @@ TOOL_SPECS = (
 
 
 MESSENGER_SPECS = (
+    ToolSpec('userio.messenger.events',
+        'Poll account-scoped live incoming sources without read ACK. Omit after to initialize at current head without historical dispatch. Persist next_cursor; history/recovery is excluded.',
+        schema({'account_ref':{'type':'string'},'after':{'type':'integer','minimum':0},
+                'limit':{'type':'integer','minimum':1,'maximum':100}},['account_ref'])),
     ToolSpec('userio.messenger.media',
         'Read bounded actual media/ASR through the account provider. Return bytes/transcript or explicit unavailable, never infer from a sticker label.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'message_id':{'type':'string'},
@@ -348,6 +352,7 @@ MESSENGER_SPECS = (
 TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
 
 TOOL_CAPABILITIES = {
+    'userio.messenger.events': 'read',
     'userio.messenger.capabilities': 'read',
     'userio.messenger.history': 'read',
     'userio.messenger.resolve': 'read',

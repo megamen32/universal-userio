@@ -183,6 +183,7 @@ TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
 
 TOOL_CAPABILITIES = {
     'userio.messenger.capabilities': 'read',
+    'userio.messenger.events': 'read',
     'userio.messenger.history': 'read',
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',

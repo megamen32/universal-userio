@@ -35,7 +35,8 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
   1. Ingress/history/media preserve exact identities and honest paging/partial flags.
   2. The approved action binds source, account, target and immutable content.
   3. A successful provider write retains its receipt; uncertain outcomes never replay.
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 13-01: Provenance, history/media, live events and immutable approval
 
 ### Phase 14: Telegram and MAX rich operations
 **Goal**: Supported rich actions share one normal approval/outbox interface.
@@ -45,7 +46,8 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
   1. Repeated own-message edits retain the same provider ID in both channels.
   2. Reactions and stickers/files work through declared capabilities and exact approval.
   3. Progress/typing follows actual support; unavailable operations have readable fallback.
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 14-01: Native-reference rich actions and media
 
 ### Phase 15: Native Secretary parity and transport retirement
 **Goal**: The real Secretary uses UserIO and no dedicated Telegram path for accepted operations.

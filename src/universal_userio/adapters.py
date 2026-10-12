@@ -48,7 +48,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         and not source.startswith("chatgpt:")
     ):
         raise ValueError("unsupported message source")
-    if source in {"max", "sms"}:
+    if source in {"telegram", "max", "sms"}:
         body = str(payload.get("body") or "")
     if not message_id or not sender:
         raise ValueError("inbox message requires message_id and sender")

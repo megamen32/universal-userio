@@ -199,6 +199,42 @@ class Messenger:
                 'next_cursor':next_cursor,'partial':True,'fresh':False,'mode':'stored',
                 'more_stored':bool(next_cursor)}
 
+    def events(self, account_ref, *, after=None, limit=50):
+        """Account transport feed, without changing personal AI policy or read state.
+
+        A new consumer starts at the current head. History/recovery rows never
+        dispatch, and account filtering happens before pagination.
+        """
+        self._allow(account_ref, 'read')
+        if after is not None and (type(after) is not int or not 0 <= after < 2**63):
+            raise ValueError('invalid_event_cursor')
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('limit_must_be_1_to_100')
+        with self.store._lock:
+            head = self.store._connection.execute('''SELECT COALESCE(MAX(e.seq),0)
+                FROM workspace_events e JOIN conversations c
+                ON c.user_id=e.user_id AND c.id=e.conversation_id
+                WHERE e.user_id=? AND c.account_ref=?''', (self.user, account_ref)).fetchone()[0]
+            if after is None:
+                rows = []
+            else:
+                rows = self.store._connection.execute('''SELECT e.seq,e.eligible,e.message_id,e.conversation_id
+                    FROM workspace_events e JOIN conversations c
+                    ON c.user_id=e.user_id AND c.id=e.conversation_id
+                    JOIN messages m ON m.user_id=e.user_id AND m.source=e.source AND m.message_id=e.message_id
+                    WHERE e.user_id=? AND c.account_ref=? AND e.seq>? AND e.seq<=?
+                    AND e.reconciled=0 AND m.direction='incoming' AND m.deleted_at IS NULL
+                    ORDER BY e.seq LIMIT ?''', (self.user, account_ref, after, head, limit+1)).fetchall()
+            more = len(rows) > limit
+            events = []
+            for row in rows[:limit]:
+                conv = self._conversation(account_ref, row['conversation_id'])
+                events.append({'seq':row['seq'], 'analysis_eligible':bool(row['eligible']),
+                    'message':self._project(conv, self._message(conv, row['message_id']))})
+        return {'schema':SCHEMA, 'account_ref':account_ref, 'events':events,
+                'head':head, 'next_cursor':events[-1]['seq'] if more else max(head, after or 0),
+                'has_more':more, 'initialized':after is None, 'provider_read_acknowledged':False}
+
     def _init_actions(self):
         # Operation journal, not a second policy/credential system. The same
         # authenticated UserIO principal and account permissions govern it.
@@ -374,12 +410,13 @@ def dispatch(store, service, principal, name, arguments):
     api = Messenger(store,service,principal)
     op = name.removeprefix('userio.messenger.')
     try:
-        if principal.read_only and op not in {'capabilities','history','get','resolve','media'}:
+        if principal.read_only and op not in {'capabilities','history','get','resolve','media','events'}:
             raise PermissionError('read_only_token')
         if op == 'capabilities': return {'ok':True,**api.capabilities(**arguments)}
         if op == 'history': return {'ok':True,**api.history(**arguments)}
         if op == 'resolve': return {'ok':True,**api.resolve(**arguments)}
         if op == 'media': return {'ok':True,**api.media(**arguments)}
+        if op == 'events': return {'ok':True,**api.events(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
         if op == 'approve': return {'ok':True,'action':api.approve(**arguments)}

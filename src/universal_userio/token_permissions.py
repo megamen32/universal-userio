@@ -1,6 +1,7 @@
 """Personal read-only credentials: explicit read operations, default deny."""
 
 READ_ONLY_TOOLS = frozenset({
+    'userio.messenger.events',
     'userio.messenger.capabilities', 'userio.messenger.history', 'userio.messenger.get', 'userio.messenger.resolve', 'userio.messenger.media',
     "userio.accounts.list", "userio.channels.list", "userio.channels.read",
     "userio.channels.download", "userio.inbox.list_new", "userio.conversation.get",
