@@ -259,3 +259,44 @@ load, improve backlog fairness and metrics before moving beyond the
 The previous experimental **personal** VK API connector remains in
 `VIP/vk-messages-api` and is not activated by this feature; don't try to
 use a VK community token for personal messages.
+
+## Personal VK Messenger — consented user tokens (experimental)
+
+The **Личный VK Мессенджер** entry at
+`/vk/personal/connect/new` is independent of ordinary VK ID profile-only
+linking and the VK **community** inbox. It accepts a personal user access token
+that must actually be permitted to call `messages.getConversations` and
+`messages.getHistory`. The user may sign in through an authorization-capable
+VK Messenger client or import a previously generated personal token. The
+browser-based helper links to the VK Messenger Desktop authorization page
+(client id from publicly available VK Messenger desktop clients), and the user
+copies the final `oauth.vk.ru/blank.html#access_token=...` redirect URL into
+a **same-origin, password-style field** inside UserIO. Its JavaScript extracts
+the fragment locally before POST. The URL or token should never be shared
+in chat, screenshots, bug reports or web-server GET query parameters.
+
+The service verifies the actual owner with `users.get` and performs both
+VK personal-message read calls before saving anything. Unavailable or denied
+message permission leaves the original VK ID profile unchanged. On success,
+the credential is persisted as an opaque `ConnectorSecrets` file bound to
+the authenticated UserIO user; `vk:<numeric-user-id>` is only upgraded
+after verification. It never stores the user's login password.
+
+The existing **single shared** `UserAccountPoller` processes these new
+personal sessions alongside Matrix, IMAP and VK communities without
+per-user systemd units. It uses per-user, per-account and per-dialog cursors.
+Only the VK API methods `users.get`, `messages.getConversations`,
+`messages.getHistory` (and optional read-only
+`messages.getLongPollServer` preflight) are allowed. It never calls
+`messages.send` or `messages.markAsRead`. New events are picked up by
+bounded periodic polling; the transport has not yet been validated with an
+actual user-approved VK Messenger token. User Long Poll subscriptions and
+full historical paging are **not yet certified**. The first import is
+recent-history only, not a proof of complete archive. Authentication
+availability/authorization may change at VK's discretion, so this remains
+experimental until live user login succeeds.
+
+If a user already has `vk:<id>` connected through profile-only VK ID,
+VK Messenger connection to **the same account** may upgrade it after
+the owner identity matches. Never overwrite an unrelated user account,
+and never use a community token to claim personal-message support.
