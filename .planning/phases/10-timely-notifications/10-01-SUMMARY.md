@@ -46,3 +46,7 @@ Published source: UserIO b083218, 6f3e53f, 33ca76a, a35b4c8, 4b45b79 and 1aa9430
 | Owned mail provider → UserIO → native analysis → delivered notification / source, summary, action, deadline | focused integration | actual complete path captured in 67s observation window | 120s / 480s |
 
 The combined ordinary source release stayed below 180 seconds including setup. No slow nightly run, old provider send, browser canary or model intent was replayed.
+
+## Additional Yandex live acceptance
+
+Direct owner request: Gmail→Yandex arrived in maintained Inbox49346 and produced delivered notice6623. Exact current receiver caption fixed in Hermes c4a14a2 after a real mismatch; narrow RED/86GREEN5.95s. After install, separate correction-validation mail49363 produced correct delivered card6624, actual Telegram mirror49367, substantive explanation/action, exact receiving address. Both messages analyzed once; no historical send or inference replay. Final proof `.tmp/notification-recovery-20261012/yandex-label-final-acceptance.json`. This closes positive Yandex delivery previously not proved, preserving older SMTP rejection history.

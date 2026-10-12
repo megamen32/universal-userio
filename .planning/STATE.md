@@ -99,7 +99,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
-|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager scoped resource/accounts/Telegram10 PASS; MAX validator fix build/install pending|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
+|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager native read-only MAX10/Telegram3 PASS; encrypted resource installed|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
 |261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
 
 Documentation accepted through actual headed BFFE consumer/owncleanup. Core
@@ -165,3 +165,25 @@ history viewport-anchor stability has not been proved. Four old unknown phone
 numbers stay archived by explicit user choice; delete-six is cancelled, not a
 remaining task. Formal milestone archival was not performed, and no new
 milestone or implementation was started by this progress request.
+
+## Completed remaining live delivery — 2026-10-12
+
+Exmanager final receipt `20261012-userio-readonly-native-read.json` now reports
+ACTUAL_NATIVE_READ_ACCEPTED: native readonly accounts/channel lists, Telegram3
+and MAX10 stored messages, correct channels, no send/markRead, no parent bound or
+UserIO core change. Prior MAX enum and bounded selector failures are superseded.
+Reads are bounded/partial; a full history scan is not claimed. Optional Telegram
+channel refresh encountered provider floodwait/timeout; default stored reading
+was accepted without that optional refresh, retained as an operational boundary.
+
+Owner's new Gmail→Yandex request positively reached Inbox and UserIO49346,
+analysis once and actual delivered card6623. It revealed a secondary account
+caption using legacy shared conversation account_ref. Hermes c4a14a2 fixed only
+mail notification identity, 86checks/5.95s, published/installed. One distinct
+post-fix control mail reached Yandex Inbox49363; corrected native card6624 and
+real receiver mirror49367 proved meaningful summary/action/exact mailbox.
+No old mail/inference repeated, no UserIO core/credential/policy/NoticePlace code
+change, pending replies preserved. Yandex positive-notification verification is
+now closed; prior SMTP554 remains historical. Exact viewport-anchor stability
+of older call history remains unproved; user-accepted unknown-number archive
+and cancelled delete-six remain unchanged.
