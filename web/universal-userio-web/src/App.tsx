@@ -308,7 +308,7 @@ export function App() {
     const params = new URLSearchParams()
     if (sourceFilter) params.set("source", sourceFilter)
     if (account) params.set("exact_source", "1")
-    if (account && ["telegram", "sms", "phone"].includes(account.provider)) params.set("account_ref", account.id)
+    if (account && ["telegram", "sms", "phone", "vk"].includes(account.provider)) params.set("account_ref", account.id)
     const suffix = params.size ? `?${params.toString()}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     if (!chatsRequest.current.isCurrent(request)) return
@@ -323,7 +323,7 @@ export function App() {
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({ q: text, limit: "100" })
       if (sourceFilter) params.set("source", sourceFilter)
-      if (account && ["telegram", "sms", "phone"].includes(account.provider)) params.set("account_ref", account.id)
+      if (account && ["telegram", "sms", "phone", "vk"].includes(account.provider)) params.set("account_ref", account.id)
       setSearching(true)
       void api<{ results: Chat[] }>(`/v1/search?${params.toString()}`)
         .then((data) => setSearchResults(data.results))
@@ -859,7 +859,7 @@ export function App() {
   const visibleChats = (search.trim() ? searchResults : chats)
     .filter((chat) => platformVisibleInFeed(chat.source))
     .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) &&
-      (["telegram", "sms", "phone"].includes(item.provider) ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
+      (["telegram", "sms", "phone", "vk"].includes(item.provider) ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
     .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
   // Clearing on selectedChat guarantees we never leak text into the next reply.
