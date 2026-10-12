@@ -164,3 +164,30 @@ def test_owner_reply_during_triage_context_preparation_is_not_current(tmp_path, 
     seq=store.workspace_events()['events'][0]['seq']
     service.triage_workspace_event(event_seq=seq,request_id='followup-race')
     assert store.conversation(cid)['drafts'][0]['context_status']=='stale'
+
+
+def test_reply_resolves_owner_account_separately_from_female_interlocutor(tmp_path):
+    """Fast unit: owner/interlocutor identity regression, expected1s/max10s."""
+    store=SQLiteUserIOStore(tmp_path/'actors.sqlite3');probe=Probe()
+    store.register_account(account_id='max',provider='max',display_name='Никита',can_read=True,can_reply=True,credential_ref='test-only')
+    service=UserIOService(store,probe,object())
+    cid,_=service.receive(InboxMessage('max','last','Дарья','Спасибо!',1,peer_id='200',conversation_kind='direct'),route_id='test',account_ref='max')
+    service.propose_from_conversation(cid,limit=1)
+    context=json.loads(probe.prompt[probe.prompt.index('{"conversation_id"'):])
+    assert context['actors']['owner_name']=='Никита'
+    assert context['actors']['interlocutor_name']=='Дарья'
+    assert context['actors']['owner_account_ref']=='max'
+    assert context['latest_message']['speaker_role']=='interlocutor'
+
+
+def test_group_reply_addressee_is_current_author_not_group_title(tmp_path):
+    """Fast unit: group title is not the interlocutor, expected1s/max10s."""
+    store=SQLiteUserIOStore(tmp_path/'group-actors.sqlite3');probe=Probe()
+    store.register_account(account_id='max',provider='max',display_name='Никита',can_read=True,can_reply=True,credential_ref='test-only')
+    service=UserIOService(store,probe,object())
+    cid,_=service.receive(InboxMessage('max','group-last','200','Встреча завтра',1,sender_name='Дарья Петрова',peer_id='300',conversation_kind='group',conversation_title='Рабочая группа'),route_id='test',account_ref='max')
+    service.propose_from_conversation(cid,limit=1)
+    context=json.loads(probe.prompt[probe.prompt.index('{"conversation_id"'):])
+    assert context['actors']['interlocutor_name']=='Дарья Петрова'
+    assert context['actors']['conversation_name']=='Рабочая группа'
+    assert context['actors']['owner_name']=='Никита'

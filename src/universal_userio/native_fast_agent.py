@@ -252,6 +252,39 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
                                      read_page=read_page, state=state)
         return self._validate_triage(value, max_drafts=max_drafts)
 
+    def suggest_with_context(self, *, conversation_id, latest_message, history, limit,
+                             actor_context=None):
+        """Generate alternatives together from one grounded native interpretation."""
+        prompt = self._reply_prompt(conversation_id=conversation_id, latest_message=latest_message,
+                                    history=history, actor_context=actor_context)
+        schema = {"type": "object", "additionalProperties": False, "properties": {
+            "source_message_id": {"type": "string", "enum": [latest_message.message_id]},
+            "reply_as": {"type": "string", "enum": ["owner"]},
+            "current_message_observation": {"type": "string", "maxLength": 1000,
+                "description": "What the interlocutor sent in the current message/pixels, not an old owner complaint."},
+            "replies": {"type": "array", "minItems": 1, "maxItems": max(1, limit),
+                        "items": {"type": "string", "minLength": 1, "maxLength": 2000}},
+        }, "required": ["source_message_id", "reply_as", "current_message_observation", "replies"]}
+        payload = {"model": self._model_for_context(latest_message=latest_message, history=history[-20:]),
+                   "max_tokens": 4000, "messages": [
+            {"role": "system", "content": self._draft_instruction()},
+            {"role": "user", "content": self._vision_content(prompt, [
+                *latest_message.attachments,
+                *(item for entry in history[-20:] for item in (entry.get("attachments") or [])),
+            ])},
+        ]}
+        result = self._execute_native(payload, schema=schema)
+        if (not isinstance(result, dict) or set(result) != set(schema["required"])
+                or result["source_message_id"] != latest_message.message_id or result["reply_as"] != "owner"
+                or not isinstance(result["current_message_observation"], str)
+                or len(result["current_message_observation"]) > 1000):
+            raise ValueError("native replies have invalid source or owner identity")
+        replies = result["replies"]
+        if (not isinstance(replies, list) or not 1 <= len(replies) <= max(1, limit)
+                or any(not isinstance(text, str) or not text.strip() or len(text) > 2000 for text in replies)):
+            raise ValueError("native reply alternatives are invalid")
+        return list(dict.fromkeys(text.strip() for text in replies))
+
     def _one_draft(self, prompt, *, model=None, attachments=()):
         return self._execute_native({
             "model": model or self._model, "max_tokens": 2000,

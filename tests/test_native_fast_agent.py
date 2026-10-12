@@ -130,7 +130,7 @@ def test_native_reply_roles_source_and_stale_followup(tmp_path):
     from universal_userio.service import UserIOService
     from universal_userio.store import SQLiteUserIOStore
 
-    with _provider_fixture([{"role": "assistant", "content": "Подтверждаю: в пятницу."}]) as (endpoint, requests):
+    with _provider_fixture([{"role": "assistant", "content": json.dumps({"source_message_id":"q3","reply_as":"owner","current_message_observation":"Собеседник уточняет срок","replies":["Подтверждаю: в пятницу."]})}]) as (endpoint, requests):
         generator = FastAgentDraftGenerator(endpoint=endpoint, token="fixture-only")
         store = SQLiteUserIOStore(tmp_path / "native-context.sqlite3")
         service = UserIOService(store, generator, object())
@@ -164,7 +164,7 @@ def test_native_reply_sees_sticker_pixels_and_not_provider_url(tmp_path):
     def image_loader(**kwargs):
         calls.append(kwargs)
         return ChannelFile("sticker.png", "image/png", b"\x89PNG\r\n\x1a\nfixture")
-    with _provider_fixture([{"role":"assistant","content":text} for text in ("Весёлый тигр на стикере.", "Милый тигр!", "Спасибо за тигра.")]) as (endpoint, requests):
+    with _provider_fixture([{"role":"assistant","content":json.dumps({"source_message_id":"sticker","reply_as":"owner","current_message_observation":"Тигр на стикере","replies":["Весёлый тигр на стикере.", "Милый тигр!", "Спасибо за тигра."]})}]) as (endpoint, requests):
         generator=FastAgentDraftGenerator(endpoint=endpoint,token="fixture-only")
         store=SQLiteUserIOStore(tmp_path/'sticker.sqlite3')
         service=UserIOService(store,generator,object(),ai_image_loader=image_loader)
@@ -173,7 +173,7 @@ def test_native_reply_sees_sticker_pixels_and_not_provider_url(tmp_path):
             {'kind':'sticker','content_type':'application/octet-stream',
              'src':'https://i.oneme.ru/getSmile?smileId=1&smileType=1'},)),route_id='test')
         service.propose_from_conversation(cid,limit=3)
-        assert len(calls)==1 and len(requests)==3
+        assert len(calls)==1 and len(requests)==1
         for request in requests:
             assert request['model']=='MiniMax-M3'
             assert 'Write as the owner' in json.dumps(request['messages'][0])

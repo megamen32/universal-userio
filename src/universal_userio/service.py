@@ -1076,6 +1076,7 @@ class UserIOService:
             received_at=float(current_source["received_at"]))
         suggest_variants = getattr(generator, "suggest_variants", None)
         suggest_with_context = getattr(generator, "suggest_with_context", None)
+        suggest_with_actors = getattr(generator, "suggest_with_actor_context", None)
         generated: Sequence[str]
         history = self._store.bounded_conversation_context(
             conversation_id, current_message_id=message.message_id,
@@ -1095,7 +1096,37 @@ class UserIOService:
         ))
         history = self._hydrate_ai_images(history, user_id=self._store._user(user_id),
                                          image_budget=image_budget)
-        if callable(suggest_with_context):
+        if callable(suggest_with_actors):
+            conversation = self._store.conversation(conversation_id, user_id=user_id) or {}
+            account = next((a for a in self._store.accounts(user_id=user_id)
+                            if a["id"] == conversation.get("account_ref")), {})
+            interlocutor = str(conversation.get("display_name") or message.sender)
+            if conversation.get("conversation_kind") in {"group", "channel"}:
+                rendered_source = next((m for m in conversation.get("messages", [])
+                                        if m["message_id"] == message.message_id), {})
+                interlocutor = str(rendered_source.get("sender_name") or message.sender)
+                for attachment in current_source.get("attachments") or []:
+                    if attachment.get("kind") != "telegram_routing":
+                        continue
+                    try:
+                        author = json.loads(str(attachment.get("provider_ref") or "{}"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not isinstance(author, dict):
+                        continue
+                    name = str(author.get("author_name") or "")
+                    if name and (author.get("author_resolved") is True or name != author.get("group_name")):
+                        interlocutor = name
+                    elif author.get("author_username"):
+                        interlocutor = "@" + str(author["author_username"]).lstrip("@")
+            generated = suggest_with_actors(conversation_id=conversation_id, latest_message=message,
+                history=history, limit=limit, actor_context={
+                    "owner_name": str(account.get("display_name") or "")[:320],
+                    "owner_account_ref": str(conversation.get("account_ref") or "")[:256],
+                    "interlocutor_name": interlocutor[:320],
+                    "conversation_name": str(conversation.get("display_name") or "")[:320],
+                })
+        elif callable(suggest_with_context):
             generated = suggest_with_context(conversation_id=conversation_id, latest_message=message, history=history, limit=limit)
         elif callable(suggest_variants):
             generated = suggest_variants(conversation_id=conversation_id, latest_message=message, limit=limit)
