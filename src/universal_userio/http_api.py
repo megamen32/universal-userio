@@ -23,7 +23,7 @@ import urllib.request
 from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
-from .account_connections import connect_matrix, connect_imap
+from .account_connections import connect_matrix, connect_imap, connect_vk_direct
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -842,6 +842,16 @@ def handler(
                     )
                     self._reply(202, {"accepted": True})
                     return
+                if path == "/v1/vk/native/accounts":
+                    # VK ID alone has no message permission; verify both
+                    # messages.getConversations and history before upgrading.
+                    if principal.service_account or not service._store.capability_enabled(
+                            "read", user_id=user_id):
+                        self._reply(403, {"error": "нужна пользовательская авторизация"})
+                        return
+                    account = connect_vk_direct(service, user_id, self._json())
+                    self._reply(201, {"accepted": True, **account})
+                    return
                 if path == "/v1/vk/accounts":
                     payload = self._json()
                     external_id = str(payload.get("user_id") or "").strip()
@@ -850,12 +860,21 @@ def handler(
                         raise ValueError("user_id required")
                     # VK ID confirms the identity only. Message access belongs to the
                     # user-owned browser extension and must not be implied here.
-                    service._store.register_account(
-                        account_id=f"vk:{external_id}", provider="vk", display_name=display_name,
-                        can_read=False, can_reply=False, credential_ref=f"vkid:{external_id}", enabled=True,
-                        user_id=user_id,
-                    )
-                    self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": "vkid_identity_only"})
+                    existing = next(
+                        (a for a in service._store.accounts(user_id=user_id)
+                         if a["id"] == f"vk:{external_id}"), None)
+                    if existing and str(existing.get("credential_ref") or "").startswith("connector:"):
+                        # Never downgrade an already authorized direct VK read
+                        # session when the user signs in with ordinary VK ID.
+                        mode = "vk_personal_messages_readonly"
+                    else:
+                        service._store.register_account(
+                            account_id=f"vk:{external_id}", provider="vk", display_name=display_name,
+                            can_read=False, can_reply=False, credential_ref=f"vkid:{external_id}", enabled=True,
+                            user_id=user_id,
+                        )
+                        mode = "vkid_identity_only"
+                    self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": mode})
                     return
                 if path in {"/v1/matrix/accounts", "/v1/imap/accounts"}:
                     if principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
@@ -1483,7 +1502,7 @@ def handler(
                      if a["id"] == account_id), None,
                 )
                 deleted = service._store.delete_account(account_id, user_id=principal.user_id)
-                if deleted and existing and existing["provider"] in {"matrix", "email"}:
+                if deleted and existing and existing["provider"] in {"matrix", "email", "vk"}:
                     ref = str(existing.get("credential_ref") or "")
                     if ref.startswith("connector:"):
                         from .account_connections import ConnectorSecrets
@@ -1686,8 +1705,14 @@ li{{margin:8px 0}}code{{background:#252525;padding:2px 5px;border-radius:4px}}
 small{{color:#aaa;line-height:1.45}}</style></head>
 <body><p><a href="/accounts/connect/new">← Аккаунты UserIO</a></p>
 <h1>Подключить ВКонтакте</h1>
-<p><b>VK ID</b> подтверждает профиль, но сам по себе не разрешает читать переписки.
-Расширение читает открытую сессию VK в Chrome. Сверяйте, что VK Web открыт именно в нужном аккаунте.</p>
+<p><b>VK ID</b> подтверждает профиль. Для прямой синхронизации UserIO должен отдельно получить
+права на чтение личных сообщений. Обычный вход VK ID таких прав не гарантирует.</p>
+<section class="card">
+  <h2>Подключить без браузерного расширения</h2>
+  <a class="btn" href="/vk/connect/new?mode=direct">Запросить доступ к сообщениям VK</a>
+  <p id="direct-note">Работает, только если VK разрешит приложению UserIO доступ <code>messages</code>.
+  При отказе ничего не подключаем и оставляем обычный VK ID неизменным.</p>
+</section>
 <div id="vk_auth"></div><p id="status">Ожидание VK ID…</p>
 <section class="card">
   <h2>Для чтения чатов установите расширение</h2>
@@ -1709,17 +1734,40 @@ small{{color:#aaa;line-height:1.45}}</style></head>
   const status = document.getElementById('status');
   const VKID = window.VKIDSDK;
   if (!VKID) {{ status.textContent = 'VK ID SDK failed to load'; return; }}
-  VKID.Config.init({{app:{safe_app_id}, redirectUrl:location.origin + '/vk/callback', responseMode:VKID.ConfigResponseMode.Callback, source:VKID.ConfigSource.LOWCODE, scope:''}});
+  const direct = new URLSearchParams(location.search).get('mode') === 'direct';
+  if (direct) {{
+    document.getElementById('direct-note').textContent =
+      'Разрешите чтение сообщений, если ВКонтакте предложит такое разрешение.';
+  }}
+  VKID.Config.init({{app:{safe_app_id}, redirectUrl:location.origin + '/vk/callback',
+    responseMode:VKID.ConfigResponseMode.Callback, source:VKID.ConfigSource.LOWCODE,
+    scope: direct ? 'messages' : ''}});
   const tap = new VKID.OneTap();
   tap.render({{container:document.getElementById('vk_auth'), showAlternativeLogin:true}})
     .on(VKID.WidgetEvents.ERROR, error => {{ status.textContent = 'VK ID error'; console.error(error); }})
     .on(VKID.OneTapInternalEvents.LOGIN_SUCCESS, payload => {{
-      status.textContent = 'Authorizing…';
+      status.textContent = 'Подтверждаю аккаунт VK…';
       VKID.Auth.exchangeCode(payload.code, payload.device_id)
-        .then(result => VKID.Auth.userInfo(result.access_token))
-        .then(info => fetch('/v1/vk/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{user_id:String(info.user_id), display_name:info.user_name || info.first_name || 'VK account'}})}}))
-        .then(response => {{ if (!response.ok) throw new Error('UserIO rejected account'); status.textContent = 'VK ID подтверждён. Для чтения сообщений скачайте и установите расширение ниже.'; }})
-        .catch(error => {{ status.textContent = 'Could not connect VK'; console.error(error); }});
+        .then(async result => {{
+          const info = await VKID.Auth.userInfo(result.access_token);
+          const details = {{user_id:String(info.user_id),
+            display_name:info.user_name || info.first_name || 'VK account'}};
+          if (direct) details.access_token = result.access_token;
+          const response = await fetch(direct ? '/v1/vk/native/accounts' : '/v1/vk/accounts', {{
+            method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(details)
+          }});
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'VK не разрешил читать сообщения');
+          return data;
+        }})
+        .then(data => {{
+          status.textContent = data.mode === 'vk_personal_messages_readonly'
+            ? 'Прямое чтение VK подключено. Chrome больше не нужен; отправка пока недоступна.'
+            : 'VK ID подтверждён. Без разрешения messages переписка не загружается.';
+        }})
+        .catch(error => {{ status.textContent =
+          direct ? 'VK не разрешил прямое чтение: ' + error.message
+                 : 'Ошибка подключения VK ID'; }});
     }});
 }})();
 </script></body></html>'''

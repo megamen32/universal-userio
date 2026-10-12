@@ -179,6 +179,9 @@ class UserIOService:
             # Group participants and our own messages belong to the same provider
             # chat. Sender identity must never become the destination of a reply.
             conversation_key = f"max:{account_ref}:{message.peer_id}"
+        if message.source == "vk" and account_ref.startswith("vk:") and message.peer_id:
+            # One UserIO user may have several independent VK identities.
+            conversation_key = f"vk:{account_ref}:{message.peer_id}"
         native_sms = message.source=='sms' and any(a['id']==account_ref and a.get('credential_ref')=='sms-native:default' for a in self._store.accounts(user_id=user_id))
         if native_sms:
             from .channels.sms_gateway import sms_address
