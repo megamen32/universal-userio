@@ -494,6 +494,22 @@ def handler(
                         "eligible_at_ingest": chat["eligible_at_ingest"],
                         "policy_revision": chat["policy_revision"]})
                     return
+                if path.startswith("/v1/conversations/") and path.endswith("/analysis-policy"):
+                    if not service._store.capability_enabled("send", user_id=user_id):
+                        self._reply(403, {"error": "send_capability_disabled"})
+                        return
+                    payload = self._json()
+                    if set(payload) != {"enabled"} or not isinstance(payload["enabled"], bool):
+                        raise ValueError("analysis policy requires an enabled boolean")
+                    conversation_id = unquote(path.removeprefix("/v1/conversations/").removesuffix("/analysis-policy").strip("/"))
+                    chat = service._store.set_workspace_chat_rule(
+                        conversation_id=conversation_id,
+                        action="allow" if payload["enabled"] else "ignore",
+                        reason="Владелец изменил настройку «Разбирать секретарём» в UserIO.",
+                        user_id=user_id,
+                    )
+                    self._reply(200, {"analysis_policy": chat})
+                    return
                 if path == "/v1/workspace/claims":
                     if not service._store.capability_enabled("read", user_id=user_id):
                         self._reply(403, {"error": "read_capability_disabled"})
@@ -1363,6 +1379,9 @@ def handler(
                     placeholder_ids, user_id=user_id,
                 )
                 for entry in conversations:
+                    entry["analysis_policy"] = service._store.evaluate_workspace_chat(
+                        conversation_id=str(entry["id"]), user_id=user_id,
+                    )
                     preview = str(entry.get("preview") or "")
                     if preview.startswith("[") and preview.endswith("]"):
                         replacement = text_overrides.get(str(entry["id"]))
@@ -1444,6 +1463,18 @@ def handler(
                     self._reply(404, {"error": str(error)})
                     return
                 self._reply(200, result)
+                return
+            if path.startswith("/v1/conversations/") and path.endswith("/analysis-policy"):
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"})
+                    return
+                conversation_id = unquote(path.removeprefix("/v1/conversations/").removesuffix("/analysis-policy").strip("/"))
+                try:
+                    chat = service._store.evaluate_workspace_chat(conversation_id=conversation_id, user_id=user_id)
+                except KeyError:
+                    self._reply(404, {"error": "conversation not found"})
+                    return
+                self._reply(200, {"analysis_policy": chat})
                 return
             if path.startswith('/v1/conversations/') and path.endswith('/phone-history'):
                 if not service._store.capability_enabled('read', user_id=user_id):

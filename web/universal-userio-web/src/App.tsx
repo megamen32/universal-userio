@@ -14,7 +14,8 @@ import { mergePhoneHistory } from "./phone-history"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
-type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
+type AnalysisPolicy = { conversation_id: string; conversation_kind: string; allowed: boolean; action: string }
+type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string; analysis_policy?: AnalysisPolicy }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; conversation_kind?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
 type Message = { source: string; message_id: string; sender: string; sender_name?: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string; created_at?: number; context_status?: "unknown" | "current" | "stale"; reply_to?: { source: string; message_id: string; body: string; received_at: number } | null }
@@ -59,6 +60,7 @@ const channelIcon = (source: string) => {
   return <MessageCircle className="size-4" />
 }
 const displayChannel = (source: string) => source === 'phone' ? 'Звонки' : providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
+const chatKindLabel = (kind?: string) => (Object.entries({ group: "Группа", channel: "Канал", direct: "Личный чат", telegram_bot: "Бот", unknown: "Тип не определён" }).find(([key]) => key === kind)?.[1] || "Тип не определён")
 
 // A message is "mine" (right bubble) when it was authored by the sending
 // account chosen for the conversation ("отправка от"; auto = first platform
@@ -212,6 +214,10 @@ export function App() {
   const [secretaryBusy, setSecretaryBusy] = useState(false)
   const [secretaryError, setSecretaryError] = useState("")
   const [secretaryLoading, setSecretaryLoading] = useState(false)
+  const [analysisPolicy, setAnalysisPolicy] = useState<AnalysisPolicy | null>(null)
+  const [analysisPolicyBusy, setAnalysisPolicyBusy] = useState(false)
+  const [analysisPolicyError, setAnalysisPolicyError] = useState("")
+  const analysisPolicyRequest = useRef(new LatestRequest())
   const currentSecretaryDeep = secretary?.deep?.event_seq === secretary?.conversation.event_seq ? secretary?.deep : null
   const [selectedAccount, setSelectedAccount] = useState<string>("all")
   const [selectedChannel, setSelectedChannel] = useState<string>("all")
@@ -442,6 +448,39 @@ export function App() {
     if (selectedChat && userCapabilities.read) void loadSecretary(selectedChat)
     return () => { requestGate.reset() }
   }, [loadSecretary, selectedChat, userCapabilities.read])
+  useEffect(() => {
+    const gate = analysisPolicyRequest.current
+    const request = gate.begin()
+    setAnalysisPolicy(null)
+    setAnalysisPolicyError("")
+    setAnalysisPolicyBusy(false)
+    if (selectedChat && userCapabilities.read) {
+      void api<{ analysis_policy: AnalysisPolicy }>(`/v1/conversations/${encodeURIComponent(selectedChat)}/analysis-policy`)
+        .then(result => { if (gate.isCurrent(request)) setAnalysisPolicy(result.analysis_policy) })
+        .catch(error => { if (gate.isCurrent(request)) setAnalysisPolicyError((error as Error).message) })
+    }
+    return () => { gate.begin() }
+  }, [selectedChat, userCapabilities.read])
+  const setChatAnalysis = async (enabled: boolean) => {
+    if (!conversation || analysisPolicyBusy) return
+    const id = conversation.id
+    const gate = analysisPolicyRequest.current
+    const request = gate.begin()
+    setAnalysisPolicyBusy(true)
+    setAnalysisPolicyError("")
+    try {
+      const result = await api<{ analysis_policy: AnalysisPolicy }>(`/v1/conversations/${encodeURIComponent(id)}/analysis-policy`, {
+        method: "POST", body: JSON.stringify({ enabled }),
+      })
+      setChats(items => items.map(item => item.id === id ? { ...item, analysis_policy: result.analysis_policy } : item))
+      if (gate.isCurrent(request)) setAnalysisPolicy(result.analysis_policy)
+      notify(enabled ? "Автоматический разбор новых сообщений включён" : "Автоматический разбор выключен")
+    } catch (error) {
+      if (gate.isCurrent(request)) setAnalysisPolicyError((error as Error).message)
+    } finally {
+      if (gate.isCurrent(request)) setAnalysisPolicyBusy(false)
+    }
+  }
   useEffect(() => {
     if (!selectedChat || secretaryBusy || secretaryLoading || !secretary?.deep || !["accepted", "running"].includes(secretary.deep.status)) return
     const timer = window.setInterval(() => {
@@ -969,7 +1008,7 @@ export function App() {
         {visibleChats.map((chat, chatIndex) => {
           const unread = chat.unread_count > 0
           return <button key={chat.id} data-conversation-id={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
-          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
+          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.analysis_policy && <span title={`${chatKindLabel(chat.analysis_policy.conversation_kind)} · Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`} aria-label={`Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`}><Sparkles className={`size-3 ${chat.analysis_policy.allowed ? "text-[#2f80ed]" : "text-muted-foreground/50"}`} /></span>}{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
         </button>
         })}
         </div>
@@ -993,6 +1032,7 @@ export function App() {
             <h2 className="truncate text-sm font-semibold" title={prettySender(conversation.sender, conversation.source)}>{titleOf(conversation)}</h2>
             <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
               <span className="shrink-0">{displayChannel(conversation.source)}</span>
+              <span className="hidden shrink-0 sm:inline">· {chatKindLabel(analysisPolicy?.conversation_kind || conversation.conversation_kind)}</span>
               {(() => {
                 const platformAccounts = accounts.filter(item => providerForSource(item.provider) === providerForSource(conversation.source))
                 const senderAccount = platformAccounts.find(item => item.id === conversation.account_ref)
@@ -1004,11 +1044,17 @@ export function App() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <label className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs" title={analysisPolicyError || "Автоматический разбор новых сообщений и уведомления. Сообщения остаются в диалоге при выключении."}>
+              <input type="checkbox" aria-label="Разбирать секретарём" checked={!!analysisPolicy?.allowed} disabled={!analysisPolicy || analysisPolicyBusy || !sendEnabled} onChange={event => void setChatAnalysis(event.target.checked)} className="size-4 accent-[#2f80ed]" />
+              <span className="hidden sm:inline">Разбирать</span><Sparkles className={`size-3.5 ${analysisPolicy?.allowed ? "text-[#2f80ed]" : "text-muted-foreground"}`} />
+            </label>
             <Popover.Root key={conversation.id}>
               <Popover.Trigger asChild><Button variant="ghost" size="sm" className="h-8 px-2" title="Открыть секретаря: оценка важности, подробный разбор и результаты" aria-label="Открыть секретаря"><Sparkles className="size-4 text-[#2f80ed]" /><span className="hidden sm:inline">Секретарь</span>{(secretaryError || currentSecretaryDeep?.status === "failed") && <span className="text-destructive">!</span>}{currentSecretaryDeep?.status === "running" && <span className="size-1.5 rounded-full bg-[#2f80ed]" />}</Button></Popover.Trigger>
               <Popover.Portal><Popover.Content align="end" sideOffset={8} collisionPadding={12} aria-label="Секретарь" className="z-50 flex max-h-[min(70vh,var(--radix-popover-content-available-height))] w-[min(420px,calc(100vw-24px))] flex-col gap-3 overflow-y-auto rounded-xl border bg-card p-3 text-foreground shadow-xl">
             <div className="flex shrink-0 flex-wrap gap-2" title="Оценить важность — приоритет и нужен ли ответ. Подробный анализ — отдельная сессия агента с разбором и планом.">{secretaryError && <Button variant="outline" size="sm" disabled={secretaryBusy || secretaryLoading} onClick={() => void loadSecretary(conversation.id)}>Повторить загрузку</Button>}<Button variant="outline" size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq} onClick={() => void analyseWithSecretary()}>{secretaryBusy ? "Подождите…" : "Оценить важность"}</Button><Button size="sm" disabled={secretaryBusy || !secretary?.conversation.event_seq || ["accepted", "running", "completed"].includes(currentSecretaryDeep?.status || "")} onClick={() => void startDeepSecretaryAnalysis()}>{currentSecretaryDeep?.status === "completed" ? "Готово" : currentSecretaryDeep?.status === "failed" ? "Повторить подробный анализ" : "Подробный анализ"}</Button>{secretary?.deep?.session_url && <Button asChild variant="outline" size="sm"><a href={secretary.deep.session_url} target="_blank" rel="noreferrer">Agent Herder ↗</a></Button>}</div>
             <div className="min-w-0 flex-1">
+              <p className="mb-2 text-xs text-muted-foreground">{chatKindLabel(analysisPolicy?.conversation_kind || conversation.conversation_kind)} · {analysisPolicy ? analysisPolicy.allowed ? "Автоматический разбор включён" : "Автоматический разбор выключен" : "Загружаю настройку разбора…"}</p>
+              {analysisPolicyError && <p className="mb-2 text-xs text-destructive" role="alert">Не удалось сохранить настройку: {analysisPolicyError}</p>}
               <div className="flex flex-wrap items-center gap-2"><span className="inline-flex items-center gap-1 text-sm font-semibold"><Sparkles className="size-4 text-[#2f80ed]" /> Секретарь</span>{secretary?.triage?.triage && <Badge variant="secondary">{(() => { const score = secretary.triage?.triage?.importance ?? 0; return score >= .75 ? "Высокий приоритет" : score >= .45 ? "Средний приоритет" : "Низкий приоритет" })()}</Badge>}{secretary?.deep && <Badge variant="outline">{secretary.deep.status === "accepted" ? "Принято" : secretary.deep.status === "running" ? "Глубокий разбор идёт" : secretary.deep.status === "completed" ? "Готово" : "Ошибка"}</Badge>}</div>
               {secretaryError && <p className="mt-1 text-xs text-destructive" role="alert">{secretaryError}</p>}
               {secretaryLoading && !secretary && <p className="mt-1 text-xs text-muted-foreground">Загружаю состояние секретаря…</p>}
