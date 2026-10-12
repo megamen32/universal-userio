@@ -129,7 +129,9 @@ class Messenger:
                   'message_id':mid, 'provider_message_id':provider_id,
                   'thread_id':str(msg.get('provider_thread_id') or routing.get('reply_to_top_id') or routing.get('thread_id') or ''),
                   'reply_to_provider_message_id':str(msg.get('provider_reply_to') or routing.get('reply_to_message_id') or routing.get('reply_to_msg_id') or ''),
-                  'channel':conv['source'], 'direction':msg['direction']}
+                  'channel':conv['source'], 'direction':msg['direction'],
+                  'invocation':{'mention':routing.get('is_exact_account_mention') is True,
+                                'reply':routing.get('is_reply_to_account') is True}}
         return {'source':source, 'author':author, 'text':str(msg['body']),
                 'at':msg['received_at'], 'edited_at':msg.get('edited_at', 0), 'media':media}
 

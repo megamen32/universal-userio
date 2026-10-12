@@ -207,3 +207,19 @@ def test_telegram_ingress_preserves_raw_source_whitespace(case):
           'sender':'42','body':'  exact body\n','received_at':1700000000,'peer_id':'-10042'}
     msg=inbox_message_from_envelope(wire,received_at=1)
     assert msg.body==wire['body']
+
+
+
+def test_invocation_is_authenticated_routing_metadata_never_body_guess(case):
+    store,service,p,cid,source=case
+    route={'author_id':'42','is_exact_account_mention':True,'is_reply_to_account':False}
+    service.receive(replace(source,message_id='-10042:90',body='ordinary text',
+        attachments=({'kind':'telegram_routing','provider_ref':json.dumps(route)},)),route_id='telegram',account_ref=p.account_ref)
+    first=dispatch(case,'history',{'account_ref':p.account_ref,'conversation_id':cid})['messages'][-1]
+    assert first['source']['invocation']=={'mention':True,'reply':False}
+    route.update(is_exact_account_mention='true',is_reply_to_account=1)
+    service.receive(replace(source,message_id='-10042:91',body='@secretary please reply',
+        attachments=({'kind':'telegram_routing','provider_ref':json.dumps(route)},)),route_id='telegram',account_ref=p.account_ref)
+    result=dispatch(case,'history',{'account_ref':p.account_ref,'conversation_id':cid})['messages'][-1]
+    assert result['source']['invocation']=={'mention':False,'reply':False}
+    assert p.calls==[]

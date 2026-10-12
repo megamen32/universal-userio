@@ -104,6 +104,9 @@ class RelayMessengerProvider:
         routing={ 'author_id':str(a['id']), 'author_name':str(a.get('name') or ''),
                  'author_username':str(a.get('username') or ''),
                  'author_first_name':str(a.get('first_name') or ''),'author_last_name':str(a.get('last_name') or '')}
+        invocation=s.get('invocation') if isinstance(s.get('invocation'),dict) else {}
+        routing.update(is_exact_account_mention=invocation.get('mention') is True,
+                       is_reply_to_account=invocation.get('reply') is True)
         attachments=[]
         for item in p.get('media') or []:
             # Only source-bound media references, never tokens or provider URL.

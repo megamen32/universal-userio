@@ -94,3 +94,15 @@ def test_media_read_passes_exact_attachment_index(case):
     provider.opener=opener
     api.media(ref,cid,ref+'|'+peer+':77',attachment_index=1)
     assert seen[-1]['read_media'] and seen[-1]['attachment_index']==1
+
+
+
+def test_real_invocation_survives_normal_provider_reconciliation(case):
+    store,service,api,provider,ref,peer,calls,options=case
+    import hashlib
+    cid='conv_'+hashlib.sha256((store.default_user_id+'\0telegram:'+ref+':'+peer).encode()).hexdigest()[:24]
+    projected=provider.message(peer_id=peer,provider_message_id='77',conversation_id=cid)
+    projected['source']['invocation']={'mention':False,'reply':True}
+    provider.import_projection(projected,peer_id=peer,conversation_id=cid,kind='group')
+    result=api.history(ref,cid)['messages'][0]
+    assert result['source']['invocation']=={'mention':False,'reply':True}

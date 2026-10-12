@@ -57,7 +57,8 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
   1. Deployed native Secretary completes Telegram/MAX source/media/read/reply/rich action acceptance.
   2. Current business work, roles, confirmations and memory remain intact.
   3. Exmanager owner retires only proven replaceable dedicated paths with rollback.
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 15-01: Real native parity, business preservation and scoped retirement
 
 ## Progress
 | Phase | Status |

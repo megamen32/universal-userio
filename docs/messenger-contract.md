@@ -39,7 +39,9 @@ MAX canonical message ID is `max-` + actual chat ID + `-` + actual provider ID.
 
 Messages expose `source`, `author`, `text`, `at`, `edited_at`, `media`.
 Source includes exact account/conversation/peer/provider/local message IDs,
-channel, direction, kind, reply-to and thread IDs. Author ID is the actual
+channel, direction, kind, reply-to and thread IDs. Source.invocation is
+`{mention:bool,reply:bool}` from verified provider routing, never a text guess.
+Unknown/native-unsupported invocation flags are explicitly false. Author ID is the actual
 participant; name/first/last/username are display fields and never authority.
 
 Approval binds the following exact provider fields:
@@ -189,7 +191,9 @@ cannot impersonate ingress or manage tokens.
 
 Append actual media references in their native order with kind, attachment_id,
 content_type, filename and size. Optional last `telegram_routing` attachment
-contains author_id/name/first_name/last_name/username as JSON provider_ref.
+contains author_id/name/first_name/last_name/username as JSON provider_ref, plus
+boolean is_exact_account_mention and is_reply_to_account when actually verified
+on the same connected account. These project as source.invocation.
 All IDs remain decimal strings. Never insert provider tokens, access hashes or
 private URLs. Do not insert ASR transcript into this raw-source ingress body;
 read actual image/voice content separately via messenger.media. That read sends
