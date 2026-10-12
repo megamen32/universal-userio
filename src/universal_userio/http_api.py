@@ -347,6 +347,12 @@ def handler(
                 return
             try:
                 if path == "/mcp":
+                    # Bounded new-file staging uses at most 2MiB of bytes
+                    # plus base64/JSON overhead; reject before reading a body.
+                    if not 0<int(self.headers.get('Content-Length','0'))<=3_000_000:
+                        self._reply(413,{'error':'mcp_body_exceeds_limit'})
+                        self.close_connection=True
+                        return
                     request = self._json()
                     response = json_rpc_response(surface, request, principal=principal, subscription_hub=subscriptions)
                     if response is None:

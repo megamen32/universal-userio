@@ -142,7 +142,12 @@ class RelayMessengerProvider:
             'idempotency_key':'userio:'+self.authorized_user+':'+envelope['action_id'],
             'issued_at':now,'expires_at':now+300}
         proof=hmac.new(self.key,(APPROVAL_SCHEMA+'\n').encode()+canonical(approval),hashlib.sha256).hexdigest()
-        return self._request('POST','/userio/messenger/execute',{'envelope':envelope,'approval':approval,'proof':proof})
+        packet={'envelope':envelope,'approval':approval,'proof':proof}
+        if 'upload_id' in envelope['payload']:
+            from .messenger_uploads import MessengerUploads
+            data=MessengerUploads(self.service._store,envelope['user_id']).data(envelope)
+            packet['upload']={'data_base64':base64.b64encode(data).decode()}
+        return self._request('POST','/userio/messenger/execute',packet)
 
     def media(self, projected, *, attachment_index=0):
         s=projected['source']

@@ -150,3 +150,62 @@ def test_max_photo_media_uses_actual_attachment_and_bytes_without_urls(tmp_path,
     assert seen[0]['attachment']['photoId']==987
     assert 'private-fixture' not in json.dumps(result)
     store.close()
+
+
+def test_new_max_document_upload_waits_ready_and_preserves_incoming(tmp_path,monkeypatch):
+    import base64,hashlib,io,urllib.request
+    store,t,service,cid,api=setup(tmp_path)
+    orig=t.send
+    def send(ws,text):
+        f=json.loads(text)
+        if f['opcode']==87:
+            t.calls.append(f)
+            t.frames.append({'seq':f['seq'],'opcode':87,'cmd':1,'payload':{'info':[{'fileId':987654321,'url':'https://upload.oneme.ru/owned-upload'}]}})
+            t.frames.append({'opcode':128,'cmd':0,'payload':{'chatId':99,'message':{'id':'555','text':'foreign incoming retained'}}})
+            t.frames.append({'opcode':136,'cmd':0,'payload':{'fileId':123456}})
+            t.frames.append({'opcode':136,'cmd':0,'payload':{'fileId':987654321}})
+        else:orig(ws,text)
+    t.send=send
+    posts=[]
+    class Response(io.BytesIO):
+        status=200
+        def __enter__(self):return self
+        def __exit__(self,*a):self.close()
+    class Opener:
+        def open(self,req,timeout):posts.append(req);return Response(b'OK')
+    monkeypatch.setattr(urllib.request,'build_opener',lambda *a:Opener())
+    data=b'MAX new exported report'
+    u=api.upload('max',cid,'max-0-123',filename='report.txt',mime_type='text/plain',
+        data_base64=base64.b64encode(data).decode(),sha256=hashlib.sha256(data).hexdigest(),request_id='new-max-document-stage-123456')
+    a=api.propose('max',cid,'max-0-123','file',{'upload_id':u['upload_id'],'caption':'report'},'new-max-document-send-123456')
+    assert not posts
+    accepted=api.approve(a['id'],a['hash'],True)
+    assert accepted['status']=='accepted' and len(posts)==1 and posts[0].data==data
+    assert posts[0].get_header('Content-range')=='0-22/23'
+    msg=next(f['payload']['message'] for f in t.calls if f['opcode']==64)
+    assert msg['attaches']==[{'_type':'FILE','fileId':987654321}]
+    assert msg['link']['messageId']==123 and msg['text']=='report'
+    assert service.max_client.dispatch(timeout=0)['message']['id']=='555'
+    assert api.approve(a['id'],a['hash'],True)==accepted and len(posts)==1
+    assert not any(f['opcode']==92 for f in t.calls)
+    store.close()
+
+
+def test_max_send_reconnect_after_upload_never_reuploads(tmp_path,monkeypatch):
+    import base64,hashlib,pytest
+    from universal_userio.contracts import DeliveryNotSubmittedError
+    store,t,service,cid,api=setup(tmp_path)
+    uploads=[]
+    def upload(**kw):uploads.append(kw);return {'_type':'FILE','fileId':777}
+    def send(**kw):raise DeliveryNotSubmittedError('write connection refused after upload')
+    monkeypatch.setattr(service.max_client,'upload_file',upload)
+    monkeypatch.setattr(service.max_client,'send_bound',send)
+    data=b'new document'
+    u=api.upload('max',cid,'max-0-123',filename='report.txt',mime_type='text/plain',data_base64=base64.b64encode(data).decode(),
+        sha256=hashlib.sha256(data).hexdigest(),request_id='max-reconnect-stage-123456')
+    a=api.propose('max',cid,'max-0-123','file',{'upload_id':u['upload_id']},'max-reconnect-action-123456')
+    with pytest.raises(RuntimeError):api.approve(a['id'],a['hash'],True)
+    assert api.get(a['id'])['status']=='sending'
+    with pytest.raises(ValueError,match='delivery_uncertain'):api.approve(a['id'],a['hash'],True)
+    assert len(uploads)==1
+    store.close()

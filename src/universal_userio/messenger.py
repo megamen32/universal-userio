@@ -14,7 +14,7 @@ import time
 from .contracts import DeliveryNotSubmittedError
 
 SCHEMA = 'userio.messenger.v1'
-OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'typing')
+OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
 READ_OPERATIONS = frozenset({'read', 'history', 'download'})
 
 
@@ -72,7 +72,8 @@ class Messenger:
                 'history_mode':'provider' if 'history' in ops else 'stored',
                 'credential_scope':('messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
-                'operations':result}
+                'operations':result,
+                'upload_limits':{'max_bytes':2*1024*1024,'ttl_seconds':900,'max_staged':4}}
 
     def _allow(self, account_ref, operation):
         capability = self.capabilities(account_ref)['operations'][operation]
@@ -254,6 +255,12 @@ class Messenger:
         keys = {'reply':{'text'},'edit':{'text','expected_text'},'react':{'emoji'},
                 'sticker':{'media_message_id','attachment_index'},'file':{'media_message_id','attachment_index','caption'},
                 'typing':{'active'}}
+        if action=='file' and 'upload_id' in payload:
+            if set(payload)-{'upload_id','caption'} or not isinstance(payload['upload_id'],str) or not re.fullmatch(r'upload_[0-9a-f]{64}',payload['upload_id']):
+                raise ValueError('invalid_upload_payload')
+            if 'caption' in payload and (not isinstance(payload['caption'],str) or len(payload['caption'])>1024):
+                raise ValueError('invalid_caption')
+            return dict(payload)
         if action not in keys or set(payload)-keys[action]: raise ValueError('invalid_action_payload')
         if action in {'reply','edit'}:
             if not isinstance(payload.get('text'),str) or not payload['text'].strip() or len(payload['text'])>65536:
@@ -300,6 +307,23 @@ class Messenger:
             media, _ = self._binding(conv,envelope['payload']['media_message_id'])
             if self._media_hash(media,envelope['payload']['attachment_index'])!=envelope['media_hash']:
                 raise ValueError('media_snapshot_conflict')
+        if 'upload_id' in envelope['payload']:
+            self._allow(envelope['account_ref'],'file_upload')
+            from .messenger_uploads import MessengerUploads
+            MessengerUploads(self.store,self.user).data(envelope)
+
+    def upload(self, account_ref, conversation_id, source_message_id, *, filename, mime_type, data_base64, sha256, request_id):
+        self._allow(account_ref,'file_upload')
+        self._allow(account_ref,'file')
+        conv=self._conversation(account_ref,conversation_id)
+        if not self.store.route_allowed(user_id=self.user,source=conv['source'],route_id=conv['route_id']):
+            raise PermissionError('route_disabled')
+        projected,source_hash=self._binding(conv,source_message_id)
+        from .messenger_uploads import MessengerUploads
+        binding={'account_ref':account_ref,'conversation_id':conv['id'],'source_message_id':source_message_id,
+                 'source_hash':source_hash,'source_binding':projected['binding'],'thread_id':projected['source']['thread_id']}
+        return MessengerUploads(self.store,self.user).stage(binding,filename=filename,mime_type=mime_type,
+            data_base64=data_base64,sha256=sha256,request_id=request_id)
 
     @staticmethod
     def _media_hash(projected, index):
@@ -322,7 +346,7 @@ class Messenger:
         if action=='edit' and (projected['source']['direction']!='outgoing' or projected['text']!=payload['expected_text']):
             raise ValueError('own_current_message_required')
         media_hash = ''
-        if action in {'sticker','file'}:
+        if action in {'sticker','file'} and 'upload_id' not in payload:
             media, _ = self._binding(conv,payload['media_message_id'])
             media_hash = self._media_hash(media,payload['attachment_index'])
         envelope = {'schema':SCHEMA, 'user_id':self.user, 'account_ref':account_ref,
@@ -331,15 +355,23 @@ class Messenger:
                     'source_hash':source_hash,'source_binding':projected['binding'],
                     'thread_id':projected['source']['thread_id'],
                     'action':action,'payload':payload,'media_hash':media_hash,'request_id':request_id}
+        upload=None
+        if 'upload_id' in payload:
+            self._allow(account_ref,'file_upload')
+            from .messenger_uploads import MessengerUploads,upload_binding
+            upload=MessengerUploads(self.store,self.user)
+            envelope['payload']={**payload,**upload.metadata(payload['upload_id'],upload_binding(envelope))}
         action_id = 'action_'+hashlib.sha256((self.user+'\0'+request_id).encode()).hexdigest()
         envelope['action_id'] = action_id
         action_hash = digest(envelope)
         self._init_actions()
         with self.store._lock, self.store._connection:
+            self.store._connection.execute('BEGIN IMMEDIATE')
             row = self.store._connection.execute('SELECT hash FROM messenger_actions WHERE user_id=? AND id=?',
                                                 (self.user,action_id)).fetchone()
             if row and row['hash']!=action_hash: raise ValueError('idempotency_conflict')
             if not row:
+                if upload is not None: upload.bind(payload['upload_id'],action_id)
                 self.store._connection.execute('INSERT INTO messenger_actions '
                     '(user_id,id,request_id,envelope,hash,status,created_at) VALUES (?,?,?,?,?,?,?)',
                     (self.user,action_id,request_id,canonical(envelope).decode(),action_hash,'proposed',time.time()))
@@ -392,6 +424,8 @@ class Messenger:
             with self.store._lock, self.store._connection:
                 self.store._connection.execute("UPDATE messenger_actions SET status='accepted',receipt=? "
                     "WHERE user_id=? AND id=? AND status='sending'",(canonical(result).decode(),self.user,action_id))
+                if 'upload_id' in e['payload']:
+                    self.store._connection.execute('UPDATE messenger_uploads SET data=NULL WHERE user_id=? AND id=?',(self.user,e['payload']['upload_id']))
         except DeliveryNotSubmittedError:
             with self.store._lock, self.store._connection:
                 self.store._connection.execute("UPDATE messenger_actions SET status='proposed' WHERE user_id=? AND id=? AND status='sending'",
@@ -420,6 +454,7 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'resolve': return {'ok':True,**api.resolve(**arguments)}
         if op == 'media': return {'ok':True,**api.media(**arguments)}
         if op == 'events': return {'ok':True,**api.events(**arguments)}
+        if op == 'upload': return {'ok':True,'upload':api.upload(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
         if op == 'approve': return {'ok':True,'action':api.approve(**arguments)}

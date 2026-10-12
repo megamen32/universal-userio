@@ -40,6 +40,8 @@ OP_GET_MESSAGE = 71
 OP_DISPATCH = 128
 OP_REACTION = 178
 OP_TYPING = 65
+OP_FILE_UPLOAD = 87
+OP_FILE_READY = 136
 
 _HEARTBEAT_INTERVAL = 25.0
 
@@ -116,6 +118,7 @@ class MaxClient:
         self._ws: Any = None
         self._lock = threading.RLock()
         self._pending: deque[dict[str, Any]] = deque()
+        self._ready_files: deque[str] = deque(maxlen=64)
         self._seq = 0
         self._profile: dict[str, Any] | None = None
         self._last_heartbeat = 0.0
@@ -221,6 +224,8 @@ class MaxClient:
                 frame = self._transport.recv(self._ws, max(1.0, deadline - time.monotonic()))
                 if frame is None:
                     continue
+                if frame.get('opcode')==OP_FILE_READY and frame.get('cmd')==0:
+                    self._remember_file_ready(frame)
                 if frame.get("opcode") == OP_DISPATCH:
                     if len(self._pending) >= 1000:
                         raise RuntimeError("MAX event buffer full; reconnect/catch up required")
@@ -236,6 +241,52 @@ class MaxClient:
             raise TimeoutError(f"MAX opcode {opcode} timed out after {timeout}s")
 
     # -- public commands ----------------------------------------------------
+
+    def _remember_file_ready(self, frame):
+        value=(frame.get('payload') or {}).get('fileId')
+        if str(value).isdigit() and int(value)>0:
+            self._ready_files.append(str(value))
+
+    def upload_file(self, *, data: bytes, filename: str, mime_type: str) -> dict[str, Any]:
+        """Upload new bounded bytes and wait for the same-client FILE_READY.
+
+        PyMax uploads/service.py: FILE_UPLOAD87 -> HTTP POST -> NOTIF_ATTACH136.
+        No automatic retry after upload begins. Caller owns durable uncertainty.
+        """
+        import urllib.request
+        from urllib.parse import urlsplit, quote
+        from ..messenger_max_media import NoRedirect
+        if not isinstance(data,bytes) or not 1<=len(data)<=2*1024*1024:
+            raise ValueError('MAX upload exceeds file budget')
+        with self._lock:
+            response=self._roundtrip(OP_FILE_UPLOAD,{'count':1,'type':0,'uploaderType':0,'profile':False})
+            info=(response or {}).get('info')
+            if not isinstance(info,list) or len(info)!=1 or not isinstance(info[0],dict):
+                raise RuntimeError('MAX upload metadata unavailable')
+            fid=str(info[0].get('fileId') or '')
+            url=info[0].get('url');parsed=urlsplit(str(url));host=parsed.hostname or ''
+            if (not fid.isdigit() or int(fid)<=0 or parsed.scheme!='https' or parsed.username or parsed.password
+                    or parsed.port not in {None,443} or not any(host==d or host.endswith('.'+d) for d in ('oneme.ru','mycdn.me','okcdn.ru'))):
+                raise RuntimeError('MAX native upload route unavailable')
+            req=urllib.request.Request(url,data=data,method='POST',headers={
+                'Content-Type':mime_type,'Content-Disposition':'attachment; filename='+quote(filename),
+                'Content-Length':str(len(data)),'Content-Range':f'0-{len(data)-1}/{len(data)}'})
+            opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open
+            with opener(req,timeout=20) as uploaded:
+                if uploaded.status!=200: raise RuntimeError('MAX upload not confirmed')
+                uploaded.read(4096)
+            deadline=time.monotonic()+30
+            while fid not in self._ready_files and time.monotonic()<deadline:
+                frame=self._transport.recv(self._ws,max(0.1,deadline-time.monotonic()))
+                if frame is None: continue
+                if frame.get('opcode')==OP_FILE_READY and frame.get('cmd')==0:
+                    self._remember_file_ready(frame)
+                elif frame.get('opcode')==OP_DISPATCH:
+                    if len(self._pending)>=1000:raise RuntimeError('MAX event buffer full')
+                    self._pending.append(frame.get('payload') or {})
+            if fid not in self._ready_files: raise TimeoutError('MAX upload readiness unknown; do not retry')
+            self._ready_files.remove(fid)
+            return {'_type':'FILE','fileId':int(fid)}
 
     def chats(self, *, count: int = 50) -> list[dict[str, Any]]:
         payload = self._roundtrip(OP_GET_CHATS, {"count": count, "marker": int(time.time() * 1000)})
@@ -398,6 +449,8 @@ class MaxClient:
                 frame = self._transport.recv(self._ws, max(1.0, deadline - time.monotonic()))
                 if frame is None:
                     continue
+                if frame.get('opcode')==OP_FILE_READY and frame.get('cmd')==0:
+                    self._remember_file_ready(frame)
                 if frame.get("opcode") == OP_DISPATCH:
                     return frame.get("payload") or {}
                 # A PING ACK is not a new server request: replying to it would

@@ -189,6 +189,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
     'userio.messenger.propose': 'send',
+    'userio.messenger.upload': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.read": "read",

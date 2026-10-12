@@ -20,6 +20,7 @@ The HTTP and stdio surfaces share `mcp_catalog.MESSENGER_SPECS`.
 | `userio.messenger.resolve` | `account_ref`, `peer_id`, `provider_message_id` | Actual source fetched on the current provider client and imported normally; canonical `conversation_id`, source and author. No fake conversation or read ACK |
 | `userio.messenger.history` | `account_ref`, `conversation_id`, `limit`1–100, optional `cursor`, `refresh`false | Chronological page; stored mode is partial/unverified, provider mode returns its actual cursor and freshness. Cursors belong to that mode/account/conversation |
 | `userio.messenger.media` | `account_ref`, `conversation_id`, `message_id`, optional `attachment_index`0–7 | Actual bounded image bytes or transcript/status. Unsupported media is explicit |
+| `userio.messenger.upload` | Exact account/conversation/source, filename/MIME/base64 bytes/SHA/request_id | Private bounded new-file staging, no provider send. See [new-file contract](contracts/messenger-upload-v1.md) |
 | `userio.messenger.propose` | `account_ref`, `conversation_id`, `source_message_id`, `action`, `payload`, `request_id`16–128 characters | Immutable action with `id`, `hash`, `created_at`, `status`, `envelope`, `receipt`. No provider mutation |
 | `userio.messenger.approve` | `action_id`, `expected_hash`, `confirm:true` | Execute exactly the human-approved action. Durable accepted receipt or explicit failure/unknown |
 | `userio.messenger.get` | `action_id` | Read the durable outcome; never generate a second intent to resolve `sending` |
@@ -79,6 +80,11 @@ in the same peer. `source_binding` uses the provider fields above,
 `attachment_index` is an integer. It contains no access hash, provider URL,
 local display name or local timestamp. The provider re-reads this actual media
 source and verifies its attachment identity before claiming the mutation.
+
+New-file actions use the separately bounded `file_upload` capability and opaque
+`upload_id`; they do not impersonate an existing media source. Their signed file
+metadata/bytes SHA replaces the media-reference branch; `media_hash` is empty.
+See [staging and provider packet](contracts/messenger-upload-v1.md).
 
 ## Current sender and protected provider route
 

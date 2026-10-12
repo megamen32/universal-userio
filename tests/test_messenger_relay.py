@@ -134,3 +134,23 @@ def test_media_survives_routing_import_and_reconciliation(case):
         rows=store.attachments_for_message(source='telegram',message_id=ref+'|'+peer+':77')
         assert [(a['idx'],a['kind']) for a in rows]==[(0,'image'),(1,'document'),(2,'telegram_routing')]
     assert len(api.history(ref,resolved['conversation_id'])['messages'])==1
+
+
+def test_new_file_bytes_travel_only_with_signed_approved_metadata(case):
+    import base64
+    store,service,api,p,ref,peer,calls,options=case
+    cid=api.resolve(ref,peer,'77')['conversation_id']
+    p._caps['operations']+=['file','file_upload']
+    data=b'New exported document bytes'
+    u=api.upload(ref,cid,ref+'|'+peer+':77',filename='export.txt',mime_type='text/plain',
+        data_base64=base64.b64encode(data).decode(),sha256=hashlib.sha256(data).hexdigest(),request_id='relay-upload-stage-123456')
+    assert not calls
+    a=api.propose(ref,cid,ref+'|'+peer+':77','file',{'upload_id':u['upload_id']},'relay-upload-send-123456')
+    result=api.approve(a['id'],a['hash'],True)
+    assert result['status']=='accepted' and len(calls)==1
+    packet=calls[0]
+    assert base64.b64decode(packet['upload']['data_base64'])==data
+    assert packet['envelope']['payload']['sha256']==hashlib.sha256(data).hexdigest()
+    assert packet['approval']['payload_sha256']==hashlib.sha256(canonical(packet['envelope']['payload'])).hexdigest()
+    assert 'data_base64' not in packet['envelope']['payload']
+    assert api.approve(a['id'],a['hash'],True)==result and len(calls)==1

@@ -14,7 +14,7 @@ from .contracts import DeliveryNotSubmittedError
 
 class MaxMessengerProvider:
     account_ref = 'max'
-    operations = frozenset({'reply','edit','react','sticker','file','typing','download','history'})
+    operations = frozenset({'reply','edit','react','sticker','file','file_upload','typing','download','history'})
 
     def __init__(self, service):
         self.service=service; self.client=service.max_client
@@ -134,6 +134,22 @@ class MaxMessengerProvider:
         elif action=='typing':
             self.client.typing(chat_id=e['peer_id'],active=p['active'])
             result={'provider_message_id':raw_id,'receipt':'max-ws-typing:'+e['action_id']}
+        elif action=='file' and 'upload_id' in p:
+            from .messenger_uploads import MessengerUploads
+            # Verification before any provider upload. Failures after this
+            # point remain UNKNOWN in the ordinary action journal.
+            try: data=MessengerUploads(self.service._store,e['user_id']).data(e)
+            except Exception: raise DeliveryNotSubmittedError('MAX staged bytes unavailable before upload') from None
+            attachment=self.client.upload_file(data=data,filename=p['filename'],mime_type=p['mime_type'])
+            try:
+                sent=self.client.send_bound(chat_id=e['peer_id'],reply_to=raw_id,cid=cid,
+                    text=p.get('caption',''),attaches=[attachment])
+            except DeliveryNotSubmittedError:
+                # A fresh write connection may fail before SEND, but the
+                # preceding upload has already reached the provider.
+                raise RuntimeError('MAX upload accepted, send outcome incomplete; do not retry') from None
+            result={'provider_message_id':sent['message_id'],'receipt':sent['receipt']+':'+e['action_id'],
+                    'upload_sha256':p['sha256'],'upload_size':p['size']}
         elif action in {'sticker','file'}:
             try:
                 conv=self.service._store.conversation(e['conversation_id'],user_id=e['user_id'])
