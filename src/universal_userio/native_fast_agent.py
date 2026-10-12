@@ -256,7 +256,7 @@ class FastAgentDraftGenerator(OpenAICompatibleDraftGenerator):
         return self._execute_native({
             "model": model or self._model, "max_tokens": 2000,
             "messages": [
-                {"role": "system", "content": "Produce a reply draft only; do not claim to send."},
+                {"role": "system", "content": self._draft_instruction()},
                 {"role": "user", "content": self._vision_content(prompt, attachments)},
             ],
         })

@@ -164,15 +164,24 @@ def test_native_reply_sees_sticker_pixels_and_not_provider_url(tmp_path):
     def image_loader(**kwargs):
         calls.append(kwargs)
         return ChannelFile("sticker.png", "image/png", b"\x89PNG\r\n\x1a\nfixture")
-    with _provider_fixture([{"role":"assistant","content":"Весёлый тигр на стикере."}]) as (endpoint, requests):
+    with _provider_fixture([{"role":"assistant","content":text} for text in ("Весёлый тигр на стикере.", "Милый тигр!", "Спасибо за тигра.")]) as (endpoint, requests):
         generator=FastAgentDraftGenerator(endpoint=endpoint,token="fixture-only")
         store=SQLiteUserIOStore(tmp_path/'sticker.sqlite3')
         service=UserIOService(store,generator,object(),ai_image_loader=image_loader)
+        service.receive(InboxMessage('max','earlier-owner','peer','Раньше не видел стикеры',0,direction='outgoing'),route_id='test')
         cid,_=service.receive(InboxMessage('max','sticker','peer','',1,attachments=(
             {'kind':'sticker','content_type':'application/octet-stream',
              'src':'https://i.oneme.ru/getSmile?smileId=1&smileType=1'},)),route_id='test')
-        service.propose_from_conversation(cid,limit=1)
-        assert len(calls)==1
+        service.propose_from_conversation(cid,limit=3)
+        assert len(calls)==1 and len(requests)==3
+        for request in requests:
+            assert request['model']=='MiniMax-M3'
+            assert 'Write as the owner' in json.dumps(request['messages'][0])
+            text='\n'.join(part['text'] for entry in request['messages']
+                           if isinstance(entry['content'],list)
+                           for part in entry['content'] if part.get('type')=='text')
+            assert 'Image provenance:' in text and '"context_role":"latest_message"' in text
+            assert '"image_available":true' in text
         assert requests[0]['model']=='MiniMax-M3'
         wire=json.dumps(requests[0],ensure_ascii=False)
         assert 'data:image/png;base64,' in wire

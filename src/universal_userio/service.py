@@ -153,6 +153,7 @@ class UserIOService:
                         ):
                             safe["content_type"] = actual_mime
                             safe["image_bytes"] = data
+                            safe["context_message_id"] = str(raw.get("message_id") or "")[:256]
                     if declared_image and "image_bytes" not in safe:
                         # Do not claim vision support when the account-scoped
                         # adapter could not provide bounded pixels.
@@ -1088,7 +1089,10 @@ class UserIOService:
             "source": message.source, "message_id": message.message_id,
             "attachments": current_source.get("attachments") or [],
         }], user_id=self._store._user(user_id), image_budget=image_budget)[0]
-        message = replace(message, attachments=tuple(current_media.get("attachments") or ()))
+        message = replace(message, attachments=tuple(
+            {**item, "context_role": "latest_message"}
+            for item in current_media.get("attachments") or ()
+        ))
         history = self._hydrate_ai_images(history, user_id=self._store._user(user_id),
                                          image_budget=image_budget)
         if callable(suggest_with_context):
