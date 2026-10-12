@@ -215,6 +215,23 @@ class MaxClient:
     def _roundtrip(
         self, opcode: int, payload: dict[str, Any], *, timeout: float = 20.0
     ) -> Any:
+        # A remote idle close can leave websocket.connected locally true.
+        # Only these side-effect-free reads may reconnect and repeat once;
+        # a lost mutation acknowledgement must remain UNKNOWN.
+        read_only = opcode in {OP_GET_CHATS, OP_CHAT_INFO, OP_GET_HISTORY, OP_GET_MESSAGE, 32}
+        with self._lock:
+            for attempt in range(2 if read_only else 1):
+                try:
+                    return self._roundtrip_once(opcode, payload, timeout=timeout)
+                except (OSError, websocket.WebSocketConnectionClosedException):
+                    self.close()
+                    if not read_only or attempt:
+                        raise
+        raise AssertionError('unreachable MAX request state')
+
+    def _roundtrip_once(
+        self, opcode: int, payload: dict[str, Any], *, timeout: float = 20.0
+    ) -> Any:
         """Send one request and read frames until its ACK (cmd=1) or error (cmd=3)."""
         with self._lock:
             self._ensure()
