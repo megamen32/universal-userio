@@ -202,3 +202,19 @@ and cancelled delete-six remain unchanged.
 ## Native Secretary evidence — independent Exmanager ownership
 
 Root97 outcome20261012-userio-native-vision-live.json: actual source18→genericSDK→reply19 plus3same-ID edits accepted; PNG10/90835bytes exactSHA decoded by GLM correctly. UserIO projection repair3477 independently accepted. MAX native journey/fulltransport retirement remain pending with Exmanager; no UserIO/Exmanager mutualhold.
+
+## Quick261012-vks — VK text send and web acceptance complete
+
+12October: normal headed M1 web composer sent ONE new text through connected
+VK200000000106 to self, native provider7 exactbody/outgoing confirmed independently,
+reload/reopen retains one bubble. Approved draft duplicate removed and explicit
+“Отправлено в VK” appears on final installed7d04cc6.30VKfocusedPASS8.24s; combined
+MAX47PASS9.96s. Docs/README updated and public bytes verified. Own browser/auth/
+profile/PNG copies cleaned. Existing credentials and history retained. VK now
+reads and sends text; editing/media/reactions/readACK remain unimplemented.
+
+Related actual recurring MAX read BrokenPipeError repaired by bounded read-only
+reconnect; mutations never retried. Same Darya sticker resolve/media plus idle
+read90258bytes/exactSHA PASS. Old MAX model/send intents were not replayed;
+Exmanager journey/retirement remains independent. Earlier read-only VK status
+is historical and superseded for the connected personal sender.

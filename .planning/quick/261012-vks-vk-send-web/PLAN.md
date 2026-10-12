@@ -1,6 +1,6 @@
 ---
 type: quick
-status: executing
+status: complete
 date: 2026-10-12
 ---
 # Personal VK sending and normal web acceptance
