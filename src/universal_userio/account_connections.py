@@ -367,6 +367,12 @@ class UserAccountPoller:
             latest = item.get("last_message") or {}
             if type(peer_id) is not int or peer_id == 0:
                 continue
+            peer_type = str(peer.get("type") or "")
+            if peer_type in {"user", "group", "chat"}:
+                self.service._store.reconcile_vk_peer_kind(
+                    account_ref=account_id, peer_id=str(peer_id),
+                    kind="group" if peer_type == "chat" else "direct", user_id=user,
+                )
             key = f"vk-personal:message-cursor:{account_id}:{peer_id}"
             previous = int(self.service._store.user_preference(key, user_id=user) or "0")
             latest_id = latest.get("id") or (item.get("conversation") or {}).get("last_message_id")
@@ -405,6 +411,7 @@ class UserAccountPoller:
                     continue
                 envelope = vk_personal_message(
                     account_id=account_id, peer_id=peer_id, row=row,
+                    peer_type=peer_type,
                     title=title, reconciled=not previous,
                     in_read=(item.get("conversation") or {}).get("in_read"),
                 )
@@ -760,7 +767,7 @@ def connect_vk_personal(
 
 def vk_personal_message(
     *, account_id: str, peer_id: int, row: Mapping[str, Any],
-    title: str = "", reconciled: bool, in_read: Any = None,
+    title: str = "", reconciled: bool, in_read: Any = None, peer_type: str = "",
 ) -> InboxMessage | None:
     """VK message envelope, retaining actual peer and local account identity."""
     message_id = row.get("id")
@@ -781,7 +788,9 @@ def vk_personal_message(
         sender=str(row.get("from_id")) if type(row.get("from_id")) is int else peer,
         sender_name=title, body=body[:50_000],
         received_at=float(received), direction="outgoing" if outgoing else "incoming",
-        peer_id=peer, conversation_kind="group" if peer_id >= 2_000_000_000 else "direct",
+        peer_id=peer, conversation_kind=("group" if peer_type == "chat" else "direct"
+                                       if peer_type in {"user", "group"} else
+                                       "group" if peer_id >= 2_000_000_000 else "direct"),
         conversation_title=title, reconciliation=reconciled,
         provider_read=(message_id <= in_read) if (
             not outgoing and type(in_read) is int

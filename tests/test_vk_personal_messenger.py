@@ -190,3 +190,31 @@ def test_browser_oauth_login_ui_is_scoped_to_user_and_does_not_ask_password():
     assert "vk-community" in body
     assert "rel=\"noopener noreferrer\"" in body
     assert "type=\"password\"" in body
+
+
+def test_large_personal_vk_id_is_not_group_and_old_guess_corrects_without_reimport(app, monkeypatch):
+    store, service, user, _, _ = app
+    large = 200000000106
+    class LargePeer(StubVK):
+        typed = False
+        def conversations(self, **kwargs):
+            return {"count": 1, "items": [{"conversation": {
+                "peer": {"id": large, **({"type": "user"} if self.typed else {})}},
+                "last_message": {"id": 12}}]}
+        def history(self, peer_id, **kwargs):
+            return [{"id": 12, "date": 1760000001, "from_id": 42, "out": 1, "text": "Self test"}]
+    monkeypatch.setattr("universal_userio.channels.vk_personal.VKPersonalReader", LargePeer)
+    conn.connect_vk_personal(service, user, {"access_token": "private-personal-token"}, reader_factory=LargePeer)
+    account = next(a for a in store.accounts(user_id=user) if a["id"] == "vk:42")
+    poller = conn.UserAccountPoller(service)
+    secret = poller.vault.load(account["credential_ref"], user_id=user, provider="vk")
+    poller.poll_vk_personal(secret)
+    cid = store.conversations(source="vk", user_id=user)[0]["id"]
+    assert store.conversation(cid, user_id=user)["conversation_kind"] == "group"
+    LargePeer.typed = True
+    poller.poll_vk_personal(secret)
+    conv = store.conversation(cid, user_id=user)
+    assert conv["conversation_kind"] == "direct"
+    assert len(conv["messages"]) == 1
+    assert store.user_preference(f"vk-personal:message-cursor:vk:42:{large}", user_id=user) == "12"
+    assert store.conversations(source="vk") == []

@@ -2562,6 +2562,30 @@ class SQLiteUserIOStore:
                 result["attachments"] = attachments
         return results
 
+    def reconcile_vk_peer_kind(self, *, account_ref: str, peer_id: str, kind: str,
+                               user_id: str | None = None) -> int:
+        """Correct old numeric-ID guesses using a verified VK provider peer type.
+
+        Called by the authenticated personal-account poller, including unchanged
+        histories. Message IDs/cursors and explicit per-chat policy are preserved.
+        """
+        if kind not in {"direct", "group"} or not account_ref.startswith("vk:") or not peer_id:
+            raise ValueError("invalid verified VK peer metadata")
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            rows = self._connection.execute(
+                """SELECT id FROM conversations WHERE user_id=? AND source='vk'
+                   AND account_ref=? AND peer_id=? AND conversation_kind!=?""",
+                (user, account_ref, peer_id, kind),
+            ).fetchall()
+            for row in rows:
+                self._connection.execute(
+                    "UPDATE conversations SET conversation_kind=? WHERE user_id=? AND id=?",
+                    (kind, user, row["id"]),
+                )
+                self._invalidate_workspace_events_for_chat(user, row["id"])
+            return len(rows)
+
     def set_conversation_account(
         self, conversation_id: str, account_ref: str, *, user_id: str | None = None
     ) -> bool:
