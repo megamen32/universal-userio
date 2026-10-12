@@ -146,6 +146,8 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
         provider_read=provider_read,
         conversation_title=str(payload.get("conversation_title") or "")[:256],
         outbox_receipt=str(payload.get("outbox_receipt") or "")[:256],
+        provider_reply_to=str(payload.get('provider_reply_to') or '')[:128],
+        provider_thread_id=str(payload.get('provider_thread_id') or '')[:128],
     )
 
 

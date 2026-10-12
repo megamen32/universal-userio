@@ -26,9 +26,14 @@ class UserIOToolDispatcher:
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
+        if principal.messenger_accounts is not None and not name.startswith('userio.messenger.'):
+            return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS:
             return {"ok": False, "error": "read_only_token"}
         user_id = principal.user_id
+        if name.startswith('userio.messenger.'):
+            from .messenger import dispatch
+            return dispatch(self._store, self._service, principal, name, arguments)
         channels = UnifiedChannels(self._store, self._service, user_id)
         try:
             required_capability = TOOL_CAPABILITIES.get(name)

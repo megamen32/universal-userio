@@ -38,6 +38,8 @@ OP_SEND = 64
 OP_EDIT = 67
 OP_GET_MESSAGE = 71
 OP_DISPATCH = 128
+OP_REACTION = 178
+OP_TYPING = 65
 
 _HEARTBEAT_INTERVAL = 25.0
 
@@ -276,17 +278,20 @@ class MaxClient:
             self._fresh_write_connection()
             return self._send_message(chat_id=chat_id, text=text)
 
-    def _send_message(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+    def _send_message(self, *, chat_id: int | str, text: str,
+                      reply_to: str = '', cid: int | None = None,
+                      sticker: dict | None = None) -> dict[str, Any]:
+        message = {'text':text, 'cid':cid if cid is not None else int(time.time()*1000),
+                   'elements':[], 'attaches':[]}
+        if reply_to: message['link']={'type':'REPLY','messageId':int(reply_to)}
+        if sticker is not None:
+            message['stickerId']=int(sticker['stickerId'])
+            message['setId']=int(sticker['setId'])
         payload = self._roundtrip(
             OP_SEND,
             {
                 "chatId": int(chat_id),
-                "message": {
-                    "text": text,
-                    "cid": int(time.time() * 1000),
-                    "elements": [],
-                    "attaches": [],
-                },
+                "message": message,
                 "notify": True,
             },
         )
@@ -300,6 +305,36 @@ class MaxClient:
             "message_id": str(message_id),
             "receipt": "max-ws-accepted",
         }
+
+    def send_bound(self, *, chat_id: str, text: str, reply_to: str, cid: int,
+                   sticker: dict | None = None) -> dict:
+        """Already approved operation; same transport and authorization.
+
+        ReplyLink follows PyMax MessageService/ReplyLink. Sticker fields follow
+        the documented observed MSG_SEND frame; no URL/session copied.
+        """
+        with self._lock:
+            self._fresh_write_connection()
+            return self._send_message(chat_id=chat_id,text=text,reply_to=reply_to,cid=cid,sticker=sticker)
+
+    def react(self, *, chat_id: str, message_id: str, emoji: str) -> dict:
+        # PyMax AddReactionPayload / Opcode.MSG_REACTION =178.
+        with self._lock:
+            self._fresh_write_connection()
+            result=self._roundtrip(OP_REACTION,{'chatId':int(chat_id),'messageId':int(message_id),
+                'reaction':{'reactionType':'EMOJI','id':emoji}})
+            if not isinstance(result,dict) or not result.get('reactionInfo'):
+                raise RuntimeError('MAX did not return a reaction receipt; do not retry')
+            return result
+
+    def typing(self, *, chat_id: str, active: bool) -> dict:
+        # MSG_TYPING only starts an expiring indicator. A stop must not
+        # accidentally issue CHAT_ACTIVITY (which marks messages read).
+        if not active: return {'status':'expires_automatically'}
+        with self._lock:
+            self._ensure()
+            self._roundtrip(OP_TYPING,{'chatId':int(chat_id)})
+            return {'status':'provider_acknowledged'}
 
     def get_message(self, *, chat_id: int | str, message_id: int | str) -> dict[str, Any]:
         payload = self._roundtrip(OP_GET_MESSAGE, {

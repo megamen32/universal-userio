@@ -59,6 +59,10 @@ class UserIOService:
         self._ai_image_loader = ai_image_loader or self._download_ai_image
         self._inbound_listeners: list[object] = []
         self._manual_send_lock = threading.Lock()
+        self.messenger_providers: dict[str, object] = {}
+        if self.max_client is not None:
+            from .messenger_max import MaxMessengerProvider
+            self.messenger_providers['max'] = MaxMessengerProvider(self)
 
     def _download_ai_image(
         self, *, source: str, message_id: str,

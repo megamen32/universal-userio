@@ -247,6 +247,9 @@ def handler(
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.messenger_accounts is not None and path!='/mcp':
+                self._reply(403, {'error':'messenger_scope_only'})
+                return
             if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
                 self._reply(403, {"error": "read_only_token"})
                 return
@@ -362,7 +365,8 @@ def handler(
                         return
                     payload = self._json()
                     self._reply(201, personal_tokens.create(user_id, payload.get("name", ""),
-                                                          scope=payload.get("scope", "full_access")),
+                                                          scope=payload.get("scope", "full_access"),
+                                                          account_refs=payload.get('account_refs')),
                                 headers={"Cache-Control": "no-store"})
                     return
                 if path.startswith("/v1/workspace/secretary/deep-jobs/") and path.endswith("/progress"):
@@ -1042,6 +1046,9 @@ def handler(
         def do_PATCH(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.messenger_accounts is not None:
+                self._reply(403, {'error':'messenger_scope_only'})
+                return
             if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
                 self._reply(403, {"error": "read_only_token"})
                 return
@@ -1081,6 +1088,10 @@ def handler(
         def do_GET(self) -> None:  # noqa: N802
             query = parse_qs(urlparse(self.path).query)
             requested_path = urlparse(self.path).path
+            restricted = self._principal()
+            if restricted is not None and restricted.messenger_accounts is not None and requested_path!='/mcp':
+                self._reply(403, {'error':'messenger_scope_only'})
+                return
             if requested_path == "/.well-known/oauth-protected-resource":
                 self._reply(200, oauth.protected_resource_metadata(self._base_url()))
                 return
@@ -1630,6 +1641,9 @@ def handler(
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.messenger_accounts is not None:
+                self._reply(403, {'error':'messenger_scope_only'})
+                return
             if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
                 self._reply(403, {"error": "read_only_token"})
                 return

@@ -1,6 +1,7 @@
 """User-owned, named Bearer tokens using the existing token authenticator."""
 
 import secrets
+import json
 import time
 import uuid
 
@@ -24,20 +25,32 @@ class PersonalTokens:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def create(self, user_id: str, name: str, *, scope: str = "full_access") -> dict:
-        if not isinstance(scope, str) or scope not in {"full_access", "read_only"}:
-            raise ValueError("scope must be full_access or read_only")
+    def create(self, user_id: str, name: str, *, scope: str = "full_access", account_refs=None) -> dict:
+        if not isinstance(scope, str) or scope not in {"full_access", "read_only", "messenger_actions"}:
+            raise ValueError("scope must be full_access, read_only or messenger_actions")
+        if scope == 'messenger_actions':
+            if (not isinstance(account_refs,list) or not 1<=len(account_refs)<=16
+                    or any(not isinstance(ref,str) for ref in account_refs) or len(set(account_refs))!=len(account_refs)):
+                raise ValueError('explicit account_refs required for messenger_actions')
+            owned={a['id']:a for a in self.store.accounts(user_id=user_id)}
+            if any(ref not in owned or owned[ref]['provider'] not in {'telegram','max'}
+                   or not owned[ref]['enabled'] or 'reply' not in owned[ref]['capabilities'] for ref in account_refs):
+                raise ValueError('messenger sender accounts must be owned, enabled and reply-capable')
+        elif account_refs is not None:
+            raise ValueError('account_refs is supported only for messenger_actions')
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
             raise ValueError("Название токена должно содержать от 1 до 80 символов")
         token_id, value, created = "token_" + uuid.uuid4().hex, "uio_" + secrets.token_urlsafe(32), time.time()
         with self.store._lock, self.store._connection:
             self.store._connection.execute(
-                "INSERT INTO api_tokens (id,user_id,token_hash,created_at,kind,token_type,name,scope) "
-                "VALUES (?,?,?,?,'personal','access',?,?)",
-                (token_id, user_id, self.store._token_hash(value), created, name.strip(), scope),
+                "INSERT INTO api_tokens (id,user_id,token_hash,created_at,kind,token_type,name,scope,account_refs) "
+                "VALUES (?,?,?,?,'personal','access',?,?,?)",
+                (token_id, user_id, self.store._token_hash(value), created, name.strip(), scope,
+                 json.dumps(account_refs) if account_refs is not None else None),
             )
         return {"id": token_id, "name": name.strip(), "created_at": created,
-                "expires_at": None, "scope": scope, "token": value, "token_returned_once": True}
+                "expires_at": None, "scope": scope, "token": value, "token_returned_once": True,
+                **({'account_refs':account_refs} if account_refs is not None else {})}
 
     def revoke(self, user_id: str, token_id: str) -> bool:
         with self.store._lock, self.store._connection:

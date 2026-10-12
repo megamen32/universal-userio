@@ -197,7 +197,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
             telegram_outbox, owner_user_id=store.owner().user_id,
             chat=notify_chat, chat_id=notify_chat_id, account_ref=notify_account_ref,
         )
-    return UserIOService(
+    service = UserIOService(
         store, generator, DirectProviderOutbox(), sms_gateway=gateway,
         sms_user_id=sms_user_id, sms_route_id=environment.get("USERIO_SMS_ROUTE_ID", "sms").strip() or "sms",
         sms_manual_approve=sms_manual_approve,
@@ -213,6 +213,18 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
             environment.get("USERIO_DRAFT_NOTIFY_DELAY_SECONDS", "5") or "5"
         ),
     )
+    messenger_url = environment.get('USERIO_MESSENGER_RELAY_URL','').strip()
+    if messenger_url:
+        from .messenger_relay import RelayMessengerProvider
+        account_ref = _required(environment,'USERIO_MESSENGER_RELAY_ACCOUNT')
+        user_id = environment.get('USERIO_MESSENGER_RELAY_USER_ID',store.default_user_id)
+        account = next((a for a in store.accounts(user_id=user_id) if a['id']==account_ref
+                        and a['enabled'] and a['provider']=='telegram' and 'reply' in a['capabilities']),None)
+        if account is None: raise ValueError('generic relay account must already be assigned to this UserIO user')
+        service.messenger_providers[account_ref] = RelayMessengerProvider(service=service,
+            base_url=messenger_url,token_file=_required(environment,'USERIO_MESSENGER_RELAY_TOKEN_FILE'),
+            approval_key=_required(environment,'USERIO_API_TOKEN'),account_ref=account_ref,authorized_user=user_id)
+    return service
 
 
 def main() -> None:

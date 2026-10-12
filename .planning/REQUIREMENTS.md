@@ -1,43 +1,54 @@
-# Requirements: v1.2 Reliable everyday communication
+# Requirements: UserIO v1.3
 
-## Current requirements
+**Defined:** 2026-10-12
+**Core Value:** One real messenger interface for the native Airlock Secretary.
 
-- [x] **SMS-01**: One native S21 SMS account continuously mirrors incoming/outgoing full bodies; remove only owned disabled test accounts.
-- [x] **PHONE-01**: Calls to one person share one chronological dialog with visible number and start/end events; unknown historical targets stay archived.
-- [x] **GUIDE-01**: Public APK and separate rooted/unrooted SMS/call setup guides; normal per-user device enrollment/disconnect.
-- [x] **GROUP-01**: Telegram/MAX group messages show real sender names and current usernames where available.
-- [x] **WEB-01**: Compact chat header, signed-in root opens cabinet, visible cabinet/O-service/GitHub links; auto-read default with stealth opt-out.
-- [x] **DOC-01**: Short README, searchable documentation, explicit completely-free promise with BYOK/MCP explanation.
-- [x] **MCP-01**: Users create multiple named Bearer tokens and independently revoke them; Codex and existing GPTAdmin connection work.
-- [x] **MCP-02**: Install UserIO MCP plugin with OAuth through normal ChatGPT browser flow and read actual owned accounts.
-- [x] **SEC-01**: Secretary distinguishes owner/interlocutor using direction and current source; owner followups remain visible to native Fast Agent.
-- [x] **SEC-02**: AI drafts show creation time and exact source preview; clicking scrolls to that message.
-- [x] **SEC-03**: Context changes mark drafts stale; old source-less drafts are labelled honestly without guessed provenance.
-- [x] **NOTIFY-01**: Fix proven dispatcher authorization/queue delay through maintained service without broad policy unpause or accepted-action replay.
-- [x] **WORK-01**: Discover actual owned working Telegram chats with Telegram Helper and enable existing AI/notification rules for future events.
-- [x] **MAIL-01**: Email notifications explain substantive content, requested action and deadlines, using existing analysis/notification paths.
-- [x] **ACCEPT-01**: Every remaining requirement has source/runtime/user-surface evidence and original GSD planning/progress is recognized.
+## v1.3 Requirements
+
+### Effective capabilities
+- [ ] **CAP-01**: UserIO exposes supported and allowed operations for an exact connected account, intersecting provider support, account permissions and credential permissions.
+- [ ] **CAP-02**: HTTP and both MCP surfaces return the same capability contract, including explicit unsupported/denied reasons; existing read-only credentials stay read-only.
+- [ ] **CAP-03**: SDK selects channel operations from capabilities rather than privileged Telegram assumptions and preserves the actual current Secretary sender identity.
+
+### Source, history and approval
+- [ ] **SRC-01**: Native ingress preserves exact account, conversation, provider message, author, owner direction, reply and thread provenance without impersonating group authors.
+- [ ] **SRC-02**: Bounded history/message/media reads have stable paging and honest partial flags on Telegram and MAX.
+- [ ] **REPLY-01**: Normal draft/approval binds the exact source, body, action payload, account and provider target; duplicate/uncertain writes do not replay.
+- [ ] **REPLY-02**: Provider acceptance includes a durable account/source-bound receipt and updates the same canonical inbox projection.
+
+### Rich operations
+- [ ] **ACT-01**: Same-ID own-message edits work repeatedly on Telegram and MAX and preserve source/receipt provenance.
+- [ ] **ACT-02**: Reactions use the same interface and actual provider-supported behavior or explicit unsupported results.
+- [ ] **ACT-03**: Sticker/file sends use ordinary immutable approval/outbox with provider-supported references, not local paths or raw client bypass.
+- [ ] **ACT-04**: Typing/progress and readable fallback follow actual channel capabilities.
+
+### Native consumer and retirement
+- [ ] **LIVE-01**: The actual deployed Secretary performs equivalent Telegram and MAX journeys through UserIO with correct speaker/source/media context.
+- [ ] **LIVE-02**: Native integration preserves current business work, SDK confirmations, tasks and L1/L2/L3 memory; tests use owned QA destinations and retained receipts.
+- [ ] **LIVE-03**: Dedicated Secretary Telegram transport is retired only after real generic consumer acceptance; shared provider clients and rollback are preserved.
+
+## Out of Scope
+New provider authorization/session clones, blanket read-only token upgrades,
+Airlock core forks or another reasoning loop, historical send/task replay,
+deletion of old customer content, and replacing business/task storage with UserIO.
 
 ## Traceability
-
 | Requirement | Phase | Status |
 |---|---|---|
-| SMS-01 | Phase 8 | Accepted |
-| PHONE-01 | Phase 8 | Accepted |
-| GUIDE-01 | Phase 8 | Accepted |
-| GROUP-01 | Phase 8 | Accepted |
-| WEB-01 | Phase 8 | Accepted |
-| DOC-01 | Phase 8 | Accepted |
-| MCP-01 | Phase 8 | Accepted |
-| MCP-02 | Phase 8 | Accepted |
-| SEC-01 | Phase 9 | Accepted |
-| SEC-02 | Phase 9 | Accepted |
-| SEC-03 | Phase 9 | Accepted |
-| NOTIFY-01 | Phase 10 | Accepted |
-| WORK-01 | Phase 10 | Accepted |
-| MAIL-01 | Phase 10 | Accepted |
-| ACCEPT-01 | Phase 11 | Accepted |
+| CAP-01 | 12 | Pending |
+| CAP-02 | 12 | Pending |
+| CAP-03 | 12 | Pending |
+| SRC-01 | 13 | Pending |
+| SRC-02 | 13 | Pending |
+| REPLY-01 | 13 | Pending |
+| REPLY-02 | 13 | Pending |
+| ACT-01 | 14 | Pending |
+| ACT-02 | 14 | Pending |
+| ACT-03 | 14 | Pending |
+| ACT-04 | 14 | Pending |
+| LIVE-01 | 15 | Pending |
+| LIVE-02 | 15 | Pending |
+| LIVE-03 | 15 | Pending |
 
-## Evidence and exceptions
-
-Accepted history and its private proof pointers are retained in STATE.md and phase 08 summary. No new provider sends are needed to reconfirm accepted work. Cancelled Exmanager delete-six expansion remains out of scope. Four historical unknown phone numbers are archived by explicit user choice. Notification cards and receipts must not be replayed.
+Coverage: 14 requirements, 14 mapped, 0 unmapped. Previous v1.2 requirements
+remain in milestones/v1.2-REQUIREMENTS.md; no prior acceptance is reset/replayed.

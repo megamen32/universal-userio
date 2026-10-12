@@ -52,7 +52,8 @@ def test_readonly_named_token_http_and_mcp_deny_mutations(tmp_path):
         assert call('GET', '/v1/conversations/'+conversation, readonly)[1]['messages'][0]['body'] == 'current message'
         assert call('GET', '/v1/conversations/'+conversation, PersonalTokens(store).create(bob.user_id,'other')['token'])[0] == 404
         surface = UserIOMcpSurface(store, service)
-        reads = {'userio.accounts.list','userio.channels.list','userio.channels.read',
+        reads = {'userio.messenger.capabilities','userio.messenger.history','userio.messenger.get','userio.messenger.resolve','userio.messenger.media',
+                 'userio.accounts.list','userio.channels.list','userio.channels.read',
                  'userio.channels.download','userio.inbox.list_new','userio.conversation.get',
                  'userio.workspace.poll','userio.workspace.claim_log','userio.workspace.exclusions.list',
                  'userio.workspace.policy.get','userio.workspace.policy.chats.list',

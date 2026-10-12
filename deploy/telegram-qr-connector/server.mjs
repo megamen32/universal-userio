@@ -521,6 +521,8 @@ async function envelope(chatKey, label, message, client, self, options) {
       ? `${options.accountId}|${chatKey}:${message.id}` : `${chatKey}:${message.id}`,
     sender: label,
     peer_id: chatKey,
+    provider_reply_to: String((message.replyTo || {}).replyToMsgId || ''),
+    provider_thread_id: String((message.replyTo || {}).replyToTopId || ''),
     conversation_kind: conversationKind,
     sender_is_bot: senderIsBot,
     ...mirrorMetadata(message, options && options.dialog),

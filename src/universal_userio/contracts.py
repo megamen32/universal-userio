@@ -31,6 +31,8 @@ class InboxMessage:
     provider_read: bool | None = None
     conversation_title: str = ""
     outbox_receipt: str = ""
+    provider_reply_to: str = ""
+    provider_thread_id: str = ""
 
     @property
     def conversation_key(self) -> str:
@@ -68,6 +70,9 @@ class UserPrincipal:
     role: str
     service_account: bool = False
     read_only: bool = False
+    # None preserves existing credentials. Scoped app credentials use only
+    # generic messenger tools and these explicitly assigned accounts.
+    messenger_accounts: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

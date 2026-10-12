@@ -178,7 +178,17 @@ TOOL_SPECS = (
 
 
 
+from .mcp_catalog import MESSENGER_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
+
 TOOL_CAPABILITIES = {
+    'userio.messenger.capabilities': 'read',
+    'userio.messenger.history': 'read',
+    'userio.messenger.resolve': 'read',
+    'userio.messenger.media': 'download',
+    'userio.messenger.get': 'read',
+    'userio.messenger.propose': 'send',
+    'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
@@ -227,6 +237,7 @@ class UserIOMcpSurface:
         specs = tuple(
             spec for spec in TOOL_SPECS
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
+            and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.'))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
                  or self._store.capability_enabled(required, user_id=principal.user_id))
         )
@@ -234,6 +245,7 @@ class UserIOMcpSurface:
 
     def resource_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if principal.messenger_accounts is not None: return {'resources':[]}
         if not self._store.capability_enabled("read", user_id=principal.user_id):
             return {"resources": []}
         return {"resources": [
@@ -244,6 +256,7 @@ class UserIOMcpSurface:
 
     def resource_template_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if principal.messenger_accounts is not None: return {'resourceTemplates':[]}
         if not self._store.capability_enabled("read", user_id=principal.user_id):
             return {"resourceTemplates": []}
         return {"resourceTemplates": [
@@ -259,6 +272,7 @@ class UserIOMcpSurface:
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
         user_id = principal.user_id
+        if principal.messenger_accounts is not None: raise PermissionError('messenger_scope_only')
         if not self._store.capability_enabled("read", user_id=user_id):
             raise PermissionError("read capability disabled")
         if uri == "userio://accounts":
@@ -290,8 +304,14 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if (principal.messenger_accounts is not None and not name.startswith('userio.messenger.')
+                and name not in {'tools/list','tools/call'}):
+            return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS | {"tools/list", "tools/call"}:
             return {"ok": False, "error": "read_only_token"}
+        if name.startswith('userio.messenger.'):
+            from .messenger import dispatch
+            return dispatch(self._store, self._service, principal, name, arguments)
         if name == "userio.channels.read" and arguments.get("channel") == "max":
             # Keep the compatibility HTTP surface on the authoritative MAX
             # reader, including its bounded cached-history contract.

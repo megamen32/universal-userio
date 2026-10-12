@@ -1,36 +1,40 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.2
-milestone_name: Reliable everyday communication
-current_phase: 11
-current_phase_name: Final real-surface acceptance
-current_plan: 01
-status: completed
-last_updated: "2026-10-12T09:08:28.740Z"
+milestone: v1.3
+milestone_name: Messenger capabilities for the Airlock Secretary
+status: executing
+last_updated: "2026-10-12T11:47:42.515Z"
 last_activity: 2026-10-12
 progress:
   total_phases: 4
-  completed_phases: 4
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  completed_phases: 0
+  total_plans: 1
+  completed_plans: 0
+  percent: 0
 ---
 
 # State
 
-**Current Phase:** 11
-**Current Phase Name:** Final real-surface acceptance
+**Current Phase:** 12
+**Current Phase Name:** Effective channel capabilities
 **Total Phases:** 4
 **Current Plan:** 01
 **Total Plans in Phase:** 1
-**Status:** completed
-**Progress:** [██████████] 100%
+**Status:** executing
+**Progress:** [░░░░░░░░░░] 0%
 **Last Activity:** 2026-10-12
-**Last Activity Description:** v1.2 delivered: real secretary, work/mail notifications and maintained Matrix catch-up accepted.
+**Last Activity Description:** v1.3 generic messenger implementation; native SDK owner integrates separately, request135 preserved.
 
-Current milestone v1.2: original SDK recognizes all phases 8–11 as
-complete. Historical accepted data below is retained; later entries supersede
-old pending statements. No old provider action is replayed.
+Current milestone v1.3 is directly authorized through deployed Telegram/MAX
+Secretary acceptance. Phase12 source implementation and source-bound action
+vertical are underway; no live retirement or full migration is claimed.
+Exact sender881 reuses the existing provider client; private readonly resource
+stays unchanged. Generic sender uses a separate explicit account-bound scope.
+
+## Historical accepted work (v1.2)
+
+The preceding v1.2 phases8–11 were accepted and archived under milestones/v1.2-*.
+The evidence below remains historical and is not replay authority.
 
 Canonical UserIO main, owner01a11747-7bb9-7bc0-8c0a-ce64db49105d.
 Original Telegram381/FastAgent/cache accepted and retained. MAX Darья normal
@@ -126,29 +130,10 @@ Last activity: 2026-10-12 — Actual normal MAX AI intent/capture/own cleanup co
 
 ## Current Position
 
-Phase: 11 — Final real-surface acceptance
-Plan: 01
-Status: completed
-Milestone: v1.2 delivered; 4/4 current plans, 100%.
-
-Secretary web roles/sticker/source/time accepted; actual work and owned mail
-notifications delivered with specific action and Moscow deadline. 32 explicit
-work conversations allowed, two empty direct chats allow future events, four
-bots retain their separate restriction. Owner chose task notifications: threshold
-0.85→0.5, confidence unchanged. Existing hard exclusions/other accounts retained.
-Maintained dispatcher credential/lane/idempotency repaired without cursor reset.
-
-The initial Yandex control was rejected before delivery; later owner-authorized
-Yandex Inbox delivery and corrected notifications are accepted below. Gmail
-delivery was also positively verified. Stable native UID head-first polling now avoids the
-large-list timeout and preserves dedup. Maintained Matrix gap catch-up installed
-and verified: messages88→124/cursor advanced, no new authorization or send.
-
-All earlier failed captures remain history, not acceptance. Four unknown phone
-numbers stay archived by explicit user decision; cancelled delete-six remains
-cancelled. Source, installed identity, actual provider and user-surface proofs
-are linked from phases10/11 summaries. Planning files are retained; no new
-project, milestone, browser, phone operation or historical intent was created.
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-10-12 — Milestone v1.3 started
 
 ## GSD Progress reconciliation — 2026-10-12
 

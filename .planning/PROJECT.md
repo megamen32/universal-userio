@@ -6,8 +6,17 @@
 ## Core Value
 Личный аккаунт доступен агентам через UserIO, а переписка соответствует реальному провайдеру.
 
-## Current Milestone: v1.2 Reliable everyday communication
-Довести оставшиеся поручения до пользовательского результата: корректные роли и источник/время черновиков секретаря, своевременные уведомления рабочих чатов и содержательный разбор почты. Сверить GSD с реальным прогрессом. Принятые SMS/телефон/MAX/сайт/документация/Bearer/ChatGPT OAuth сохраняются.
+## Current Milestone: v1.3 Messenger capabilities for the Airlock Secretary
+
+**Goal:** The actual Secretary uses Telegram and MAX through UserIO capabilities
+and the native Airlock SDK, preserving its business task and current sender identity.
+
+**Target features:** Effective account/credential capabilities, source-bound
+paged history/media, immutable approved replies and rich operations, real native
+consumer acceptance and scoped retirement of replaceable Telegram transport.
+
+User directly authorized execution on 2026-10-12. Prior v1.2 acceptance and all
+historical receipts/plans are preserved under `.planning/milestones/`.
 
 ## Requirements
 ### Validated

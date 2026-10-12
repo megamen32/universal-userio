@@ -1,6 +1,6 @@
 # Secretary transport through UserIO
 
-Source audit, 12 October 2026. This is a migration plan; current Exmanager
+Baseline source audit, 12 October 2026. v1.3 implementation is now active; current Exmanager
 transport and business work remain active. Exmanager files were read only.
 
 ## Decision
@@ -55,4 +55,14 @@ storage and credential-managed LLM access to Airlock/SDK. Follow the
    Exmanager owner integrates and accepts the thin SDK wiring. Keep rollback
    and retained business receipts. No replacement LLM loop or Airlock core fork.
 
-Queued GSD context: [UserIO v1.3](../.planning/milestones/v1.3-MESSENGER-PARITY-CONTEXT.md).
+Active GSD context: [UserIO v1.3](../.planning/milestones/v1.3-MESSENGER-PARITY-CONTEXT.md).
+
+## Implementation contract
+
+The account/credential intersection, common MCP catalog, paged stored/provider
+history, actual media/source resolve, source-bound action journal, distinct
+`messenger_actions` credential and current-client provider routes are implemented
+in the v1.3 source slice. See [callable contract](messenger-contract.md).
+Native Secretary sender remains900000103; private900000101 readonly access
+is unchanged. Source/focused checks do not claim deployment, rich media parity
+or native acceptance; Exmanager owns its thin SDK/relay installation and cutover.

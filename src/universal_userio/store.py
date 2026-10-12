@@ -195,6 +195,7 @@ class SQLiteUserIOStore:
             ("expires_at", "REAL"),
             ("oauth_client_id", "TEXT"),
             ("scope", "TEXT"),
+            ("account_refs", "TEXT"),
         ):
             if name not in columns:
                 self._connection.execute(f"ALTER TABLE api_tokens ADD COLUMN {name} {definition}")
@@ -494,6 +495,10 @@ class SQLiteUserIOStore:
             self._connection.execute("ALTER TABLE messages ADD COLUMN edited_at REAL")
         except sqlite3.OperationalError:  # column already exists
             pass
+        for column in ('provider_reply_to', 'provider_thread_id'):
+            columns = {row['name'] for row in self._connection.execute('PRAGMA table_info(messages)')}
+            if column not in columns:
+                self._connection.execute(f"ALTER TABLE messages ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
         try:
             self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
         except sqlite3.OperationalError:  # column already exists
@@ -840,7 +845,7 @@ class SQLiteUserIOStore:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT u.id,u.username,u.role,t.kind,t.scope FROM api_tokens t JOIN users u ON u.id=t.user_id
+                SELECT u.id,u.username,u.role,t.kind,t.scope,t.account_refs FROM api_tokens t JOIN users u ON u.id=t.user_id
                 WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.token_type='access'
                   AND (t.expires_at IS NULL OR t.expires_at>?)
                 """,
@@ -849,6 +854,8 @@ class SQLiteUserIOStore:
         return None if row is None else UserPrincipal(
             str(row["id"]), str(row["username"]), str(row["role"]),
             read_only=row["kind"] == "personal" and row["scope"] == "read_only",
+            messenger_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
+                                if row['scope']=='messenger_actions' else None),
         )
 
     def register_oauth_client(
@@ -1616,10 +1623,13 @@ class SQLiteUserIOStore:
                         or (message.source=='sms' and message.reconciliation and previous['body']!=message.body)):
                     self._invalidate_message_summary(user_id, message.source, message.message_id)
                 self._connection.execute("""UPDATE messages SET direction=?,received_at=?,
-                    provider_read=CASE WHEN provider_read=1 THEN 1 ELSE COALESCE(?,provider_read) END,sender_is_bot=?,edited_at=COALESCE(?,edited_at)
+                    provider_read=CASE WHEN provider_read=1 THEN 1 ELSE COALESCE(?,provider_read) END,sender_is_bot=?,edited_at=COALESCE(?,edited_at),
+                    provider_reply_to=CASE WHEN provider_reply_to='' THEN ? ELSE provider_reply_to END,
+                    provider_thread_id=CASE WHEN provider_thread_id='' THEN ? ELSE provider_thread_id END
                     WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                     (message.direction, message.received_at, message.provider_read, int(message.sender_is_bot),
-                     message.edited_at or None, user_id, message.source, message.message_id, conversation_id))
+                     message.edited_at or None, message.provider_reply_to, message.provider_thread_id,
+                     user_id, message.source, message.message_id, conversation_id))
                 if message.source=='sms' and message.reconciliation and message.message_id.startswith('sms-native:'):
                     self._connection.execute("UPDATE messages SET body=? WHERE user_id=? AND source='sms' AND message_id=? AND conversation_id=?", (message.body,user_id,message.message_id,conversation_id))
                 if message.direction != "incoming" or (message.sender_is_bot
@@ -1630,13 +1640,14 @@ class SQLiteUserIOStore:
             inserted = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO messages
-                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot,edited_at,provider_read,outbox_receipt)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                (user_id,source,message_id,conversation_id,sender,body,direction,received_at,sender_is_bot,edited_at,provider_read,outbox_receipt,provider_reply_to,provider_thread_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     user_id, message.source, message.message_id, conversation_id,
                     message.sender, message.body, message.direction, message.received_at,
                     int(message.sender_is_bot), message.edited_at or None, message.provider_read, message.outbox_receipt,
+                    message.provider_reply_to, message.provider_thread_id,
                 ),
             ).rowcount == 1
             if message.source=='sms' and message.provider_read is True:
@@ -3220,7 +3231,7 @@ class SQLiteUserIOStore:
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT source,message_id,conversation_id,sender,body,direction,received_at,seen_at,edited_at,provider_read
+                SELECT source,message_id,conversation_id,sender,body,direction,received_at,seen_at,edited_at,provider_read,provider_reply_to,provider_thread_id
                 FROM messages WHERE {where} AND deleted_at IS NULL ORDER BY received_at DESC LIMIT 2
                 """,
                 values,

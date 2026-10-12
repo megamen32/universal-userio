@@ -37,7 +37,7 @@ def schema(
 
 CHANNEL_SCHEMA = {
     "type": "string",
-    "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt"],
+    "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"],
 }
 IGNORED_CHATS_SCHEMA = {
     "type": "array",
@@ -313,7 +313,48 @@ TOOL_SPECS = (
 )
 
 
+MESSENGER_SPECS = (
+    ToolSpec('userio.messenger.media',
+        'Read bounded actual media/ASR through the account provider. Return bytes/transcript or explicit unavailable, never infer from a sticker label.',
+        schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'message_id':{'type':'string'},
+                'attachment_index':{'type':'integer','minimum':0,'maximum':7}},['account_ref','conversation_id','message_id'])),
+    ToolSpec('userio.messenger.resolve',
+        'Resolve one exact actual provider source into the owned UserIO account. No fake conversations, sends or read ACK.',
+        schema({'account_ref':{'type':'string'},'peer_id':{'type':'string'},'provider_message_id':{'type':'string'}},
+               ['account_ref','peer_id','provider_message_id'])),
+    ToolSpec('userio.messenger.capabilities',
+        'Discover effective account/provider/credential operations; unsupported actions are explicit.',
+        schema({'account_ref':{'type':'string'}}, ['account_ref'])),
+    ToolSpec('userio.messenger.history',
+        'Read a bounded stored page without provider refresh or read ACK; preserve author/source/thread and opaque provider IDs.',
+        schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},
+                'limit':{'type':'integer','minimum':1,'maximum':100}, 'cursor':{'type':'string','maxLength':1024},
+                'refresh':{'type':'boolean','default':False}},
+               ['account_ref','conversation_id'])),
+    ToolSpec('userio.messenger.propose',
+        'Propose a source-bound reply/edit/reaction/media/typing operation. Does not execute. Keep request_id for dedup.',
+        schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},
+                'action':{'type':'string','enum':['reply','edit','react','sticker','file','typing']},
+                'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
+               ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
+    ToolSpec('userio.messenger.get',
+        'Read the durable operation and receipt. Sending means UNKNOWN: never replay with a new request ID.',
+        schema({'action_id':{'type':'string'}}, ['action_id'])),
+    ToolSpec('userio.messenger.approve',
+        'Execute only this explicitly approved immutable operation. Bind approval to its exact hash; no automatic model approval.',
+        schema({'action_id':{'type':'string'}, 'expected_hash':{'type':'string'}, 'confirm':{'type':'boolean'}},
+               ['action_id','expected_hash','confirm'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
+
 TOOL_CAPABILITIES = {
+    'userio.messenger.capabilities': 'read',
+    'userio.messenger.history': 'read',
+    'userio.messenger.resolve': 'read',
+    'userio.messenger.media': 'download',
+    'userio.messenger.get': 'read',
+    'userio.messenger.propose': 'send',
+    'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.read": "read",
     "userio.channels.download": "download",

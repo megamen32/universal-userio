@@ -68,6 +68,9 @@ def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direc
     if not isinstance(timestamp, (int, float)) or timestamp <= 0:
         raise ValueError("MAX message has no provider timestamp")
     sender = str(row.get("sender") if row.get("sender") is not None else chat_id)
+    link = row.get('link') if isinstance(row.get('link'), dict) else {}
+    linked_message = link.get('message') if isinstance(link.get('message'),dict) else {}
+    reply_id = str(link.get('messageId') or linked_message.get('id') or '') if link.get('type')=='REPLY' else ''
     return {
         "schema": "universal.inbox.message.v1", "source": "max",
         "message_id": f"max-{chat_id}-{row['id']}",
@@ -77,6 +80,7 @@ def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direc
         "direction": "outgoing" if row.get("out") or sender == own_id else "incoming",
         "conversation_kind": kind, "attachments": attachments,
         "conversation_title": title,
+        "provider_reply_to": reply_id,
         "reconciliation": reconciliation,
     }
 
