@@ -26,7 +26,7 @@ progress:
 **Status:** executing
 **Progress:** [███░░░░░░░] 25%
 **Last Activity:** 2026-10-12
-**Last Activity Description:** ChatGPT OAuth real 13-account read accepted; secretary native/source tests and bounded build passed, install/UI acceptance next.
+**Last Activity Description:** ChatGPT OAuth accepted; secretary source/time/normal click/reload UI passed, but real sticker misclassified as empty. Media-context fix next; own test proposals/tab cleaned up.
 
 Current milestone v1.2: original SDK now recognizes phases 8–11 and phase 8
 complete. Historical accepted data below is retained; later entries supersede
@@ -110,5 +110,5 @@ anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clari
 
 Phase: 9 of 11 (Secretary roles and draft provenance)
 Plan: 01
-Status: Implemented; publish/install and real UI acceptance next
-Last activity: 2026-10-12 — Actual native Fast Agent context, draft race regressions and bounded UI build passed
+Status: Real source/time UI passed; reply content failed on sticker, media-context repair next
+Last activity: 2026-10-12 — Actual normal MAX AI intent/capture/own cleanup complete, phase9 remains open
