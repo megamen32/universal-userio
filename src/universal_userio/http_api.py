@@ -33,6 +33,7 @@ from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
 from .personal_tokens import PersonalTokens
+from .token_permissions import read_only_http_allowed
 from .search import search_conversations
 from .service import DeliveryUnavailableError, UserIOService
 
@@ -245,6 +246,10 @@ def handler(
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            restricted = self._principal()
+            if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
+                self._reply(403, {"error": "read_only_token"})
+                return
             if path == "/auth/session":
                 values = self._form()
                 principal = service._store.authenticate_credentials(
@@ -356,7 +361,8 @@ def handler(
                         self._reply(403, {"error": "personal login required"})
                         return
                     payload = self._json()
-                    self._reply(201, personal_tokens.create(user_id, payload.get("name", "")),
+                    self._reply(201, personal_tokens.create(user_id, payload.get("name", ""),
+                                                          scope=payload.get("scope", "full_access")),
                                 headers={"Cache-Control": "no-store"})
                     return
                 if path.startswith("/v1/workspace/secretary/deep-jobs/") and path.endswith("/progress"):
@@ -1019,6 +1025,10 @@ def handler(
 
         def do_PATCH(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            restricted = self._principal()
+            if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
+                self._reply(403, {"error": "read_only_token"})
+                return
             principal = self._principal(allow_proxy=True)
             if principal is None:
                 self._reply(401, {"error": "unauthorized"})
@@ -1152,6 +1162,9 @@ def handler(
                 self._reply(401, {"error": "unauthorized"})
                 return
             path = urlparse(self.path).path
+            if principal.read_only and not read_only_http_allowed(self.command, path):
+                self._reply(403, {"error": "read_only_token"})
+                return
             user_id = principal.user_id
             if path == "/v1/personal-tokens":
                 if principal.service_account:
@@ -1293,7 +1306,7 @@ def handler(
                     visible = list(account.get("capabilities", []))
                     if not caps["read"]:
                         visible = [cap for cap in visible if cap != "read"]
-                    if not caps["send"]:
+                    if principal.read_only or not caps["send"]:
                         visible = [cap for cap in visible if cap != "reply"]
                     if not caps["download"]:
                         visible = [cap for cap in visible if cap not in {"download", "media"}]
@@ -1580,6 +1593,10 @@ def handler(
 
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            restricted = self._principal()
+            if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
+                self._reply(403, {"error": "read_only_token"})
+                return
             principal = self._principal(allow_proxy=True)
             if principal is None:
                 self._reply(401, {"error": "unauthorized"})

@@ -67,6 +67,7 @@ class UserPrincipal:
     username: str
     role: str
     service_account: bool = False
+    read_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)

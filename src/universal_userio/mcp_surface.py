@@ -8,6 +8,7 @@ from typing import Any
 
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
+from .token_permissions import READ_ONLY_TOOLS
 from .service import UserIOService
 from .store import SQLiteUserIOStore
 
@@ -225,8 +226,9 @@ class UserIOMcpSurface:
         principal = self._principal if principal is None else principal
         specs = tuple(
             spec for spec in TOOL_SPECS
-            if (required := TOOL_CAPABILITIES.get(spec.name)) is None
-            or self._store.capability_enabled(required, user_id=principal.user_id)
+            if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
+            and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
+                 or self._store.capability_enabled(required, user_id=principal.user_id))
         )
         return {"tools": [spec.as_dict() for spec in specs]}
 
@@ -288,6 +290,8 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if principal.read_only and name not in READ_ONLY_TOOLS | {"tools/list", "tools/call"}:
+            return {"ok": False, "error": "read_only_token"}
         if name == "userio.channels.read" and arguments.get("channel") == "max":
             # Keep the compatibility HTTP surface on the authoritative MAX
             # reader, including its bounded cached-history contract.
@@ -551,7 +555,10 @@ class UserIOMcpSurface:
             if name == "userio.conversation.delete_local":
                 return self._delete_conversation(arguments, principal)
             if name == "userio.accounts.list":
-                return {"ok": True, "accounts": self._store.accounts(user_id=user_id)}
+                accounts = self._store.accounts(user_id=user_id)
+                if principal.read_only:
+                    accounts = [{**a, "capabilities": [c for c in a.get("capabilities", []) if c != "reply"]} for a in accounts]
+                return {"ok": True, "accounts": accounts}
             if name == "userio.ai.propose":
                 return self._propose(arguments, principal)
         except PermissionError as error:

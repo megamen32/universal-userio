@@ -840,14 +840,15 @@ class SQLiteUserIOStore:
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT u.id,u.username,u.role FROM api_tokens t JOIN users u ON u.id=t.user_id
+                SELECT u.id,u.username,u.role,t.kind,t.scope FROM api_tokens t JOIN users u ON u.id=t.user_id
                 WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.token_type='access'
                   AND (t.expires_at IS NULL OR t.expires_at>?)
                 """,
                 (self._token_hash(token), time.time()),
             ).fetchone()
         return None if row is None else UserPrincipal(
-            str(row["id"]), str(row["username"]), str(row["role"])
+            str(row["id"]), str(row["username"]), str(row["role"]),
+            read_only=row["kind"] == "personal" and row["scope"] == "read_only",
         )
 
     def register_oauth_client(
