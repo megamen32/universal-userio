@@ -62,3 +62,14 @@ auth restored. Post-protocol gateway closure0e3354c proves deleted binding/401.
 Secretary role/source draft UI, dispatcher401/delay, work-chat allowlist, substantive
 email notifications remain ACTIVE. Attached documentation/short README refresh
 added to same owning task; no broad unpause or historical action replay.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+|261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
+
+Documentation accepted through actual headed BFFE consumer/owncleanup. Core
+1727408/files verified. Existing explicit AgentCall ingress stop predates docs;
+fullsystemd not claimed/Root24humanStop preserved. Next: secretary roles/latest
+anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clarity.
