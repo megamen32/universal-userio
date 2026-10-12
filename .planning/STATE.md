@@ -99,7 +99,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
-|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|pending|57 focused integration checks PASS; install/native acceptance pending|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
+|261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO installed live read/refused-write/revoke PASS; Exmanager native callback owned Root|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
 |261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
 
 Documentation accepted through actual headed BFFE consumer/owncleanup. Core
