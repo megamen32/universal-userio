@@ -11,7 +11,7 @@ last_updated: 2026-10-12
 number: 9
 name: Recipient-visible typing/progress
 expected: Observed native indicator/expiry or truthful unsupported fallback, distinct from provider ACK.
-awaiting: owned authenticated recipient on managed44/88; native SDK remains Exmanager-owned
+awaiting: explicitly deferred until a second recipient test account is supplied; native SDK remains Exmanager-owned
 
 ## Tests
 
@@ -23,7 +23,7 @@ evidence: Exmanager native-vision outcome source18/reply19, three accepted edits
 ### 2. MAX repeated own-message edit
 expected: Same provider ID survives URL replacement/removal and normal reload.
 result: pass
-evidence: Accepted phase04/STATE normal human web send/edit evidence; native Secretary MAX remains phase15.
+evidence: Accepted phase04/STATE normal web evidence plus new native Secretary final reply117430265913625196 changed twice and original body restored with same-ID fresh readbacks; see phase15 native-max-final verification. Later auth refusal retained separately.
 
 ### 3. Telegram reaction lifecycle
 expected: Add/change/remove through exact generic approved action; independent native reaction readback.
@@ -70,7 +70,7 @@ owner: UserIO7bb recipient observation; Exmanager97 native SDK/relay.
 ### 10. MAX typing/progress
 expected: Same visible provider behavior or truthful unsupported fallback for the exact current account.
 result: pending
-evidence: Generic native start accepted; discovery explicitly says expires_automatically; recipient indicator/expiry not observed.
+evidence: Generic native start accepted; discovery explicitly says expires_automatically; recipient indicator/expiry not observed. User hook explicitly defers until second recipient test account; existing sender is sufficient for send/read/edit, no password in chat.
 owner: UserIO7bb recipient observation; Exmanager97 native SDK.
 
 ## Summary

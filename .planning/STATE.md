@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: executing
-last_updated: "2026-10-12T22:10:17.253586Z"
+last_updated: "2026-10-12T22:54:57.762033Z"
 last_activity: 2026-10-13
 progress:
   total_phases: 4
@@ -15,8 +15,8 @@ progress:
 
 # State
 
-**Current Phase:** 14
-**Current Phase Name:** Telegram and MAX rich operations
+**Current Phase:** 15
+**Current Phase Name:** Native Secretary parity and transport retirement
 **Total Phases:** 4
 **Current Plan:** 01
 **Total Plans in Phase:** 1
@@ -25,7 +25,7 @@ progress:
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
 **Last Activity:** 2026-10-13
-**Last Activity Description:** Fresh post-install native sourcecf3 ACTIVE verified: TG/MAX capability/source/media, exact document/image bytes, MAX three-page history and separate private readonly13accounts PASS. Prior placement failures terminal/historical. Typing recipient observation and phase15 native MAX model/retirement remain open.
+**Last Activity Description:** Native MAX final model reply delivered and edited twice with same-ID fresh readback; current saved MAX authorization later refused. Installed f0cd37a explicitly exposes reconnect, preserves cached17 messages/all3accepted receipts and denies new provider claims. Typing deferred; transport unchanged.
 
 ## Current acceptance and next action
 
@@ -33,35 +33,32 @@ Newly found MAX history regression is resolved in installed6288120.
 [Owned debug](debug/max-history-inclusive-boundary.md) retains live RED,
 old prepayload75, new52focusedPASS and actual Secretary third-page read without
 duplicates or ACK. Historical SRC-02 acceptance is retained; current native
-source/media tool proof does not imply whole-milestone model/retirement readiness.
+source/media tool proof does not imply whole-milestone readiness. The new
+[native MAX final reply/edit proof](phases/15-native-secretary-parity-and-transport-retirement/15-native-max-final-VERIFICATION.md)
+closes that stock owner-command vertical. A later LOGIN19 login.token refusal
+requires normal same-account reauthorization; no old send/model/edit is replayed.
 
 - Phase12: CAP-01–03 complete,3/3 (100%), installed HTTP/MCP discovery,
   scoped-refusal and actual native preserved-sender proof.
 - Phase13: SRC-01–02/REPLY-01–02 complete,4/4 (100%), real Telegram native
   source/media/reply/edit receipts plus bounded Telegram/MAX reads.
-- Phase14: ACT-01–03 complete,3/4 (75%); ACT-04 command ACK/stop-mode proved, recipient-visible typing/expiry not observed.
+- Phase14: ACT-01–03 complete,3/4 (75%); ACT-04 command ACK/stop-mode proved, recipient-visible typing/expiry explicitly deferred until a second test recipient is available.
 - Phase15: native MAX final parity/business preservation/transport retirement
-  remain Exmanager97-owned acceptance,0/3fullyclosed; actual TG vertical retained.
+  remain Exmanager97-owned acceptance,0/3fullyclosed; actual TG vertical and native MAX grounded final reply/two edits retained. Transport retirement explicitly excluded from this session.
 - Milestone2/4plans (50%),10/14requirements (71% rounded). Original all-directory
   progress includes historical phases and is not this milestone's percentage.
 
-Next route: resume [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md),
-reusing accepted receipts and filling only missing live matrix evidence. UserIO
-lead7bb owns provider/contracts; Exmanager lead97 owns SDK/native consumer and
-its retirement. Neither project waits on a generic whole-project hold.
+Next route: UserIO7bb restores existing MAX authorization through the normal
+protected route, then freshly reads the already accepted final message without
+repeating provider writes/model intent. Current reconnect handling is installed
+and real MCP-accepted; see [auth debug](debug/max-post-edit-auth-refusal.md).
+Exmanager97 independently finishes fresh external inbound/rich SDK parity and
+business/memory checkpoints; transport retirement is a later separate step.
+Typing awaits a second recipient test account, not a password for this account.
 
-Additional open UserIO follow-ups: VK reactions/read acknowledgements/automatic
-session renewal and exact older-call-history scroll anchor. Owner and closure
-criteria: [ROADMAP remaining work](ROADMAP.md). Already accepted continuous SMS,
-call grouping/numbers, group authors, chat analysis switches, draft source/time,
-mail notices, Bearer/OAuth, landing/docs and VK rich web are explicitly closed
-there. Unknown-number archive is an accepted exception; delete-six was cancelled.
-
-Current v1.3 evidence includes installed source2544edc, source3477 media repair,
-native Telegram source18→reply19 plus3edits, scoped reader/native MAX stored reads,
-and MAX new-file203-byte exact download. Private readonly resource and existing
-sender881 remain unchanged. These acceptances do not claim the missing full MAX
-SDK journey or full transport retirement.
+Latest protected proof root: `.tmp/native-max-final-20261013/` (delivery, both
+same-ID edits, 67-test bounded GREEN, installed manifest and real auth/cached
+history read). No active test/browser job or resource lease is held here.
 
 ## Historical records below
 

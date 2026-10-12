@@ -66,15 +66,15 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
 **Plans**: 1 plan
 - [ ] 15-01: Real native parity, business preservation and scoped retirement
 
-**Status:** Pending final native acceptance — 0/3 fully closed requirements, 0%. Telegram text/vision/streaming evidence is accepted as a partial vertical; MAX native completion and transport retirement remain with the Exmanager owner.
+**Status:** Pending final native acceptance — 0/3 fully closed requirements, 0%. Telegram text/vision/streaming and native MAX grounded final reply/two same-ID edits are accepted partial verticals. Current MAX saved authorization is refused; reconnection handling/cached history are live-accepted in f0cd37a. Full external inbound/rich parity remains with Exmanager; retirement is explicitly a later separate step. [Latest verification](phases/15-native-secretary-parity-and-transport-retirement/15-native-max-final-VERIFICATION.md).
 
 ## Progress
 | Phase | Status | Closed requirements | Requirement progress |
 |---|---|---|---|
 | 12 | Complete | CAP-01–03: 3/3 | 100% |
 | 13 | Complete | SRC-01–02, REPLY-01–02: 4/4 | 100% |
-| 14 | Recipient typing/progress proof remaining | ACT-01–03: 3/4 | 75% |
-| 15 | Native MAX acceptance / retirement pending | 0/3 | 0% |
+| 14 | Recipient typing deferred until second test account | ACT-01–03: 3/4 | 75% |
+| 15 | Native MAX reply/edit accepted; auth/full parity/retirement open | 0/3 | 0% |
 
 Current milestone: **2/4 phases/plans closed (50%); 10/14 requirements accepted (71%)**. These are different counters. The original GSD all-directory bar also counts retained historical phases and is not a product-readiness percentage. No full milestone completion is claimed.
 
@@ -99,7 +99,8 @@ These belong to accepted v1.0–v1.2 or completed quick tasks; they are not new 
 | Open item | Owner | Required evidence to close |
 |---|---|---|
 | **Native Secretary MAX journey and scoped transport retirement** (LIVE-01–03, phase15) | Exmanager lead `01a11197-d2d9-7812-97c8-c2da3f454461`; UserIO lead fixes only a reproduced UserIO contract defect | A new authorized MAX source handled by the deployed Secretary through its existing Airlock/UserIO resource; exact author/source/media, approved reply/provider receipt and native readback; original business/memory/readonly checkpoints retained. Then owner-recorded removal of only proven replaceable Telegram glue, rollback and affected fresh native acceptance. UserIO-only MAX sends do not substitute for this proof. Exmanager-owned document-content reader is now live-accepted for actual bytes/text/SHA; source24 was not resent. Installed6288120 MAX history also passes actual native third-page read. |
-| **Recipient typing/progress acceptance** (remaining ACT-04, phase14) | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` owns contract/provider checks; Exmanager lead owns actual Secretary SDK journeys | Complete remaining typing/progress rows in [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md): owned authenticated recipient observation or a truthful unsupported fallback for each Telegram/MAX account. Provider ACK alone is not visible typing. Reactions/sticker/file delivery passed the new real provider cycle; native Secretary rich parity remains phase15, not an additional UserIO send replay. |
+| **Recipient typing/progress acceptance — explicitly deferred until second test account** (remaining ACT-04, phase14) | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` owns contract/provider checks; Exmanager lead owns actual Secretary SDK journeys | Complete remaining typing/progress rows in [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md): owned authenticated recipient observation or a truthful unsupported fallback for each Telegram/MAX account. Provider ACK alone is not visible typing. Reactions/sticker/file delivery passed the new real provider cycle; native Secretary rich parity remains phase15, not an additional UserIO send replay. |
+| **Current MAX saved authorization refused** | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` | Normal protected same-account reauthorization then fresh existing-final-message/native history read without send/model/edit replay. Installed f0cd37a explicit reconnect/cached17messages/all3accepted receipts PASS; upstream LOGIN19 login.token remains actual blocker. [Debug](debug/max-post-edit-auth-refusal.md). |
 | **VK reactions, read acknowledgements, automatic session renewal** | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` | Separate source/runtime changes and permitted live checks: reaction native readback; a newly unread authorized message becomes read after normal viewing while stealth suppresses it; controlled credential expiry/renewal resumes maintained sync without manual re-entry or duplicate messages. Current text/edit/file acceptance does not imply these capabilities. |
 | **Older call-history scroll anchor** | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` | Normal managed browser on server44/88: record the visible message ID and viewport offset, load older history, show that the same message stays at the same offset within measured tolerance; retained screenshot/DOM readback. API pagination/counts alone are insufficient; no calls needed. |
 
