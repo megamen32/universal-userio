@@ -195,21 +195,60 @@ class HimalayaReader:
         self, cursor: str | None, *, limit: int = 100,
         known_message_ids: set[str] | frozenset[str] = frozenset(),
     ) -> tuple[list[GmailMessage], str | None]:
-        payload = self._run("--json", "envelope", "list", "-m", self.mailbox, "-p", "1", "-s", str(max(limit, self.snapshot_size)))
-        envelopes = payload.get("envelopes") if isinstance(payload, dict) else None
-        if not isinstance(envelopes, list):
-            raise RuntimeError("invalid Himalaya envelope response")
         pending: list[dict[str, Any]] = []
         found = cursor is None
-        for env in envelopes:
-            if not isinstance(env, dict):
-                continue
-            message_id = str(env.get("message-id") or env.get("id") or "").strip()
-            if cursor and (message_id == cursor or message_id in known_message_ids):
-                found = True
+        # Snapshot stable IMAP UIDs, then fetch only bounded headers. The shared
+        # date-sorted listing can load the whole Yandex mailbox before paging.
+        # Offset pages can also skip a message when another one is deleted.
+        snapshot = self._run("--json", "imap", "search", "-m", self.mailbox)
+        ids = snapshot.get("ids") if isinstance(snapshot, dict) else None
+        if not isinstance(ids, list) or snapshot.get("uid_mode") is not True:
+            raise RuntimeError("Himalaya must return stable IMAP UIDs")
+        uids = []
+        for item in ids:
+            uid = item.get("id") if isinstance(item, dict) else None
+            if type(uid) is not int or not 1 <= uid <= 4294967295:
+                raise RuntimeError("invalid Himalaya IMAP UID")
+            uids.append(uid)
+        uids = sorted(set(uids), reverse=True)[:max(limit, self.snapshot_size)]
+        deadline = time.monotonic() + 45
+        for offset in range(0, len(uids), 50):
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"gmail metadata scan for {self.account} exceeded its time budget")
+            batch = uids[offset:offset + 50]
+            payload = self._run("--json", "imap", "fetch", "-m", self.mailbox,
+                                "--envelope", ",".join(map(str, batch)))
+            rows = payload.get("messages") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                raise RuntimeError("invalid Himalaya envelope response")
+            by_uid = {}
+            for row in rows:
+                uid = row.get("uid") if isinstance(row, dict) else None
+                if type(uid) is not int or uid not in batch or uid in by_uid:
+                    raise RuntimeError("Himalaya fetched an unexpected IMAP UID")
+                envelope = row.get("envelope")
+                if not isinstance(envelope, dict):
+                    raise RuntimeError("invalid Himalaya IMAP envelope")
+                senders = envelope.get("from") or []
+                sender = str(senders[0]) if isinstance(senders, list) and senders else ""
+                by_uid[uid] = {"id": str(uid),
+                    "message-id": str(envelope.get("message_id") or "").strip("<>"),
+                    "subject": envelope.get("subject") or "",
+                    "from": [{"email": parseaddr(sender)[1] or sender}]}
+            # Missing UIDs were deleted since the snapshot; they do not shift
+            # remaining IDs or manufacture a cursor for a missing message.
+            envelopes = [by_uid[uid] for uid in batch if uid in by_uid]
+            for env in envelopes:
+                if not isinstance(env, dict):
+                    continue
+                message_id = str(env.get("message-id") or env.get("id") or "").strip()
+                if cursor and (message_id == cursor or message_id in known_message_ids):
+                    found = True
+                    break
+                if message_id:
+                    pending.append(env)
+            if cursor and found:
                 break
-            if message_id:
-                pending.append(env)
         if cursor and not found:
             raise RuntimeError(f"gmail cursor for {self.account} is outside bounded snapshot")
         selected = list(reversed(pending))[:limit]

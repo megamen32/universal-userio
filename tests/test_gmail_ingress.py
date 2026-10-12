@@ -48,21 +48,63 @@ def test_gmail_ingress_uses_userio_cursor_api():
     assert sink.cursors['gmail']=='m2'
 
 
-def test_missing_cursor_recovers_from_recent_durable_message() -> None:
-    reader = HimalayaReader("himalaya", "careviolan", snapshot_size=10)
-    reader._run = lambda *_args: {"envelopes": [
-        {"id": "3", "message-id": "m3"},
-        {"id": "2", "message-id": "m2"},
-        {"id": "1", "message-id": "durable-anchor"},
-    ]}
-    reader._read = lambda env: GmailMessage(str(env["message-id"]), str(env["id"]), "sender", "body")
+def native_uid_reader(reader, ids, *, deleted=(), provider_ids=None):
+    calls=[]
+    def run(*args):
+        calls.append(args)
+        if 'search' in args:
+            return {'uid_mode':True,'ids':[{'id':i} for i in ids]}
+        assert 'fetch' in args and 'envelope' not in args[:-1]
+        requested=[int(i) for i in args[-1].split(',')]
+        return {'messages':[{'uid':i,'seq':99-i,'envelope':{
+            'message_id':'<'+(provider_ids or {}).get(i, f'm{i}')+'>',
+            'from':['Sender <sender@example.test>'],'subject':'Work'}}
+            for i in reversed(requested) if i not in deleted]}
+    reader._run=run
+    reader._read=lambda env:GmailMessage(env['message-id'],env['id'],env['from'][0]['email'],'body')
+    return calls
 
-    messages, cursor = reader.poll(
-        "deleted-cursor", limit=10, known_message_ids=frozenset({"durable-anchor"}),
-    )
 
-    assert [message.message_id for message in messages] == ["m2", "m3"]
-    assert cursor == "m3"
+def test_missing_cursor_recovers_from_recent_durable_message():
+    reader=HimalayaReader('himalaya','careviolan',snapshot_size=10)
+    native_uid_reader(reader,[1,2,3],provider_ids={1:'durable-anchor'})
+    messages,cursor=reader.poll('deleted-cursor',limit=10,known_message_ids=frozenset({'durable-anchor'}))
+    assert [x.message_id for x in messages]==['m2','m3'] and cursor=='m3'
+
+
+def test_poll_uses_stable_native_uids_without_slow_sorted_full_list():
+    reader=HimalayaReader('himalaya','yandex',snapshot_size=100)
+    calls=native_uid_reader(reader,[1,2,3])
+    messages,cursor=reader.poll('m1',limit=10)
+    assert [x.message_id for x in messages]==['m2','m3'] and cursor=='m3'
+    assert len(calls)==2 and calls[1][-1]=='3,2,1'
+    assert all(x.sender=='sender@example.test' for x in messages)
+    calls.clear()
+    assert reader.poll('m3',limit=10)==([], 'm3') and len(calls)==2
+
+
+def test_deleted_head_cannot_shift_offsets_and_skip_remaining_new_mail():
+    reader=HimalayaReader('himalaya','yandex',snapshot_size=100)
+    native_uid_reader(reader,[1,2,3],deleted={3})
+    messages,cursor=reader.poll('m1',limit=10)
+    assert [x.message_id for x in messages]==['m2'] and cursor=='m2'
+
+
+def test_initial_mail_bootstrap_keeps_bounded_snapshot_and_oldest_first_cursor():
+    reader=HimalayaReader('himalaya','gmail',snapshot_size=4)
+    calls=native_uid_reader(reader,[1,2,3,4,5])
+    messages,cursor=reader.poll(None,limit=2)
+    assert [x.message_id for x in messages]==['m2','m3'] and cursor=='m3'
+    assert calls[1][-1]=='5,4,3,2'
+
+
+def test_sequence_number_or_unrequested_uid_refused_before_body_read():
+    reader=HimalayaReader('himalaya','gmail',snapshot_size=4)
+    reader._run=lambda *args:{'uid_mode':False,'ids':[{'id':1}]}
+    with pytest.raises(RuntimeError,match='stable IMAP UIDs'):reader.poll('m1')
+    reader._run=lambda *args:({'uid_mode':True,'ids':[{'id':1}]} if 'search' in args
+                              else {'messages':[{'uid':2,'envelope':{}}]})
+    with pytest.raises(RuntimeError,match='unexpected IMAP UID'):reader.poll('m1')
 
 
 def test_reader_prefers_plain_text_and_keeps_html_as_accessible_fallback() -> None:
