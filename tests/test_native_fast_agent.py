@@ -121,6 +121,39 @@ def test_native_triage_reuses_summary_without_unnecessary_history_read():
         assert generator.last_native_run["read_calls"] == 0
 
 
+def test_native_reply_roles_source_and_stale_followup(tmp_path):
+    """Focused integration, 5s expected/30s maximum: actual SDK request and store.
+
+    Detects owner/interlocutor confusion and drafts losing their source after
+    later replies. The provider is a local fixture; no external send or model.
+    """
+    from universal_userio.service import UserIOService
+    from universal_userio.store import SQLiteUserIOStore
+
+    with _provider_fixture([{"role": "assistant", "content": "Подтверждаю: в пятницу."}]) as (endpoint, requests):
+        generator = FastAgentDraftGenerator(endpoint=endpoint, token="fixture-only")
+        store = SQLiteUserIOStore(tmp_path / "native-context.sqlite3")
+        service = UserIOService(store, generator, object())
+        cid, _ = service.receive(InboxMessage("telegram", "q1", "same-label", "Когда готово?", 1), route_id="test")
+        service.receive(InboxMessage("telegram", "r2", "same-label", "В пятницу", 2, direction="outgoing"), route_id="test")
+        service.receive(InboxMessage("telegram", "q3", "same-label", "Точно в пятницу?", 3), route_id="test")
+        service.propose_from_conversation(cid, limit=1)
+        assert generator.last_native_run["engine"] == "fast-agent"
+        prompt = next(item["content"] for item in requests[0]["messages"] if item["role"] == "user")
+        context = json.loads(prompt[prompt.index("{\"conversation_id\""):])
+        assert context["latest_message"]["message_id"] == "q3"
+        assert context["latest_message"]["speaker_role"] == "interlocutor"
+        assert any(item["message_id"] == "r2" and item["speaker_role"] == "owner"
+                   and item["body"] == "В пятницу" for item in context["history"])
+        draft = store.conversation(cid)["drafts"][0]
+        assert draft["created_at"] > 0 and draft["reply_to"]["message_id"] == "q3"
+        assert draft["context_status"] == "current"
+        service.receive(InboxMessage("telegram", "q4", "same-label", "А в какое время?", 4), route_id="test")
+        changed = store.conversation(cid)["drafts"][0]
+        assert changed["reply_to"] == draft["reply_to"]
+        assert changed["context_status"] == "stale"
+
+
 def test_native_read_more_switches_to_m3_before_sending_new_image():
     anchors = []
 

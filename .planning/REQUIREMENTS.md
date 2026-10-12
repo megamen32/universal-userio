@@ -1,14 +1,43 @@
-# Requirements: MAX v1.0
+# Requirements: v1.2 Reliable everyday communication
 
-- [x] AUTH-01: Existing Android authorization reused with user authority; account identity proven.
-- [x] AUTH-02: Session reused without browser/phone; no token in logs/Git.
-- [x] READ-01: UserIO history preserves provider IDs, chat, sender, time, direction and attachments.
-- [x] READ-02: Live messages, own replies and reconnect catch-up deduplicated.
-- [x] SEND-01: Ordinary draft plus explicit approval sends once to exact chat, with actual provider receipt and history readback.
-- [x] OPS-01: Bounded native service, reconnect/stop, rollback and real consumer proof.
+## Current requirements
+
+- [x] **SMS-01**: One native S21 SMS account continuously mirrors incoming/outgoing full bodies; remove only owned disabled test accounts.
+- [x] **PHONE-01**: Calls to one person share one chronological dialog with visible number and start/end events; unknown historical targets stay archived.
+- [x] **GUIDE-01**: Public APK and separate rooted/unrooted SMS/call setup guides; normal per-user device enrollment/disconnect.
+- [x] **GROUP-01**: Telegram/MAX group messages show real sender names and current usernames where available.
+- [x] **WEB-01**: Compact chat header, signed-in root opens cabinet, visible cabinet/O-service/GitHub links; auto-read default with stealth opt-out.
+- [x] **DOC-01**: Short README, searchable documentation, explicit completely-free promise with BYOK/MCP explanation.
+- [x] **MCP-01**: Users create multiple named Bearer tokens and independently revoke them; Codex and existing GPTAdmin connection work.
+- [x] **MCP-02**: Install UserIO MCP plugin with OAuth through normal ChatGPT browser flow and read actual owned accounts.
+- [ ] **SEC-01**: Secretary distinguishes owner/interlocutor using direction and current source; owner followups remain visible to native Fast Agent.
+- [ ] **SEC-02**: AI drafts show creation time and exact source preview; clicking scrolls to that message.
+- [ ] **SEC-03**: Context changes mark drafts stale; old source-less drafts are labelled honestly without guessed provenance.
+- [ ] **NOTIFY-01**: Fix proven dispatcher authorization/queue delay through maintained service without broad policy unpause or accepted-action replay.
+- [ ] **WORK-01**: Discover actual owned working Telegram chats with Telegram Helper and enable existing AI/notification rules for future events.
+- [ ] **MAIL-01**: Email notifications explain substantive content, requested action and deadlines, using existing analysis/notification paths.
+- [ ] **ACCEPT-01**: Every remaining requirement has source/runtime/user-surface evidence and original GSD planning/progress is recognized.
 
 ## Traceability
-AUTH-01/AUTH-02 → Phase 1; READ-01/READ-02 → Phase 2; SEND-01/OPS-01 → Phase 3.
 
-## Release criteria
-Authenticated account, real history parity, new event, approved test message in owner Saved Messages, reconnect readback. Preserve other providers and never replay an uncertain send. Ordinary checks have maximum 180 seconds; slow reliability soak is nightly.
+| Requirement | Phase | Status |
+|---|---|---|
+| SMS-01 | Phase 8 | Accepted |
+| PHONE-01 | Phase 8 | Accepted |
+| GUIDE-01 | Phase 8 | Accepted |
+| GROUP-01 | Phase 8 | Accepted |
+| WEB-01 | Phase 8 | Accepted |
+| DOC-01 | Phase 8 | Accepted |
+| MCP-01 | Phase 8 | Accepted |
+| MCP-02 | Phase 8 | Accepted |
+| SEC-01 | Phase 9 | Pending real acceptance |
+| SEC-02 | Phase 9 | Pending real acceptance |
+| SEC-03 | Phase 9 | Pending real acceptance |
+| NOTIFY-01 | Phase 10 | Pending real acceptance |
+| WORK-01 | Phase 10 | Pending real acceptance |
+| MAIL-01 | Phase 10 | Pending real acceptance |
+| ACCEPT-01 | Phase 11 | Pending real acceptance |
+
+## Evidence and exceptions
+
+Accepted history and its private proof pointers are retained in STATE.md and phase 08 summary. No new provider sends are needed to reconfirm accepted work. Cancelled Exmanager delete-six expansion remains out of scope. Four historical unknown phone numbers are archived by explicit user choice. Notification cards and receipts must not be replayed.

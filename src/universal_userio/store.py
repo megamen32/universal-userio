@@ -395,6 +395,11 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
+            CREATE TABLE IF NOT EXISTS draft_context_snapshots (
+                user_id TEXT NOT NULL,draft_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,context_json TEXT NOT NULL,
+                PRIMARY KEY(user_id,draft_id)
+            );
             CREATE TABLE IF NOT EXISTS draft_reply_origins (
                 user_id TEXT NOT NULL,draft_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,message_key TEXT NOT NULL,
@@ -2062,8 +2067,55 @@ class SQLiteUserIOStore:
                 (self._user(user_id), draft.id, draft.conversation_id, draft.body, draft.status, time.time()),
             )
 
+    def reply_context_snapshot(self, conversation_id: str, *, source: str,
+                               message_id: str, user_id: str | None = None) -> dict:
+        """Local canonical provenance for a draft, separate from relay send authority."""
+        user = self._user(user_id)
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user)
+        with self._lock:
+            anchor = self._connection.execute("""SELECT source,message_id,body,direction,
+                received_at,edited_at,deleted_at FROM messages WHERE user_id=?
+                AND conversation_id=? AND source=? AND message_id=?""",
+                (user, conversation_id, source, message_id)).fetchone()
+            latest = self._connection.execute("""SELECT source,message_id,body,direction,
+                received_at,edited_at FROM messages WHERE user_id=? AND conversation_id=?
+                AND deleted_at IS NULL ORDER BY received_at DESC,rowid DESC LIMIT 1""",
+                (user, conversation_id)).fetchone()
+        if anchor is None or anchor["deleted_at"] is not None:
+            raise KeyError("draft source not found in this conversation")
+        fingerprint = hashlib.sha256(json.dumps(
+            [dict(anchor), dict(latest) if latest else None], ensure_ascii=False,
+            sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        return {"source": source, "message_id": message_id,
+                "body": str(anchor["body"])[:1000], "received_at": anchor["received_at"],
+                "fingerprint": fingerprint}
+
+    def reply_generation_context(self, conversation_id: str, *, source: str,
+                                 message_id: str, user_id: str | None = None) -> tuple[dict, dict]:
+        """Read the model's source and its saved version under one store lock."""
+        with self._lock:
+            snapshot = self.reply_context_snapshot(conversation_id, source=source,
+                message_id=message_id, user_id=user_id)
+            message = self.message(message_id, source=source, user_id=user_id)
+            if message is None or message["conversation_id"] != self.resolve_conversation_id(conversation_id, user_id=user_id):
+                raise KeyError("draft source not found in this conversation")
+            return snapshot, message
+
+    def bind_draft_context(self, draft_id: str, *, conversation_id: str,
+                           snapshot: dict, user_id: str | None = None) -> None:
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            draft = self._connection.execute("SELECT conversation_id FROM drafts WHERE user_id=? AND id=?",
+                                             (user, draft_id)).fetchone()
+            if draft is None or draft["conversation_id"] != conversation_id:
+                raise KeyError("draft not found in this conversation")
+            self._connection.execute("INSERT OR IGNORE INTO draft_context_snapshots VALUES (?,?,?,?)",
+                (user, draft_id, conversation_id, json.dumps(snapshot, ensure_ascii=False)))
+
     def add_source_bound_draft(self, draft: ReplyDraft, *, account_ref: str,
-                               peer_id: str, user_id: str | None = None) -> None:
+                               peer_id: str, user_id: str | None = None,
+                               source_message_id: str | None = None) -> None:
         user = self._user(user_id)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -2071,8 +2123,10 @@ class SQLiteUserIOStore:
                 FROM messages m JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id
                 WHERE m.user_id=? AND c.id=? AND c.source='telegram' AND c.account_ref=?
                 AND c.peer_id=? AND m.source='telegram' AND m.direction='incoming'
-                AND m.deleted_at IS NULL ORDER BY m.received_at DESC,m.rowid DESC LIMIT 1""",
-                (user, draft.conversation_id, account_ref, peer_id)).fetchone()
+                AND m.deleted_at IS NULL AND (? IS NULL OR m.message_id=?)
+                ORDER BY m.received_at DESC,m.rowid DESC LIMIT 1""",
+                (user, draft.conversation_id, account_ref, peer_id,
+                 source_message_id, source_message_id)).fetchone()
             if row is None:
                 raise ValueError("real relay inbound source is required")
             match = re.fullmatch(re.escape(f"{account_ref}|{peer_id}:") + r"([1-9][0-9]*)", str(row["message_id"]))
@@ -2359,7 +2413,7 @@ class SQLiteUserIOStore:
             ).fetchall()
             drafts = self._connection.execute(
                 """
-                SELECT id,body,status,outbox_receipt FROM drafts
+                SELECT id,body,status,outbox_receipt,created_at FROM drafts
                 WHERE user_id=? AND conversation_id=? ORDER BY created_at
                 """,
                 (user_id, conversation_id),
@@ -2375,6 +2429,23 @@ class SQLiteUserIOStore:
                     FROM telegram_history_state WHERE user_id=? AND account_ref=? AND peer_id=?""",
                     (user_id,row["account_ref"],row["peer_id"])).fetchone()
         message_records = [dict(item) for item in messages]
+        draft_records = [dict(item) for item in drafts]
+        with self._lock:
+            snapshots = dict(self._connection.execute(
+                "SELECT draft_id,context_json FROM draft_context_snapshots WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id)).fetchall())
+        for draft in draft_records:
+            saved = json.loads(snapshots[draft["id"]]) if draft["id"] in snapshots else None
+            draft["reply_to"] = None
+            draft["context_status"] = "unknown"
+            if saved:
+                draft["reply_to"] = {key: saved[key] for key in ("source", "message_id", "body", "received_at")}
+                try:
+                    current = self.reply_context_snapshot(conversation_id, source=saved["source"],
+                        message_id=saved["message_id"], user_id=user_id)
+                    draft["context_status"] = "current" if current["fingerprint"] == saved["fingerprint"] else "stale"
+                except KeyError:
+                    draft["context_status"] = "stale"
         if row['source'] == 'max' and row['conversation_kind'] in {'group','channel'}:
             with self._lock:
                 author_names = dict(self._connection.execute(
@@ -2402,7 +2473,7 @@ class SQLiteUserIOStore:
             "peer_id": str(row["peer_id"] or ""),
             "conversation_kind": str(row['conversation_kind'] or 'unknown'),
             "display_name": str(name_row["name"]) if name_row else "",
-            "messages": message_records, "drafts": [dict(item) for item in drafts],
+            "messages": message_records, "drafts": draft_records,
             **({'phone_history': self._phone_history_cursor(row['id'], message_records, user_id)} if row['source']=='phone' else {}),
             **({"history": {
                 "status": "complete" if history_row["complete"] else "partial",
@@ -3166,6 +3237,18 @@ class SQLiteUserIOStore:
             result["attachments"] = attachments
         return result
 
+    def latest_incoming_message(self, conversation_id: str, *,
+                                user_id: str | None = None) -> dict[str, object] | None:
+        """Select the reply source independently of the rendered history page."""
+        user = self._user(user_id)
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user)
+        with self._lock:
+            row = self._connection.execute("""SELECT source,message_id FROM messages
+                WHERE user_id=? AND conversation_id=? AND direction='incoming'
+                AND deleted_at IS NULL ORDER BY received_at DESC,rowid DESC LIMIT 1""",
+                (user, conversation_id)).fetchone()
+        return self.message(str(row["message_id"]), source=str(row["source"]), user_id=user) if row else None
+
     def new_messages(
         self, *, source: str | None = None, limit: int = 50, user_id: str | None = None,
     ) -> list[dict[str, object]]:
@@ -3384,6 +3467,7 @@ class SQLiteUserIOStore:
     def complete_workspace_triage(
         self, *, event_seq: int, request_id: str, result: dict[str, object],
         draft_bodies: list[str], user_id: str | None = None,
+        context_snapshot: dict | None = None,
     ) -> dict[str, object]:
         user = self._user(user_id)
         request_id = self._triage_request_id(request_id)
@@ -3414,6 +3498,9 @@ class SQLiteUserIOStore:
                        VALUES (?,?,?,?, 'proposed', ?)""",
                     (user, draft_id, str(event["conversation_id"]), body.strip(), now),
                 )
+                if context_snapshot is not None:
+                    self._connection.execute("INSERT OR IGNORE INTO draft_context_snapshots VALUES (?,?,?,?)",
+                        (user, draft_id, str(event["conversation_id"]), json.dumps(context_snapshot, ensure_ascii=False)))
             self._connection.execute(
                 """UPDATE workspace_triage SET status='completed',result_json=?,draft_ids_json=?,
                    last_error=NULL,updated_at=? WHERE user_id=? AND event_seq=?""",

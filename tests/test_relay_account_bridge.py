@@ -83,6 +83,22 @@ def test_wrong_sender_projection_never_imports_or_advances_cursor(case):
     assert store.conversations()==[] and not sent
 
 
+def test_ai_draft_source_does_not_move_during_generation(case):
+    store,service,bridge,events,sent,*_=case;uid=store.default_user_id
+    cid=service.sync_relay_account(user_id=uid)['conversation_ids'][0]
+    class Generator:
+        def suggest_with_context(self, **kwargs):
+            events.append({**events[0],"seq":2,"provider_message_id":"78","text":"later source"})
+            service.sync_relay_account(user_id=uid)
+            return ["Ответ на исходное сообщение"]
+    service._generator=Generator()
+    draft=service.propose_from_conversation(cid,limit=1,user_id=uid)[0]
+    assert store.draft_reply_origin(draft.id,user_id=uid)['provider_message_id']=='77'
+    record=store.conversation(cid,user_id=uid)['drafts'][0]
+    assert record['reply_to']['message_id'].endswith(':77')
+    assert record['context_status']=='stale' and not sent
+
+
 def test_other_account_uses_original_qr_outbox(case):
     store,service,bridge,events,sent,health,guard,fallback=case
     cb=bridge.prepare_reply(chat='other',chat_id='42',account_ref='telegram:900000101',body='x',

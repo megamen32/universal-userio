@@ -65,7 +65,9 @@ def test_variants_are_separate_calls_with_context_and_auth() -> None:
     assert len(requests) == 2
     payload = json.loads(requests[0][0].data)
     assert "n" not in payload
-    assert "anna: earlier" in payload["messages"][1]["content"]
+    assert "earlier" in payload["messages"][1]["content"]
+    assert "latest" in payload["messages"][1]["content"]
+    assert "interlocutor" in payload["messages"][1]["content"]
     assert requests[0][0].get_header("Authorization") == "Bearer secret"
     # ...and <think> blocks are stripped from reasoning-model answers.
     assert drafts == ["draft one", "draft two"]

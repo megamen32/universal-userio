@@ -278,11 +278,11 @@ class UserIOService:
                     if item.get("provider") == "telegram"}
         sender = accounts.get(sender_id)
         receiver = accounts.get(receiver_id)
-        if sender is None or receiver is None:
+        if receiver is None:
             return None
         return {
             "sender_account_id": sender_id,
-            "sender_display_name": str(sender["display_name"])[:320],
+            "sender_display_name": str(sender["display_name"] if sender else event.get("sender") or peer_id)[:320],
             "receiver_account_id": receiver_id,
             "receiver_display_name": str(receiver["display_name"])[:320],
         }
@@ -373,6 +373,19 @@ class UserIOService:
                 }
             return current
         event = self._store.workspace_event(event_seq, user_id=resolved_user)
+        # Freeze the version before context preparation. Any reply/edit arriving
+        # while history or images are read must make the eventual draft stale.
+        try:
+            draft_context, current_source = self._store.reply_generation_context(
+                str(event["conversation_id"]), source=str(event["source"]),
+                message_id=str(event["message_id"]), user_id=resolved_user,
+            )
+        except KeyError:
+            return self._store.fail_workspace_triage(event_seq=event_seq, request_id=request_id,
+                error="Исходное сообщение удалено или недоступно", user_id=resolved_user)
+        event = {**event, "body": str(current_source["body"]),
+                 "sender": str(current_source["sender"]), "direction": str(current_source["direction"]),
+                 "received_at": float(current_source["received_at"])}
         owner_followups = self._store.owner_messages_after(
             str(event["conversation_id"]), str(event["message_id"]), user_id=resolved_user,
         )
@@ -538,7 +551,7 @@ class UserIOService:
             )
         return self._store.complete_workspace_triage(
             event_seq=event_seq, request_id=request_id, result=result,
-            draft_bodies=draft_bodies, user_id=resolved_user,
+            draft_bodies=draft_bodies, user_id=resolved_user, context_snapshot=draft_context,
         )
 
     def send_workspace_triage(
@@ -922,13 +935,13 @@ class UserIOService:
         conversation = self._store.conversation(conversation_id, user_id=user_id)
         if conversation is None:
             raise KeyError("conversation not found")
-        messages = list(conversation["messages"])
-        if not messages:
-            raise ValueError("conversation has no messages")
-        latest = messages[-1]
+        latest = self._store.latest_incoming_message(conversation_id, user_id=user_id)
+        if latest is None:
+            raise ValueError("conversation has no incoming message to reply to")
         message = InboxMessage(
             source=str(latest["source"]), message_id=str(latest["message_id"]), sender=str(latest["sender"]),
             body=str(latest["body"]), received_at=float(latest["received_at"]),
+            direction=str(latest["direction"]), attachments=tuple(latest.get("attachments") or ()),
         )
         return self.propose_for_approval(
             conversation_id, message, limit=limit, user_id=user_id
@@ -1050,6 +1063,12 @@ class UserIOService:
         if self._store.conversation(conversation_id, user_id=user_id) is None:
             raise KeyError("conversation not found")
         generator = self._generator_for(user_id)
+        context_snapshot, current_source = self._store.reply_generation_context(
+            conversation_id, source=message.source, message_id=message.message_id, user_id=user_id,
+        )
+        message = replace(message, body=str(current_source["body"]),
+            sender=str(current_source["sender"]), direction=str(current_source["direction"]),
+            received_at=float(current_source["received_at"]))
         suggest_variants = getattr(generator, "suggest_variants", None)
         suggest_with_context = getattr(generator, "suggest_with_context", None)
         generated: Sequence[str]
@@ -1057,6 +1076,9 @@ class UserIOService:
             conversation_id, current_message_id=message.message_id,
             user_id=user_id,
         )
+        history = [*history, *self._store.owner_messages_after(
+            conversation_id, message.message_id, user_id=user_id,
+        )]
         if callable(suggest_with_context):
             generated = suggest_with_context(conversation_id=conversation_id, latest_message=message, history=history, limit=limit)
         elif callable(suggest_variants):
@@ -1068,15 +1090,19 @@ class UserIOService:
             raise ValueError("AI produced no reply variants")
         drafts = [ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, body, "proposed") for body in bodies]
         for draft in drafts:
-            self._persist_reply_draft(draft, user_id=user_id)
+            self._persist_reply_draft(draft, user_id=user_id, source_message_id=message.message_id)
+            self._store.bind_draft_context(draft.id, conversation_id=conversation_id,
+                                           snapshot=context_snapshot, user_id=user_id)
         return drafts
 
-    def _persist_reply_draft(self, draft: ReplyDraft, *, user_id: str | None) -> None:
+    def _persist_reply_draft(self, draft: ReplyDraft, *, user_id: str | None,
+                             source_message_id: str | None = None) -> None:
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id) or {}
         scoped = getattr(self.telegram_outbox, "source_bound_pair", None)
         account, peer = str(conversation.get("account_ref") or ""), str(conversation.get("peer_id") or "")
         if conversation.get("source") == "telegram" and callable(scoped) and scoped(account, peer):
-            self._store.add_source_bound_draft(draft, account_ref=account, peer_id=peer, user_id=user_id)
+            self._store.add_source_bound_draft(draft, account_ref=account, peer_id=peer,
+                user_id=user_id, source_message_id=source_message_id)
         else:
             self._store.add_draft(draft, user_id=user_id)
 

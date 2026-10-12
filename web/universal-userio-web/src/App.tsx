@@ -17,7 +17,7 @@ type Account = { id: string; provider: string; source?: string; display_name: st
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; conversation_kind?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
 type Message = { source: string; message_id: string; sender: string; sender_name?: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string }
-type Draft = { id: string; body: string; status: string; outbox_receipt?: string }
+type Draft = { id: string; body: string; status: string; outbox_receipt?: string; created_at?: number; context_status?: "unknown" | "current" | "stale"; reply_to?: { source: string; message_id: string; body: string; received_at: number } | null }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
 type SecretaryTriage = { event_seq: number; status: string; request_id: string; triage?: { decision?: string; importance?: number; urgency?: string; confidence?: number; reason_ru?: string; action_summary?: string; action_required?: boolean } }
 type SecretaryDeep = { job_id: string; event_seq: number; status: "accepted" | "running" | "completed" | "failed"; session_id?: string; session_url?: string; result?: string; error?: string }
@@ -504,6 +504,43 @@ export function App() {
 
   const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
   const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
+
+  const jumpToDraftSource = async (item: Draft) => {
+    if (!item.reply_to || !conversation) return
+    const id = conversation.id
+    const locate = () => [...document.querySelectorAll<HTMLElement>("[data-read-message]")]
+      .find(element => element.dataset.readMessage === item.reply_to?.message_id)
+    let target = locate()
+    if (!target) {
+      try {
+        // Reuse the maintained current-user message read. Fetch one canonical
+        // source, without provider sync or a guessed history window.
+        const result = await api<{ error?: { message?: string }; result?: { isError?: boolean; structuredContent?: { message?: Message & { conversation_id: string } } } }>("/mcp", {
+          method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: "draft-source", method: "tools/call",
+            params: { name: "userio.channels.read", arguments: {
+              channel: ["phone", "chatgpt"].includes(providerForSource(item.reply_to.source)) ? undefined
+                : providerForSource(item.reply_to.source) === "gmail" ? "mail" : providerForSource(item.reply_to.source),
+              message_id: item.reply_to.message_id,
+            } } }),
+        })
+        const message = result.result?.structuredContent?.message
+        if (result.error || result.result?.isError || !message || message.conversation_id !== id || message.message_id !== item.reply_to.message_id) {
+          throw new Error("Исходное сообщение удалено или недоступно")
+        }
+        if (activeConversation.current !== id) return
+        setConversation(current => current?.id === id ? { ...current,
+          messages: current.messages.some(entry => entry.message_id === message.message_id) ? current.messages
+            : [...current.messages, message].sort((a, b) => a.received_at - b.received_at),
+        } : current)
+        await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+        target = locate()
+      } catch (error) {
+        notify((error as Error).message)
+        return
+      }
+    }
+    target?.scrollIntoView({ behavior: "smooth", block: "center" })
+  }
   const openNewChat = () => {
     const preferredSource = account
       ? sourceForAccount(account)
@@ -1012,6 +1049,9 @@ export function App() {
             message.message_id === item.outbox_receipt || (conversation.source === "sms" && message.outbox_receipt === item.outbox_receipt) || (conversation.source === "max" && message.message_id.endsWith(`-${item.outbox_receipt}`))))).map((item) => {
             const editing = editDraftId === item.id
             return <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-primary/90 px-4 py-3 text-sm text-primary-foreground shadow-sm md:max-w-[78%]">
+              <p className="mb-2 text-[11px] opacity-75">{item.created_at ? <time dateTime={new Date(item.created_at * 1000).toISOString()}>Создано {new Date(item.created_at * 1000).toLocaleString("ru-RU")}</time> : "Дата создания не сохранена"}</p>
+              {item.reply_to ? <button type="button" data-draft-source={item.id} className="mb-2 block w-full rounded border-l-2 border-current bg-black/10 px-2 py-1 text-left text-xs" onClick={() => void jumpToDraftSource(item)}><span className="font-semibold">В ответ на сообщение · {timeHM(item.reply_to.received_at)}</span><span className="mt-0.5 block line-clamp-2 whitespace-pre-wrap opacity-80">{item.reply_to.body || "Вложение"}</span></button> : item.status === "proposed" && !item.id.startsWith("draft_web_") && <p className="mb-2 text-xs opacity-75">Исходное сообщение не сохранено для этого черновика</p>}
+              {item.context_status === "stale" && item.status === "proposed" && <p className="mb-2 text-xs font-medium">Переписка изменилась после создания: проверьте актуальность ответа.</p>}
               {editing
                 ? <div className="space-y-2"><textarea className="min-h-16 w-full rounded-lg bg-primary-foreground/10 p-2 text-foreground" value={editDraftBody} onChange={(event) => setEditDraftBody(event.target.value)} rows={3} /><div className="flex justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditDraftId(""); setEditDraftBody("") }}>Отмена</Button><Button size="sm" onClick={() => void saveDraftEdit(item.id)}>Сохранить</Button></div></div>
                 : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? (item.id.startsWith("draft_web_") ? "Не отправлено" : "Черновик") : item.status === "approved" ? "Отправлено" : item.status === "rejected" ? "Отклонено" : item.status === "sending" ? "Результат отправки уточняется — не отправляйте повторно" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-primary-foreground/80 hover:text-primary-foreground" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply || !!approvingDraft} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}

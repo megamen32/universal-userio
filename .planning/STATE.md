@@ -1,4 +1,36 @@
+---
+gsd_state_version: 1.0
+milestone: v1.2
+milestone_name: Reliable everyday communication
+current_phase: 09
+current_phase_name: Secretary roles and draft provenance
+current_plan: 01
+status: executing
+last_updated: "2026-10-12T04:15:22.993Z"
+last_activity: 2026-10-12
+progress:
+  total_phases: 4
+  completed_phases: 1
+  total_plans: 4
+  completed_plans: 1
+  percent: 25
+---
+
 # State
+
+**Current Phase:** 09
+**Current Phase Name:** Secretary roles and draft provenance
+**Total Phases:** 4
+**Current Plan:** 01
+**Total Plans in Phase:** 1
+**Status:** executing
+**Progress:** [███░░░░░░░] 25%
+**Last Activity:** 2026-10-12
+**Last Activity Description:** ChatGPT OAuth real 13-account read accepted; secretary native/source tests and bounded build passed, install/UI acceptance next.
+
+Current milestone v1.2: original SDK now recognizes phases 8–11 and phase 8
+complete. Historical accepted data below is retained; later entries supersede
+old pending statements. No old provider action is replayed.
 
 Canonical UserIO main, owner01a11747-7bb9-7bc0-8c0a-ce64db49105d.
 Original Telegram381/FastAgent/cache accepted and retained. MAX Darья normal
@@ -73,3 +105,10 @@ Documentation accepted through actual headed BFFE consumer/owncleanup. Core
 1727408/files verified. Existing explicit AgentCall ingress stop predates docs;
 fullsystemd not claimed/Root24humanStop preserved. Next: secretary roles/latest
 anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clarity.
+
+## Current Position
+
+Phase: 9 of 11 (Secretary roles and draft provenance)
+Plan: 01
+Status: Implemented; publish/install and real UI acceptance next
+Last activity: 2026-10-12 — Actual native Fast Agent context, draft race regressions and bounded UI build passed

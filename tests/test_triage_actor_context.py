@@ -56,7 +56,10 @@ def test_group_and_foreign_accounts_never_supply_a_private_sender_identity(tmp_p
     service = UserIOService(store, Generator(), Outbox())
     event = dict(source="telegram", direction="incoming", conversation_kind="direct",
                  peer_id="200", account_ref="telegram:100")
-    assert service._triage_actor_context(event, store._user(None)) is None
+    context = service._triage_actor_context(event, store._user(None))
+    assert context['receiver_account_id'] == 'telegram:100'
+    assert context['sender_display_name'] == '200'
+    assert 'Foreign private name' not in str(context)
     register(store, "telegram:200", "Секретарь")
     assert service._triage_actor_context({**event, "conversation_kind": "group"}, store._user(None)) is None
     assert service._triage_actor_context({**event, "direction": "outgoing"}, store._user(None)) is None
