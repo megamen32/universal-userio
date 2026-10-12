@@ -31,6 +31,15 @@ def test_raw_access_token_does_not_exchange_or_invent_owner():
         "private-personal-token", "", None)
 
 
+def test_actual_direct_login_query_payload_keeps_uuid():
+    def provider(method, **fields):
+        if method=='auth.getAnonymToken':return {'token':'private-anonymous-token'}
+        assert fields['uuid']=='exact-attempt'
+        return {'access_token':'private-personal-token','user_id':42}
+    assert resolve_authorization(callback().replace('#payload=','?payload='),call=provider)==(
+        'private-personal-token','42',None)
+
+
 @pytest.mark.parametrize("url", [
     "http://oauth.vk.ru/blank.html#access_token=private-personal-token",
     "https://evil.test/blank.html#access_token=private-personal-token",
@@ -39,6 +48,7 @@ def test_raw_access_token_does_not_exchange_or_invent_owner():
     "https://oauth.vk.ru/blank.html#access_token=private-personal-token&access_token=other-private-token",
     callback(type="other"), callback(ttl=0), callback(user={"id": True}),
     callback(uuid=""),
+    callback().replace('#payload=','?payload=')+'#access_token=other-private-token',
 ])
 def test_invalid_callback_never_contacts_provider(url):
     with pytest.raises(ValueError):

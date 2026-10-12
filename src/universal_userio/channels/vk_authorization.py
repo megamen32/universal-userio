@@ -57,12 +57,13 @@ def resolve_authorization(value: str, *, call: Callable[..., Any] = _exchange_ca
         url = urllib.parse.urlsplit(value)
         valid = (url.scheme == "https" and url.hostname in {"oauth.vk.ru", "oauth.vk.com"}
                  and url.path == "/blank.html" and url.port in (None, 443)
-                 and not url.username and not url.password and not url.query)
+                 and not url.username and not url.password
+                 and not (url.query and url.fragment))
     except ValueError:
         valid = False
     if not valid:
         raise ValueError("Вставьте итоговый адрес авторизации VK")
-    fragment = urllib.parse.parse_qs(url.fragment, keep_blank_values=True)
+    fragment = urllib.parse.parse_qs(url.fragment or url.query, keep_blank_values=True)
     if any(len(v) != 1 for v in fragment.values()) or "error" in fragment:
         raise ValueError("VK не подтвердил вход")
     if "access_token" in fragment and "payload" not in fragment:

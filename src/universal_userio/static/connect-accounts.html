@@ -63,7 +63,7 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <form id="vk-personal" autocomplete="off">
 <h2>Личный VK Мессенджер</h2>
 <p>Одноразовая авторизация, затем история и новые сообщения синхронизируются с сервера UserIO. Chrome или расширение постоянно держать открытыми не нужно.</p>
-<p><a id="vk-personal-login" href="https://oauth.vk.ru/authorize?client_id=51453752&display=page&scope=messages%2Coffline&response_type=token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=5.199" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
+<p><a id="vk-personal-login" href="https://id.vk.ru/auth?app_id=51453752&scope=messages%2Coffline&response_type=silent_token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=1.60.0" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
 <p class="hint">После подтверждения входа скопируйте полный адрес итоговой страницы <code>oauth.vk.ru/blank.html</code> из адресной строки и вставьте ниже. Поддерживаются оба ответа VK: токен и одноразовый результат входа. Если VK не дал доступ к сообщениям, UserIO сообщит об этом и не подключит пустой аккаунт. Не пересылайте адрес или токен в переписку.</p>
 <label>Адрес успешной авторизации или токен<input name="authorization" type="password" autocomplete="off" spellcheck="false" required placeholder="Вставьте адрес страницы авторизации VK"></label>
 <label>Ожидаемый VK ID (необязательно)<input name="user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Проверим, что это ваш аккаунт"></label>
@@ -200,7 +200,7 @@ for(const [kind,form] of Object.entries(forms)){
          const redirect=new URL(raw);
          if(redirect.protocol!=='https:' || !['oauth.vk.ru','oauth.vk.com'].includes(redirect.hostname) || redirect.pathname!=='/blank.html')
            throw new Error('Вставьте итоговый адрес авторизации VK, а не ссылку на вход.');
-         const params=new URLSearchParams(redirect.hash.substring(1));
+         const params=new URLSearchParams(redirect.hash ? redirect.hash.substring(1) : redirect.search);
          if(params.has('error'))throw new Error('ВКонтакте не разрешил доступ.');
          if(!params.has('access_token') && !params.has('payload'))throw new Error('VK не вернул результат входа.');
        } else if(!/^[A-Za-z0-9_.-]{10,4096}$/.test(raw))
