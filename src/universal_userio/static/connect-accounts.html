@@ -63,7 +63,7 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <form id="vk-personal" autocomplete="off">
 <h2>Личный VK Мессенджер</h2>
 <p>Одноразовая авторизация, затем история и новые сообщения синхронизируются с сервера UserIO. Chrome или расширение постоянно держать открытыми не нужно.</p>
-<p><a href="https://oauth.vk.ru/authorize?client_id=51453752&display=page&scope=messages%2Coffline&response_type=token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=5.199" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
+<p><a id="vk-personal-login" href="https://oauth.vk.ru/authorize?client_id=51453752&display=page&scope=messages%2Coffline&response_type=token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=5.199" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
 <p class="hint">После подтверждения входа скопируйте полный адрес итоговой страницы <code>oauth.vk.ru/blank.html</code> из адресной строки и вставьте ниже. Поддерживаются оба ответа VK: токен и одноразовый результат входа. Если VK не дал доступ к сообщениям, UserIO сообщит об этом и не подключит пустой аккаунт. Не пересылайте адрес или токен в переписку.</p>
 <label>Адрес успешной авторизации или токен<input name="authorization" type="password" autocomplete="off" spellcheck="false" required placeholder="Вставьте адрес страницы авторизации VK"></label>
 <label>Ожидаемый VK ID (необязательно)<input name="user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Проверим, что это ваш аккаунт"></label>
@@ -82,6 +82,13 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <p id="status" role="status" aria-live="polite"></p>
 <section class="connected" aria-label="Подключённые аккаунты"><h2>Ваши подключения</h2><div id="connected-list">Загружаю…</div></section>
 <script>
+// VK binds its temporary result to the UUID supplied before authorization.
+// Each form load starts a new attempt. Adding a UUID after the callback
+// cannot repair a temporary result issued without one.
+const vkPersonalLogin = document.getElementById('vk-personal-login');
+const vkAuthorizationUrl = new URL(vkPersonalLogin.href);
+vkAuthorizationUrl.searchParams.set('uuid', crypto.randomUUID());
+vkPersonalLogin.href = vkAuthorizationUrl.href;
 const forms={matrix:document.getElementById('matrix'),imap:document.getElementById('imap'),'vk-community':document.getElementById('vk-community'),'vk-personal':document.getElementById('vk-personal')};
 async function connectedAccounts(){
  const container=document.getElementById('connected-list');

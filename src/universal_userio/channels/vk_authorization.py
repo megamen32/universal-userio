@@ -37,7 +37,11 @@ def _exchange_call(method: str, **fields: object) -> Any:
         raise ValueError("Не удалось завершить авторизацию VK. Повторите вход.") from error
     if not isinstance(result, dict) or not isinstance(result.get("response"), dict):
         # Provider response/error strings may contain secrets. Never forward them.
-        raise ValueError("VK не подтвердил авторизацию. Получите новый результат входа.")
+        error = result.get("error") if isinstance(result, dict) else None
+        code = error.get("error_code") if isinstance(error, dict) else None
+        detail = f" (код {code})" if type(code) is int and 0 < code < 10000 else ""
+        stage = "обмен временного разрешения" if method == "auth.exchangeSilentAuthToken" else "начало входа"
+        raise ValueError(f"VK не подтвердил {stage}{detail}. Получите новый результат входа.")
     return result["response"]
 
 
@@ -85,6 +89,8 @@ def resolve_authorization(value: str, *, call: Callable[..., Any] = _exchange_ca
             or type(ttl) is not int or not 1 <= ttl <= 86400
             or not isinstance(uuid, str) or len(uuid) > 256 or "\n" in uuid):
         raise ValueError("Некорректный результат авторизации VK")
+    if not uuid:
+        raise ValueError("Этот адрес входа VK неполный. Откройте «Войти через VK Мессенджер» в UserIO заново.")
     anon = call("auth.getAnonymToken", client_id=_CLIENT_ID)
     anonymous = anon.get("token") if isinstance(anon, dict) else None
     if not isinstance(anonymous, str) or not _TOKEN.fullmatch(anonymous):

@@ -38,10 +38,27 @@ def test_raw_access_token_does_not_exchange_or_invent_owner():
     "https://user@oauth.vk.ru/blank.html#access_token=private-personal-token",
     "https://oauth.vk.ru/blank.html#access_token=private-personal-token&access_token=other-private-token",
     callback(type="other"), callback(ttl=0), callback(user={"id": True}),
+    callback(uuid=""),
 ])
 def test_invalid_callback_never_contacts_provider(url):
     with pytest.raises(ValueError):
         resolve_authorization(url, call=lambda *_: pytest.fail("invalid callback contacted provider"))
+
+
+def test_exchange_refusal_identifies_stage_and_code_without_provider_secrets(monkeypatch):
+    import io
+    from universal_userio.channels import vk_authorization as auth
+    class Response(io.BytesIO):
+        def __enter__(self):return self
+        def __exit__(self,*args):self.close()
+    class Opener:
+        def open(self,*args,**kwargs):
+            return Response(json.dumps({'error':{'error_code':100,
+                'error_msg':'secret-provider-value','request_params':[{'value':'private-token'}]}}).encode())
+    monkeypatch.setattr(auth.urllib.request,'build_opener',lambda *args:Opener())
+    with pytest.raises(ValueError,match='обмен временного разрешения.*код 100') as error:
+        auth._exchange_call('auth.exchangeSilentAuthToken',token='fixture-token',uuid='exact-attempt')
+    assert 'secret-provider-value' not in str(error.value) and 'private-token' not in str(error.value)
 
 
 @pytest.mark.parametrize("extra", [{"user_id": 43}, {"is_partial": True}, {"additional_signup_required": True}])
