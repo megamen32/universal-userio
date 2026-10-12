@@ -123,3 +123,28 @@ For a known inactive conversation, optionally supply
 messages.getHistory rather than the latest chat. The ID is not a secret,
 but avoid copying an actual chat identifier into public issue reports.
 The check does not mutate provider read state and does not print message text.
+
+## Security review follow-up (2026-10-12)
+
+The proof now stores the VK ID confirmed by the real users.get response,
+not a caller-supplied or missing callback ID. Subsequent resume validates
+this saved identity even when no expected ID is provided. A session with an
+empty saved owner is rejected.
+
+For a noninteractive GPTAdmin flow, create a one-time Hub secret_request.
+The browser form value stays out of chat and shell command arguments. On
+execution use shell_exec.secret_env to inject the opaque secret_ref into the
+USERIO_VK_LOGIN_RESULT environment name, and run verify_transport.py with
+--from-secret-env and the expected VK ID. It consumes the environment value
+once and never prints the authorization result.
+
+For interactive fallback, getpass.GetPassWarning is treated as an error so
+the URL can never be entered into an echoing terminal by accident.
+
+When an expired proof file is encountered on resume, the local file is
+deleted. This does not revoke the session on VK's servers; account security
+settings must be used for provider-side revocation.
+
+The proof requires at least one message from a personal dialog; no empty
+history is accepted as a complete success. The historical peer can be selected
+with --history-peer-id. Production UserIO is unchanged.

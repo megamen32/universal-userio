@@ -17,6 +17,7 @@ import secrets
 import sys
 import tempfile
 import time
+import warnings
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -216,7 +217,8 @@ def verify_personal_reads(
         raise RuntimeError("The selected personal VK dialog has no history")
     if progress:
         progress("VK_PERSONAL_HISTORY_OK")
-    return {"identity_match": True, "dialog_count": conversations.get("count"),
+    return {"identity_match": True, "confirmed_vk_id": str(actual),
+            "dialog_count": conversations.get("count"),
             "sampled_chats": len(items), "sampled_history_messages": history_count,
             "history_requested": True}
 
@@ -251,7 +253,11 @@ def inspect_common_token(
 
 
 def save_temporary_session(token: str, expected: str, expires: int | None, path: Path):
-    """Only with explicit CLI opt-in, restrict file and directory permissions."""
+    """Persist only a confirmed VK identity into a private proof session."""
+    if not isinstance(expected, str) or not expected.isdecimal() or int(expected) <= 0:
+        raise ValueError("VK session owner must be a confirmed numeric ID")
+    if not isinstance(token, str) or not TOKEN_PATTERN.fullmatch(token):
+        raise ValueError("Invalid user bearer")
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if parent.is_symlink() or parent.stat().st_mode & 0o077:
@@ -271,6 +277,34 @@ def save_temporary_session(token: str, expected: str, expires: int | None, path:
         os.fsync(handle.fileno())
 
 
+def read_fresh_vk_authorization(*, from_secret_env: bool) -> str:
+    """Never fall back to a plaintext/echoing stdin for VK credentials.
+
+    The GPTAdmin secret_request channel may inject the opaque value into
+    USERIO_VK_LOGIN_RESULT through shell_exec.secret_env. No CLI arguments,
+    shell history, MCP result, or printed output contain the result.
+    """
+    if from_secret_env:
+        raw = os.environ.pop("USERIO_VK_LOGIN_RESULT", "")
+        if not raw:
+            raise RuntimeError("No one-time VK login secret was injected")
+    else:
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", getpass.GetPassWarning)
+                raw = getpass.getpass(
+                    "Paste a fresh VK authorization result (input hidden): "
+                )
+        except (getpass.GetPassWarning, EOFError, OSError):
+            raise RuntimeError(
+                "A secure terminal is unavailable; use the GPTAdmin one-time "
+                "secret form instead"
+            ) from None
+    if len(raw) > 12_000:
+        raise ValueError("VK OAuth response is unexpectedly long")
+    return raw
+
+
 def main():
     parser = argparse.ArgumentParser(description="One-time personal VK server transport proof")
     parser.add_argument("--expected-vk-id", default="", help="Expected integer VK ID")
@@ -282,6 +316,10 @@ def main():
                         help="Optional metadata-only VK common_token probe after read proof")
     parser.add_argument("--anonymous-probe", action="store_true", help="No user token needed")
     parser.add_argument("--clear-session", type=Path, help="Discard one saved proof token")
+    parser.add_argument(
+        "--from-secret-env", action="store_true",
+        help="Consume one-time GPTAdmin secret_env USERIO_VK_LOGIN_RESULT",
+    )
     args = parser.parse_args()
     if args.expected_vk_id and not args.expected_vk_id.isdecimal():
         parser.error("Expected VK ID must be numeric")
@@ -289,23 +327,37 @@ def main():
         if args.clear_session.is_symlink() or args.clear_session.stat().st_mode & 0o077:
             raise ValueError("Refusing unsafe proof session")
         args.clear_session.unlink()
-        print("PROOF_SESSION_DESTROYED", True)
+        print("LOCAL_PROOF_FILE_DESTROYED", True, "VK_ACCESS_NOT_REVOKED", True)
         return 0
     if args.anonymous_probe:
         response = vk_call("auth.getAnonymToken", client_id=CLIENT_ID)
         print("anonymous_vk_auth_available:", bool(isinstance(response, dict) and response.get("token")))
         return 0
     if args.resume:
+        if args.from_secret_env:
+            parser.error("--resume cannot be combined with --from-secret-env")
         if args.resume.is_symlink() or args.resume.stat().st_mode & 0o077:
             raise ValueError("Unsafe saved-session permissions")
         if args.resume.parent.stat().st_mode & 0o077:
             raise ValueError("Unsafe saved-session directory")
         item = json.loads(args.resume.read_text())
-        if item.get("expires_at") is not None and item["expires_at"] < time.time():
-            raise RuntimeError("VK session expired")
-        token, actual, ttl = item["access_token"], str(item["user_id"]), None
+        stored_id = item.get("user_id")
+        if not isinstance(stored_id, str) or not stored_id.isdecimal():
+            raise RuntimeError("Saved proof has no verified VK account identity")
+        if args.expected_vk_id and args.expected_vk_id != stored_id:
+            raise RuntimeError("Saved proof belongs to another VK account")
+        expires_at = item.get("expires_at")
+        if (not isinstance(expires_at, (int, float)) or
+                expires_at <= time.time()):
+            args.resume.unlink()
+            raise RuntimeError(
+                "Saved proof expired; local credential deleted, VK access not revoked"
+            )
+        token, actual, ttl = item["access_token"], stored_id, None
+        if not isinstance(token, str) or not TOKEN_PATTERN.fullmatch(token):
+            raise RuntimeError("Saved proof bearer is malformed")
     else:
-        raw = getpass.getpass("Paste a fresh VK authorization result (input hidden): ")
+        raw = read_fresh_vk_authorization(from_secret_env=args.from_secret_env)
         parsed = parse_login_result(raw)
         raw = ""
         token, actual, ttl = resolve_user_access(parsed, progress=print)
@@ -316,12 +368,14 @@ def main():
             test_peer_id=args.history_peer_id,
         )
         print("PERSONAL_VK_TRANSPORT_PROOF", json.dumps(result, ensure_ascii=False))
+        verified_id = result["confirmed_vk_id"]
         if args.inspect_common_token:
-            metadata = inspect_common_token(token, args.expected_vk_id or actual)
+            metadata = inspect_common_token(token, verified_id)
             print("VK_COMMON_TOKEN_METADATA", json.dumps(metadata))
         if args.save:
-            save_temporary_session(token, actual, ttl, args.save)
-            print("SESSION_SAVED_PRIVATELY", True, "TOKEN_NOT_PRINTED", True)
+            save_temporary_session(token, verified_id, ttl, args.save)
+            print("SESSION_SAVED_PRIVATELY", True,
+                  "VERIFIED_OWNER", verified_id, "TOKEN_NOT_PRINTED", True)
         return 0
     except VKRejected as error:
         print("VK_API_DENIED_METHOD", error.method, "ERROR_CODE", error.code)

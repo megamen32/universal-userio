@@ -110,7 +110,8 @@ def test_exact_personal_chat_and_history_proof_readonly():
             return {"count":10, "items":[{"id":i} for i in range(5)]}
         raise AssertionError("Unexpected operation")
     d=proof.verify_personal_reads("personal-access-token-value","46887791",call=callback)
-    assert d == {"identity_match":True,"dialog_count":9,"sampled_chats":1,
+    assert d == {"identity_match":True,"confirmed_vk_id":"46887791",
+                 "dialog_count":9,"sampled_chats":1,
                  "sampled_history_messages":5,"history_requested":True}
     assert methods == ["users.get","messages.getConversations","messages.getHistory"]
     assert not any("markAsRead" in name or "send" in name for name in methods)
@@ -257,3 +258,106 @@ def test_empty_personal_history_rejected_after_dialog_list():
         raise AssertionError(method)
     with pytest.raises(RuntimeError, match="no history"):
         proof.verify_personal_reads("vk-personal-token-value", "46887791", call=api)
+
+
+def test_secret_env_is_consumed_without_exposing_raw_authorization(monkeypatch, capsys):
+    fake = "https://oauth.vk.ru/blank.html#access_token=synthetic-login-value-long&user_id=42"
+    monkeypatch.setenv("USERIO_VK_LOGIN_RESULT", fake)
+    assert proof.read_fresh_vk_authorization(from_secret_env=True) == fake
+    assert "USERIO_VK_LOGIN_RESULT" not in proof.os.environ
+    assert fake not in capsys.readouterr().out
+    with pytest.raises(RuntimeError, match="No one-time"):
+        proof.read_fresh_vk_authorization(from_secret_env=True)
+
+
+def test_getpass_plaintext_fallback_is_blocked(monkeypatch, capsys):
+    import warnings
+    def forced_fallback(*_args, **_kwargs):
+        warnings.warn("Cannot disable echo", proof.getpass.GetPassWarning)
+        raise AssertionError("unsafe plaintext read must not be reached")
+    monkeypatch.setattr(proof.getpass, "getpass", forced_fallback)
+    with pytest.raises(RuntimeError, match="secure terminal is unavailable"):
+        proof.read_fresh_vk_authorization(from_secret_env=False)
+    assert not capsys.readouterr().out
+
+
+def test_proof_persists_confirmed_identity_not_untrusted_or_empty_callback_id(
+    tmp_path, monkeypatch, capsys,
+):
+    from pathlib import Path
+    import sys
+    session = tmp_path / "private" / "session.json"
+    secret = "synthetic-user-bearer-value"
+    monkeypatch.setenv("USERIO_VK_LOGIN_RESULT", secret)
+    monkeypatch.setattr(sys, "argv", [
+        "verify_transport.py", "--from-secret-env", "--save", str(session),
+    ])
+    original = proof.verify_personal_reads
+    def mock_via_actual_identity_query(token, expected, **kwargs):
+        assert token == secret
+        def vk(method, **_params):
+            if method == "users.get":
+                return [{"id": 46887791}]
+            if method == "messages.getConversations":
+                return {"count": 1, "items": [{
+                    "conversation": {"peer": {"id": 123}}
+                }]}
+            if method == "messages.getHistory":
+                return {"count": 1, "items": [{"id": 11, "text": "synthetic"}]}
+            raise AssertionError("unexpected action")
+        return original(token, expected, call=vk, **kwargs)
+    monkeypatch.setattr(proof, "verify_personal_reads", mock_via_actual_identity_query)
+    assert proof.main() == 0
+    stored = json.loads(session.read_text())
+    assert stored["user_id"] == "46887791"  # no ID in supplied bearer
+    assert stored["access_token"] == secret
+    output = capsys.readouterr().out
+    assert "SESSION_SAVED_PRIVATELY" in output
+    assert secret not in output
+    assert "USERIO_VK_LOGIN_RESULT" not in proof.os.environ
+
+    # New process-style resume, without --expected-vk-id: must still verify
+    # the saved, server-confirmed identity against users.get.
+    monkeypatch.setattr(sys, "argv", ["verify_transport.py", "--resume", str(session)])
+    assert proof.main() == 0
+    assert secret not in capsys.readouterr().out
+
+    # Revoked/switched account: stored owner remains binding even if user
+    # omitted the --expected-vk-id flag on resume.
+    def wrong_identity(token, expected, **kwargs):
+        assert expected == "46887791"
+        raise RuntimeError("VK session belongs to a different user")
+    monkeypatch.setattr(proof, "verify_personal_reads", wrong_identity)
+    with pytest.raises(RuntimeError, match="different user"):
+        proof.main()
+
+
+def test_resume_rejects_empty_saved_owner_without_network_call(tmp_path, monkeypatch):
+    import sys
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    path = private / "session.json"
+    path.write_text(json.dumps({
+        "access_token": "synthetic-user-bearer-value",
+        "user_id": "", "expires_at": time.time() + 1800,
+    }))
+    path.chmod(0o600)
+    monkeypatch.setattr(sys, "argv", ["verify_transport.py", "--resume", str(path)])
+    with pytest.raises(RuntimeError, match="no verified VK"):
+        proof.main()
+
+
+def test_expired_proof_deletes_local_file_but_never_calls_vk_logout(
+    tmp_path, monkeypatch,
+):
+    import sys
+    private = tmp_path / "private"
+    path = private / "session.json"
+    proof.save_temporary_session("synthetic-user-bearer-value", "46887791", 60, path)
+    data = json.loads(path.read_text())
+    data["expires_at"] = time.time() - 1
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(sys, "argv", ["verify_transport.py", "--resume", str(path)])
+    with pytest.raises(RuntimeError, match="VK access not revoked"):
+        proof.main()
+    assert not path.exists()
