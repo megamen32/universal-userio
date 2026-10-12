@@ -6,6 +6,8 @@ from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import pytest
+
 from universal_userio.contracts import InboxMessage
 from universal_userio.http_api import handler
 from universal_userio.service import UserIOService
@@ -727,6 +729,14 @@ def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> No
             result = json.loads(response.read())
         assert result["mode"] == "vkid_identity_only"
         assert service._store.accounts()[0]["capabilities"] == []
+        invalid = Request(base + "/v1/vk/accounts", data=b'{"user_id":"undefined"}',
+                          method="POST", headers={
+                              "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
+                              "Content-Type": "application/json"})
+        with pytest.raises(HTTPError) as denied:
+            urlopen(invalid)
+        assert denied.value.code == 400
+        assert not any(a["id"] == "vk:undefined" for a in service._store.accounts())
     finally:
         server.shutdown()
         server.server_close()

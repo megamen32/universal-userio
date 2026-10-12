@@ -132,6 +132,7 @@ def test_sender_token_scoped_to_explicit_account_no_legacy_or_management(case):
         assert not api.dispatch('userio.accounts.list',{},principal=principal)['ok']
         assert not api.dispatch('userio.messenger.capabilities',{'account_ref':'max'},principal=principal)['ok']
         assert api.dispatch('userio.messenger.capabilities',{'account_ref':provider.account_ref},principal=principal)['operations']['reply']['allowed']
+        assert api.dispatch('userio.messenger.capabilities',{'account_ref':provider.account_ref},principal=principal)['credential_scope']=='messenger_actions'
     api=UserIOMcpSurface(store,service)
     assert api.resource_manifest(principal=principal)=={'resources':[]}
     assert all(t['name'].startswith('userio.messenger.') for t in api.tool_manifest(principal=principal)['tools'])

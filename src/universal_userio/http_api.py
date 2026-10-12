@@ -926,8 +926,8 @@ def handler(
                     payload = self._json()
                     external_id = str(payload.get("user_id") or "").strip()
                     display_name = str(payload.get("display_name") or "VK account").strip()
-                    if not external_id:
-                        raise ValueError("user_id required")
+                    if not external_id.isdecimal() or len(external_id) > 20 or int(external_id) <= 0:
+                        raise ValueError("VK не подтвердил ID пользователя")
                     # VK ID confirms the identity only. Message access belongs to the
                     # user-owned browser extension and must not be implied here.
                     existing = next(
@@ -1919,8 +1919,11 @@ small{{color:#aaa;line-height:1.45}}</style></head>
       VKID.Auth.exchangeCode(payload.code, payload.device_id)
         .then(async result => {{
           const info = await VKID.Auth.userInfo(result.access_token);
-          const details = {{user_id:String(info.user_id),
-            display_name:info.user_name || info.first_name || 'VK account'}};
+          const profile = info.user || {{}};
+          const actualId = String(profile.user_id || result.user_id || '');
+          if (!/^[1-9][0-9]*$/.test(actualId)) throw new Error('VK не подтвердил ID пользователя');
+          const details = {{user_id:actualId,
+            display_name:[profile.first_name, profile.last_name].filter(Boolean).join(' ') || 'VK account'}};
           const response = await fetch('/v1/vk/accounts', {{
             method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(details)
           }});

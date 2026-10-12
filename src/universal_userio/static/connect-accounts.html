@@ -64,7 +64,7 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <h2>Личный VK Мессенджер</h2>
 <p>Одноразовая авторизация, затем история и новые сообщения синхронизируются с сервера UserIO. Chrome или расширение постоянно держать открытыми не нужно.</p>
 <p><a href="https://oauth.vk.ru/authorize?client_id=51453752&display=page&scope=messages%2Coffline&response_type=token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=5.199" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
-<p class="hint">После подтверждения входа скопируйте адрес итоговой страницы <code>oauth.vk.ru/blank.html#access_token=…</code> из адресной строки браузера и вставьте ниже. Если другой VK-клиент умеет экспортировать пользовательский токен с правом «Сообщения», можно вставить сам токен. Не пересылайте ссылку или токен никому, кроме этой формы.</p>
+<p class="hint">После подтверждения входа скопируйте полный адрес итоговой страницы <code>oauth.vk.ru/blank.html</code> из адресной строки и вставьте ниже. Поддерживаются оба ответа VK: токен и одноразовый результат входа. Если VK не дал доступ к сообщениям, UserIO сообщит об этом и не подключит пустой аккаунт. Не пересылайте адрес или токен в переписку.</p>
 <label>Адрес успешной авторизации или токен<input name="authorization" type="password" autocomplete="off" spellcheck="false" required placeholder="Вставьте адрес страницы авторизации VK"></label>
 <label>Ожидаемый VK ID (необязательно)<input name="user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Проверим, что это ваш аккаунт"></label>
 <p class="hint">UserIO самостоятельно проверит личные диалоги и историю. Если VK не разрешит чтение, аккаунт не будет помечен подключённым. Отправка и отметки о прочтении выключены.</p>
@@ -189,19 +189,16 @@ for(const [kind,form] of Object.entries(forms)){
    try{
      if(kind==='vk-personal'){
        const raw=String(data.authorization||'').trim();
-       let token=raw;
        if(/^https?:\/\//i.test(raw)){
          const redirect=new URL(raw);
          if(redirect.protocol!=='https:' || !['oauth.vk.ru','oauth.vk.com'].includes(redirect.hostname) || redirect.pathname!=='/blank.html')
            throw new Error('Вставьте итоговый адрес авторизации VK, а не ссылку на вход.');
          const params=new URLSearchParams(redirect.hash.substring(1));
          if(params.has('error'))throw new Error('ВКонтакте не разрешил доступ.');
-         token=params.get('access_token')||'';
-       }
-       if(!/^[A-Za-z0-9_.-]{10,4096}$/.test(token))
+         if(!params.has('access_token') && !params.has('payload'))throw new Error('VK не вернул результат входа.');
+       } else if(!/^[A-Za-z0-9_.-]{10,4096}$/.test(raw))
          throw new Error('Невозможно прочитать пользовательский токен из адреса.');
-       data.access_token=token;
-       delete data.authorization;
+       data.authorization=raw;
      }
      const response=await fetch(kind==='matrix'?'/v1/matrix/accounts':kind==='vk-community'?'/v1/vk/community/accounts':kind==='vk-personal'?'/v1/vk/personal/accounts':'/v1/imap/accounts',{
        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});

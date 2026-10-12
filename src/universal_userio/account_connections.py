@@ -714,14 +714,16 @@ def connect_vk_personal(
 ) -> dict[str, str]:
     """Enable VK personal messages only after the actual message permission is proven."""
     from .channels.vk_personal import VKPersonalReader
+    from .channels.vk_authorization import resolve_authorization
 
-    token = str(payload.get("access_token") or "")
     expected = str(payload.get("user_id") or "").strip()
     if expected and (not expected.isdecimal() or len(expected) > 20):
         raise ValueError("неверный VK ID")
+    supplied = str(payload.get("authorization") or payload.get("access_token") or "")
+    token, asserted_id, expires_in = resolve_authorization(supplied)
     reader = (reader_factory or VKPersonalReader)(token)
     actual = reader.identity()
-    if expected and int(expected) != actual:
+    if (expected and int(expected) != actual) or (asserted_id and int(asserted_id) != actual):
         raise ValueError("токен принадлежит другому аккаунту VK")
     dialogs = reader.conversations(count=1)
     if dialogs["items"]:
@@ -734,6 +736,7 @@ def connect_vk_personal(
     reference = storage.save({
         "provider": "vk", "user_id": user_id, "account_id": account_id,
         "kind": "personal", "vk_user_id": str(actual), "access_token": token,
+        **({"expires_at": str(time.time() + expires_in)} if expires_in else {}),
     })
     old_account = next(
         (row for row in service._store.accounts(user_id=user_id) if row["id"] == account_id),

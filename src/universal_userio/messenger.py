@@ -70,7 +70,8 @@ class Messenger:
         return {'schema':SCHEMA, 'account_ref':account_ref, 'channel':account['provider'],
                 'sender_id':getattr(provider, 'sender_id', ''),
                 'history_mode':'provider' if 'history' in ops else 'stored',
-                'credential_scope':'read_only' if self.principal.read_only else 'full_access',
+                'credential_scope':('messenger_actions' if self.principal.messenger_accounts is not None
+                                    else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result}
 
     def _allow(self, account_ref, operation):
