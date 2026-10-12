@@ -36,7 +36,7 @@ def main():
             raise RuntimeError('Owned target absent; refusing a replacement page')
         if urlsplit(page.url).path not in {'/docs', '/docs/', '/docs/index.html'}:
             raise RuntimeError('Owned target is not on the published documentation')
-        original_viewport = page.viewport_size
+        original_viewport = page.viewport_size or page.evaluate("({width:innerWidth,height:innerHeight})")
         page.set_default_timeout(4000)
         page.on('pageerror', lambda error: errors.append(str(error)))
         try:

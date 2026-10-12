@@ -12,3 +12,5 @@
 @media(max-width:500px){.top>.btn-primary{display:none}.top{gap:10px}.brand{font-size:22px}}
 @media print{.mobile-signup{display:none!important}}
 .mark{background:#171d19;color:#d5f870;border:1px solid #35402f}
+
+.free-promise{font-size:clamp(24px,3vw,32px);line-height:1.2;font-weight:750;background:var(--lime);color:#171a17;border-radius:12px;padding:16px;margin:24px 0}

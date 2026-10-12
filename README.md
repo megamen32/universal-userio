@@ -2,6 +2,8 @@
 
 ### Your conversations. Your AI. One inbox.
 
+**Free to use. Bring your own AI key or connect your MCP client.**
+
 Messages, email, SMS and call history in one inbox. Let your AI find agreements,
 explain what matters and prepare replies you can review.
 

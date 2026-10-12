@@ -24,6 +24,9 @@ def test_public_documentation_does_not_expose_private_routes(tmp_path):
                 assert 'id="pages-data"' in body
                 assert 'Android SMS' in body
                 assert 'id="search-dialog"' in body
+                assert 'Полностью бесплатно. Пользуйтесь.' in body
+                assert 'Bring Your Own Key' in body
+                assert 'Начать бесплатно' not in body
         for path in ('/v1/accounts', '/v1/inbox', '/docs/../../.env', '/docs/README.md'):
             try:
                 urlopen(base + path, timeout=2)
@@ -32,7 +35,10 @@ def test_public_documentation_does_not_expose_private_routes(tmp_path):
             else:
                 raise AssertionError(f'private/unpublished route exposed: {path}')
         with urlopen(base + '/welcome', timeout=2) as response:
-            assert 'href="/docs/"' in response.read().decode()
+            body = response.read().decode()
+            assert 'href="/docs/"' in body
+            assert '<p class="free-promise">Полностью бесплатно. Пользуйтесь.</p>' in body
+            assert 'Bring Your Own Key' in body
     finally:
         server.shutdown()
         server.server_close()
