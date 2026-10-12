@@ -156,13 +156,14 @@ def test_vk_id_login_does_not_downgrade_existing_native_account(users, monkeypat
         worker.join(timeout=2)
 
 
-def test_vk_web_page_requires_explicit_native_permission_and_reports_denial():
+def test_vk_connect_page_does_not_offer_unavailable_messages_scope():
     page=_vk_connect_page("123456")
-    assert "Запросить доступ к сообщениям VK" in page
-    assert "mode=direct" in page
-    assert "scope: direct ? 'messages' : ''" in page
-    assert "/v1/vk/native/accounts" in page
-    assert "VK не разрешил прямое чтение" in page
+    assert "Запросить доступ к сообщениям VK" not in page
+    assert "mode=direct" not in page
+    assert "scope:''" in page
+    assert "/v1/vk/native/accounts" not in page
+    assert "Серверная синхронизация личных переписок пока не поддерживается" in page
+    assert "VK ID" in page
 
 
 def test_vk_native_http_enrollment_requires_owner_and_message_permission(users, monkeypatch):
@@ -186,10 +187,10 @@ def test_vk_native_http_enrollment_requires_owner_and_message_permission(users, 
             return error.code,json.load(error)
     try:
         assert post("wrong-token")[0]==401
-        status, account=post(token)
-        assert status==201 and account["mode"]=="vk_personal_messages_readonly"
-        assert "access_token" not in json.dumps(account)
-        assert any(r["id"]=="vk:42" for r in store.accounts(user_id=other))
+        status, reply=post(token)
+        assert status==409
+        assert reply["code"]=="vk_messages_permission_unavailable"
+        assert not any(r["id"]=="vk:42" for r in store.accounts(user_id=other))
         assert not any(r["id"]=="vk:42" for r in store.accounts())
     finally:
         server.shutdown()

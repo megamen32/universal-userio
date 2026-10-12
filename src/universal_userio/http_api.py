@@ -23,7 +23,7 @@ import urllib.request
 from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
-from .account_connections import connect_matrix, connect_imap, connect_vk_direct
+from .account_connections import connect_matrix, connect_imap
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -843,14 +843,14 @@ def handler(
                     self._reply(202, {"accepted": True})
                     return
                 if path == "/v1/vk/native/accounts":
-                    # VK ID alone has no message permission; verify both
-                    # messages.getConversations and history before upgrading.
-                    if principal.service_account or not service._store.capability_enabled(
-                            "read", user_id=user_id):
-                        self._reply(403, {"error": "нужна пользовательская авторизация"})
-                        return
-                    account = connect_vk_direct(service, user_id, self._json())
-                    self._reply(201, {"accepted": True, **account})
+                    # VK ID applications normally cannot obtain personal
+                    # messages permission. Do not accept or store their token
+                    # under the pretence that native sync is available.
+                    self._reply(409, {
+                        "code": "vk_messages_permission_unavailable",
+                        "error": "Прямой доступ к личным сообщениям VK через VK ID "
+                                 "для этого приложения недоступен",
+                    })
                     return
                 if path == "/v1/vk/accounts":
                     payload = self._json()
@@ -1705,13 +1705,14 @@ li{{margin:8px 0}}code{{background:#252525;padding:2px 5px;border-radius:4px}}
 small{{color:#aaa;line-height:1.45}}</style></head>
 <body><p><a href="/accounts/connect/new">← Аккаунты UserIO</a></p>
 <h1>Подключить ВКонтакте</h1>
-<p><b>VK ID</b> подтверждает профиль. Для прямой синхронизации UserIO должен отдельно получить
-права на чтение личных сообщений. Обычный вход VK ID таких прав не гарантирует.</p>
+<p><b>VK ID</b> подтверждает профиль, но не предоставляет UserIO доступ
+к личным сообщениям. VK ограничивает этот API для сторонних приложений.</p>
 <section class="card">
-  <h2>Подключить без браузерного расширения</h2>
-  <a class="btn" href="/vk/connect/new?mode=direct">Запросить доступ к сообщениям VK</a>
-  <p id="direct-note">Работает, только если VK разрешит приложению UserIO доступ <code>messages</code>.
-  При отказе ничего не подключаем и оставляем обычный VK ID неизменным.</p>
+  <h2>VK без расширения</h2>
+  <p>Серверная синхронизация личных переписок пока не поддерживается.
+  Вариант с запросом разрешения <code>messages</code> убран: обычным VK ID
+  это разрешение не выдаётся. Потребуется отдельная проверенная интеграция
+  через авторизованную сессию VK, без отдельного сервиса на пользователя.</p>
 </section>
 <div id="vk_auth"></div><p id="status">Ожидание VK ID…</p>
 <section class="card">
@@ -1734,14 +1735,9 @@ small{{color:#aaa;line-height:1.45}}</style></head>
   const status = document.getElementById('status');
   const VKID = window.VKIDSDK;
   if (!VKID) {{ status.textContent = 'VK ID SDK failed to load'; return; }}
-  const direct = new URLSearchParams(location.search).get('mode') === 'direct';
-  if (direct) {{
-    document.getElementById('direct-note').textContent =
-      'Разрешите чтение сообщений, если ВКонтакте предложит такое разрешение.';
-  }}
   VKID.Config.init({{app:{safe_app_id}, redirectUrl:location.origin + '/vk/callback',
     responseMode:VKID.ConfigResponseMode.Callback, source:VKID.ConfigSource.LOWCODE,
-    scope: direct ? 'messages' : ''}});
+    scope:''}});
   const tap = new VKID.OneTap();
   tap.render({{container:document.getElementById('vk_auth'), showAlternativeLogin:true}})
     .on(VKID.WidgetEvents.ERROR, error => {{ status.textContent = 'VK ID error'; console.error(error); }})
@@ -1752,22 +1748,18 @@ small{{color:#aaa;line-height:1.45}}</style></head>
           const info = await VKID.Auth.userInfo(result.access_token);
           const details = {{user_id:String(info.user_id),
             display_name:info.user_name || info.first_name || 'VK account'}};
-          if (direct) details.access_token = result.access_token;
-          const response = await fetch(direct ? '/v1/vk/native/accounts' : '/v1/vk/accounts', {{
+          const response = await fetch('/v1/vk/accounts', {{
             method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify(details)
           }});
           const data = await response.json();
-          if (!response.ok) throw new Error(data.error || 'VK не разрешил читать сообщения');
+          if (!response.ok) throw new Error(data.error || 'Ошибка VK ID');
           return data;
         }})
-        .then(data => {{
-          status.textContent = data.mode === 'vk_personal_messages_readonly'
-            ? 'Прямое чтение VK подключено. Chrome больше не нужен; отправка пока недоступна.'
-            : 'VK ID подтверждён. Без разрешения messages переписка не загружается.';
+        .then(() => {{
+          status.textContent = 'VK ID подтверждён. Чтение личных сообщений '
+            + 'через сервер пока недоступно.';
         }})
-        .catch(error => {{ status.textContent =
-          direct ? 'VK не разрешил прямое чтение: ' + error.message
-                 : 'Ошибка подключения VK ID'; }});
+        .catch(error => {{ status.textContent = 'Ошибка подключения VK ID: ' + error.message; }});
     }});
 }})();
 </script></body></html>'''
