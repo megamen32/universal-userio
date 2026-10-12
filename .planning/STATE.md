@@ -99,6 +99,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
+|261012-j88|Named work groups, per-chat web analysis checkbox and sidebar/search status; quadratic search repaired|2026-10-12|640501d|Real web ON/reload/OFF/reload, OFF/ON search badges and exact reading baseline restore PASS|[proof](./quick/261012-j88-per-chat-secretary-switch-and-explicit-w/SUMMARY.md)|
 |261012-hj3|Named read-only personal Bearer for Secretary; existing full/OAuth unchanged|2026-10-12|5c372ca|UserIO live PASS; Exmanager native read-only MAX10/Telegram3 PASS; encrypted resource installed|[plan](./quick/261012-hj3-named-personal-bearer-with-server-enforc/)|
 |261012-6tp|Complete docs + short README + explicit completely-free/BYOK/MCP copy|2026-10-12|6769fbc|Verified live desktop/mobile|[docs](./quick/261012-6tp-update-userio-documentation-and-short-pu/)|
 
@@ -108,6 +109,15 @@ fullsystemd not claimed/Root24humanStop preserved. The following next-step list 
 anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clarity.
 
 ## Historical checkpoint (superseded by final acceptance below)
+
+12 October later owner correction: automatic Telegram group/channel analysis is
+limited to explicitly named work groups, superseding the earlier folder-derived
+selection. Other user accounts, personal/mail and bot defaults unchanged. Web
+chat checkbox/group kind/search badges accepted through actual owned browser;
+temporary reading preference restored and owned tabs/copies cleaned up.
+Future UserIO transport milestone v1.3 is [queued](milestones/v1.3-MESSENGER-PARITY-CONTEXT.md)
+from a read-only Exmanager source audit; no current transport/business migration
+or readonly credential rights were changed.
 
 Phase: 9 of 11 (Secretary roles and draft provenance)
 Plan: 01
