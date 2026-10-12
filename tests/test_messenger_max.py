@@ -87,6 +87,28 @@ def test_max_login_refusal_reports_reconnect_keeps_history_and_blocks_new_claims
     store.close()
 
 
+def test_first_max_login_refusal_during_approval_is_known_unsubmitted(tmp_path):
+    """Focused integration expected1s/max5s: first login fails before mutation."""
+    from universal_userio.messenger import dispatch
+    store,t,service,cid,api=setup(tmp_path)
+    action=api.propose('max',cid,'max-0-123','reply',{'text':'unsent'},'first-auth-refusal-1234')
+    old_send=t.send
+    def reject_login(ws,text):
+        frame=json.loads(text)
+        if frame['opcode']==19:
+            t.calls.append(frame)
+            t.frames.append(dict(frame,cmd=3,payload={'error':'login.token'}))
+        else:old_send(ws,text)
+    t.send=reject_login
+    result=dispatch(store,service,store.owner(),'approve',{'action_id':action['id'],'expected_hash':action['hash'],'confirm':True})
+    assert result['error']=='provider_authentication_required'
+    assert result['reconnect_required'] is True
+    assert api.get(action['id'])['status']=='proposed' and api.get(action['id'])['receipt'] is None
+    assert sum(f['opcode']==19 for f in t.calls)==1
+    assert not any(f['opcode'] in {64,67,92,178} for f in t.calls)
+    store.close()
+
+
 def test_generic_reply_native_anchor_opaque_id_and_durable_projection(tmp_path):
     store,t,service,cid,api=setup(tmp_path)
     a=api.propose('max',cid,'max-0-123','reply',{'text':'fresh reply'},'one-max-reply-123456')

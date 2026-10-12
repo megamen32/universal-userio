@@ -9,7 +9,8 @@ import json
 from .adapters import inbox_message_from_envelope
 from .max_ingress import message_envelope, _own_id
 from .messenger import digest
-from .contracts import DeliveryNotSubmittedError
+from .contracts import (DeliveryNotSubmittedError, ProviderAuthenticationRequiredError,
+                        ProviderAuthenticationNotSubmittedError)
 
 
 class MaxMessengerProvider:
@@ -134,6 +135,8 @@ class MaxMessengerProvider:
             row=self.client.get_message(chat_id=e['peer_id'],message_id=e['source_provider_message_id'])
             if not row or not self.sender_id or digest(self._native_binding(e,row))!=e['source_hash']:
                 raise ValueError('MAX source changed before dispatch')
+        except ProviderAuthenticationRequiredError as error:
+            raise ProviderAuthenticationNotSubmittedError('max', provider_code=error.provider_code) from None
         except Exception:
             raise DeliveryNotSubmittedError('MAX source could not be verified; no mutation submitted') from None
         p,action=e['payload'],e['action']

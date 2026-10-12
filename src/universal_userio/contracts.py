@@ -21,6 +21,10 @@ class ProviderAuthenticationRequiredError(RuntimeError):
         super().__init__('provider_authentication_required' + (f' ({provider_code})' if provider_code else ''))
 
 
+class ProviderAuthenticationNotSubmittedError(ProviderAuthenticationRequiredError, DeliveryNotSubmittedError):
+    """Provider auth failed while verifying source, before any mutation."""
+
+
 @dataclass(frozen=True, slots=True)
 class InboxMessage:
     source: str
