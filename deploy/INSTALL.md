@@ -195,26 +195,22 @@ proves a VK identity but does not itself authorize VK message reading, and
 the browser extension reads the VK Web profile actually open in Chrome.
 
 
-## VK personal messages without a browser extension (permission-gated)
+## VK personal messages without a browser extension — not yet available
 
-The owner-account VK ID step alone only proves a VK profile. To attempt native
-sync, the user selects **Запросить доступ к сообщениям VK** on
-`/vk/connect/new?mode=direct`. The VK ID SDK then requests the `messages`
-scope; UserIO validates both `users.get` identity and
-`messages.getConversations` + `messages.getHistory` read permission before
-enabling the account. A denied scope leaves the existing VK ID identity
-unchanged, and must NOT be reported as connected personal messages.
+VK ID authentication establishes only an identity. Since ordinary third-party
+VK ID applications do not have permission to read personal messages, the
+experimental user-facing messages scope request has been disabled. The old
+POST /v1/vk/native/accounts endpoint now returns HTTP 409 without accepting
+a token or registering any account. This is an intentional fail-closed boundary.
 
-On success, the user access token goes into the same owner-bound private
-ConnectorSecrets vault used by Matrix and IMAP. One UserAccountPoller owned by
-`universal-userio.service` batches all user-linked Matrix/IMAP/VK sessions;
-there is no systemd unit per user. Each VK dialog gets its own durable
-account-scoped read cursor. Calls are strictly limited to VK's read-only
-methods; no `messages.send` or `messages.markAsRead`. Users may reconnect to
-refresh an expiring token. VK permission availability for this VK ID app must
-be verified during a real human login; passing mocked tests does not prove VK
-will grant `messages` to this application. Also, only recent pages are
-fetched initially and edits/older history are not claimed complete.
+The proof-of-concept VK API reader and shared UserAccountPoller code remain
+unused unless a separately supported and verified authorization transport is
+provided. A future MAX-like connector would need a consented VK website session
+or an officially approved messaging integration, independently validated for
+history, live updates, and read-state safety. Do not ask users to hand over
+session cookies, VK ID tokens or passwords in chat. Verify account identity,
+keep session credentials per UserIO principal and avoid claiming full history
+until paging and recovery are checked. Ordinary VK ID does not meet this bar.
 
 Legacy service units for existing provider-specific integrations (MAX,
 Telegram/WhatsApp gateways, Gmail, SMS) remain active for compatibility.
