@@ -29,7 +29,7 @@ def search_conversations(
         return []
     uid = store._user(user_id)
     source_sql = ""
-    values: list[object] = [uid]
+    values: list[object] = [uid, uid]
     if source:
         source = source.strip().lower()
         if source in {"mail", "email", "gmail"}:
@@ -53,10 +53,14 @@ def search_conversations(
                     WHERE user_id=c.user_id AND source=c.source AND sender=
                       CASE WHEN c.source IN ('max','phone') AND c.account_ref!='' AND c.peer_id!=''
                         THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
-                   (SELECT COUNT(*) FROM messages um
-                    WHERE um.user_id=c.user_id AND um.conversation_id=c.id AND um.seen_at IS NULL) AS unread_count
+                   COALESCE(unread.unread_count,0) AS unread_count
             FROM messages m
             JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id
+            LEFT JOIN (
+                SELECT user_id,conversation_id,COUNT(*) AS unread_count
+                FROM messages WHERE user_id=? AND seen_at IS NULL
+                GROUP BY user_id,conversation_id
+            ) unread ON unread.user_id=c.user_id AND unread.conversation_id=c.id
             WHERE m.user_id=? {source_sql}
             ORDER BY m.received_at DESC
             LIMIT ?

@@ -36,3 +36,31 @@ def test_search_source_filter(tmp_path):
     results = search_conversations(store, "needle", source="telegram")
     assert len(results) == 1
     assert results[0]["source"] == "telegram"
+
+
+def test_search_unread_aggregation_has_linear_sql_work(tmp_path):
+    """Fast unit, expected <1s/max5s: prevent CPU/HTTP thread exhaustion."""
+    store = SQLiteUserIOStore(tmp_path / "search.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    cid, _ = service.receive(InboxMessage("telegram", "seed", "Group", "needle", 1.0), route_id="telegram")
+    row = dict(store._connection.execute("SELECT * FROM messages WHERE message_id='seed'").fetchone())
+    columns = list(row)
+    rows = []
+    for i in range(2000):
+        item = dict(row, message_id=f"search-{i}", received_at=i+2., seen_at=None if i % 2 else 1.)
+        rows.append(tuple(item[name] for name in columns))
+    with store._connection:
+        store._connection.executemany(f"INSERT INTO messages ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", rows)
+    steps = 0
+    def bounded_query():
+        nonlocal steps
+        steps += 1
+        return int(steps > 100)
+    store._connection.set_progress_handler(bounded_query, 10000)
+    try:
+        result = search_conversations(store, "needle", source="telegram")
+    finally:
+        store._connection.set_progress_handler(None, 0)
+    assert len(result) == 1 and result[0]["id"] == cid
+    assert result[0]["unread_count"] == 1001
+    assert steps <= 100
