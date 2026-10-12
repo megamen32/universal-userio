@@ -218,3 +218,14 @@ reconnect; mutations never retried. Same Darya sticker resolve/media plus idle
 read90258bytes/exactSHA PASS. Old MAX model/send intents were not replayed;
 Exmanager journey/retirement remains independent. Earlier read-only VK status
 is historical and superseded for the connected personal sender.
+
+## Quick261012-vkr — VK repeated edits and attachments delivered
+
+12October: exact owner-requested bezrabotniq/46887791 normal headed web source8
+sent and edited twice (changed URL then removed), photo9 and document10 retained
+after reload. Web download exact3682bytes/SHA, photo preview360px and independent
+native IDs/body/author/bytes PASS.67focusedPASS24.41s; sourcefb6e584 installed.
+Per-chat titles/author separation and native document CDN redirect repaired.
+Own browser/copies removed, only first known-unsubmitted QA draft cleaned; old
+provider intents not replayed. Personal VK now supports text/photo/doc<=2MiB and
+repeat edits; reactions/readACK remain open. Exmanager milestone remains separate.
