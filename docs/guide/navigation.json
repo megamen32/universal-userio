@@ -1,0 +1,347 @@
+{
+  "edition": "12 октября 2026",
+  "pages": [
+    {
+      "slug": "overview",
+      "title": "Ваши чаты. Ваш ИИ.",
+      "group": "Начало",
+      "summary": "Почта и мессенджеры становятся инструментами вашего ИИ.",
+      "sources": [
+        "userio",
+        "auth"
+      ]
+    },
+    {
+      "slug": "quickstart",
+      "title": "Первый аккаунт и первый результат",
+      "group": "Начало",
+      "summary": "От регистрации до полезного ответа по вашей переписке.",
+      "sources": [
+        "auth",
+        "userio",
+        "openai"
+      ]
+    },
+    {
+      "slug": "account",
+      "title": "Аккаунт и доступ",
+      "group": "Начало",
+      "summary": "Что требуется для регистрации и как связаны ваши подключения.",
+      "sources": [
+        "auth",
+        "userio"
+      ]
+    },
+    {
+      "slug": "channels",
+      "title": "Выберите канал",
+      "group": "Каналы",
+      "summary": "Способы подключения и условия работы каждой интеграции.",
+      "sources": [
+        "userio",
+        "adapters"
+      ]
+    },
+    {
+      "slug": "telegram",
+      "title": "Telegram",
+      "group": "Каналы",
+      "summary": "Подключите личный и рабочий аккаунты независимыми сессиями.",
+      "sources": [
+        "userio",
+        "telegram"
+      ]
+    },
+    {
+      "slug": "gmail",
+      "title": "Gmail",
+      "group": "Каналы",
+      "summary": "Своя IMAP-почта, пароль приложения; отправка отдельно.",
+      "sources": [
+        "auth",
+        "gmail-ingress",
+        "userio"
+      ]
+    },
+    {
+      "slug": "yandex",
+      "title": "Яндекс.Почта",
+      "group": "Каналы",
+      "summary": "Самостоятельное IMAP-подключение; SMTP отдельно.",
+      "sources": [
+        "adapters",
+        "yandex"
+      ]
+    },
+    {
+      "slug": "whatsapp",
+      "title": "WhatsApp",
+      "group": "Каналы",
+      "summary": "Подключение личного WhatsApp через связанное устройство.",
+      "sources": [
+        "userio",
+        "whatsapp"
+      ]
+    },
+    {
+      "slug": "max",
+      "title": "MAX",
+      "group": "Каналы",
+      "summary": "Личный аккаунт через отдельный неофициальный коннектор.",
+      "sources": [
+        "userio",
+        "max-ingress"
+      ]
+    },
+    {
+      "slug": "vk",
+      "title": "VK",
+      "group": "Каналы",
+      "summary": "Подключение переписки из вашего авторизованного браузера.",
+      "sources": [
+        "userio",
+        "vk"
+      ]
+    },
+    {
+      "slug": "matrix",
+      "title": "Matrix",
+      "group": "Каналы",
+      "summary": "Подключение собственного homeserver для чтения.",
+      "sources": [
+        "userio",
+        "auth"
+      ]
+    },
+    {
+      "slug": "phone",
+      "title": "Android SMS",
+      "group": "Каналы",
+      "summary": "APK для Android с root и без root; native-архив отдельно.",
+      "sources": [
+        "userio",
+        "auth"
+      ]
+    },
+    {
+      "slug": "calls",
+      "title": "Звонки",
+      "group": "Каналы",
+      "summary": "GSM2SIP, SIP/AgentCall и общая история по номеру.",
+      "sources": [
+        "userio",
+        "auth"
+      ]
+    },
+    {
+      "slug": "reading",
+      "title": "Чтение и вложения",
+      "group": "Работа в кабинете",
+      "summary": "Режим скрытности, авторы групп и история.",
+      "sources": [
+        "userio",
+        "auth"
+      ]
+    },
+    {
+      "slug": "drafts",
+      "title": "Сообщения и черновики",
+      "group": "Работа в кабинете",
+      "summary": "Ваш текст сразу, ИИ после подтверждения; редактирование MAX.",
+      "sources": [
+        "userio",
+        "auth"
+      ]
+    },
+    {
+      "slug": "connect-ai",
+      "title": "Подключите свой ИИ",
+      "group": "ИИ и автоматизация",
+      "summary": "Один MCP-адрес для работы с подключёнными переписками.",
+      "sources": [
+        "userio",
+        "openai",
+        "mcp-spec"
+      ]
+    },
+    {
+      "slug": "secretary",
+      "title": "Секретарь на новых входящих",
+      "group": "ИИ и автоматизация",
+      "summary": "Обычная оценка Fast Agent и отдельный подробный анализ.",
+      "sources": [
+        "telegram",
+        "herder",
+        "webhooks",
+        "userio"
+      ]
+    },
+    {
+      "slug": "recipes",
+      "title": "Три полезных сценария",
+      "group": "ИИ и автоматизация",
+      "summary": "Готовые задания для переписки, продаж и договорённостей.",
+      "sources": [
+        "userio",
+        "herder"
+      ]
+    },
+    {
+      "slug": "architecture",
+      "title": "Как устроен User.io",
+      "group": "Разработчикам",
+      "summary": "Границы каналов, хранилища, доступа и агентного исполнения.",
+      "sources": [
+        "userio",
+        "adapters",
+        "herder",
+        "webhooks"
+      ]
+    },
+    {
+      "slug": "mcp",
+      "title": "MCP: инструменты и вызовы",
+      "group": "Разработчикам",
+      "summary": "Обнаружение схем, чтение каналов и подтверждённые действия.",
+      "sources": [
+        "userio",
+        "mcp-spec"
+      ]
+    },
+    {
+      "slug": "http-api",
+      "title": "HTTP API",
+      "group": "Разработчикам",
+      "summary": "Основные маршруты, авторизация и правила интеграции.",
+      "sources": [
+        "auth",
+        "userio"
+      ]
+    },
+    {
+      "slug": "self-host",
+      "title": "Развернуть на своём сервере",
+      "group": "Разработчикам",
+      "summary": "Локальный запуск, подключение каналов и публикация HTTPS.",
+      "sources": [
+        "userio",
+        "deploy",
+        "adapters"
+      ]
+    },
+    {
+      "slug": "security",
+      "title": "Приватность и отправка",
+      "group": "Помощь",
+      "summary": "Кому доступны сообщения и какие действия требуют отдельного решения.",
+      "sources": [
+        "userio",
+        "mcp-spec"
+      ]
+    },
+    {
+      "slug": "troubleshooting",
+      "title": "Если что-то не работает",
+      "group": "Помощь",
+      "summary": "От ошибки входа до задержек секретаря.",
+      "sources": [
+        "auth",
+        "userio",
+        "telegram",
+        "openai"
+      ]
+    },
+    {
+      "slug": "faq",
+      "title": "Частые вопросы",
+      "group": "Помощь",
+      "summary": "Стоимость, аккаунты, ИИ и текущие ограничения.",
+      "sources": [
+        "userio",
+        "auth",
+        "herder"
+      ]
+    },
+    {
+      "slug": "reference",
+      "title": "Полная техническая справка",
+      "group": "Справка",
+      "summary": "Все контракты, примеры, эксплуатация и документы проекта.",
+      "sources": [
+        "userio",
+        "adapters",
+        "deploy"
+      ]
+    },
+    {
+      "slug": "sources",
+      "title": "Версии и источники",
+      "group": "Справка",
+      "summary": "На каких контрактах основаны инструкции и что требует повторной проверки.",
+      "sources": [
+        "userio",
+        "auth",
+        "herder",
+        "webhooks"
+      ]
+    }
+  ],
+  "sources": {
+    "userio": {
+      "title": "UserIO · README и контракт каналов",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/README.md"
+    },
+    "auth": {
+      "title": "UserIO · HTTP, регистрация и авторизация",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/src/universal_userio/http_api.py"
+    },
+    "adapters": {
+      "title": "UserIO · универсальные адаптеры",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/docs/2026-09-03-universal-adapters-spec.md"
+    },
+    "deploy": {
+      "title": "UserIO · развёртывание",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/deploy/INSTALL.md"
+    },
+    "herder": {
+      "title": "Agent Herder · именованные сессии",
+      "url": "https://github.com/megamen32/agent-herder/blob/065ed8d5918a9abf436b6ab3117657df721127d4/README.md"
+    },
+    "webhooks": {
+      "title": "GPTAdmin · маршрутизация событий",
+      "url": "https://github.com/megamen32/gptadmin_opensource/blob/4db418113123194394cea76e35a6f10a0e8b2dc5/docs/WEBHOOKS.md"
+    },
+    "openai": {
+      "title": "OpenAI · MCP-приложения в ChatGPT",
+      "url": "https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt"
+    },
+    "yandex": {
+      "title": "Яндекс · параметры IMAP/SMTP",
+      "url": "https://yandex.ru/support/yandex-360/customers/mail/ru/mail-clients/others"
+    },
+    "mcp-spec": {
+      "title": "MCP · инструменты и схемы",
+      "url": "https://modelcontextprotocol.io/specification/2025-06-18/server/tools"
+    },
+    "whatsapp": {
+      "title": "UserIO · WhatsApp-мост",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/deploy/whatsapp-bridge/README.md"
+    },
+    "vk": {
+      "title": "UserIO · расширение VK",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/extensions/vk-inbox/README.md"
+    },
+    "gmail-ingress": {
+      "title": "UserIO · почтовый воркер",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/src/universal_userio/gmail_ingress.py"
+    },
+    "max-ingress": {
+      "title": "UserIO · MAX ingress",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/src/universal_userio/max_ingress.py"
+    },
+    "telegram": {
+      "title": "UserIO · Telegram ingress и пауза разбора",
+      "url": "https://github.com/megamen32/universal-userio/blob/main/deploy/telegram-qr-connector/server.mjs"
+    }
+  }
+}

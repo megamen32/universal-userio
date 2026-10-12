@@ -1,5 +1,16 @@
 # Universal UserIO resource budget
 
+## Current service baseline (12October2026)
+
+The published core unit uses384MiB MemoryHigh /512MiB MemoryMax, CPU1,
+TasksMax64 and64MiB swap. The earlier128/256MiB baseline below is historical,
+not the current target. Telegram ingress soft224/hard256MiB; MAX96/128MiB.
+Use exact deployed units plus fresh working set/pressure/OOM checks for changes.
+No budget change follows from editing documentation.
+
+## Retained measurements and bounded contracts
+
+
 The2026-10-09 continuation uses finite native systemd jobs under the unchanged
 user-1000.slice bounds; it does not require a fresh human permission for each
 case. The reviewed original-seven isolation/controller is retained and its

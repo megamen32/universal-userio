@@ -22,8 +22,9 @@ overlap anchor; it never skips ahead without such an anchor, and a broken
 account does not block the other configured mailboxes.
 
 The service is loopback-only by default. Publish the dashboard only through an
-HTTPS reverse proxy; UserIO itself redirects anonymous browsers to `/login`
-and scopes the dashboard session to the authenticated user. Do not copy
+HTTPS reverse proxy; UserIO serves the public landing for anonymous `/` and opens the cabinet
+for signed-in users. `/welcome`, `/connect-phone` and `/docs/` are public guides;
+private `/v1/*` and `/mcp` retain authentication. Do not copy
 provider cookies, browser profiles, or raw NoticePlace credentials into UserIO.
 If the proxy uses the dashboard trust header, configure
 `USERIO_TRUSTED_PROXY_TOKEN` and make the proxy overwrite both
@@ -91,8 +92,8 @@ image reaches the provider.
 Install the core's Python environment under its reviewed finite build budget
 before activation. Verify Fast Agent 0.10.43 and Python 3.12 in that environment,
 run the five `tests/test_native_fast_agent.py` integration cases, and measure
-its initialize/request/shutdown working set against the service's existing
-128/256 MiB limits. Source publication alone does not prove that this fits.
+its initialize/request/shutdown working set against the current reviewed
+384/512 MiB core limits. Source publication alone does not prove that this fits.
 If installation fails, restore the prepared release receipt; the old service
 unit uses the system interpreter and does not use the new environment.
 
@@ -219,3 +220,12 @@ a separate migration and should not be claimed complete by this change.
 The Android notification option, if deployed later, requires an independent
 opt-in notification listener on each device and only exposes notification
 contents, not a complete VK chat history.
+
+## Public documentation
+
+The standalone guide at `/docs/` is generated from `docs/guide/*.md` by
+`tools/userio_docs/build.py` into tracked `src/universal_userio/static/docs.html`.
+The runtime exposes only that exact public file; it does not serve the repository
+`docs/` tree or private state. `/docs` and `/docs/index.html` are aliases.
+Rebuild and check documentation before the normal publish/rollback-first release.
+No Node build or extra documentation service is required.

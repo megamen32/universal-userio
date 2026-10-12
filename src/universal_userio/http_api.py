@@ -1068,6 +1068,9 @@ def handler(
                 return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
+            if requested_path in {"/docs", "/docs/", "/docs/index.html"}:
+                if self._static("/docs.html"):
+                    return
             if requested_path == "/download":
                 self._html(200, _download_page().encode())
                 return
