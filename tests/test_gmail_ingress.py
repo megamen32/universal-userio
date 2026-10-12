@@ -77,7 +77,7 @@ def test_poll_uses_stable_native_uids_without_slow_sorted_full_list():
     calls=native_uid_reader(reader,[1,2,3])
     messages,cursor=reader.poll('m1',limit=10)
     assert [x.message_id for x in messages]==['m2','m3'] and cursor=='m3'
-    assert len(calls)==2 and calls[1][-1]=='3,2,1'
+    assert len(calls)==3 and calls[1][-1]=='3' and calls[2][-1]=='2,1'
     assert all(x.sender=='sender@example.test' for x in messages)
     calls.clear()
     assert reader.poll('m3',limit=10)==([], 'm3') and len(calls)==2
@@ -95,7 +95,7 @@ def test_initial_mail_bootstrap_keeps_bounded_snapshot_and_oldest_first_cursor()
     calls=native_uid_reader(reader,[1,2,3,4,5])
     messages,cursor=reader.poll(None,limit=2)
     assert [x.message_id for x in messages]==['m2','m3'] and cursor=='m3'
-    assert calls[1][-1]=='5,4,3,2'
+    assert calls[1][-1]=='5' and calls[2][-1]=='4,3,2'
 
 
 def test_sequence_number_or_unrequested_uid_refused_before_body_read():

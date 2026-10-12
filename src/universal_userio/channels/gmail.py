@@ -212,10 +212,11 @@ class HimalayaReader:
             uids.append(uid)
         uids = sorted(set(uids), reverse=True)[:max(limit, self.snapshot_size)]
         deadline = time.monotonic() + 45
-        for offset in range(0, len(uids), 50):
+        batches = ([uids[:1]] if uids else []) + [
+            uids[offset:offset + 10] for offset in range(1, len(uids), 10)]
+        for batch in batches:
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"gmail metadata scan for {self.account} exceeded its time budget")
-            batch = uids[offset:offset + 50]
             payload = self._run("--json", "imap", "fetch", "-m", self.mailbox,
                                 "--envelope", ",".join(map(str, batch)))
             rows = payload.get("messages") if isinstance(payload, dict) else None
