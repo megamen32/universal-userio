@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: executing
-last_updated: "2026-10-12T21:13:10.551372Z"
-last_activity: 2026-10-12
+last_updated: "2026-10-12T22:01:24.346355Z"
+last_activity: 2026-10-13
 progress:
   total_phases: 4
   completed_phases: 2
@@ -24,10 +24,16 @@ progress:
 **Progress:** 50%
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
-**Last Activity:** 2026-10-12
-**Last Activity Description:** Actual Telegram/MAX reaction lifecycle, sticker identity and byte-identical files accepted; phase14 ACT-01–03 complete (75%). Typing recipient observation and phase15 native SDK remain open; UNKNOWN sticker not replayed.
+**Last Activity:** 2026-10-13
+**Last Activity Description:** Live Secretary TG document/MAX image bytes and existing readonly accounts accepted; MAX history boundary repaired,52focusedPASS,6288120 published/installed and native third-page read PASS. Typing recipient observation and phase15 native MAX/retirement remain open.
 
 ## Current acceptance and next action
+
+Newly found MAX history regression is resolved in installed6288120.
+[Owned debug](debug/max-history-inclusive-boundary.md) retains live RED,
+old prepayload75, new52focusedPASS and actual Secretary third-page read without
+duplicates or ACK. Historical SRC-02 acceptance is retained; current native
+source/media tool proof does not imply whole-milestone model/retirement readiness.
 
 - Phase12: CAP-01–03 complete,3/3 (100%), installed HTTP/MCP discovery,
   scoped-refusal and actual native preserved-sender proof.

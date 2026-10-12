@@ -9,11 +9,16 @@ UserIO can own messenger connections, inbox history, media access and provider
 delivery. Exmanager keeps the Secretary application on the official Airlock SDK:
 reasoning, tasks, reminders, L1/L2/L3 memory, human confirmations and group roles.
 It should become a thin UserIO consumer rather than maintain another Telegram
-session/transport. Current UserIO does not yet provide every required operation
-through one generic contract, so removing the existing transport now would lose
-working features.
+session/transport. The shared generic source/action/media contract and real rich-provider delivery
+are now implemented and accepted separately. Final native MAX behavior and
+retirement still need the Exmanager owner’s affected acceptance; provider success
+alone does not authorize removing working transport.
 
-## Actual reusable paths and gaps
+## Retained baseline source audit and original gaps
+
+The table below records the original pre-v1.3 audit. It is historical, not a
+current list of missing UserIO operations. Current implemented contracts and
+remaining native/regression boundaries are linked at the end.
 
 | Need | Existing source | Remaining UserIO work |
 |---|---|---|
@@ -66,3 +71,20 @@ in the v1.3 source slice. See [callable contract](messenger-contract.md).
 Native Secretary sender remains900000103; private900000101 readonly access
 is unchanged. Source/focused checks do not claim deployment, rich media parity
 or native acceptance; Exmanager owns its thin SDK/relay installation and cutover.
+
+
+## Current native acceptance, 13 October 2026
+
+[Native read verification](../.planning/phases/15-native-secretary-parity-and-transport-retirement/15-native-read-VERIFICATION.md)
+confirms actual Secretary TG881/MAX capabilities, exact author/source/media,
+real Telegram document body/SHA and MAX SDK image resource bytes. Actual rich
+provider reaction/sticker/file delivery is in the phase14 verification. A newly
+reproduced MAX inclusive-history cursor regression is repaired in installed
+6288120:52focusedchecks passed and live Secretary reached known older third page
+without duplicates or read acknowledgement. Original failure and admission
+refusal remain recorded separately.
+
+Native MAX reasoning/reply and scoped Telegram adapter retirement are still
+Exmanager-owned gates after its current placement repair and installed SDK
+candidate. The existing business work and provider client remain intact. Source
+review/compiled image/native readonly tools do not replace that final consumer.

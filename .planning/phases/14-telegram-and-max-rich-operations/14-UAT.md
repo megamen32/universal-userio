@@ -89,10 +89,10 @@ different count. The current user's independent-project instruction separates
 this provider matrix from native SDK parity: original native MAX file/sticker/
 reaction journeys remain phase15 and are not silently called successful.
 
-The relay document24 media reader returns its caption instead of actual UTF-8
-content/SHA. File delivery is independently150bytes/SHA9575a93d… correct; the
-read defect is preserved in rich-provider verification and accepted by owning
-Exmanager97. No send is repeated to diagnose it.
+Earlier relay document24 caption substitution is repaired by its owner:
+current live Secretary media returns actual150bytes/body/SHA9575a93d…, matching
+independent recipient download. Old failure is preserved; no send repeated.
+See phase15 native-read verification for actual SDK read evidence.
 
 No historical UNKNOWN is replayed. New browsers use managed44/88 only. Each
 scenario is focused integration, expected120/max600s under a finite owning
