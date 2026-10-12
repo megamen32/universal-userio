@@ -76,17 +76,21 @@ class MaxMessengerProvider:
                 before=c['before']
                 if type(before) is not int or before<=0:raise ValueError('invalid MAX cursor')
             except (ValueError,TypeError,KeyError):raise ValueError('invalid MAX cursor') from None
-        rows=self.client.history(peer_id,backward=min(limit+1,100),before=before)
+        # Native `from` is inclusive: on continuation its boundary record
+        # consumes one slot before we exclude it. Keep another slot for the
+        # lookahead, including requests at the native 100-record ceiling.
+        page_limit=min(limit,98)
+        rows=self.client.history(peer_id,backward=page_limit+2,before=before)
         rows=sorted((r for r in rows if before is None or r.get('time',0)<before),key=lambda r:r.get('time',0),reverse=True)
-        page=rows[:limit];next_cursor=''
-        if len(rows)>limit and page:
+        page=rows[:page_limit];next_cursor=''
+        if len(rows)>page_limit and page:
             oldest=page[-1]['time']
             # Timestamp-only native pagination cannot certify tied timestamps.
-            if rows[limit].get('time')!=oldest:
+            if rows[page_limit].get('time')!=oldest:
                 next_cursor=base64.urlsafe_b64encode(json.dumps({'account_ref':self.account_ref,'conversation_id':conversation_id,
                     'peer_id':peer_id,'before':oldest}).encode()).decode()
         return {'messages':[self._projection(r,peer_id,conversation_id) for r in reversed(page)],
-                'next_cursor':next_cursor,'partial':True,'more_stored':False}
+                'next_cursor':next_cursor,'partial':True,'more_stored':False,'page_limit':page_limit}
 
     def _native_binding(self, e, row):
         envelope=message_envelope(row,chat_id=e['peer_id'],own_id=self.sender_id,

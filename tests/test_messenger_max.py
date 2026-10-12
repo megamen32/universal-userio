@@ -15,13 +15,13 @@ from universal_userio.store import SQLiteUserIOStore
 
 
 class Transport:
-    def __init__(self):self.calls=[];self.frames=[];self.rows={123:{'id':'123','sender':'77','text':'before','time':1700000000000,'updateTime':1700000001000}}
+    def __init__(self):self.calls=[];self.frames=[];self.inclusive_history=False;self.rows={123:{'id':'123','sender':'77','text':'before','time':1700000000000,'updateTime':1700000001000}}
     def connect(self,timeout):return type('WS',(),{'connected':True})()
     def close(self,ws):ws.connected=False
     def send(self,ws,text):
         f=json.loads(text);self.calls.append(f);p=f['payload'];op=f['opcode'];result={'ready':True}
         if op==19:result={'profile':{'contact':{'id':77}}}
-        if op==49:result={'messages':sorted([r for r in self.rows.values() if r['time']<p['from']],key=lambda r:r['time'],reverse=True)[:p['backward']]}
+        if op==49:result={'messages':sorted([r for r in self.rows.values() if r['time']<p['from'] or self.inclusive_history and r['time']==p['from']],key=lambda r:r['time'],reverse=True)[:p['backward']]}
         if op==48:result={'chats':[{'id':p['chatIds'][0],'type':'DIALOG'}]}
         if op==71:result={'messages':[self.rows[i] for i in p['messageIds'] if i in self.rows]}
         if op==64:
@@ -194,6 +194,33 @@ def test_max_provider_refresh_preserves_raw_source_and_cursor_scope(tmp_path):
     second=api.history('max',cid,limit=2,cursor=first['next_cursor'],refresh=True)
     assert [m['source']['provider_message_id'] for m in second['messages']]==['124','125']
     assert api.events('max',after=0)['events']==[]  # refresh must not dispatch history
+    assert not any(f['opcode'] in {64,92} for f in t.calls)
+    store.close()
+
+
+@pytest.mark.parametrize('limit', [2, 100])
+def test_max_inclusive_history_boundary_does_not_hide_older_pages(tmp_path, limit):
+    """Focused integration expected1s/max5s: native from includes boundary.
+
+    Real SDK limit2 stalled after page2 despite a known older source. Reproduce
+    the same inclusive frame and preserve lookahead within native100 limit.
+    """
+    store,t,service,cid,api=setup(tmp_path)
+    t.inclusive_history=True
+    for n in range(124,244):
+        t.rows[n]={'id':str(n),'sender':'88','text':'older '+str(n),'time':1700000000000+n*1000}
+    first=api.history('max',cid,limit=limit,refresh=True)
+    assert first['next_cursor']
+    second=api.history('max',cid,limit=limit,cursor=first['next_cursor'],refresh=True)
+    if limit==2:
+        assert second['next_cursor'], 'boundary consumed lookahead and hid existing older messages'
+        third=api.history('max',cid,limit=limit,cursor=second['next_cursor'],refresh=True)
+        assert third['messages'] and not set(m['source']['message_id'] for m in third['messages']) & set(m['source']['message_id'] for m in second['messages'])
+    else:
+        assert len(first['messages'])==98 and first['page_limit']==98
+        messages=first['messages']+second['messages']
+        assert len(messages)==len(t.rows) and len({m['source']['message_id'] for m in messages})==len(messages)
+    assert all(f['payload']['backward']<=100 for f in t.calls if f['opcode']==49)
     assert not any(f['opcode'] in {64,92} for f in t.calls)
     store.close()
 
