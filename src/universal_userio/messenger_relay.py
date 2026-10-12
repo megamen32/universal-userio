@@ -111,7 +111,11 @@ class RelayMessengerProvider:
         for item in p.get('media') or []:
             # Only source-bound media references, never tokens or provider URL.
             attachments.append({k:item[k] for k in ('kind','filename','content_type','size','attachment_id','idx') if k in item})
-        attachments.append({'kind':'telegram_routing','provider_ref':json.dumps(routing)})
+        # Attachment storage is keyed by idx. Routing metadata must follow the
+        # native media slots rather than overwriting the default slot zero.
+        routing_idx=max((int(item.get('idx') or 0) for item in attachments),default=-1)+1
+        attachments.append({'kind':'telegram_routing','idx':routing_idx,
+                            'provider_ref':json.dumps(routing)})
         msg=InboxMessage(source='telegram',message_id=s['message_id'],sender=str(a['id']),
             body=p['text'],received_at=p['at'],direction=s['direction'],peer_id=peer_id,
             conversation_kind=kind,reconciliation=True,attachments=tuple(attachments),

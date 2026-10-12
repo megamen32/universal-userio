@@ -106,3 +106,31 @@ def test_real_invocation_survives_normal_provider_reconciliation(case):
     provider.import_projection(projected,peer_id=peer,conversation_id=cid,kind='group')
     result=api.history(ref,cid)['messages'][0]
     assert result['source']['invocation']=={'mention':False,'reply':True}
+
+
+def test_media_survives_routing_import_and_reconciliation(case):
+    store,service,api,provider,ref,peer,calls,options=case
+    old=provider.opener
+    def opener(req,**kwargs):
+        response=old(req,**kwargs)
+        result=json.loads(response.getvalue())
+        if req.full_url.endswith('/message'):
+            result['message']['media']=[
+                {'kind':'image','content_type':'image/png','size':90835,
+                 'attachment_id':'5361575419839556313','idx':0},
+                {'kind':'document','content_type':'application/pdf','size':100,
+                 'attachment_id':'second-native-id','idx':1}]
+            result['message']['source']['invocation']={'mention':False,'reply':True}
+        return Response(json.dumps(result).encode())
+    provider.opener=opener
+    for _ in range(2):
+        resolved=api.resolve(ref,peer,'77')
+        message=resolved['message']
+        assert [a['attachment_id'] for a in message['media']]==[
+            '5361575419839556313','second-native-id']
+        assert [a['attachment_index'] for a in message['media']]==[0,1]
+        assert message['source']['invocation']=={'mention':False,'reply':True}
+        assert message['author']['id']=='42'
+        rows=store.attachments_for_message(source='telegram',message_id=ref+'|'+peer+':77')
+        assert [(a['idx'],a['kind']) for a in rows]==[(0,'image'),(1,'document'),(2,'telegram_routing')]
+    assert len(api.history(ref,resolved['conversation_id'])['messages'])==1
