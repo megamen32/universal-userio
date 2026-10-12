@@ -32,3 +32,17 @@ def test_max_sender_profile_cache_batches_and_retains_username():
     assert [len(c) for c in calls]==[100,100,5]
     assert cache['1']=='Person 1 · @user1'
     group_sender_names(Client(),rows,cache);assert len(calls)==3
+
+def test_partial_max_profile_is_retried_after_bounded_delay(monkeypatch):
+    now=[10.0];calls=[];cache={};retry={}
+    monkeypatch.setattr('universal_userio.max_ingress.time.monotonic',lambda:now[0])
+    class Client:
+        def contacts(self,ids):
+            calls.append(ids)
+            return [] if len(calls)==1 else [{'id':1,'names':[{'name':'Анна Иванова'}]}]
+    client=Client();rows=[{'sender':1}]
+    group_sender_names(client,rows,cache,retry);assert not cache.get('1')
+    group_sender_names(client,rows,cache,retry);assert len(calls)==1
+    now[0]=41.0
+    group_sender_names(client,rows,cache,retry)
+    assert cache['1']=='Анна Иванова' and not retry

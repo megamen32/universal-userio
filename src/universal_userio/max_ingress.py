@@ -129,36 +129,45 @@ def resolve_chat_metadata(client: MaxClient, chat_id: str) -> tuple[str, str]:
     return kind, name
 
 
-def group_sender_names(client: MaxClient, rows: list[dict], cache: dict[str, str]) -> None:
+def group_sender_names(client: MaxClient, rows: list[dict], cache: dict[str, str],
+                       retry_at: dict[str, float] | None = None) -> None:
+    retry_at = {} if retry_at is None else retry_at
+    now = time.monotonic()
     own = ((getattr(client, 'profile', None) or {}).get('profile') or {}).get('contact') or {}
     own_name = next((str(n.get('name')) for n in own.get('names') or [] if n.get('name')), '')
     if own.get('id') is not None and own_name:
         cache[str(own['id'])] = own_name
     ids = sorted({str(row.get('sender')) for row in rows
-                  if str(row.get('sender')).isdigit() and str(row.get('sender')) not in cache})
+                  if str(row.get('sender')).isdigit() and not cache.get(str(row.get('sender')))
+                  and retry_at.get(str(row.get('sender')), 0) <= now})
     if not ids or not hasattr(client, 'contacts'):
         return
     try:
         for offset in range(0, len(ids), 100):
             batch = ids[offset:offset+100]
-            users = client.contacts([int(value) for value in batch])
             for value in batch:
-                cache[value] = ''
+                retry_at[value] = now + 30
+            users = client.contacts([int(value) for value in batch])
             for user in users:
                 name = next((str(n.get('name')) for n in user.get('names') or [] if n.get('name')), '')
                 username = str(user.get('username') or '').lstrip('@')
-                cache[str(user.get('id'))] = ' · '.join(x for x in (name, '@'+username if username else '') if x)
+                label = ' · '.join(x for x in (name, '@'+username if username else '') if x)
+                if label:
+                    cache[str(user.get('id'))] = label
+                    retry_at.pop(str(user.get('id')), None)
     except (TimeoutError, OSError, RuntimeError, ValueError, websocket.WebSocketException) as error:
         log.warning('MAX author metadata pending: %s', type(error).__name__)
 
 
 def backfill(sink: MaxIngressClient, client: MaxClient, *, depth: int = 30,
              route_id: str = "max", account_id: str = "max",
-             stop: threading.Event | None = None, author_names: dict[str, str] | None = None) -> int:
+             stop: threading.Event | None = None, author_names: dict[str, str] | None = None,
+             author_retry: dict[str, float] | None = None) -> int:
     delivered = 0
     own = _own_id(client)
     chats, titles = chat_catalog(client)
     author_names = {} if author_names is None else author_names
+    author_retry = {} if author_retry is None else author_retry
     for chat in chats:
         if stop is not None and stop.is_set():
             break
@@ -169,7 +178,7 @@ def backfill(sink: MaxIngressClient, client: MaxClient, *, depth: int = 30,
             "channel" if str(chat.get("type")) == "CHANNEL" else "direct")
         rows = sorted(client.history(chat_id, backward=depth), key=lambda m: m.get("time") or 0)
         if kind in {'group','channel'}:
-            group_sender_names(client, rows, author_names)
+            group_sender_names(client, rows, author_names, author_retry)
         for row in rows:
             envelope = message_envelope(row, chat_id=chat_id, own_id=own, kind=kind,
                                         reconciliation=True, title=titles.get(chat_id, ""))
@@ -189,10 +198,12 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
     kinds = {}
     titles = {}
     author_names: dict[str, str] = {}
+    author_retry: dict[str, float] = {}
     while not stop.is_set():
         try:
             if not ready:
                 author_names.clear()
+                author_retry.clear()
                 login = client.connect()
                 if not _own_id(client):
                     raise ValueError("MAX account identity missing")
@@ -205,7 +216,7 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
                          for c in login.get("chats", []) if c.get("id") is not None}
                 _, titles = chat_catalog(client)
                 if depth:
-                    backfill(sink, client, depth=depth, route_id=route_id, account_id=account_id, stop=stop, author_names=author_names)
+                    backfill(sink, client, depth=depth, route_id=route_id, account_id=account_id, stop=stop, author_names=author_names, author_retry=author_retry)
                 ready, delay = True, 3
                 log.info("MAX identity and history ready")
             payload = client.dispatch(timeout=1)
@@ -229,9 +240,10 @@ def run_loop(sink: MaxIngressClient, client: MaxClient, *, route_id: str = "max"
                                         title=titles.get(message["chat_id"], ""))
             if envelope is not None:
                 if kinds.get(chat_id) in {'group','channel'}:
-                    if len(author_names) > 2000:
+                    if len(author_names) + len(author_retry) > 2000:
                         author_names.clear()
-                    group_sender_names(client, [row], author_names)
+                        author_retry.clear()
+                    group_sender_names(client, [row], author_names, author_retry)
                     envelope['sender_name'] = author_names.get(str(row.get('sender')), '')
                 sink.send_max_message(envelope=envelope, account_id=account_id, route_id=route_id)
         except (TimeoutError, OSError, RuntimeError, ValueError, websocket.WebSocketException) as error:
