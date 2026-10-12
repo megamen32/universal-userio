@@ -766,12 +766,12 @@ def connect_vk_personal(
             "mode": "vk_personal_messages"}
 
 
-def _vk_personal_client(service, conversation, user_id):
+def _vk_personal_client(service, conversation, user_id, *, for_send=True):
     from .channels.vk_personal import VKPersonalClient
     account_ref=str(conversation.get('account_ref') or '')
     account=next((a for a in service._store.accounts(user_id=user_id)
                   if a['id']==account_ref and a['provider']=='vk' and a['enabled']
-                  and 'reply' in a['capabilities']),None)
+                  and ('reply' if for_send else 'read') in a['capabilities']),None)
     if account is None or not account_ref.startswith('vk:') or not account_ref[3:].isdecimal():
         raise ValueError('Личный аккаунт VK не разрешает отправку')
     secret=ConnectorSecrets().load(account['credential_ref'],user_id=user_id,provider='vk')
@@ -785,11 +785,16 @@ def prepare_vk_reply(service, conversation, draft, *, user_id):
     peer=str(conversation.get('peer_id') or '')
     if not re.fullmatch(r'-?[1-9][0-9]*',peer): raise ValueError('VK recipient is missing')
     if client.identity()!=expected: raise ValueError('Токен принадлежит другому аккаунту VK')
-    if not draft.body.strip() or len(draft.body)>4096:
+    from .vk_web import VKWeb
+    web=VKWeb(service,user_id)
+    upload=web.for_draft(draft.id,conversation)
+    if (not draft.body.strip() and not upload) or len(draft.body)>4096:
         raise ValueError('Сообщение VK должно содержать от 1 до 4096 символов')
     import hashlib
     key='\0'.join((user_id,conversation['account_ref'],peer,draft.id))
     random_id=(int.from_bytes(hashlib.sha256(key.encode()).digest()[:4],'big')&0x7fffffff) or 1
+    if upload:
+        return lambda:web.send_file(client,conversation,draft,upload,random_id)
     return lambda:client.send(int(peer),draft.body,random_id)
 
 
@@ -823,10 +828,12 @@ def vk_personal_message(
         return None
     outgoing = row.get("out") is True or row.get("out") == 1
     peer = str(peer_id)
+    from .channels.vk_personal import vk_native_attachments
     return InboxMessage(
         source="vk", message_id=f"{account_id}|{peer}:{message_id}",
         sender=str(row.get("from_id")) if type(row.get("from_id")) is int else peer,
         sender_name=title, body=body[:50_000],
+        attachments=tuple(vk_native_attachments(row)),
         received_at=float(received), direction="outgoing" if outgoing else "incoming",
         peer_id=peer, conversation_kind=("group" if peer_type == "chat" else "direct"
                                        if peer_type in {"user", "group"} else

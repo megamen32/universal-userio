@@ -8,6 +8,9 @@ neither reader nor sender marks conversations read.
 from __future__ import annotations
 
 import json
+import re
+import uuid
+import mimetypes
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +21,10 @@ from ..contracts import DeliveryNotSubmittedError
 
 class VKPermissionDenied(ValueError):
     """This VK token cannot access personal messages."""
+
+
+class VKEditPreflightError(ValueError):
+    """Known refusal before a messages.edit command is submitted."""
 
 
 class VKPersonalReader:
@@ -126,18 +133,113 @@ class VKPersonalReader:
 
 
 class VKPersonalClient(VKPersonalReader):
-    def send(self, peer_id: int, text: str, random_id: int) -> str:
+    def send(self, peer_id: int, text: str, random_id: int, *, attachment: str = '') -> str:
         if type(peer_id) is not int or peer_id==0:
             raise ValueError('VK exact peer ID required')
-        if not isinstance(text,str) or not text.strip() or len(text)>4096:
+        if not isinstance(text,str) or (not text.strip() and not attachment) or len(text)>4096:
             raise ValueError('Сообщение VK должно содержать от 1 до 4096 символов')
         if type(random_id) is not int or not 0<random_id<2**31:
             raise ValueError('VK stable random ID required')
         # VKCOM schema: user-token messages.send, random_id deduplicates sends.
-        result=self._request('messages.send',{'peer_id':peer_id,'message':text,'random_id':random_id},mutation=True)
+        args={'peer_id':peer_id,'message':text,'random_id':random_id}
+        if attachment:
+            if not re.fullmatch(r'(?:photo|doc)-?\d+_\d+(?:_[A-Za-z0-9_-]+)?', attachment):
+                raise ValueError('VK native attachment required')
+            args['attachment']=attachment
+        result=self._request('messages.send',args,mutation=True)
         if type(result) is not int or result<=0:
             raise RuntimeError('VK не подтвердил отправку. Не повторяйте сообщение; обновите диалог.')
         return str(result)
+
+    def edit(self, *, peer_id, message_id, body, expected_body, own_id):
+        if not isinstance(body,str) or not body.strip() or len(body)>4096:
+            raise ValueError('Сообщение VK должно содержать от 1 до 4096 символов')
+        original=self.message(message_id)
+        if expected_body=='[Вложение VK]' and not original.get('text') and original.get('attachments'):
+            expected_body=''
+        if (original.get('peer_id')!=peer_id or original.get('from_id')!=own_id
+                or original.get('out')!=1 or original.get('text','')!=expected_body):
+            raise VKEditPreflightError('Сообщение VK уже изменилось или принадлежит другому собеседнику')
+        refs=[]
+        for att in original.get('attachments') or []:
+            kind=att.get('type')
+            if kind=='link':continue  # rebuild snippets from the new text
+            if kind not in {'photo','doc'}:raise ValueError('Редактирование этого вложения VK не поддерживается')
+            refs.append(native_attachment_ref(kind,att.get(kind) or {}))
+        ack=self._request('messages.edit',{'peer_id':peer_id,'message_id':message_id,
+            'message':body,'attachment':','.join(refs),'keep_snippets':0,'keep_forward_messages':1},mutation=True)
+        if ack!=1:raise RuntimeError('VK не подтвердил изменение; обновите диалог без повторной отправки')
+        row=self.message(message_id)
+        if row.get('text')!=body:raise RuntimeError('Результат изменения VK уточняется; обновите диалог')
+        return row
+
+    def upload(self, *, peer_id, data, filename, mime_type):
+        if not isinstance(data,bytes) or not 1<=len(data)<=2*1024*1024:
+            raise ValueError('Вложение VK должно быть не больше 2 МБ')
+        if not isinstance(filename,str) or not 1<=len(filename)<=128 or any(c in filename for c in '/\\\r\n"'):
+            raise ValueError('Некорректное имя файла')
+        photo=mime_type in {'image/png','image/jpeg','image/gif'}
+        method='photos' if photo else 'docs'
+        args={'peer_id':peer_id}
+        if not photo:args['type']='doc'
+        server=self._request(method+'.getMessagesUploadServer',args)
+        url=server.get('upload_url') if isinstance(server,dict) else None
+        _native_file_url(url)
+        boundary='UserIO'+uuid.uuid4().hex
+        content=(f'--{boundary}\r\nContent-Disposition: form-data; name="'+('photo' if photo else 'file')+f'"; filename="{filename}"\r\nContent-Type: {mime_type}\r\n\r\n').encode()+data+f'\r\n--{boundary}--\r\n'.encode()
+        req=urllib.request.Request(url,data=content,method='POST',headers={'Content-Type':'multipart/form-data; boundary='+boundary})
+        try:
+            with self._opener(req,timeout=20) as response:result=json.loads(response.read(2_000_001))
+        except (OSError,ValueError) as error:
+            raise RuntimeError('Загрузка VK не подтверждена; не отправляйте повторно') from error
+        if photo:
+            saved=self._request('photos.saveMessagesPhoto',{k:result[k] for k in ('photo','server','hash')},mutation=True)
+            if not isinstance(saved,list) or len(saved)!=1:raise RuntimeError('VK не сохранил фото')
+            return native_attachment_ref('photo',saved[0])
+        saved=self._request('docs.save',{'file':result['file'],'title':filename},mutation=True)
+        return native_attachment_ref('doc',saved.get('doc') or {})
+
+    def download(self, row, index=0):
+        attachments=vk_native_attachments(row)
+        if not 0<=index<len(attachments):raise ValueError('Вложение VK не найдено')
+        att=attachments[index];_native_file_url(att['src'])
+        with self._opener(urllib.request.Request(att['src']),timeout=20) as response:
+            data=response.read(2*1024*1024+1)
+        if len(data)>2*1024*1024:raise ValueError('Вложение VK больше 2 МБ')
+        return {**att,'data':data,'size':len(data)}
+
+
+def _native_file_url(url):
+    parsed=urllib.parse.urlsplit(str(url or ''));host=parsed.hostname or ''
+    if (parsed.scheme!='https' or parsed.username or parsed.password or parsed.port not in {None,443}
+            or not any(host==d or host.endswith('.'+d) for d in ('vk.com','vk.ru','userapi.com','vkuser.net','vkuserphoto.ru','vkuseraudio.net'))):
+        raise ValueError('VK не вернул поддерживаемый адрес файла')
+
+
+def native_attachment_ref(kind, value):
+    if kind not in {'photo','doc'} or type(value.get('owner_id')) is not int or type(value.get('id')) is not int:
+        raise ValueError('VK не подтвердил идентификатор вложения')
+    ref=f"{kind}{value['owner_id']}_{value['id']}"
+    if value.get('access_key'):ref+='_'+str(value['access_key'])
+    if not re.fullmatch(r'(?:photo|doc)-?\d+_\d+(?:_[A-Za-z0-9_-]+)?',ref):raise ValueError('VK attachment reference invalid')
+    return ref
+
+
+def vk_native_attachments(row):
+    result=[]
+    for att in row.get('attachments') or []:
+        kind=att.get('type');value=att.get(kind) or {}
+        if kind not in {'photo','doc'}:continue
+        ref=native_attachment_ref(kind,value)
+        if kind=='photo':
+            sizes=[x for x in value.get('sizes') or [] if isinstance(x,dict) and x.get('url')]
+            best=max(sizes,key=lambda x:int(x.get('width',0))*int(x.get('height',0)),default={})
+            url=best.get('url','');name=f"photo-{value['id']}.jpg";mime='image/jpeg'
+        else:
+            url=value.get('url','');name=value.get('title') or f"file-{value['id']}";mime=mimetypes.guess_type(name)[0] or 'application/octet-stream'
+        result.append({'idx':len(result),'kind':'image' if kind=='photo' else 'doc','attachment_id':ref,
+            'provider_ref':ref,'filename':name,'content_type':mime,'src':url,'size':value.get('size')})
+    return result
 
 
 class _RejectRedirect(urllib.request.HTTPRedirectHandler):

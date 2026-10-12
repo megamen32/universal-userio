@@ -1020,7 +1020,7 @@ class UserIOService:
         return draft
 
     def send_manual_message(self, conversation_id: str, *, body: str,
-                            request_id: str, user_id: str | None = None) -> ReplyDraft:
+                            request_id: str, user_id: str | None = None, upload_id: str = '') -> ReplyDraft:
         """A human pressing Send authorizes exactly this body and recipient.
 
         Retain the normal durable delivery claim/receipt, but do not place this
@@ -1030,9 +1030,12 @@ class UserIOService:
         if not re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", request_id):
             raise ValueError("request_id is required")
         text = body.strip()
-        if not text:
+        if not text and not upload_id:
             raise ValueError("Сообщение не может быть пустым")
         user = self._store._user(user_id)
+        conv=self._store.conversation(conversation_id,user_id=user)
+        if upload_id and (not conv or conv['source']!='vk'):
+            raise ValueError('Вложения поддерживаются в личном VK')
         draft_id = "draft_web_" + hashlib.sha256(f"{user}:{request_id}".encode()).hexdigest()
         with self._manual_send_lock:
             try:
@@ -1044,6 +1047,9 @@ class UserIOService:
                 raise ValueError("Этот запрос уже относится к другому сообщению")
             if draft.status == "sending":
                 raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте это сообщение повторно.")
+            if conv and conv['source']=='vk':
+                from .vk_web import VKWeb
+                VKWeb(self,user).bind(draft,conv,upload_id)
         return self.approve(draft.id, user_id=user, expected_snapshot={
             "expected_text": text, "expected_chat_id": conversation_id, "expected_attachments": [],
         })
@@ -1052,6 +1058,9 @@ class UserIOService:
                          expected_body: str, user_id: str | None = None) -> dict:
         user = self._store._user(user_id)
         conv = self._store.conversation(conversation_id, user_id=user)
+        if conv and conv['source']=='vk':
+            from .vk_web import VKWeb
+            return VKWeb(self,user).edit(conversation_id,message_id,body.strip(),expected_body)
         if not conv or conv["source"] != "max" or user != self.max_user_id or self.max_client is None:
             raise DeliveryUnavailableError("Редактирование MAX недоступно для этого аккаунта")
         if not self._store.send_enabled(user_id=user) or not self._store.route_allowed(

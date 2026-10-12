@@ -17,7 +17,7 @@ from email.utils import parseaddr
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Type
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -606,7 +606,11 @@ def handler(
                         raise ValueError("unsupported conversation source")
                     if not sender:
                         raise ValueError("sender is required")
-                    record = service._store.create_conversation(source, sender, user_id=user_id)
+                    if source=='vk':
+                        from .vk_web import VKWeb
+                        record=VKWeb(service,user_id).create_conversation(str(payload.get('account_ref') or ''),sender)
+                    else:
+                        record = service._store.create_conversation(source, sender, user_id=user_id)
                     self._reply(201, {"conversation": record})
                     return
                 if path == "/v1/conversations/set-account":
@@ -849,6 +853,14 @@ def handler(
                     drafts = service.propose_from_conversation(conversation_id, user_id=user_id)
                     self._reply(202, {"drafts": [{"id": draft.id, "body": draft.body, "status": draft.status} for draft in drafts]})
                     return
+                if path.startswith('/v1/conversations/') and path.endswith('/uploads'):
+                    if principal.service_account or not service._store.capability_enabled('send',user_id=user_id):
+                        self._reply(403,{'error':'send_capability_disabled'});return
+                    if int(self.headers.get('Content-Length','0'))>3*1024*1024:
+                        self._reply(413,{'error':'Вложение должно быть не больше 2 МБ'});return
+                    from .vk_web import VKWeb
+                    cid=unquote(path.removeprefix('/v1/conversations/').removesuffix('/uploads').strip('/'))
+                    self._reply(201,VKWeb(service,user_id).stage(cid,self._json()));return
                 if path.startswith("/v1/conversations/") and path.endswith("/send"):
                     if principal.service_account:
                         self._reply(403, {"error": "Используйте явное подтверждение черновика для автоматической отправки"})
@@ -859,7 +871,8 @@ def handler(
                     conversation_id = unquote(path.removeprefix("/v1/conversations/").removesuffix("/send").strip("/"))
                     payload = self._json()
                     draft = service.send_manual_message(conversation_id, body=str(payload.get("body") or ""),
-                        request_id=str(payload.get("request_id") or ""), user_id=user_id)
+                        request_id=str(payload.get("request_id") or ""), user_id=user_id,
+                        upload_id=str(payload.get('upload_id') or ''))
                     self._reply(200, {"id": draft.id, "status": draft.status, "receipt": draft.receipt})
                     return
                 if path.startswith("/v1/conversations/") and path.endswith("/drafts"):
@@ -1546,6 +1559,12 @@ def handler(
                 if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return
+                if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:'):
+                    from .vk_web import VKWeb
+                    try:file=VKWeb(service,user_id).download(real_id,message_id)
+                    except (ValueError,RuntimeError,OSError) as error:
+                        self._reply(502,{'error':str(error)});return
+                    self._reply_raw(200,file['data'],content_type=file['content_type'],filename=file['filename']);return
                 adapter = _adapter_for_message(service, message, user_id)
                 # VK adapter needs attachment_id; everything else keys on message_id.
                 file_ref = message_id
@@ -1621,6 +1640,13 @@ def handler(
                         for a in attachments
                     ],
                 }
+                if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:') and attachments:
+                    from .vk_web import VKWeb
+                    VKWeb(service,user_id).conversation(real_id,write=False)
+                    a=attachments[0]
+                    payload.update(available=True,reason='',filename=a['filename'],content_type=a['content_type'],size=a['size'],
+                        download_url=f'/v1/conversations/{quote(real_id,safe="")}/media/{quote(message_id,safe="")}/raw')
+                    self._reply(200,payload);return
                 adapter = _adapter_for_message(service, message, user_id)
                 # VK adapter needs the FIRST attachment_id, not message_id;
                 # every other channel still keys on message_id which we
