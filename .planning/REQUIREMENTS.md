@@ -18,8 +18,8 @@
 
 ### Rich operations
 - [x] **ACT-01**: Same-ID own-message edits work repeatedly on Telegram and MAX and preserve source/receipt provenance.
-- [ ] **ACT-02**: Reactions use the same interface and actual provider-supported behavior or explicit unsupported results.
-- [ ] **ACT-03**: Sticker/file sends use ordinary immutable approval/outbox with provider-supported references, not local paths or raw client bypass.
+- [x] **ACT-02**: Reactions use the same interface and actual provider-supported behavior or explicit unsupported results.
+- [x] **ACT-03**: Sticker/file sends use ordinary immutable approval/outbox with provider-supported references, not local paths or raw client bypass.
 - [ ] **ACT-04**: Typing/progress and readable fallback follow actual channel capabilities.
 
 ### Native consumer and retirement
@@ -43,8 +43,8 @@ deletion of old customer content, and replacing business/task storage with UserI
 | REPLY-01 | 13 | Complete |
 | REPLY-02 | 13 | Complete |
 | ACT-01 | 14 | Complete |
-| ACT-02 | 14 | Partial — live acceptance pending |
-| ACT-03 | 14 | Partial — live acceptance pending |
+| ACT-02 | 14 | Complete — actual add/change/remove and native readback on both providers |
+| ACT-03 | 14 | Complete — actual stickers and byte-identical files on both providers; native Secretary remains phase15 |
 | ACT-04 | 14 | Partial — live acceptance pending |
 | LIVE-01 | 15 | Partial — live acceptance pending |
 | LIVE-02 | 15 | Partial — live acceptance pending |
@@ -55,11 +55,11 @@ remain in milestones/v1.2-REQUIREMENTS.md; no prior acceptance is reset/replayed
 
 ## Evidence reconciliation — 2026-10-12
 
-Accepted8/14requirements (57% rounded), not a whole-product readiness estimate.
+Accepted10/14requirements (71% rounded), not a whole-product readiness estimate.
 CAP-01–03: [phase12 summary](phases/12-effective-channel-capabilities/12-01-SUMMARY.md).
 SRC-01–02/REPLY-01–02: [phase13 summary](phases/13-source-bound-history-and-approved-replies/13-01-SUMMARY.md).
-ACT-01: [phase14 verification](phases/14-telegram-and-max-rich-operations/14-VERIFICATION.md).
-Remaining ACT-02–04 and LIVE-01–03 have installed/partial evidence but no whole
+ACT-01–03: [phase14 verification](phases/14-telegram-and-max-rich-operations/14-rich-provider-VERIFICATION.md).
+Remaining ACT-04 and LIVE-01–03 have installed/partial evidence but no whole
 requirement pass; owners and exact closing proofs are in [ROADMAP](ROADMAP.md)
 and [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md).
 

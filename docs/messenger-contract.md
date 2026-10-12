@@ -38,6 +38,11 @@ command, not an empty emoji added to the message. Fresh MAX resolve includes
 explicitly unavailable and does not hide the message or imply zero reactions.
 MAX SavedMessages uses its actual peer`0`, not a guessed personal contact.
 
+Native sticker references use the received opaque attachment identity. In MAX,
+the received global stickerId/setId is sent as `attaches[].STICKER`; the older
+top-level sticker shortcut expects a different set-local ID. Keep native IDs
+as decimal strings at the public boundary and preserve the actual sticker type.
+
 Typing discovery includes `stop_mode`: `provider_command` for explicit native
 stop, or `expires_automatically` for MAX. MAX active=false submits no read ACK
 and relies on the short native indicator expiry; it does not claim immediate
@@ -170,6 +175,14 @@ conversation and exact confirmation during acceptance. Existing business
 request135, other chats and historical sends are not canaries.
 
 ## Real acceptance
+
+Current provider acceptance: Telegram/MAX reaction add/change/remove, native
+sticker identity and new-file recipient bytes passed the shared approved-action
+path. Telegram SDK document delivery also has independent native acceptance.
+The [live matrix](../.planning/phases/14-telegram-and-max-rich-operations/14-rich-provider-VERIFICATION.md)
+separates these results from typing command ACKs, unobserved recipient typing
+and unfinished native Secretary MAX migration. Neither an advertised capability
+nor an accepted command substitutes for the missing recipient observation.
 
 After reviewed source, focused checks, publication, install and all intentional
 restarts, run the same native Secretary journey through Telegram QA

@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: executing
-last_updated: "2026-10-12T20:18:28.829Z"
+last_updated: "2026-10-12T21:13:10.551372Z"
 last_activity: 2026-10-12
 progress:
   total_phases: 4
@@ -25,7 +25,7 @@ progress:
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
 **Last Activity:** 2026-10-12
-**Last Activity Description:** Reconciled retained live evidence: phase12 and13 complete, phase14 ACT-01 accepted (25%), phase15 actual MAX Secretary/retirement pending. No runtime/provider replay.
+**Last Activity Description:** Actual Telegram/MAX reaction lifecycle, sticker identity and byte-identical files accepted; phase14 ACT-01–03 complete (75%). Typing recipient observation and phase15 native SDK remain open; UNKNOWN sticker not replayed.
 
 ## Current acceptance and next action
 
@@ -33,10 +33,10 @@ progress:
   scoped-refusal and actual native preserved-sender proof.
 - Phase13: SRC-01–02/REPLY-01–02 complete,4/4 (100%), real Telegram native
   source/media/reply/edit receipts plus bounded Telegram/MAX reads.
-- Phase14: ACT-01 complete; ACT-02–04 partial/live matrix missing,1/4 (25%).
+- Phase14: ACT-01–03 complete,3/4 (75%); ACT-04 command ACK/stop-mode proved, recipient-visible typing/expiry not observed.
 - Phase15: native MAX final parity/business preservation/transport retirement
   remain Exmanager97-owned acceptance,0/3fullyclosed; actual TG vertical retained.
-- Milestone2/4plans (50%),8/14requirements (57% rounded). Original all-directory
+- Milestone2/4plans (50%),10/14requirements (71% rounded). Original all-directory
   progress includes historical phases and is not this milestone's percentage.
 
 Next route: resume [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md),

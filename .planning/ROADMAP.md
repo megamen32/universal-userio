@@ -53,7 +53,7 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
 **Plans**: 1 plan
 - [ ] 14-01: Native-reference rich actions and media
 
-**Status:** Partial — ACT-01 accepted, 1/4 requirements, 25%. Telegram native same-ID edits and MAX repeated web edits are retained; full reaction/sticker/file/typing parity is still open. [Current verification](phases/14-telegram-and-max-rich-operations/14-VERIFICATION.md), [remaining matrix](phases/14-telegram-and-max-rich-operations/14-UAT.md).
+**Status:** Partial — ACT-01–03 accepted, 3/4 requirements, 75%. Actual Telegram/MAX reaction add/change/remove, sticker identity and recipient file bytes are verified. Typing commands are accepted; recipient visibility/fallback acceptance is still open. [Current verification](phases/14-telegram-and-max-rich-operations/14-rich-provider-VERIFICATION.md), [remaining matrix](phases/14-telegram-and-max-rich-operations/14-UAT.md). Native Secretary MAX remains phase15.
 
 ### Phase 15: Native Secretary parity and transport retirement
 **Goal**: The real Secretary uses UserIO and no dedicated Telegram path for accepted operations.
@@ -73,10 +73,10 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
 |---|---|---|---|
 | 12 | Complete | CAP-01–03: 3/3 | 100% |
 | 13 | Complete | SRC-01–02, REPLY-01–02: 4/4 | 100% |
-| 14 | Partial, live matrix remaining | ACT-01: 1/4 | 25% |
+| 14 | Recipient typing/progress proof remaining | ACT-01–03: 3/4 | 75% |
 | 15 | Native MAX acceptance / retirement pending | 0/3 | 0% |
 
-Current milestone: **2/4 phases/plans closed (50%); 8/14 requirements accepted (57%)**. These are different counters. The original GSD all-directory bar also counts retained historical phases and is not a product-readiness percentage. No full milestone completion is claimed.
+Current milestone: **2/4 phases/plans closed (50%); 10/14 requirements accepted (71%)**. These are different counters. The original GSD all-directory bar also counts retained historical phases and is not a product-readiness percentage. No full milestone completion is claimed.
 
 ## Already accepted user outcomes — retained, not reopened
 
@@ -98,9 +98,9 @@ These belong to accepted v1.0–v1.2 or completed quick tasks; they are not new 
 
 | Open item | Owner | Required evidence to close |
 |---|---|---|
-| **Native Secretary MAX journey and scoped transport retirement** (LIVE-01–03, phase15) | Exmanager lead `01a11197-d2d9-7812-97c8-c2da3f454461`; UserIO lead fixes only a reproduced UserIO contract defect | A new authorized MAX source handled by the deployed Secretary through its existing Airlock/UserIO resource; exact author/source/media, approved reply/provider receipt and native readback; original business/memory/readonly checkpoints retained. Then owner-recorded removal of only proven replaceable Telegram glue, rollback and affected fresh native acceptance. UserIO-only MAX sends do not substitute for this proof. |
-| **Full live capability matrix** (remaining ACT-02–04, phase14) | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` owns contract/provider checks; Exmanager lead owns actual Secretary SDK journeys | Complete [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md): reaction add/change/remove and readback, actual sticker/file arrival, byte comparison where applicable, typing/progress observation or a truthful unsupported fallback for each Telegram/MAX account. Declared capabilities and source/unit tests alone do not close rows. Existing accepted edits/files are reused as evidence, never replayed. |
+| **Native Secretary MAX journey and scoped transport retirement** (LIVE-01–03, phase15) | Exmanager lead `01a11197-d2d9-7812-97c8-c2da3f454461`; UserIO lead fixes only a reproduced UserIO contract defect | A new authorized MAX source handled by the deployed Secretary through its existing Airlock/UserIO resource; exact author/source/media, approved reply/provider receipt and native readback; original business/memory/readonly checkpoints retained. Then owner-recorded removal of only proven replaceable Telegram glue, rollback and affected fresh native acceptance. UserIO-only MAX sends do not substitute for this proof. Exmanager-owned document-content reader must return actual bytes/text/SHA instead of a caption; source24 delivery is already accepted and not replayed. |
+| **Recipient typing/progress acceptance** (remaining ACT-04, phase14) | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` owns contract/provider checks; Exmanager lead owns actual Secretary SDK journeys | Complete remaining typing/progress rows in [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md): owned authenticated recipient observation or a truthful unsupported fallback for each Telegram/MAX account. Provider ACK alone is not visible typing. Reactions/sticker/file delivery passed the new real provider cycle; native Secretary rich parity remains phase15, not an additional UserIO send replay. |
 | **VK reactions, read acknowledgements, automatic session renewal** | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` | Separate source/runtime changes and permitted live checks: reaction native readback; a newly unread authorized message becomes read after normal viewing while stealth suppresses it; controlled credential expiry/renewal resumes maintained sync without manual re-entry or duplicate messages. Current text/edit/file acceptance does not imply these capabilities. |
 | **Older call-history scroll anchor** | UserIO lead `01a11747-7bb9-7bc0-8c0a-ce64db49105d` | Normal managed browser on server44/88: record the visible message ID and viewport offset, load older history, show that the same message stays at the same offset within measured tolerance; retained screenshot/DOM readback. API pagination/counts alone are insufficient; no calls needed. |
 
-No new runtime/provider actions were performed for this reconciliation. Earlier failures, cancelled delete-six scope and the explicit unknown-number archive are preserved, not reintroduced as open product work. Prior provider quota429 is an operational observation; accepted notification delivery is not a guarantee of uninterrupted external model availability.
+The earlier reconciliation performed no provider action; the subsequent owned rich cycle installed reviewed source and captured new explicit QA actions in [provider verification](phases/14-telegram-and-max-rich-operations/14-rich-provider-VERIFICATION.md). Earlier failures, cancelled delete-six scope and the explicit unknown-number archive are preserved, not reintroduced as open product work. Prior provider quota429 is an operational observation; accepted notification delivery is not a guarantee of uninterrupted external model availability.
