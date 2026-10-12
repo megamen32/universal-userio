@@ -2,6 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "../deploy/telegram-qr-connector/group-routing.mjs";
 
+test('group author profile preserves first/last/username and does not use group title', async () => {
+  const att=await telegramGroupRoutingAttachment({chatKey:'-1001',groupName:'Team',message:{senderId:'42'},
+    resolveSender:async()=>({id:'42',name:'Анна Иванова',firstName:'Анна',lastName:'Иванова',username:'anna'})});
+  const author=JSON.parse(att.provider_ref);
+  assert.equal(author.author_name,'Анна Иванова');
+  assert.equal(author.author_first_name,'Анна');
+  assert.equal(author.author_last_name,'Иванова');
+  assert.equal(author.author_username,'anna');
+  const unknown=await telegramGroupRoutingAttachment({chatKey:'-1001',groupName:'Team',message:{senderId:'9'}});
+  assert.equal(JSON.parse(unknown.provider_ref).author_resolved,false);
+});
+
 test("Telegram bot dialogs are classified separately and disabled by policy", () => {
   assert.equal(telegramConversationKind({ bot: true, className: "User" }, "777"), "telegram_bot");
   assert.equal(telegramConversationKind({ className: "User" }, "778"), "direct");

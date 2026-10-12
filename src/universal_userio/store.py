@@ -2375,6 +2375,13 @@ class SQLiteUserIOStore:
                     FROM telegram_history_state WHERE user_id=? AND account_ref=? AND peer_id=?""",
                     (user_id,row["account_ref"],row["peer_id"])).fetchone()
         message_records = [dict(item) for item in messages]
+        if row['source'] == 'max' and row['conversation_kind'] in {'group','channel'}:
+            with self._lock:
+                author_names = dict(self._connection.execute(
+                    "SELECT sender,name FROM contact_names WHERE user_id=? AND source='max'",
+                    (user_id,)).fetchall())
+            for item in message_records:
+                item['sender_name'] = author_names.get(item['sender'], '')
         for item in message_records:
             if item.get('outbox_receipt'):
                 item['outbox_receipt']=self.match_sms_receipt(str(item['outbox_receipt']),account_ref=str(row['account_ref']),sender=str(item['sender']),body=str(item['body']),user_id=user_id) if item['source']=='sms' else ''
@@ -2393,6 +2400,7 @@ class SQLiteUserIOStore:
             "identity_id": row["identity_id"], "source": row["source"], "sender": row["sender"],
             "account_ref": str(row["account_ref"] or ""),
             "peer_id": str(row["peer_id"] or ""),
+            "conversation_kind": str(row['conversation_kind'] or 'unknown'),
             "display_name": str(name_row["name"]) if name_row else "",
             "messages": message_records, "drafts": [dict(item) for item in drafts],
             **({'phone_history': self._phone_history_cursor(row['id'], message_records, user_id)} if row['source']=='phone' else {}),
