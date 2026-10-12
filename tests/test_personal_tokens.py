@@ -35,12 +35,16 @@ def test_personal_tokens_multiple_clients_revocation_and_user_isolation(tmp_path
 
     try:
         assert call("GET", "/v1/personal-tokens")[0] == 401
+        assert call("POST", "/v1/personal-tokens", "test-service", {"name": "service escape"})[0] == 403
+        assert call("GET", "/v1/personal-tokens", "test-service")[0] == 403
+        assert PersonalTokens(store).list(store.owner().user_id) == []
         assert call("POST", "/v1/personal-tokens", login, {"name": " "})[0] == 400
         status, first, headers = call("POST", "/v1/personal-tokens", login, {"name": "ZCode"})
         assert status == 201 and headers["Cache-Control"] == "no-store"
         assert first["token_returned_once"] is True and first["expires_at"] is None
         _, second, _ = call("POST", "/v1/personal-tokens", login, {"name": "Laptop"})
         assert first["token"] != second["token"]
+        assert call("DELETE", "/v1/personal-tokens/" + first["id"], "test-service")[0] == 403
         status, listing, _ = call("GET", "/v1/personal-tokens", first["token"])
         assert status == 200 and len(listing["tokens"]) == 2
         assert {t["name"] for t in listing["tokens"]} == {"ZCode", "Laptop"}

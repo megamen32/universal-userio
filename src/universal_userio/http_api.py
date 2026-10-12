@@ -348,6 +348,9 @@ def handler(
                     return
                 user_id = principal.user_id
                 if path == "/v1/personal-tokens":
+                    if principal.service_account:
+                        self._reply(403, {"error": "personal login required"})
+                        return
                     payload = self._json()
                     self._reply(201, personal_tokens.create(user_id, payload.get("name", "")),
                                 headers={"Cache-Control": "no-store"})
@@ -1125,6 +1128,9 @@ def handler(
             path = urlparse(self.path).path
             user_id = principal.user_id
             if path == "/v1/personal-tokens":
+                if principal.service_account:
+                    self._reply(403, {"error": "personal login required"})
+                    return
                 self._reply(200, {"tokens": personal_tokens.list(user_id)},
                             headers={"Cache-Control": "no-store"})
                 return
@@ -1532,6 +1538,9 @@ def handler(
                 self._reply(401, {"error": "unauthorized"})
                 return
             if path.startswith("/v1/personal-tokens/"):
+                if principal.service_account:
+                    self._reply(403, {"error": "personal login required"})
+                    return
                 token_id = unquote(path.removeprefix("/v1/personal-tokens/"))
                 self._reply(200, {"revoked": personal_tokens.revoke(principal.user_id, token_id)})
                 return
