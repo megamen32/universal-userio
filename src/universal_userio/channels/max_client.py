@@ -355,8 +355,13 @@ class MaxClient:
                    'elements':[], 'attaches':list(attaches or [])}
         if reply_to: message['link']={'type':'REPLY','messageId':int(reply_to)}
         if sticker is not None:
-            message['stickerId']=int(sticker['stickerId'])
-            message['setId']=int(sticker['setId'])
+            # Received stickerId is the opaque server attachment ID. The
+            # top-level shortcut instead addresses a sticker within a set.
+            # Reuse the actual attachment form, not the local-index shortcut.
+            item={'_type':'STICKER','stickerId':int(sticker['stickerId']),
+                  'setId':int(sticker['setId'])}
+            if sticker.get('stickerType'): item['stickerType']=sticker['stickerType']
+            message['attaches'].append(item)
         payload = self._roundtrip(
             OP_SEND,
             {

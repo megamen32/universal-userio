@@ -26,7 +26,8 @@ class Transport:
         if op==71:result={'messages':[self.rows[i] for i in p['messageIds'] if i in self.rows]}
         if op==64:
             row={'id':'900719925474099311','sender':'77','text':p['message']['text'],'time':1700000002000,
-                 'link':p['message'].get('link'),'updateTime':0};self.rows[int(row['id'])]=row
+                 'link':p['message'].get('link'),'attaches':p['message'].get('attaches',[]),
+                 'updateTime':0};self.rows[int(row['id'])]=row
             result={'chatId':0,'message':row}
         if op==67:
             row=self.rows[p['messageId']];row['text']=p['text'];row['updateTime']+=1000;result={'message':row}
@@ -142,6 +143,27 @@ def test_max_file_reference_has_stable_native_identity_and_no_upload(tmp_path):
     assert not any(f['opcode']==87 for f in t.calls)
     assert api.approve(a['id'],a['hash'],True)['receipt']==accepted['receipt']
     assert sum(f['opcode']==64 for f in t.calls)==1
+    store.close()
+
+
+def test_sticker_reference_uses_server_attachment_not_set_local_shortcut(tmp_path):
+    store,t,service,cid,api=setup(tmp_path)
+    row={'id':'124','sender':'77','text':'','time':1700000003000,
+         'attaches':[{'_type':'STICKER','stickerId':4830150843,'setId':44,'stickerType':'STATIC'}]}
+    t.rows[124]=row
+    from universal_userio.max_ingress import message_envelope
+    from universal_userio.adapters import inbox_message_from_envelope
+    service.receive(inbox_message_from_envelope(message_envelope(row,chat_id='0',own_id='77',
+        reconciliation=True),received_at=1),route_id='max',account_ref='max')
+    a=api.propose('max',cid,'max-0-123','sticker',{'media_message_id':'max-0-124',
+        'attachment_index':0},'max-sticker-reference-123456')
+    accepted=api.approve(a['id'],a['hash'],True)
+    assert accepted['status']=='accepted'
+    send=next(f['payload']['message'] for f in t.calls if f['opcode']==64)
+    assert send['attaches']==row['attaches']
+    assert 'stickerId' not in send and 'setId' not in send
+    saved=store.attachments_for_message(source='max',message_id='max-0-900719925474099311')
+    assert saved[0]['attachment_id']=='4830150843' and saved[0]['kind']=='sticker'
     store.close()
 
 
