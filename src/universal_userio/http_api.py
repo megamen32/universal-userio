@@ -23,7 +23,9 @@ import urllib.request
 from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
-from .account_connections import connect_matrix, connect_imap, connect_vk_community
+from .account_connections import (
+    connect_matrix, connect_imap, connect_vk_community, connect_vk_personal,
+)
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -871,6 +873,17 @@ def handler(
                     account = connect_vk_community(service, user_id, self._json())
                     self._reply(201, {"accepted": True, **account}, {"Cache-Control": "no-store"})
                     return
+                if path == "/v1/vk/personal/accounts":
+                    # A VK Messenger token can be imported from any consenting
+                    # authorization client. Validate actual personal message
+                    # permissions and account identity before saving it.
+                    if principal.service_account or not service._store.capability_enabled(
+                            "read", user_id=user_id):
+                        self._reply(403, {"error": "нужна авторизация пользователя"})
+                        return
+                    account = connect_vk_personal(service, user_id, self._json())
+                    self._reply(201, {"accepted": True, **account}, {"Cache-Control": "no-store"})
+                    return
                 if path == "/v1/vk/native/accounts":
                     # VK ID applications normally cannot obtain personal
                     # messages permission. Do not accept or store their token
@@ -1113,7 +1126,7 @@ def handler(
                 self._html(200, body)
                 return
             if requested_path in {"/accounts/connect/new", "/matrix/connect/new", "/mail/connect/new",
-                                   "/vk/community/connect/new"}:
+                                   "/vk/community/connect/new", "/vk/personal/connect/new"}:
                 if self._principal(allow_proxy=True) is None:
                     self._redirect("/login")
                     return
