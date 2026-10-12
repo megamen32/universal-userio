@@ -27,6 +27,20 @@ class Sink:
     def set_cursor(self,source,cursor): self.cursors[source]=cursor
     def send(self,account,message): self.items.append((account,message.message_id))
 
+def test_normal_ingress_waits_for_analysis_instead_of_notifying_only_subject(monkeypatch, tmp_path):
+    import universal_userio.gmail_ingress as module
+    accounts = tmp_path / 'accounts.txt'
+    accounts.write_text('careviolan\n')
+    monkeypatch.setenv('USERIO_API_TOKEN', 'test-only')
+    monkeypatch.setenv('USERIO_NOTICEPLACE_TOKEN', 'notice-test-only')
+    monkeypatch.setenv('USERIO_GMAIL_ACCOUNTS_FILE', str(accounts))
+    monkeypatch.setattr(module, 'himalaya_mailbox_addresses', lambda *_: {'careviolan':'owner@example.test'})
+    monkeypatch.setattr(module, 'HimalayaReader', lambda *_, **__: Reader())
+    installed = []
+    monkeypatch.setattr(module, 'poll_once', lambda sink, *_args, **_kwargs: installed.append(sink) or 1)
+    assert module.main(['--once']) == 0
+    assert installed[0].notifier is None, 'Only the maintained analysis dispatcher should notify the owner'
+
 def test_gmail_ingress_uses_userio_cursor_api():
     reader=Reader(); sink=Sink()
     assert poll_once(sink,{'gmail':reader},limit=10)==1

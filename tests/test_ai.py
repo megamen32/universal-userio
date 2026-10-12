@@ -128,6 +128,9 @@ def test_importance_triage_is_one_bounded_json_call_with_minimal_initial_context
     assert payload["tool_choice"]["function"]["name"] == "submit_triage"
     assert payload["tools"][0]["function"]["parameters"]["additionalProperties"] is False
     prompt = payload["messages"][1]["content"]
+    assert "Moscow time (МСК) is UTC+03:00" in prompt
+    assert "12:00 МСК is 12:00+03:00, not 09:00+03:00" in prompt
+    assert "explicit request to confirm or check" in prompt
     context = json.loads(prompt.splitlines()[-1])
     assert context["sender"] == "Секретарь"
     assert context["raw_sender_label"] == "anna"

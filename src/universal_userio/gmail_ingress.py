@@ -194,16 +194,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         for account in accounts
     }
-    notice_token = os.environ.get("USERIO_NOTICEPLACE_TOKEN", "").strip()
-    notifier = NoticePlaceEmailNotifier(
-        os.environ.get("USERIO_NOTICEPLACE_EVENT_URL", "http://127.0.0.1:8091/v1/events"),
-        notice_token,
-        project=os.environ.get("USERIO_NOTICEPLACE_PROJECT", "userio"),
-        recipient=os.environ.get("USERIO_NOTICEPLACE_RECIPIENT", "me"),
-    ) if notice_token else None
+    # The maintained secretary dispatcher owns analysis and delivery. Notifying
+    # here would send an unanalysed subject-only card before its substantive one.
     sink = UserIOIngressClient(
         os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"), token,
-        notifier=notifier,
     )
     logging.basicConfig(level=os.environ.get("USERIO_LOG_LEVEL", "INFO"))
     stop = threading.Event()
