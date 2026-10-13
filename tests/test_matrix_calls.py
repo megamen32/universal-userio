@@ -8,6 +8,25 @@ from universal_userio import matrix_calls, call_audio
 from universal_userio.matrix_calls import MEMBER, MatrixCalls, fresh_answer
 
 
+def test_late_barge_in_clears_the_rtc_tail_while_playout_is_waiting():
+    # Fast unit expected<1s/max10s; detects interruption after final drain.
+    import asyncio
+    from universal_userio.matrix_call_worker import finish_rtc_audio
+    async def check():
+        started=asyncio.Event();released=asyncio.Event();stopped=asyncio.Event()
+        class Source:
+            cleared=0
+            async def wait_for_playout(self):
+                started.set();await released.wait()
+            def clear_queue(self):
+                self.cleared+=1;released.set()
+        source=Source();task=asyncio.create_task(finish_rtc_audio(source,stopped.is_set))
+        await started.wait();assert not task.done()
+        stopped.set();await asyncio.wait_for(task,1)
+        assert source.cleared==1
+    asyncio.run(check())
+
+
 def test_matrix_binds_frozen_voice_preparation_without_mutating_phone_peer():
     from dataclasses import dataclass
     from universal_userio.matrix_call_worker import bind_prepared

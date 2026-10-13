@@ -1,7 +1,7 @@
 ---
 type: execute
 mode: quick
-status: in-progress
+status: complete
 ---
 # Matrix AI voice calls in UserIO
 
@@ -17,3 +17,10 @@ Current limitation: existing test DM is unencrypted. Encrypted MatrixRTC key exc
 Preserved pre-existing WIP at entry: docs/guide/max.md and src/universal_userio/static/connect-accounts.html (later committed independently by their owner).
 
 User clarification: do not build another voice dialogue. Matrix is only a transport around the existing preparation/handle_call engine, preserving TTS/model/tempo/VAD/barge-in/recording/transcription settings. No new call-start UI.
+
+Final accepted voice: existing server Silero native24k, whole-phrase tempo1.35,
+then48k Matrix transport/archive. The owner selected this sample and accepted
+the fresh dialogue after removal of the extra relative20ms sender sleep.
+NoticePlace's existing adapter is now configured to the local UserIO route;
+its token, escalation timings and phone fallback are preserved. Telegram and
+the subsequently requested telephone pacing check remain separate follow-ups.

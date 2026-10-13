@@ -34,6 +34,22 @@ def server_voice_config(config):
     return config
 
 
+async def finish_rtc_audio(source, should_stop):
+    """Flush the bounded RTC tail, observing interruptions during playback."""
+    playing=asyncio.create_task(source.wait_for_playout())
+    try:
+        while not playing.done():
+            if should_stop():
+                source.clear_queue()
+                break
+            await asyncio.wait({playing},timeout=.01)
+        await playing
+    finally:
+        if not playing.done():
+            playing.cancel()
+            await asyncio.gather(playing,return_exceptions=True)
+
+
 async def run(request):
     from livekit import rtc
     sys.path.insert(0,'/usr/local/lib/agentcall')
@@ -101,9 +117,8 @@ async def run(request):
                     await source.capture_frame(rtc.AudioFrame(pcm,48000,1,len(pcm)//2))
                 elif kind==voice.HANGUP_KIND: terminate()
         def close(self): self.closed=True;terminate()
-        async def finish_audio(self,*,interrupted=False):
-            if interrupted: source.clear_queue()
-            else: await source.wait_for_playout()
+        async def finish_audio(self,*,should_stop):
+            await finish_rtc_audio(source,should_stop)
         def is_closing(self):return self.closed
         async def wait_closed(self):pass
         def get_extra_info(self,name,default=None):return default
