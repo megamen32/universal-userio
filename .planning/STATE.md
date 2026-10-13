@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: executing
-last_updated: "2026-10-12T22:54:57.762033Z"
+last_updated: "2026-10-13T00:06:35.890172Z"
 last_activity: 2026-10-13
 progress:
   total_phases: 4
@@ -25,7 +25,7 @@ progress:
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
 **Last Activity:** 2026-10-13
-**Last Activity Description:** Native MAX final model reply delivered and edited twice with same-ID fresh readback; current saved MAX authorization later refused. Installed f0cd37a explicitly exposes reconnect, preserves cached17 messages/all3accepted receipts and denies new provider claims. Typing deferred; transport unchanged.
+**Last Activity Description:** Native Secretary TG reaction add/removal recipient PASS; MAX source-stage authentication refusal fixed and installed with68focused checks. Current MAX ordinary server44/phone login remains pending; protected same-account persistence and native read are next, without replaying accepted actions.
 
 ## Current acceptance and next action
 
@@ -57,8 +57,8 @@ business/memory checkpoints; transport retirement is a later separate step.
 Typing awaits a second recipient test account, not a password for this account.
 
 Latest protected proof root: `.tmp/native-max-final-20261013/` (delivery, both
-same-ID edits, 67-test bounded GREEN, installed manifest and real auth/cached
-history read). No active test/browser job or resource lease is held here.
+same-ID edits, 68-test bounded GREEN, installed manifest and real auth/cached
+history read). Our test cases are terminal before-payload refusals with exact cleanup; Root97 owns the current phone/browser login. No provider/model action is in flight here.
 
 ## Historical records below
 
