@@ -119,10 +119,12 @@ class MatrixCalls:
         temporary.replace(folder/'call.json')
 
     def _emit(self, record, body, direction='system', suffix='status'):
+        label = next((a['display_name'] for a in self.service._store.accounts(user_id=record['user_id'])
+                      if a['id']==record['account_ref']), record['target'])
         return self.service.receive(InboxMessage(
             record['history_account_ref'], 'matrixcall-'+record['call_id']+'-'+suffix,
             record.get('voice_call_id',record['call_id']), body, time.time(), peer_id=record['room_id'],
-            conversation_kind='direct', direction=direction, reconciliation=True),
+            sender_name=label, conversation_kind='direct', direction=direction, reconciliation=True),
             route_id='matrix-read-only', user_id=record['user_id'], account_ref=record['history_account_ref'])
 
     def _run(self, record, secret, identity, stop):
@@ -161,7 +163,7 @@ class MatrixCalls:
                         remote = event.get('speaker') == 'remote'
                         text = str(event.get('text') or '').strip()
                         if text:
-                            if remote and any(phrase in text.lower() for phrase in ('я услышал','да, слышу','да слышу','подтверждаю','принял уведомление')):
+                            if remote and any(phrase in text.lower() for phrase in ('я услышал','да, слышу','да слышу','я тебя слышу','я вас слышу','подтверждаю','принял уведомление')):
                                 record['acknowledged'] = True
                             transcripts['caller' if remote else 'assistant'].append(text)
                             self._emit(record,('Собеседник: ' if remote else 'ИИ: ')+text,
