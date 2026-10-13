@@ -257,4 +257,14 @@ class Tests(unittest.TestCase):
         self.b.accept_transaction("legacy",{"events":[event]});self.b.drain()
         self.assertEqual(self.b.db.execute("SELECT status FROM jobs").fetchone()[0],"ignored")
         self.assertFalse(self.uio.calls)
+    def test_repeated_own_media_echo_does_not_replace_or_redact_human_image(self):
+        human=self.evt(content={"msgtype":"m.image","body":"photo.png","url":"mxc://example.org/human"})
+        self.b.db.execute("INSERT INTO jobs(event_id,payload,status,receipt) VALUES (?,?,?,?)",
+            ("$human",json.dumps(human),"sent","99"))
+        self.b.db.execute("INSERT INTO mappings VALUES (?,?,?,?,?)",("conv_vk","vk:1|2:99","$human",self.b.owner,"earlier"))
+        self.b.db.commit()
+        msg={"message_id":"vk:1|2:99","body":"[file]","direction":"outgoing","attachments":[{"filename":"photo.png"}]}
+        for i in range(3):self.b.import_message(dict(self.b.db.execute("SELECT * FROM portals").fetchone()),self.uio.conv,msg)
+        self.assertFalse(self.mx.calls);self.assertFalse(self.uio.calls)
+        self.assertEqual(self.b.db.execute("SELECT count(*) FROM media_links").fetchone()[0],0)
 if __name__=="__main__":unittest.main()

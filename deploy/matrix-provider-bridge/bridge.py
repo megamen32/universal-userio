@@ -198,7 +198,7 @@ class Bridge:
         # the human Matrix event instead of producing a second visible bubble.
         if message.get("direction") == "outgoing":
             suffix = mid.rsplit(":",1)[-1].rsplit("-",1)[-1]
-            sent = self.db.execute("SELECT event_id FROM jobs WHERE status='sent' AND "
+            sent = self.db.execute("SELECT event_id,payload FROM jobs WHERE status='sent' AND "
                 "json_extract(payload,'$.room_id')=? AND (receipt=? OR receipt LIKE ?) LIMIT 1", (portal["room"],suffix, "%:"+suffix)).fetchone()
             if sent and (not old or old["event"] != sent["event_id"]):
                 if old and old["event"] != sent["event_id"]:
@@ -208,6 +208,13 @@ class Bridge:
                     self.db.execute("INSERT OR REPLACE INTO mappings VALUES (?,?,?,?,?)",
                         (cid,mid,sent["event_id"],self.owner,current))
                 return
+            if sent and old:
+                original=json.loads(sent["payload"]).get("content",{})
+                # The original human media event is already the correct bubble.
+                # A later native echo must neither replace it with [file] nor
+                # redact it as an automatically generated text placeholder.
+                if original.get("msgtype") in {"m.image","m.file","m.audio","m.video"} or old["body_hash"]==current:
+                    return
         if old and old["body_hash"] == current:
             if message.get("attachments"):
                 self.import_media(portal,cid,mid,message,old["sender"])
