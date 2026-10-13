@@ -57,8 +57,11 @@ class MaxSendNotSubmittedError(DeliveryNotSubmittedError):
 class MaxTransport:
     """Thin wrapper over a websocket-client connection (overridable in tests)."""
 
-    def __init__(self, *, socks_host: str = "", socks_port: int = 0) -> None:
+    def __init__(self, *, socks_host: str = "", socks_port: int = 0, web_auth: bool = False) -> None:
         self._socks_host, self._socks_port = socks_host, socks_port
+        self._host = 'api.oneme.ru' if web_auth else 'ws-api.oneme.ru'
+        self._url = 'wss://' + self._host + '/websocket'
+        self._options = {'origin':'https://web.max.ru'} if web_auth else {}
 
     def connect(self, timeout: float) -> Any:
         if self._socks_host:
@@ -70,14 +73,14 @@ class MaxTransport:
             raw = socks.socksocket(pysocket.AF_INET, pysocket.SOCK_STREAM)
             raw.set_proxy(socks.SOCKS5, self._socks_host, self._socks_port)
             raw.settimeout(timeout)
-            raw.connect(("ws-api.oneme.ru", 443))
+            raw.connect((self._host, 443))
             tls = ssl.create_default_context().wrap_socket(
-                raw, server_hostname="ws-api.oneme.ru"
+                raw, server_hostname=self._host
             )
             ws = websocket.WebSocket()
-            ws.connect(WS_URL, socket=tls, timeout=timeout)
+            ws.connect(self._url, socket=tls, timeout=timeout, **self._options)
             return ws
-        return websocket.create_connection(WS_URL, timeout=timeout)
+        return websocket.create_connection(self._url, timeout=timeout, **self._options)
 
     @staticmethod
     def send(ws: Any, text: str) -> None:
@@ -127,6 +130,7 @@ class MaxClient:
         self._profile: dict[str, Any] | None = None
         self._last_heartbeat = 0.0
         self.authentication_required = False
+        self._anonymous = False
 
     # -- session -----------------------------------------------------------
 
@@ -148,10 +152,44 @@ class MaxClient:
 
     def _connect(self) -> dict[str, Any]:
         """INIT + LOGIN; returns the LOGIN payload (profile, chats, users)."""
+        if self._anonymous:
+            raise ValueError('anonymous QR session cannot perform sender LOGIN')
         if self.authentication_required:
             raise ProviderAuthenticationRequiredError('max')
         if self.connected():
             return self._profile or {}
+        self._initialize_transport()
+        login = self._roundtrip(
+            OP_LOGIN,
+            {
+                "interactive": True,
+                "token": self._token,
+                "chatsCount": 100,
+                "chatsSync": 100,
+                "contactsSync": 0,
+                "presenceSync": 0,
+                "draftsSync": 0,
+            },
+        )
+        if not isinstance(login, dict) or not login.get("profile"):
+            raise RuntimeError("MAX LOGIN rejected the session token")
+        self._profile = login
+        self.authentication_required = False
+        return login
+
+    def initialize_anonymous(self) -> None:
+        """Initialize an isolated QR login client, never an existing sender."""
+        with self._lock:
+            if self._token or self.connected():
+                raise ValueError('isolated anonymous MAX client required')
+            self._anonymous = True
+            try:
+                self._initialize_transport()
+            except Exception:
+                self.close()
+                raise
+
+    def _initialize_transport(self) -> None:
         ws = self._transport.connect(timeout=20)
         self._ws, self._seq, self._last_heartbeat = ws, 0, time.monotonic()
         init = self._roundtrip(
@@ -176,23 +214,6 @@ class MaxClient:
         )
         if not init:
             raise RuntimeError("MAX INIT returned no payload")
-        login = self._roundtrip(
-            OP_LOGIN,
-            {
-                "interactive": True,
-                "token": self._token,
-                "chatsCount": 100,
-                "chatsSync": 100,
-                "contactsSync": 0,
-                "presenceSync": 0,
-                "draftsSync": 0,
-            },
-        )
-        if not isinstance(login, dict) or not login.get("profile"):
-            raise RuntimeError("MAX LOGIN rejected the session token")
-        self._profile = login
-        self.authentication_required = False
-        return login
 
     def close(self) -> None:
         with self._lock:
@@ -202,6 +223,8 @@ class MaxClient:
 
     def _ensure(self) -> None:
         if not self.connected():
+            if self._anonymous:
+                raise RuntimeError('isolated MAX QR session disconnected')
             self.connect()
 
     # -- protocol core ------------------------------------------------------
