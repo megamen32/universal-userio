@@ -1,7 +1,7 @@
 # Telegram transport for the existing AgentCall engine
 
-The source transport, worker and UserIO call lifecycle are implemented. They are not yet deployed or
-accepted by a real Telegram recipient. Do not expose a working-call claim or
+The transport, worker and UserIO call lifecycle are deployed on server100.
+They are not yet accepted by a real Telegram recipient. Do not expose a working-call claim or
 enable automatic incident calls until the connector seam and recipient canary
 below pass. Matrix calls have already passed their separate acceptance.
 
@@ -229,6 +229,23 @@ native-result.json, completed-case receipt). The earlier bare-budget refusal
 started no payload and was resolved through the existing own project profile.
 This proves native transport locally; actual Secretary caller acceptance still
 requires the installed existing-client seam and recipient dialogue.
+
+Server100 installation on2026-10-14: published UserIO6d9bbd7 and gateway
+e99dd010 installed; compatible offline native runtime imported3.0.3. Installer
+completed in the supported own project profile, peak263266304bytes, swap/OOM0,
+same-generation cleanup complete. Existing API/gateway budgets retained.
+Actual authenticated MCP lists all three tools and refuses confirm:false before
+provider activity. Actual private gateway launched its fixed worker and rejected
+an invalid recipient with ValueError/EOF and zero RPCs, synthesis or dial.
+Own source tests56PASS/1opt-in native skip; actual installed GramJS constructor
+serialization7PASS; gateway routing4PASS. Real48k native proof is the separately
+accepted caller-first run above. Private evidence:
+`.tmp/telegram-call-runtime-install-20261014/`.
+
+Remaining deployment boundary: the existing Secretary relay's call capabilities
+endpoint returned HTTP404 after these installs. No new client/session/login or
+fallback is used. Wait for that existing owner seam to be installed, then perform
+one authorized real call and verify speech, recordings and transcripts.
 
 Settled owner relay API on30192, existing protected bearer:
 `POST /userio/telegram/calls/start` with admission_id/account_id/recipient_id/purpose;
