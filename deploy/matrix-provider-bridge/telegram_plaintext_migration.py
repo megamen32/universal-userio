@@ -84,14 +84,9 @@ class Migration:
     power=next(e["content"] for e in r["state"] if e["type"]=="m.room.power_levels")
     power=json.loads(json.dumps(power));power.setdefault("users",{})[self.bot]=9001
     power.setdefault("events",{})["m.room.encryption"]=9001
-    # Durable room alias recovers the same room after a lost creation response.
-    alias="tg_plain_"+hashlib.sha256((str(self.work)+"|"+r["old"]).encode()).hexdigest()[:24]
-    existing=self.mx("GET","/directory/room/"+Q("#"+alias+":"+self.domain),missing=True)
-    if existing:room=existing["room_id"]
-    else:
-     room=self.mx("POST","/createRoom",{"room_alias_name":alias,"visibility":"private","preset":"private_chat",
+    room=self.ensure_room("room:"+r["old"],{"visibility":"private","preset":"private_chat",
       "is_direct":r["portal"]["room_type"]=="dm","invite":[self.owner],
-      "creation_content":{"m.federate":False},"initial_state":state,"power_level_content_override":power})["room_id"]
+      "creation_content":{"m.federate":False},"initial_state":state,"power_level_content_override":power})
     r["new"]=room;self.save()
    self.mx("POST","/rooms/"+Q(r["new"])+"/join",{},self.owner)
    if not r.get("ghosts_joined"):
@@ -140,11 +135,24 @@ class Migration:
    finally:self.docker("start")
   else:self.docker("start")
   self.m["stage"]="cutover";self.save();print(json.dumps({"stage":"cutover","rooms":len(self.m["rows"])}),flush=True)
+ def ensure_room(self,key,payload):
+  marker=hashlib.sha256(str(self.work).encode()).hexdigest()
+  if not hasattr(self,"existing"):
+   self.existing={}
+   joined=self.mx("GET","/joined_rooms")["joined_rooms"]
+   if len(joined)>1024:raise RuntimeError("bot joined room recovery exceeds bound")
+   for room in joined:
+    identity=self.state(room,"io.userio.telegram_migration")
+    if identity and identity.get("migration")==marker:self.existing[identity["key"]]=room
+  if key in self.existing:return self.existing[key]
+  initial=list(payload.get("initial_state",[]))
+  initial.append({"type":"io.userio.telegram_migration","state_key":"","content":{"migration":marker,"key":key}})
+  room=self.mx("POST","/createRoom",dict(payload,initial_state=initial))["room_id"]
+  self.existing[key]=room
+  return room
  def ensure_space(self,key,name):
-  alias="tg_history_"+hashlib.sha256((str(self.work)+"|"+key).encode()).hexdigest()[:24]
-  found=self.mx("GET","/directory/room/"+Q("#"+alias+":"+self.domain),missing=True)
-  room=found["room_id"] if found else self.mx("POST","/createRoom",{"room_alias_name":alias,"name":name,
-   "visibility":"private","preset":"private_chat","creation_content":{"type":"m.space","m.federate":False},"invite":[self.owner]})["room_id"]
+  room=self.ensure_room("space:"+key,{"name":name,"visibility":"private","preset":"private_chat",
+   "creation_content":{"type":"m.space","m.federate":False},"invite":[self.owner]})
   self.mx("POST","/rooms/"+Q(room)+"/join",{},self.owner);return room
  def link(self,parent,child,order=None):
   content={"via":[self.domain],"suggested":True}

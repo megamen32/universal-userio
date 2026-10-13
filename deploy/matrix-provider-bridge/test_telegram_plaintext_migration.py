@@ -1,4 +1,4 @@
-import json,pathlib,sqlite3,tempfile,unittest
+import hashlib,json,pathlib,sqlite3,tempfile,unittest
 from unittest.mock import Mock
 import yaml
 from telegram_plaintext_migration import Migration
@@ -50,7 +50,7 @@ INSERT INTO user_portal VALUES('','user:1','10',1,123),('','user:1','20',1,456);
   a=self.prepare_create();requests=[]
   def mx(method,path,body=None,user=None,missing=False):
    requests.append((method,path,body,user))
-   if path.startswith("/directory/room/"):return None
+   if path=="/joined_rooms":return {"joined_rooms":[]}
    if path=="/createRoom":return {"room_id":"!new"}
    return {}
   a.mx=mx;a.create()
@@ -58,8 +58,10 @@ INSERT INTO user_portal VALUES('','user:1','10',1,123),('','user:1','20',1,456);
   self.assertNotIn("m.room.encryption",[x["type"] for x in payload["initial_state"]])
   self.assertIn("m.space.parent",[x["type"] for x in payload["initial_state"]])
   self.assertEqual(payload["invite"],[a.owner]);self.assertEqual(payload["power_level_content_override"]["events"]["m.room.encryption"],9001)
- def test_alias_recovers_created_room_without_second_creation(self):
-  a=self.prepare_create();a.mx=Mock(side_effect=[{"room_id":"!already"},{}]);a.create()
+ def test_marker_recovers_created_room_without_second_creation(self):
+  a=self.prepare_create();a.mx=Mock(side_effect=[{"joined_rooms":["!already"]},{}])
+  a.state=Mock(return_value={"migration":hashlib.sha256(str(a.work).encode()).hexdigest(),"key":"room:!old"})
+  a.create()
   self.assertEqual(a.m["rows"][0]["new"],"!already")
   self.assertFalse(any(c.args[1]=="/createRoom" for c in a.mx.call_args_list))
 if __name__=="__main__":unittest.main()

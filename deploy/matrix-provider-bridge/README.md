@@ -131,16 +131,21 @@ logout, remote edit/delete или send.
 ответ Matrix до4MiB, manifest до32MiB, два SQLite backup до256MiB каждый,
 всего временное состояние до600MiB; без GPU/браузеров. Каждая стадия
 oneshot с wall600s и checkpoint; после timeout повторяется та же стадия,
-новая комната восстанавливается по стабильному alias.
+новая комната восстанавливается по маркеру в initial_state.
+Регистрация Telegram AS не разрешает создавать room aliases; namespaces
+и регистрация Synapse не расширяются ради миграции.
 Измеренная свободная память перед миграцией — 98GiB; штатный мост ограничен
 512MiB/swap0/CPU1/Tasks128, его бюджет не повышается.
 
 Fast unit migration tests: expected2s/max30s; проверяют изоляцию portal keys,
 атомарный отказ при чужой перепривязке, сохранение чужих mappings,
 отсутствие encryption в создаваемой комнате и восстановление после
-потерянного ответа createRoom.
+потерянного ответа createRoom по маркеру состояния.
 Focused integration: отдельная партия проверки expected30s/max180s;
 настоящие Matrix state/membership/portal rows, обычные чаты,
 дерево форумов и архива. Последний canary после всех рестартов:
 Matrix-сообщение только в Telegram Saved Messages и подтверждённое
 plaintext-событие в новой комнате. Медленная nightly не нужна.
+
+Обновление AST-графа после исходников: один bounded процесс, RAM256/512MiB,
+swap0,CPU1,Tasks32,wall120s,temporary output до100MiB,без GPU/LLM.
