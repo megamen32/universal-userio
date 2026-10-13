@@ -38,6 +38,13 @@ INSERT INTO user_portal VALUES('','user:1','10',1,123),('','user:1','20',1,456);
  def test_cutover_recovers_committed_mapping_after_lost_checkpoint(self):
   a=self.a;d=sqlite3.connect(a.dbpath);d.execute("update portal set mxid='!new' where receiver='10'");d.commit();d.close()
   a.cutover();self.assertEqual(a.m["stage"],"cutover")
+ def test_direct_list_preserves_unrelated_entries_exactly(self):
+  a=self.a;a.personal="!personal";a.m.update(stage="cutover",archive="!archive",spaces=[],archive_spaces={})
+  a.m["rows"][0]["finished"]=True
+  direct={"@contact":["!old"],"@unrelated":["!keep","!keep"]}
+  a.mx=Mock(side_effect=[direct,{}]);a.link=Mock();a.finish()
+  saved=a.mx.call_args_list[-1].args[2]
+  self.assertEqual(saved["@contact"],["!new"]);self.assertEqual(saved["@unrelated"],["!keep","!keep"])
  def prepare_create(self):
   a=self.a
   state=[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}},

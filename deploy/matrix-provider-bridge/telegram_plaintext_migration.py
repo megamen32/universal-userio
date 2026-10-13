@@ -202,7 +202,7 @@ class Migration:
    if (i+1)%10==0:print(json.dumps({"stage":"archive","rooms":i+1,"total":len(self.m["rows"])}),flush=True)
   direct=self.mx("GET","/user/"+Q(self.owner)+"/account_data/m.direct",user=self.owner,missing=True) or {}
   replace={r["old"]:r["new"] for r in self.m["rows"]}
-  new={k:list(dict.fromkeys(replace.get(v,v) for v in values)) for k,values in direct.items()}
+  new={k:(list(dict.fromkeys(replace.get(v,v) for v in values)) if any(v in replace for v in values) else values) for k,values in direct.items()}
   self.mx("PUT","/user/"+Q(self.owner)+"/account_data/m.direct",new,self.owner)
   self.m["stage"]="finished";self.save()
  def verify(self):
