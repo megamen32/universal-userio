@@ -73,6 +73,6 @@ and [14-UAT](phases/14-telegram-and-max-rich-operations/14-UAT.md).
 Accepted everyday SMS/phone/group authors/chat switches/draft source/time/mail/
 Bearer/OAuth/landing/docs retain their original v1.0–v1.2 or quick-task ownership.
 They are explicitly listed as closed in ROADMAP, without inventing new CAP IDs.
-VK reactions/read acknowledgements/session renewal and older-history viewport
+VK read acknowledgements/session renewal and older-history viewport
 anchor are additional open follow-ups with their own owner and live evidence
 criteria there; completed VK text/edits/photo/document acceptance stays closed.

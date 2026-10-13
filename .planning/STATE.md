@@ -185,6 +185,8 @@ anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clari
 
 | 261013-5gi | Две аудиодорожки звонка: прослушивание и WAV, живая веб-приёмка | 2026-10-13 | 787077b | Verified | [261013-5gi](./quick/261013-5gi-two-track-call-audio-playback-with-trans/) |
 
+| 261013-oq5 | Реакции UserIO в Telegram/MAX/VK: добавить, сменить, снять | 2026-10-13 | 23a4cda | Live provider PASS; Secretary behavior independently owned97 | [proof](./quick/261013-oq5-userio-telegram-max-vk-reaction-lifecycl/SUMMARY.md) |
+
 ## Historical checkpoint (superseded by final acceptance below)
 
 12 October later owner correction: automatic Telegram group/channel analysis is
@@ -296,7 +298,7 @@ native IDs/body/author/bytes PASS.67focusedPASS24.41s; sourcefb6e584 installed.
 Per-chat titles/author separation and native document CDN redirect repaired.
 Own browser/copies removed, only first known-unsubmitted QA draft cleaned; old
 provider intents not replayed. Personal VK now supports text/photo/doc<=2MiB and
-repeat edits; reactions/readACK remain open. Exmanager milestone remains separate.
+repeat edits; reactions now independently live-verified13October; readACK remains open. Exmanager milestone remains separate.
 
 
 ## Preserved pre-reconciliation v1.3 checkpoint

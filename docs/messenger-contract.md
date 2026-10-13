@@ -315,3 +315,13 @@ Primary protocol: [VKCOM messages schema](https://github.com/VKCOM/vk-api-schema
 Telegram uses [messages.sendReaction](https://core.telegram.org/method/messages.sendReaction),
 including an empty reaction vector for removal. Secretary policy/automatic use
 belongs to its SDK consumer; provider support alone is not native consumer proof.
+
+
+Live13October reaction acceptance: fresh Telegram881 and MAX498 lifecycles,
+and personal VK200000000106 nativecmid1 👍→🔥→removed. All original baselines
+restored. Before each distinct mutation, resolve the exact current source;
+an edited_at change makes an older approval snapshot stale even when visible
+text is unchanged. Never replay an UNKNOWN action or replace its request ID.
+The initial known-unsubmitted stale Telegram proposals remain preserved;
+fresh source-bound proposals passed independently. Native Secretary policy
+acceptance remains with the Exmanager owner; no mutual source/runtime hold.
