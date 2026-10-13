@@ -342,6 +342,10 @@ def handler(
                 })
                 return
             principal = self._principal(allow_proxy=path != "/mcp")
+            matrix_notice_token = os.environ.get('USERIO_MATRIX_NOTICE_TOKEN','')
+            if (principal is None and path == '/v1/calls/matrix/noticeplace' and matrix_notice_token
+                    and hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+matrix_notice_token)):
+                principal = service._store.owner()
             if principal is None:
                 if path == "/mcp":
                     self._mcp_unauthorized()
@@ -615,6 +619,27 @@ def handler(
                     else:
                         record = service._store.create_conversation(source, sender, user_id=user_id)
                     self._reply(201, {"conversation": record})
+                    return
+                if path == '/v1/calls/matrix':
+                    from .matrix_calls import calls_for
+                    payload = self._json()
+                    record = calls_for(service).start(user_id=user_id, **payload)
+                    self._reply(202, {'ok':True, 'call':record})
+                    return
+                if path == '/v1/calls/matrix/noticeplace':
+                    from .matrix_calls import noticeplace_call
+                    if not service._store.capability_enabled('send', user_id=user_id):
+                        self._reply(403, {'error':'send_capability_disabled'})
+                        return
+                    self._reply(200, noticeplace_call(service,user_id,self._json()))
+                    return
+                if path.startswith('/v1/calls/matrix/') and path.endswith('/stop'):
+                    if not service._store.capability_enabled('send', user_id=user_id):
+                        self._reply(403, {'error':'send_capability_disabled'})
+                        return
+                    from .matrix_calls import calls_for
+                    record = calls_for(service).stop(path.split('/')[-2],user_id)
+                    self._reply(200, {'ok':True,'call':record})
                     return
                 if path == "/v1/conversations/set-account":
                     payload = self._json()
@@ -1243,6 +1268,13 @@ def handler(
                 self._reply(403, {"error": "read_only_token"})
                 return
             user_id = principal.user_id
+            if path.startswith('/v1/calls/matrix/'):
+                if not service._store.capability_enabled('read', user_id=user_id):
+                    self._reply(403, {'error':'read_capability_disabled'})
+                    return
+                from .matrix_calls import calls_for
+                self._reply(200, {'ok':True,'call':calls_for(service).get(path.split('/')[-1],user_id)})
+                return
             audio_route = re.fullmatch(r'/v1/conversations/([^/]+)/call-audio/([^/]+)/(caller|assistant)', path)
             if audio_route:
                 if not service._store.capability_enabled('download', user_id=user_id):
@@ -1250,11 +1282,11 @@ def handler(
                     return
                 conversation_id, message_id, track = map(unquote, audio_route.groups())
                 conv = service._store.conversation(conversation_id, user_id=user_id)
-                message = service._store.message(message_id, source='phone', user_id=user_id)
+                message = service._store.message(message_id, source=conv['source'], user_id=user_id) if conv else None
                 if not conv or not message or not call_audio.recording(conv, message):
                     self._reply(404, {'error': 'call recording not found'})
                     return
-                audio_path = call_audio.ARCHIVE / message['sender'] / (track + '.wav')
+                audio_path = call_audio.archive_for(conv) / message['sender'] / (track + '.wav')
                 with audio_path.open('rb') as audio:
                     size = os.fstat(audio.fileno()).st_size
                     try:

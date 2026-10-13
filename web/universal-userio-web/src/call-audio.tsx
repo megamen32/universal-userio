@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 
-export type CallRecording = { complete: boolean; duration: number; tracks: { name: string; label: string; url: string; duration: number }[] }
+export type CallRecording = { complete: boolean; duration: number; tracks: { name: string; label: string; url: string; duration: number; transcript?: string }[] }
 
 export function CallAudio({ recording }: { recording: CallRecording }) {
   const players = useRef<(HTMLAudioElement | null)[]>([])
@@ -25,8 +25,9 @@ export function CallAudio({ recording }: { recording: CallRecording }) {
     {recording.tracks.map((track, index) => <div key={track.name} className="mb-2 last:mb-0">
       <div className="mb-1 flex items-center justify-between text-xs"><span>{track.label}</span><a href={track.url} download={`${track.name}.wav`} className="underline">Скачать WAV</a></div>
       <audio ref={element => { players.current[index] = element }} aria-label={`Аудио: ${track.label}`} controls preload="none" src={track.url} className="h-9 w-full" onError={() => setError('Не удалось загрузить запись. Обновите страницу и попробуйте снова.')} />
+      {track.transcript && <p aria-label={`Транскрипция: ${track.label}`} className="mt-2 whitespace-pre-wrap text-sm">{track.transcript}</p>}
     </div>)}
     {error && <p role="alert" className="mt-2 text-xs text-red-600">{error}</p>}
-    <p className="mt-2 text-[11px] text-muted-foreground">Одна шкала времени. «Телефон» — звук, который шлюз отправлял собеседнику.</p>
+    <p className="mt-2 text-[11px] text-muted-foreground">Одна шкала времени. Каждая дорожка содержит звук одного участника.</p>
   </section>
 }

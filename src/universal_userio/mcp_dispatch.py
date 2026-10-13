@@ -92,6 +92,17 @@ class UserIOToolDispatcher:
                 if conversation_id in ignored_chats:
                     raise KeyError("chat not found")
                 return {"ok": True, **result}
+            if name.startswith('userio.calls.matrix.'):
+                from .matrix_calls import calls_for
+                calls = calls_for(self._service)
+                if name == 'userio.calls.matrix.start':
+                    call = calls.start(user_id=user_id, **arguments)
+                elif name == 'userio.calls.matrix.get':
+                    call = calls.get(self._required(arguments,'call_id'),user_id)
+                elif name == 'userio.calls.matrix.stop':
+                    call = calls.stop(self._required(arguments,'call_id'),user_id)
+                else: raise KeyError('unknown call operation')
+                return {'ok':True,'call':call}
             if name == "userio.channels.download":
                 file = channels.download(
                     file_ref=self._required(arguments, "file_ref")

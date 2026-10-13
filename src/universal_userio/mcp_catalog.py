@@ -358,7 +358,24 @@ MESSENGER_SPECS = (
 )
 TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
 
+MATRIX_CALL_SPECS = (
+    ToolSpec('userio.calls.matrix.start',
+        'Start one explicitly authorized AI voice call in a joined two-person Matrix room. '
+        'Keep request_id: accepted or unknown calls must never be replayed. Returns a durable call receipt.',
+        schema({'account_ref':{'type':'string'},'room_id':{'type':'string'},'target':{'type':'string'},
+                'purpose':{'type':'string','maxLength':12000},'greeting':{'type':'string','maxLength':1000},
+                'request_id':{'type':'string','minLength':16,'maxLength':128},
+                'max_seconds':{'type':'integer','minimum':30,'maximum':600},'confirm':{'type':'boolean'}},
+               ['account_ref','room_id','target','purpose','request_id','confirm'])),
+    ToolSpec('userio.calls.matrix.get','Read an owned call receipt without calling again.',
+        schema({'call_id':{'type':'string'}},['call_id'])),
+    ToolSpec('userio.calls.matrix.stop','End this owned Matrix call; never dial another call.',
+        schema({'call_id':{'type':'string'}},['call_id'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS)
+
 TOOL_CAPABILITIES = {
+    'userio.calls.matrix.start':'send', 'userio.calls.matrix.get':'read', 'userio.calls.matrix.stop':'send',
     'userio.messenger.upload': 'send',
     'userio.messenger.events': 'read',
     'userio.messenger.capabilities': 'read',
