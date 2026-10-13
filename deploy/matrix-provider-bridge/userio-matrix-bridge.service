@@ -1,0 +1,26 @@
+[Unit]
+Description=Matrix bridges for personal MAX and VK through UserIO
+After=network-online.target universal-userio.service
+Wants=network-online.target
+Requires=universal-userio.service
+
+[Service]
+Type=simple
+User=roomhacker
+WorkingDirectory=/opt/userio-matrix-bridge
+ExecStart=/usr/bin/python3 /opt/userio-matrix-bridge/bridge.py --config /var/lib/userio-matrix-bridge/config.json
+Restart=on-failure
+RestartSec=10
+MemoryHigh=96M
+MemoryMax=192M
+MemorySwapMax=0
+CPUQuota=50%
+TasksMax=32
+IOWeight=25
+LimitNOFILE=128
+UMask=0077
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=20
+
+[Install]
+WantedBy=multi-user.target
