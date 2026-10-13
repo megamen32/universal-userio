@@ -33,7 +33,7 @@ class PersonalTokens:
                     or any(not isinstance(ref,str) for ref in account_refs) or len(set(account_refs))!=len(account_refs)):
                 raise ValueError('explicit account_refs required for messenger_actions')
             owned={a['id']:a for a in self.store.accounts(user_id=user_id)}
-            if any(ref not in owned or owned[ref]['provider'] not in {'telegram','max','gmail'}
+            if any(ref not in owned or owned[ref]['provider'] not in {'telegram','max','gmail','vk'}
                    or not owned[ref]['enabled'] or 'reply' not in owned[ref]['capabilities'] for ref in account_refs):
                 raise ValueError('messenger sender accounts must be owned, enabled and reply-capable')
         elif account_refs is not None:

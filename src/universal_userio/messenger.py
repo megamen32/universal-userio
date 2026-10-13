@@ -44,6 +44,12 @@ class Messenger:
 
     def _provider(self, account_ref):
         provider = getattr(self.service, 'messenger_providers', {}).get(account_ref)
+        if provider is None:
+            account=self._account(account_ref)
+            if (account['provider']=='vk' and account_ref.startswith('vk:')
+                    and account['enabled'] and str(account['credential_ref']).startswith('connector:')):
+                from .messenger_vk import VKMessengerProvider
+                provider=VKMessengerProvider(self.service,account_ref,self.user)
         if provider is not None and getattr(provider,'authorized_user',self.user)!=self.user:
             return None
         return provider
@@ -79,6 +85,7 @@ class Messenger:
                 'credential_scope':('messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
+                **({'reaction_options':provider.reaction_options} if hasattr(provider,'reaction_options') else {}),
                 'upload_limits':{'max_bytes':2*1024*1024,'ttl_seconds':900,'max_staged':4}}
 
     def _allow(self, account_ref, operation):
@@ -109,12 +116,12 @@ class Messenger:
     def _project(self, conv, msg):
         account_ref, peer, mid = conv['account_ref'], str(conv['peer_id']), str(msg['message_id'])
         provider_id = ''
-        if conv['source'] == 'telegram' and mid.startswith(account_ref+'|'+peer+':'):
+        if conv['source'] in {'telegram','vk'} and mid.startswith(account_ref+'|'+peer+':'):
             provider_id = mid[len(account_ref+'|'+peer+':'):]
         elif conv['source'] == 'max' and mid.startswith('max-'+peer+'-'):
             provider_id = mid[len('max-'+peer+'-'):]
-        if conv['source'] not in {'telegram','max'}: provider_id=mid
-        if not provider_id or conv['source'] in {'telegram','max'} and not re.fullmatch(r'[1-9][0-9]*', provider_id):
+        if conv['source'] not in {'telegram','max','vk'}: provider_id=mid
+        if not provider_id or conv['source'] in {'telegram','max','vk'} and not re.fullmatch(r'[1-9][0-9]*', provider_id):
             raise ValueError('provider_source_id_unavailable')
         routing = {}
         media = []
@@ -502,6 +509,10 @@ def dispatch(store, service, principal, name, arguments):
     except ProviderAuthenticationRequiredError as error:
         return {'ok':False,'error':'provider_authentication_required',
                 'message':error.public_message,'reconnect_required':True}
+    except DeliveryNotSubmittedError:
+        return {'ok':False,'error':'provider_not_submitted',
+                'message':'Операция отклонена до отправки. Проверьте статус того же действия.',
+                'action_status':'proposed'}
     except (KeyError, ValueError, PermissionError) as error:
         return {'ok':False,'error':str(error).strip("'")}
     except Exception as error:

@@ -41,7 +41,7 @@ class VKPersonalReader:
         self._last_call = 0.0
 
     def call(self, method: str, **kwargs: object) -> Any:
-        if method not in {"users.get", "messages.getConversations", "messages.getHistory", "messages.getLongPollServer", "messages.getById"}:
+        if method not in {"users.get", "messages.getConversations", "messages.getHistory", "messages.getLongPollServer", "messages.getById", "messages.getReactionsAssets"}:
             raise ValueError("VK method not allowed in read-only connector")
         return self._request(method, kwargs)
 
@@ -135,6 +135,27 @@ class VKPersonalReader:
 
 
 class VKPersonalClient(VKPersonalReader):
+    # Verified VKCOM 5.199 catalog artwork: native IDs, not Unicode IDs.
+    REACTION_IDS = {'❤':1, '❤️':1, '🔥':2, '😂':3, '👍':4}
+
+    def react(self, *, peer_id, row, emoji):
+        cmid=row.get('conversation_message_id')
+        if (type(peer_id) is not int or peer_id==0 or row.get('peer_id')!=peer_id
+                or type(cmid) is not int or cmid<=0):
+            raise DeliveryNotSubmittedError('VK native conversation message identity unavailable')
+        if not isinstance(emoji,str) or emoji not in {*self.REACTION_IDS, ''}:
+            raise DeliveryNotSubmittedError('VK reaction not supported')
+        args={'peer_id':peer_id,'cmid':cmid}
+        if emoji:
+            catalog=self.call('messages.getReactionsAssets')
+            ids=catalog.get('reaction_ids') if isinstance(catalog,dict) else None
+            if not isinstance(ids,list) or self.REACTION_IDS[emoji] not in ids:
+                raise DeliveryNotSubmittedError('VK reaction unavailable in current catalog')
+            args['reaction_id']=self.REACTION_IDS[emoji]
+        result=self._request('messages.sendReaction' if emoji else 'messages.deleteReaction',args,mutation=True)
+        if result is not True and (type(result) is not int or result!=1):
+            raise RuntimeError('VK reaction result uncertain; do not replay')
+
     def send(self, peer_id: int, text: str, random_id: int, *, attachment: str = '') -> str:
         if type(peer_id) is not int or peer_id==0:
             raise ValueError('VK exact peer ID required')

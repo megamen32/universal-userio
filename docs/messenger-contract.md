@@ -286,3 +286,32 @@ reply-capable Gmail IDs в `account_refs`. Старые readonly токены о
 и полным собственным owner credential. Это новая отправка с новым Message-ID,
 а не пересылка старой операции. Дальнейший ответ Секретаря идёт через generic approval
 по точному новому входящему письму. SMTP напрямую для обхода UserIO не нужен.
+
+
+## Personal VK reactions
+
+Personal `vk:<actual-user-id>` accounts use the existing user-owned connector
+through the same `capabilities → resolve → propose(react) → approve → get` path.
+A new `messenger_actions` credential may explicitly name that account; existing
+readonly/other-account credentials are unchanged. No new VK login or client
+session is created. Generic reply/edit/media/typing remain unsupported until
+implemented; the normal VK web send/edit/upload paths continue independently.
+
+`reaction_options` lists ❤️, 🔥, 😂, 👍. `payload={"emoji":""}` removes only
+this sender's reaction. VKCOM native catalog IDs 1–4 were verified against the
+current provider artwork. Before adding/changing, the provider checks the actual
+catalog still permits the ID. Other emoji are refused before submission.
+Reactions use the freshly read native `conversation_message_id` with the exact
+peer; a global `message_id` is never substituted for cmid. Source/author/body/edit
+binding and credential identity are revalidated before dispatch. `resolve`
+returns native `reaction_info.own_reaction_id` plus counters without marking read.
+
+An explicit refusal before mutation returns `provider_not_submitted` and
+`action_status=proposed`. Accepted actions are deduplicated. Uncertain transport
+or malformed mutation receipts remain `sending`; do not invent a new request ID.
+
+Primary protocol: [VKCOM messages schema](https://github.com/VKCOM/vk-api-schema/blob/master/messages/methods.json)
+(`messages.sendReaction`, `messages.deleteReaction`, `messages.getReactionsAssets`).
+Telegram uses [messages.sendReaction](https://core.telegram.org/method/messages.sendReaction),
+including an empty reaction vector for removal. Secretary policy/automatic use
+belongs to its SDK consumer; provider support alone is not native consumer proof.
