@@ -7,6 +7,7 @@ UserIO owner; credentials arrive on stdin, never process arguments or logs.
 """
 from __future__ import annotations
 import asyncio
+from dataclasses import replace
 import json
 import os
 import signal
@@ -16,6 +17,11 @@ from urllib.parse import quote
 import uuid
 
 from .matrix_calls import MEMBER, RING, fresh_answer, request_json
+
+
+def bind_prepared(entry, record):
+    return replace(entry, account_ref=record['history_account_ref'],
+                   peer_ref=record['room_id'], peer_label=record['target'])
 
 
 async def run(request):
@@ -97,8 +103,7 @@ async def run(request):
         nonlocal current_id,engine_task,joined
         current_id=call_id
         print(json.dumps({'event':'prepared','callId':call_id}),flush=True)
-        entry=prepared[call_id]
-        entry.account_ref=record['history_account_ref'];entry.peer_ref=room_id;entry.peer_label=target
+        prepared[call_id]=bind_prepared(prepared[call_id],record)
         await media.connect(sfu['url'],sfu['jwt'],rtc.RoomOptions(connect_timeout=15))
         await media.local_participant.publish_track(rtc.LocalAudioTrack.create_audio_track('ИИ',source),
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))

@@ -8,6 +8,23 @@ from universal_userio import matrix_calls, call_audio
 from universal_userio.matrix_calls import MEMBER, MatrixCalls, fresh_answer
 
 
+def test_matrix_binds_frozen_voice_preparation_without_mutating_phone_peer():
+    from dataclasses import dataclass
+    from universal_userio.matrix_call_worker import bind_prepared
+    @dataclass(frozen=True)
+    class Prepared:
+        account_ref: str = 'phone'
+        peer_ref: str = '+example'
+        peer_label: str = 'Owner'
+        greeting_pcm: bytes = b'voice'
+    original = Prepared()
+    bound = bind_prepared(original, {'history_account_ref':'matrix:owner',
+        'room_id':'!room:hs','target':'@recipient:hs'})
+    assert (bound.account_ref,bound.peer_ref,bound.peer_label)==('matrix:owner','!room:hs','@recipient:hs')
+    assert bound.greeting_pcm is original.greeting_pcm
+    assert original.account_ref == 'phone'
+
+
 def test_only_fresh_target_membership_is_an_answer():
     event = {'type':MEMBER,'sender':'@b:hs','event_id':'$new','origin_server_ts':101,
              'content':{'application':'m.call','expires':1000,
