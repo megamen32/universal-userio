@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: executing
-last_updated: "2026-10-13T00:06:35.890172Z"
+last_updated: "2026-10-13T00:27:22.688803Z"
 last_activity: 2026-10-13
 progress:
   total_phases: 4
@@ -25,7 +25,7 @@ progress:
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
 **Last Activity:** 2026-10-13
-**Last Activity Description:** Native Secretary TG reaction add/removal recipient PASS; MAX source-stage authentication refusal fixed and installed with68focused checks. Current MAX ordinary server44/phone login remains pending; protected same-account persistence and native read are next, without replaying accepted actions.
+**Last Activity Description:** MAX ordinary phone login persisted for SAME900000102; deployed UserIO MCP live read/reply capability and unchanged3accepted receipts PASS. Native TG reaction add/removal accepted. New Secretary inbound/image/final reply remains Exmanager-owned; typing and retirement separately deferred.
 
 ## Current acceptance and next action
 
@@ -35,8 +35,8 @@ old prepayload75, new52focusedPASS and actual Secretary third-page read without
 duplicates or ACK. Historical SRC-02 acceptance is retained; current native
 source/media tool proof does not imply whole-milestone readiness. The new
 [native MAX final reply/edit proof](phases/15-native-secretary-parity-and-transport-retirement/15-native-max-final-VERIFICATION.md)
-closes that stock owner-command vertical. A later LOGIN19 login.token refusal
-requires normal same-account reauthorization; no old send/model/edit is replayed.
+closes that stock owner-command vertical. The later LOGIN19 login.token refusal is resolved by ordinary same-account login
+and protected persistence, with deployed MCP live read accepted; no old send/model/edit was replayed.
 
 - Phase12: CAP-01–03 complete,3/3 (100%), installed HTTP/MCP discovery,
   scoped-refusal and actual native preserved-sender proof.
@@ -48,17 +48,17 @@ requires normal same-account reauthorization; no old send/model/edit is replayed
 - Milestone2/4plans (50%),10/14requirements (71% rounded). Original all-directory
   progress includes historical phases and is not this milestone's percentage.
 
-Next route: UserIO7bb restores existing MAX authorization through the normal
-protected route, then freshly reads the already accepted final message without
-repeating provider writes/model intent. Current reconnect handling is installed
-and real MCP-accepted; see [auth debug](debug/max-post-edit-auth-refusal.md).
+Next route: Exmanager97 verifies ONE NEW native MAX inbound/image/final reply on
+the restored account. UserIO7bb recovery is closed: normal same-account login,
+protected runtime persistence and deployed MCP fresh read accepted; see
+[resolved auth debug](debug/max-post-edit-auth-refusal.md).
 Exmanager97 independently finishes fresh external inbound/rich SDK parity and
 business/memory checkpoints; transport retirement is a later separate step.
 Typing awaits a second recipient test account, not a password for this account.
 
 Latest protected proof root: `.tmp/native-max-final-20261013/` (delivery, both
 same-ID edits, 68-test bounded GREEN, installed manifest and real auth/cached
-history read). Our test cases are terminal before-payload refusals with exact cleanup; Root97 owns the current phone/browser login. No provider/model action is in flight here.
+history read). Recovered ordinary tests and auth/MCP consumers completed with exact cleanup; old refusals remain separate. The handed browser is returned to Root97 as the original blank page, and all own plaintext credential/PNG copies are removed.
 
 ## Historical records below
 

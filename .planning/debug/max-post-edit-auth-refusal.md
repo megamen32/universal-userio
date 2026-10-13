@@ -1,5 +1,5 @@
 ---
-status: awaiting-provider-reauthorization
+status: resolved
 trigger: Fresh MAX resolve failed after accepted final reply and repeated edits
 created: 2026-10-13
 ---
@@ -75,3 +75,39 @@ Close recovery only when SAME900000102 native LOGIN19 and fresh existing-message
 read succeed after protected configuration persistence and core/ingress readback.
 Then Exmanager owns new external inbound/image/final reply acceptance. Old
 transport stays enabled in this session; typing recipient observation is deferred.
+
+
+## Resolved — ordinary login persisted and deployed MCP read accepted
+
+13October00:23Z: Root97 completed ordinary phone-number login on the leased S21
+and the existing server44 MAX page. The authorized page was handed to UserIO7bb.
+Only official auth/device storage keys for exact900000102 were read in memory
+through the actual root/HOME context. The first two reads refused before auth
+access because roomhacker selected another existing blank namespace; neither
+changed a page or created a browser. The corrected root-context stage completed.
+
+Normal installed MaxClient LOGIN19 accepted SAME900000102 and read existing
+message117430265913625196 with exact restored bodySHA d372403d…. Only the two
+MAX runtime parameters were atomically replaced; all other configuration and
+MCP/SDK credentials were preserved. Publishedc6cdf44/manifest71e5667c was installed,
+one core/MAX-ingress restart completed, daemon reload and runtime verification
+finished before the final canary. Current core570170 is verified active.
+
+Final ordinary UserIO MCP resolve accepted the exact message; capabilities show
+sender900000102, configured provider/history and reply allowed. All three old
+accepted action receipts/body remain unchanged. No provider mutation/model/read
+ACK or auth-intent replay ran in this recovery. Local plaintext credential and
+owned rollback-key copies were removed after successful persistence/readback.
+
+Exact tab close refused deterministically because it was the last tab. The same
+owned page was captured/inspected, its two own PNG copies removed, then returned
+to its original about:blank state without relaunch or new page. Root97 received
+controller ownership back; no full browser shutdown or native absence is claimed.
+Closejob956f9829; original-blank restoration jobd0314666. This does not block the
+restored server account. Typing and legacy retirement remain separately deferred.
+
+Evidence: `.tmp/max-reauth-20261013/{web-stage-v3-result,web-native-verify,web-persistence,qr-verify,restored-live-mcp,secret-copy-cleanup}.json`.
+The final bounded MCP consumer helper0/same-generation cleanup is recorded in
+completed-7a03d9c961680a714c26cee0c47d5f55d88eb4c0bafb43cef76a9f15ffb4e840.json.
+Root97 owns the NEXT new native inbound/image/final reply journey. Old successful
+and unknown intents must not be replayed. No old transport was retired here.
