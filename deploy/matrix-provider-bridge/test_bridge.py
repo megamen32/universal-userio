@@ -241,4 +241,13 @@ class Tests(unittest.TestCase):
         row=self.b.db.execute("SELECT next_try FROM media_retries").fetchone()
         self.assertLess(row[0]-time.time(),2.1)
 
+    def test_confirmed_file_recovers_pending_job_without_consumed_upload(self):
+        self.b.config["userio_user_id"]="user_owner"
+        self.uio.conv["drafts"]=[{"id":"draft_web_"+HASH("user_owner:mx_"+HASH("$human")),
+            "status":"approved","outbox_receipt":"99"}]
+        event=self.evt(content={"msgtype":"m.file","body":"file.txt","url":"mxc://example.org/source"})
+        self.b.accept_transaction("file-restart",{"events":[event]});self.b.drain()
+        self.assertEqual(self.b.db.execute("SELECT status,receipt FROM jobs").fetchone()[:],("sent","99"))
+        self.assertEqual([p for m,p,c,k in self.uio.calls],["/v1/conversations/conv_vk"])
+
 if __name__=="__main__":unittest.main()

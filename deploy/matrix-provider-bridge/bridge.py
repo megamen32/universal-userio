@@ -408,6 +408,17 @@ class Bridge:
         if relates.get("m.in_reply_to") and body.startswith(">") and "\n\n" in body:
             body=body.split("\n\n",1)[1]
             send["body"]=body
+        # Validate the destination before staging bytes. An accepted draft
+        # also restores pending jobs after a process restart, without reupload.
+        conv=self.uio.request("GET","/v1/conversations/"+Q(portal["cid"]))
+        if not self.selected(conv) or (conv["account_ref"],conv["peer_id"])!=(portal["account"],portal["peer"]):
+            raise ValueError("Привязка аккаунта изменилась; отправка остановлена.")
+        uid=self.config.get("userio_user_id")
+        if uid:
+            did="draft_web_"+HASH(uid+":"+request_id)
+            prior=next((d for d in conv.get("drafts",[]) if d.get("id")==did),None)
+            if prior and prior.get("status")=="approved" and prior.get("outbox_receipt"):
+                return "sent",str(prior["outbox_receipt"])
         if msgtype in {"m.image","m.file","m.audio","m.video"}:
             url=content.get("url","")
             if not re.fullmatch(r"mxc://[^/]+/[^/?#]+",url) or content.get("file"):
@@ -422,10 +433,6 @@ class Bridge:
             send["body"]=str(content.get("caption") or (body if content.get("filename") and content["filename"]!=body else ""))
         elif msgtype not in {"m.text","m.emote"}:
             raise ValueError("Этот тип сообщения пока не передаётся мостом.")
-        # Verify the configured account still owns the exact original dialog.
-        conv=self.uio.request("GET","/v1/conversations/"+Q(portal["cid"]))
-        if not self.selected(conv) or (conv["account_ref"],conv["peer_id"])!=(portal["account"],portal["peer"]):
-            raise ValueError("Привязка аккаунта изменилась; отправка остановлена.")
         result=self.uio.request("POST","/v1/conversations/"+Q(portal["cid"])+"/send",send,timeout=90)
         if result.get("status") not in {"sent","approved"} or not result.get("receipt"):
             raise ValueError("UserIO не подтвердил отправку. Проверьте исходный мессенджер перед повтором.")
