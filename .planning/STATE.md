@@ -25,7 +25,7 @@ progress:
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
 **Last Activity:** 2026-10-13
-**Last Activity Description:** MAX ordinary phone login persisted for SAME900000102; deployed UserIO MCP live read/reply capability and unchanged3accepted receipts PASS. Native TG reaction add/removal accepted. New Secretary inbound/image/final reply remains Exmanager-owned; typing and retirement separately deferred.
+**Last Activity Description:** Restored MAX confirmed by native Secretary read/history/media; ONE authorized request for a new Darja picture delivered and independently resolved after reconnect. Finite90s/18reads returned no new incoming source at50967; cleanup complete. Current UserIO contract ready, final native journey awaits genuine new input; typing/retirement separately deferred.
 
 ## Current acceptance and next action
 
@@ -51,7 +51,10 @@ and protected persistence, with deployed MCP live read accepted; no old send/mod
 Next route: Exmanager97 verifies ONE NEW native MAX inbound/image/final reply on
 the restored account. Independent native source/history/media restoration is
 accepted in Exmanager3e58f39. Cursor50967 has no new event: the missing input is
-one genuine new image+caption from the interlocutor, already requested by Root97.
+one genuine new image+caption from the interlocutor. Root97 requested it from the
+owner; UserIO7bb also delivered ONE authorized transparent MAX request directly
+to Darja117430793777467441 with fresh native body/author readback. That outgoing
+request does not substitute for an incoming source or a native model response.
 No UserIO-wide source/runtime hold is required while that input is pending. UserIO7bb recovery is closed: normal same-account login,
 protected runtime persistence and deployed MCP fresh read accepted; see
 [resolved auth debug](debug/max-post-edit-auth-refusal.md).

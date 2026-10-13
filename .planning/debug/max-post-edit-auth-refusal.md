@@ -111,3 +111,33 @@ The final bounded MCP consumer helper0/same-generation cleanup is recorded in
 completed-7a03d9c961680a714c26cee0c47d5f55d88eb4c0bafb43cef76a9f15ffb4e840.json.
 Root97 owns the NEXT new native inbound/image/final reply journey. Old successful
 and unknown intents must not be replayed. No old transport was retired here.
+
+
+## New post-recovery mutation — request for the actual missing input
+
+Under the owner's retained explicit authorization for test messages to Darja,
+UserIO7bb created ONE new immutable reply asking for a new picture and caption.
+Action7597aed0… was explicitly approved once, accepted by MAX as new message
+117430793777467441, then freshly resolved: actual author900000102/outgoing and
+exact request body. Thus current post-recovery sending is also accepted, without
+repeating any former provider/model intent. This is an operator-authored request,
+not the Secretary response and not a genuine incoming source. It cannot close
+LIVE-01 or stand in for external-author/media/model acceptance.
+
+Proof: `.tmp/native-max-new-input-20261013/request-{action,accepted,readback}.json`.
+Root97 direct result delivery was skipped_inactive; no unauthorized wake/deferred
+message debt. An owning agents-projects handoff note preserves the distinction
+for his next native turn. A finite90-second normal events read after50967 is
+observational only; no source is fabricated, sent twice, marked read or dispatched
+by that observer. Root's normal deployed source consumer retains its ownership.
+
+
+The owned finite observer completed18 ordinary reads over90seconds and returned
+no new source, cursor50967 unchanged, model/send/ACK0. Helper0/peak29.5MiB/swapOOM0
+and exact generation cleanup were verified in
+`.tmp/native-max-new-input-20261013/completed-5c4360b89b1fc0f97dffb3e9b148db0dc817a6951bb0fc952c13752c7aca5eb7.json`.
+`incoming-poll.json` retains the actual empty result. The approved outgoing
+request did not masquerade as an incoming workspace event. There is no new
+image/model journey to dispatch, and no live waiter or reservation remains.
+Do not resend the request or synthesize a reply; continue on a genuinely new
+interlocutor event at the Exmanager owner's native boundary.
