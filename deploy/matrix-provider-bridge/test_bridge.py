@@ -46,6 +46,11 @@ class Tests(unittest.TestCase):
         self.b.poll()
         self.assertTrue(any(p=="/v1/conversations/conv_vk" for _,p,_,_ in self.uio.calls))
         self.assertGreater(self.b.last_poll,0)
+    def test_same_ghost_not_invited_again_for_each_message(self):
+        portal=dict(self.b.db.execute("SELECT * FROM portals").fetchone())
+        for mid in ("7","8"):
+            self.b.import_message(portal,self.uio.conv,{"message_id":"vk:1|2:"+mid,"body":"hello","sender":"2","direction":"incoming"})
+        self.assertEqual(sum("/invite" in p for _,p,_,_ in self.mx.calls),1)
     def test_transaction_replay_exactly_once(self):
         p={"events":[self.evt()]}
         self.b.accept_transaction("txn",p);self.b.accept_transaction("txn",p)

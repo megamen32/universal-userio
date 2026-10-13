@@ -77,6 +77,7 @@ class Bridge:
             CREATE TABLE IF NOT EXISTS values_store (key TEXT PRIMARY KEY,value TEXT NOT NULL);
         """)
         self.registered = set()
+        self.joined = set()
         self.last_poll = 0.0
         self.last_error = ""
 
@@ -205,9 +206,16 @@ class Bridge:
             "owner" if message.get("direction")=="outgoing" else str(message.get("sender") or portal["peer"]),
             "Вы · "+portal["source"].upper() if message.get("direction")=="outgoing"
             else message.get("sender_name") or conv.get("display_name") or str(message.get("sender") or conv["sender"]))
-        if not old and sender != self.owner:
-            self.client("POST","/rooms/"+Q(portal["room"])+"/invite",{"user_id":sender})
-            self.client("POST","/rooms/"+Q(portal["room"])+"/join",{},user=sender)
+        if not old and sender != self.owner and (portal["room"],sender) not in self.joined:
+            try:
+                member=self.client("GET","/rooms/"+Q(portal["room"])+"/state/m.room.member/"+Q(sender))
+            except urllib.error.HTTPError as error:
+                if error.code!=404:raise
+                member={}
+            if member.get("membership")!="join":
+                self.client("POST","/rooms/"+Q(portal["room"])+"/invite",{"user_id":sender})
+                self.client("POST","/rooms/"+Q(portal["room"])+"/join",{},user=sender)
+            self.joined.add((portal["room"],sender))
         content = {"msgtype":"m.text","body":body or "[Вложение]",
             BRIDGE_FIELD:{"account_ref":portal["account"],"message_id":mid}}
         if old:
