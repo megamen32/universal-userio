@@ -200,6 +200,8 @@ class Migration:
    self.state(r["old"],"m.room.tombstone","",{"body":"Переписка Telegram продолжается в новой комнате без шифрования. Эта комната сохранена для истории.","replacement_room":r["new"]})
    r["finished"]=True;self.save()
    if (i+1)%10==0:print(json.dumps({"stage":"archive","rooms":i+1,"total":len(self.m["rows"])}),flush=True)
+  # Personal-space child hints need not have a matching parent event.
+  for r in self.m["rows"]:self.state(self.personal,"m.space.child",r["old"],{})
   direct=self.mx("GET","/user/"+Q(self.owner)+"/account_data/m.direct",user=self.owner,missing=True) or {}
   replace={r["old"]:r["new"] for r in self.m["rows"]}
   new={k:(list(dict.fromkeys(replace.get(v,v) for v in values)) if any(v in replace for v in values) else values) for k,values in direct.items()}
@@ -216,6 +218,7 @@ class Migration:
    for room in [r["new"],r["old"]]:
     if self.state(room,"m.room.member",self.owner).get("membership")!="join":errors.append("owner missing")
    if (self.state(r["old"],"m.room.tombstone") or {}).get("replacement_room")!=r["new"]:errors.append("history link missing")
+   if (self.state(self.personal,"m.space.child",r["old"]) or {}).get("via"):errors.append("history mixed into live personal space")
    parent=next((s["room"] for s in self.m["spaces"] if (s["id"],s["receiver"])==(p["parent_id"],p["parent_receiver"])),self.personal)
    if not (self.state(parent,"m.space.child",r["new"]) or {}).get("via"):errors.append("topic child missing")
    archive=self.m["archive_spaces"].get(parent,self.m["archive"])
