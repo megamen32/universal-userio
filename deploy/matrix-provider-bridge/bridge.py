@@ -189,19 +189,22 @@ class Bridge:
         body = str(message.get("body") or "")
         current = HASH(json.dumps([body,message.get("attachments",[])], sort_keys=True))
         old = self.db.execute("SELECT * FROM mappings WHERE cid=? AND mid=?", (cid,mid)).fetchone()
-        if old and old["body_hash"] == current:
-            return
         # UserIO sends are projected back with their provider ID; map them to
         # the human Matrix event instead of producing a second visible bubble.
-        if not old and message.get("direction") == "outgoing":
+        if message.get("direction") == "outgoing":
             suffix = mid.rsplit(":",1)[-1].rsplit("-",1)[-1]
             sent = self.db.execute("SELECT event_id FROM jobs WHERE status='sent' AND "
                 "json_extract(payload,'$.room_id')=? AND (receipt=? OR receipt LIKE ?) LIMIT 1", (portal["room"],suffix, "%:"+suffix)).fetchone()
             if sent:
+                if old and old["event"] != sent["event_id"]:
+                    self.client("PUT", "/rooms/"+Q(portal["room"])+"/redact/"+Q(old["event"])+"/"+Q("echo_"+HASH(cid+"|"+mid)),
+                        {"reason":"Убран повтор подтверждённого сообщения моста"},user=old["sender"])
                 with self.lock,self.db:
                     self.db.execute("INSERT INTO mappings VALUES (?,?,?,?,?)",
                         (cid,mid,sent["event_id"],self.owner,current))
                 return
+        if old and old["body_hash"] == current:
+            return
         sender = old["sender"] if old else self.owner if message.get("direction") == "outgoing" and self.owner_http else self.ghost(portal["source"], portal["account"],
             "owner" if message.get("direction")=="outgoing" else str(message.get("sender") or portal["peer"]),
             "Вы · "+portal["source"].upper() if message.get("direction")=="outgoing"
@@ -249,6 +252,22 @@ class Bridge:
         except Exception:
             LOG.warning("VK media unavailable for portal %s", portal["room"])
 
+    def reconcile_approved(self, portal, conv):
+        """Restore confirmed outcomes after a lost HTTP response, without sending."""
+        uid=self.config.get("userio_user_id")
+        if not uid:return
+        drafts={d["id"]:d for d in conv.get("drafts",[]) if d.get("status")=="approved" and d.get("outbox_receipt")}
+        if not drafts:return
+        jobs=self.db.execute("SELECT event_id FROM jobs WHERE status='failed' AND json_extract(payload,'$.room_id')=?",
+            (portal["room"],)).fetchall()
+        with self.lock,self.db:
+            for job in jobs:
+                draft_id="draft_web_"+HASH(uid+":mx_"+HASH(job["event_id"]))
+                draft=drafts.get(draft_id)
+                if draft:
+                    self.db.execute("UPDATE jobs SET status='sent',receipt=?,error='' WHERE event_id=?",
+                        (draft["outbox_receipt"],job["event_id"]))
+
     def poll(self):
         self.register(self.bot,"MAX и VK · UserIO")
         for account,settings in self.config["accounts"].items():
@@ -264,6 +283,7 @@ class Bridge:
                 portal = self.portal(conv)
                 if not portal["active"]:
                     continue
+                self.reconcile_approved(portal,conv)
                 messages = conv.get("messages", [])
                 known = self.db.execute("SELECT 1 FROM mappings WHERE cid=? LIMIT 1",(conv["id"],)).fetchone()
                 selected = messages if known else messages[-self.config.get("initial_messages",10):]
@@ -369,7 +389,7 @@ class Bridge:
         if not self.selected(conv) or (conv["account_ref"],conv["peer_id"])!=(portal["account"],portal["peer"]):
             raise ValueError("Привязка аккаунта изменилась; отправка остановлена.")
         result=self.uio.request("POST","/v1/conversations/"+Q(portal["cid"])+"/send",send)
-        if result.get("status")!="sent" or not result.get("receipt"):
+        if result.get("status") not in {"sent","approved"} or not result.get("receipt"):
             raise ValueError("UserIO не подтвердил отправку. Проверьте исходный мессенджер перед повтором.")
         return "sent",str(result["receipt"])
 

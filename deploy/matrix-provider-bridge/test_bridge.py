@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from bridge import Bridge, BRIDGE_FIELD
+from bridge import Bridge, BRIDGE_FIELD, HASH
 
 class FakeHttp:
     def __init__(self):
@@ -12,7 +12,7 @@ class FakeHttp:
     def request(self, method, path, payload=None, **kwargs):
         self.calls.append((method,path,payload,kwargs))
         if path.endswith("/send"):
-            return {"status":"sent","receipt":"vk-personal:99"}
+            return {"status":"approved","receipt":"vk-personal:99"}
         if "/v1/conversations/" in path:
             return self.conv
         if "/send/m.room.message/" in path:
@@ -51,6 +51,20 @@ class Tests(unittest.TestCase):
         for mid in ("7","8"):
             self.b.import_message(portal,self.uio.conv,{"message_id":"vk:1|2:"+mid,"body":"hello","sender":"2","direction":"incoming"})
         self.assertEqual(sum("/invite" in p for _,p,_,_ in self.mx.calls),1)
+    def test_native_userio_approved_with_receipt_is_sent(self):
+        self.b.accept_transaction("txn",{"events":[self.evt()]})
+        self.b.drain()
+        self.assertEqual(self.b.db.execute("SELECT status,receipt FROM jobs").fetchone()[:],("sent","vk-personal:99"))
+    def test_lost_response_reconciled_from_existing_draft_without_send(self):
+        self.b.config["userio_user_id"]="user_owner"
+        self.b.db.execute("INSERT INTO jobs(event_id,payload,status) VALUES (?,?,?)",
+            ("$human",json.dumps(self.evt()),"failed"))
+        self.b.db.commit()
+        conv=dict(self.uio.conv,drafts=[{"id":"draft_web_"+HASH("user_owner:mx_"+HASH("$human")),
+            "status":"approved","outbox_receipt":"99"}])
+        self.b.reconcile_approved({"room":"!vk:example.org"},conv)
+        self.assertEqual(self.b.db.execute("SELECT status,receipt FROM jobs").fetchone()[:],("sent","99"))
+        self.assertFalse(self.uio.calls)
     def test_transaction_replay_exactly_once(self):
         p={"events":[self.evt()]}
         self.b.accept_transaction("txn",p);self.b.accept_transaction("txn",p)
