@@ -42,9 +42,15 @@ class MaxQrLogin:
         if not self._track or self._completed:raise ValueError('active QR flow required')
         reply=self.client._roundtrip(289,{'trackId':self._track})
         status=reply.get('status') if isinstance(reply,dict) else None
-        if not isinstance(status,dict) or type(status.get('loginAvailable')) is not bool:
+        if not isinstance(status,dict):raise ValueError('MAX QR status unavailable')
+        # Current official Web response omits this false/default field while
+        # pending and sends only positive expiresAt/ttl. It is not a refusal.
+        available=status.get('loginAvailable',False)
+        if type(available) is not bool or ('loginAvailable' not in status and not (
+                type(status.get('ttl')) is int and status['ttl']>0 and
+                type(status.get('expiresAt')) is int and status['expiresAt']>0)):
             raise ValueError('MAX QR status unavailable')
-        self._ready=status['loginAvailable']
+        self._ready=available
         return self._ready
 
     def finish(self):

@@ -178,3 +178,20 @@ points to personal SIP issuance and keeps unverified voice disabled. Independent
 delta reviewPASS; this is simulated content review, not human research or phone
 pairing. Final content-only browser capture follows this documentation/UI delta
 without another QR, SIP create, send, model or accepted provider replay.
+
+## New real MAX pending-status defect
+
+S21 became reachable, was leased and physically verified asR5CR702SRFP.
+AgentDevice reached the normal authenticated MAX app after an ordinary swipe-only
+lockscreen (no password required). The native same-phone auth link merely opens
+the Devices instruction; it does not confirm login in this installed app.
+No new WEB session/auth exchange/account/send occurred.
+
+The new normal browser case failed on its FIRST unconfirmed QR poll. An isolated
+normal UserIO provider probe confirmed actual status shape contains expiresAt
+and ttl, and omits false/default loginAvailable. Our strict parser incorrectly
+raisedValueError and cancelled a valid pending login. It now accepts this exact
+positive pending shape asfalse, still rejects malformed fields and never grants
+AuthByTrack before true confirmation.19focusedregressions PASS5.11s. Old failed
+QR/private-link copies are consumed/removed, never replayed. Successful ordinary
+confirmation remains a distinct live boundary, not inferred from this repair.

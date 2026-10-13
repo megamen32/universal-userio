@@ -97,3 +97,23 @@ def test_disconnected_qr_session_cannot_fall_back_to_sender_login():
         assert [frame['opcode'] for frame in transport.sent]==[6,288]
     finally:
         flow.close()
+
+
+def test_live_pending_status_omits_false_login_available_and_keeps_challenge():
+    class CurrentWeb(Client):
+        def _roundtrip(self,opcode,payload):
+            if opcode==289 and not self.available:
+                self.calls.append(opcode);return {'status':{'expiresAt':1791916000000,'ttl':55000}}
+            return super()._roundtrip(opcode,payload)
+    c=CurrentWeb();f=MaxQrLogin('900000102',client=c);f.begin()
+    assert not f.poll() and not f.poll() and not c.closed
+    with pytest.raises(ValueError,match='human MAX confirmation'):f.finish()
+    c.available=True;assert f.poll();assert f.finish()['user_id']=='900000102'
+    assert c.calls.count(291)==1
+
+
+@pytest.mark.parametrize('status',[{}, {'loginAvailable':None}, {'ttl':0,'expiresAt':1791916000000}, {'ttl':'55000','expiresAt':1791916000000}])
+def test_bad_pending_status_does_not_grant_login(status):
+    c=Client();f=MaxQrLogin('900000102',client=c);f.begin();c._roundtrip=lambda *a: {'status':status}
+    with pytest.raises(ValueError):f.poll()
+    assert not f._ready and not f._completed
