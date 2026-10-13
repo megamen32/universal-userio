@@ -152,3 +152,19 @@ swap0,CPU1,Tasks32,wall120s,temporary output до100MiB,без GPU/LLM. GRAPHIFY
 OMP_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1: host cpu_count не используется
 как разрешение размножить процессы за конечный TasksMax. Первый AST проход
 без worker override достиг wall120s; повтор только с уменьшенной параллельностью.
+
+
+## Подтверждения и изображения
+
+Подтверждением UserIO считается approved с точным native receipt. POST send
+ожидает до90s: native upload/save/send/readback может занять больше20s.
+Неясные отправки не повторяются. Поздний approved восстанавливается из
+сохранённого draft без повторного provider send.
+
+Недоступный media source повторяется с сохранённой задержкой60s…3600s;
+изменение attachment metadata позволяет немедленную новую попытку.
+Это исключает повторный native download каждого старого неподдерживаемого
+вложения при каждом poll. Полученное изображение имеет m.image и mxc URL;
+PNG/JPEG/GIF/WebP с generic native MIME определяется по bytes signature.
+Автоматическое обозначение [Вложение]/[photo] и пустой текст удаляются после
+успешной публикации media; смысловая подпись сохраняется.

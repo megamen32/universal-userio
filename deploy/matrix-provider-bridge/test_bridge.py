@@ -174,4 +174,53 @@ class Tests(unittest.TestCase):
         self.b.drain()
         self.assertEqual(self.b.db.execute("SELECT status FROM jobs").fetchone()[0],"sent")
 
+    def media_fixture(self, mime="application/octet-stream", body=""):
+        self.media_calls=[]
+        def uio(method,path,payload=None,**kwargs):
+            self.media_calls.append(path)
+            return b"\x89PNG\r\n\x1a\nactual image bytes",mime
+        previous=self.mx.request
+        def mx(method,path,payload=None,**kwargs):
+            if "/media/v3/upload" in path:
+                self.mx.calls.append((method,path,payload,kwargs))
+                return {"content_uri":"mxc://example.org/actual"}
+            return previous(method,path,payload,**kwargs)
+        self.uio.request=uio;self.mx.request=mx
+        self.portal=dict(self.b.db.execute("SELECT * FROM portals").fetchone())
+        self.message={"body":body,"attachments":[{"kind":"image","filename":"photo.png"}]}
+        self.b.db.execute("INSERT INTO mappings VALUES (?,?,?,?,?)",("conv_vk","mid","$placeholder",self.b.owner,"hash"))
+        self.b.db.commit()
+    def test_native_generic_mime_png_becomes_matrix_image_and_hides_empty_placeholder_once(self):
+        self.media_fixture()
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        sends=[c for m,p,c,k in self.mx.calls if "/send/m.room.message/" in p]
+        self.assertEqual(sends[0]["msgtype"],"m.image")
+        self.assertEqual(sends[0]["url"],"mxc://example.org/actual")
+        self.assertEqual(sends[0]["info"]["mimetype"],"image/png")
+        self.assertEqual(len(self.media_calls),1)
+        self.assertEqual(sum("/redact/" in p for m,p,c,k in self.mx.calls),1)
+    def test_image_caption_is_preserved(self):
+        self.media_fixture(body="Meaningful caption")
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        self.assertFalse(any("/redact/" in p for m,p,c,k in self.mx.calls))
+    def test_failed_media_backoff_survives_restart(self):
+        self.media_fixture();attempts=[]
+        def fail(*args,**kwargs):attempts.append(args);raise ValueError("unsupported native media")
+        self.uio.request=fail
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        config=self.b.config;self.b.db.close();self.b=Bridge(config,mx=self.mx,userio=self.uio)
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        self.assertEqual(len(attempts),1)
+    def test_changed_attachment_retries_immediately_and_success_clears_backoff(self):
+        self.media_fixture()
+        original=self.uio.request
+        self.uio.request=lambda *a,**k:(_ for _ in ()).throw(ValueError("not ready"))
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        self.uio.request=original
+        self.message["attachments"][0]["filename"]="available.png"
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        self.assertEqual(self.b.db.execute("SELECT count(*) FROM media_retries").fetchone()[0],0)
+        self.assertEqual(self.b.db.execute("SELECT count(*) FROM media_links").fetchone()[0],1)
+
 if __name__=="__main__":unittest.main()

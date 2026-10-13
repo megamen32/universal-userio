@@ -7,6 +7,7 @@
   "owner_token": "EXISTING_OWNER_MATRIX_TOKEN",
   "userio_url": "http://127.0.0.1:18093",
   "userio_token": "PERSONAL_USERIO_TOKEN",
+  "userio_user_id": "EXISTING_USERIO_USER_ID",
   "database": "/var/lib/userio-matrix-bridge/bridge.sqlite3",
   "bind": "192.168.2.100",
   "port": 18097,

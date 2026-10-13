@@ -35,11 +35,11 @@ class Http:
         self.base, self.token = base.rstrip("/"), token
         self.open = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect()).open
 
-    def request(self, method, path, payload=None, *, raw=None, mime="application/json", limit=4*1024*1024):
+    def request(self, method, path, payload=None, *, raw=None, mime="application/json", limit=4*1024*1024, timeout=20):
         data = raw if raw is not None else None if payload is None else json.dumps(payload, ensure_ascii=False).encode()
         req = urllib.request.Request(self.base + path, data=data, method=method,
             headers={"Authorization": "Bearer " + self.token, "Content-Type": mime})
-        with self.open(req, timeout=20) as response:
+        with self.open(req, timeout=timeout) as response:
             body = response.read(limit+1)
             if len(body)>limit:
                 raise ValueError("response exceeds bound")
@@ -71,6 +71,7 @@ class Bridge:
                 cid TEXT NOT NULL, mid TEXT NOT NULL, event TEXT NOT NULL,
                 sender TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(cid,mid));
             CREATE TABLE IF NOT EXISTS media_links (cid TEXT NOT NULL, mid TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(cid,mid));
+            CREATE TABLE IF NOT EXISTS media_retries (cid TEXT NOT NULL, mid TEXT NOT NULL, fingerprint TEXT NOT NULL, attempts INTEGER NOT NULL, next_try REAL NOT NULL, PRIMARY KEY(cid,mid));
             CREATE TABLE IF NOT EXISTS jobs (
                 event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
                 receipt TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
@@ -126,6 +127,8 @@ class Bridge:
             "creation_content":{"type":"m.space","m.federate":False},"preset":"private_chat",
             "invite":[self.owner],"initial_state":[{"type":"m.room.history_visibility","state_key":"",
             "content":{"history_visibility":"joined"}}]})
+        if self.owner_http:
+            self.client("POST","/rooms/"+Q(room)+"/join",{},user=self.owner)
         self.state("space:"+source, room)
         return room
 
@@ -235,13 +238,35 @@ class Bridge:
         if message.get("attachments"):
             self.import_media(portal, cid, mid, message, sender)
 
+    def hide_media_placeholder(self, portal, cid, mid, message):
+        placeholders={"","[вложение]","[вложение vk]","[photo]","[image]","[document]","[sticker]","[file]","[voice]","[video]","[audio]"}
+        if str(message.get("body") or "").strip().casefold() not in placeholders:
+            return
+        old=self.db.execute("SELECT * FROM mappings WHERE cid=? AND mid=?",(cid,mid)).fetchone()
+        key="placeholder:"+HASH(cid+"|"+mid)
+        if old and self.state(key)!=old["event"]:
+            self.client("PUT","/rooms/"+Q(portal["room"])+"/redact/"+Q(old["event"])+"/"+Q("placeholder_"+HASH(cid+"|"+mid)),
+                {"reason":"Вместо обозначения показано исходное вложение"},user=old["sender"])
+            self.state(key,old["event"])
+
     def import_media(self, portal, cid, mid, message, sender):
         # Binary bytes come from the existing authenticated UserIO provider seam.
         if self.db.execute("SELECT 1 FROM media_links WHERE cid=? AND mid=?",(cid,mid)).fetchone():
+            self.hide_media_placeholder(portal,cid,mid,message)
+            return
+        fingerprint=HASH(json.dumps(message.get("attachments",[]),sort_keys=True))
+        retry=self.db.execute("SELECT * FROM media_retries WHERE cid=? AND mid=?",(cid,mid)).fetchone()
+        if retry and retry["fingerprint"]==fingerprint and retry["next_try"]>time.time():
             return
         try:
-            result = self.uio.request("GET","/v1/conversations/"+Q(cid)+"/media/"+Q(mid)+"/raw",limit=MAX_FILE)
+            result = self.uio.request("GET","/v1/conversations/"+Q(cid)+"/media/"+Q(mid)+"/raw",limit=MAX_FILE,timeout=45)
             data,mime=result
+            # Native MAX files may have a generic Content-Type despite image bytes.
+            if mime in {"application/octet-stream","binary/octet-stream"}:
+                if data.startswith(b"\x89PNG\r\n\x1a\n"):mime="image/png"
+                elif data.startswith(b"\xff\xd8\xff"):mime="image/jpeg"
+                elif data.startswith((b"GIF87a",b"GIF89a")):mime="image/gif"
+                elif data.startswith(b"RIFF") and data[8:12]==b"WEBP":mime="image/webp"
             uploaded = self.matrix("POST","/_matrix/media/v3/upload?filename="+Q("attachment"),
                 raw=data,mime=mime)
             # Upload is JSON even when request bytes are raw.
@@ -253,12 +278,15 @@ class Bridge:
                 "media_"+HASH(cid+"|"+mid),sender)
             with self.lock,self.db:
                 self.db.execute("INSERT OR IGNORE INTO media_links VALUES (?,?,?)",(cid,mid,media_event))
-            old=self.db.execute("SELECT * FROM mappings WHERE cid=? AND mid=?",(cid,mid)).fetchone()
-            if old and str(message.get("body") or "").casefold() in {"[photo]","[image]","[document]","[sticker]","[file]","[voice]","[video]","[audio]"}:
-                self.client("PUT","/rooms/"+Q(portal["room"])+"/redact/"+Q(old["event"])+"/"+Q("placeholder_"+HASH(cid+"|"+mid)),
-                    {"reason":"Вместо обозначения показано исходное вложение"},user=old["sender"])
+                self.db.execute("DELETE FROM media_retries WHERE cid=? AND mid=?",(cid,mid))
+            self.hide_media_placeholder(portal,cid,mid,message)
         except Exception:
-            LOG.warning("Provider media unavailable for portal %s", portal["room"])
+            attempts=(retry["attempts"] if retry and retry["fingerprint"]==fingerprint else 0)+1
+            delay=min(3600,60*2**min(attempts-1,6))
+            with self.lock,self.db:
+                self.db.execute("INSERT OR REPLACE INTO media_retries VALUES (?,?,?,?,?)",
+                    (cid,mid,fingerprint,attempts,time.time()+delay))
+            LOG.warning("Provider media unavailable for portal %s; retry in %ss", portal["room"],delay)
 
     def reconcile_approved(self, portal, conv):
         """Restore confirmed outcomes after a lost HTTP response, without sending."""
@@ -394,7 +422,7 @@ class Bridge:
         conv=self.uio.request("GET","/v1/conversations/"+Q(portal["cid"]))
         if not self.selected(conv) or (conv["account_ref"],conv["peer_id"])!=(portal["account"],portal["peer"]):
             raise ValueError("Привязка аккаунта изменилась; отправка остановлена.")
-        result=self.uio.request("POST","/v1/conversations/"+Q(portal["cid"])+"/send",send)
+        result=self.uio.request("POST","/v1/conversations/"+Q(portal["cid"])+"/send",send,timeout=90)
         if result.get("status") not in {"sent","approved"} or not result.get("receipt"):
             raise ValueError("UserIO не подтвердил отправку. Проверьте исходный мессенджер перед повтором.")
         return "sent",str(result["receipt"])
