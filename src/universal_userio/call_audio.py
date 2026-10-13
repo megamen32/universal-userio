@@ -1,0 +1,80 @@
+"""Expose the existing private gateway archive through an owned call message."""
+import json
+from pathlib import Path
+import re
+import uuid
+import wave
+from urllib.parse import quote
+
+ARCHIVE = Path('/var/lib/agentcall/recordings')
+TRACKS = {'caller': 'Собеседник', 'assistant': 'Телефон'}
+
+
+def recording(conversation, message, root=None):
+    if (conversation.get('source') != 'phone' or message.get('source') != 'phone'
+            or message.get('conversation_id') != conversation.get('id')):
+        return None
+    try:
+        call_id = str(uuid.UUID(str(message['sender'])))
+        folder = (root or ARCHIVE) / call_id
+        if folder.is_symlink():
+            return None
+        manifest = folder / 'manifest.json'
+        if manifest.is_symlink() or manifest.stat().st_size > 65536:
+            return None
+        data = json.loads(manifest.read_text())
+        if not isinstance(data, dict) or not isinstance(data.get('peerFields'), dict):
+            return None
+        peer = data.get('peerFields', {})
+        if (data.get('callId') != call_id or not conversation.get('account_ref')
+                or peer.get('accountRef') != conversation['account_ref']
+                or peer.get('peerRef', '') != conversation.get('peer_id', '')):
+            return None
+        tracks = []
+        frames = []
+        for name, label in TRACKS.items():
+            path = folder / (name + '.wav')
+            if path.is_symlink() or not 44 <= path.stat().st_size <= 44 + 8000 * 2 * 7200:
+                return None
+            with wave.open(str(path)) as audio:
+                if (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) != (1, 2, 8000):
+                    return None
+                count = audio.getnframes()
+            if path.stat().st_size != 44 + count * 2:
+                return None
+            frames.append(count)
+            base = f"/v1/conversations/{quote(conversation['id'], safe='')}/call-audio/{quote(message['message_id'], safe='')}"
+            tracks.append({'name': name, 'label': label, 'url': base + '/' + name,
+                           'duration': count / 8000})
+        return {'complete': data.get('complete') is True and frames[0] == frames[1],
+                'duration': max(frames) / 8000, 'tracks': tracks}
+    except (OSError, ValueError, KeyError, TypeError, wave.Error):
+        return None
+
+
+def enrich(conversation):
+    if conversation and conversation.get('source') == 'phone':
+        for message in conversation.get('messages', []):
+            if message.get('direction') == 'system' and message.get('body', '').startswith('Звонок завершён'):
+                audio = recording(conversation, dict(message, conversation_id=conversation['id']))
+                if audio:
+                    message['call_audio'] = audio
+    return conversation
+
+
+def byte_range(value, size):
+    if not value:
+        return 0, size - 1, 200
+    match = re.fullmatch(r'bytes=(\d*)-(\d*)', value)
+    if not match or not any(match.groups()):
+        raise ValueError('invalid range')
+    start, end = match.groups()
+    if not start:
+        if int(end) <= 0:
+            raise ValueError('invalid suffix')
+        return max(0, size - int(end)), size - 1, 206
+    start = int(start)
+    end = min(int(end), size - 1) if end else size - 1
+    if start >= size or end < start:
+        raise ValueError('unsatisfiable range')
+    return start, end, 206

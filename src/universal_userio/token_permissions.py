@@ -23,6 +23,7 @@ def read_only_http_allowed(method: str, path: str) -> bool:
     parts = path.split("/")
     if len(parts) >= 4 and parts[:3] == ["", "v1", "conversations"] and parts[3]:
         return (len(parts) == 4 or
+                len(parts) == 7 and parts[4] == 'call-audio' and bool(parts[5]) and parts[6] in {'caller', 'assistant'} or
                 len(parts) == 5 and parts[4] in {"phone-history", "secretary", "analysis-policy"} or
                 len(parts) == 6 and parts[4] == "media" and bool(parts[5]) or
                 len(parts) == 7 and parts[4] == "media" and bool(parts[5]) and parts[6] == "raw")

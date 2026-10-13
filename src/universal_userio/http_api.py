@@ -23,6 +23,7 @@ import urllib.request
 from collections.abc import Mapping
 
 from . import agent_channel, chatgpt_sessions, collect, vault
+from . import call_audio
 from .account_connections import (
     connect_matrix, connect_imap, connect_vk_community, connect_vk_personal,
 )
@@ -1212,6 +1213,46 @@ def handler(
                 self._reply(403, {"error": "read_only_token"})
                 return
             user_id = principal.user_id
+            audio_route = re.fullmatch(r'/v1/conversations/([^/]+)/call-audio/([^/]+)/(caller|assistant)', path)
+            if audio_route:
+                if not service._store.capability_enabled('download', user_id=user_id):
+                    self._reply(403, {'error': 'download_capability_disabled'})
+                    return
+                conversation_id, message_id, track = map(unquote, audio_route.groups())
+                conv = service._store.conversation(conversation_id, user_id=user_id)
+                message = service._store.message(message_id, source='phone', user_id=user_id)
+                if not conv or not message or not call_audio.recording(conv, message):
+                    self._reply(404, {'error': 'call recording not found'})
+                    return
+                audio_path = call_audio.ARCHIVE / message['sender'] / (track + '.wav')
+                with audio_path.open('rb') as audio:
+                    size = os.fstat(audio.fileno()).st_size
+                    try:
+                        start, end, status = call_audio.byte_range(self.headers.get('Range'), size)
+                    except ValueError:
+                        self._reply(416, {'error': 'unsatisfiable range'}, {'Content-Range': f'bytes */{size}'})
+                        return
+                    self.send_response(status)
+                    self.send_header('Content-Type', 'audio/wav')
+                    self.send_header('Content-Length', str(end - start + 1))
+                    self.send_header('Accept-Ranges', 'bytes')
+                    self.send_header('Cache-Control', 'private, no-store')
+                    self.send_header('Content-Disposition', f'inline; filename="{track}.wav"')
+                    if status == 206:
+                        self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+                    self.end_headers()
+                    audio.seek(start)
+                    remaining = end - start + 1
+                    try:
+                        while remaining:
+                            chunk = audio.read(min(65536, remaining))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                return
             if path == "/v1/personal-tokens":
                 if principal.service_account:
                     self._reply(403, {"error": "personal login required"})
@@ -1525,6 +1566,9 @@ def handler(
                 except ValueError as error:
                     self._reply(400, {'error':str(error)})
                     return
+                conv = service._store.conversation(conversation_id, user_id=user_id)
+                if conv:
+                    call_audio.enrich(dict(conv, messages=page.get('messages', [])))
                 self._reply(200, page)
                 return
             conversation_id = path.removeprefix("/v1/conversations/")
@@ -1668,6 +1712,7 @@ def handler(
                 self._reply(200, payload)
                 return
             record = service._store.conversation(conversation_id, user_id=user_id)
+            call_audio.enrich(record)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})
 
         def do_DELETE(self) -> None:  # noqa: N802
