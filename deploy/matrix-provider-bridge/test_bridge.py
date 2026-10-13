@@ -36,6 +36,16 @@ class Tests(unittest.TestCase):
         return dict(e,**changes)
     def job(self, event):
         return {"payload":json.dumps(event)}
+    def test_poll_uses_detail_kind_when_summary_omits_it(self):
+        original=self.uio.request
+        def request(method,path,payload=None,**kwargs):
+            if path.startswith("/v1/conversations?"):
+                return {"conversations":[{"id":"conv_vk","source":"vk","account_ref":"vk:1"}]} if "vk" in path else {"conversations":[]}
+            return original(method,path,payload,**kwargs)
+        self.uio.request=request
+        self.b.poll()
+        self.assertTrue(any(p=="/v1/conversations/conv_vk" for _,p,_,_ in self.uio.calls))
+        self.assertGreater(self.b.last_poll,0)
     def test_transaction_replay_exactly_once(self):
         p={"events":[self.evt()]}
         self.b.accept_transaction("txn",p);self.b.accept_transaction("txn",p)

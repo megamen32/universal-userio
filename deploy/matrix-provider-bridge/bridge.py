@@ -248,7 +248,7 @@ class Bridge:
             if len(listing)>200:
                 raise ValueError("account portal limit exceeded")
             for summary in listing:
-                if not self.selected(summary):
+                if summary.get("account_ref") != account or summary.get("source") != settings["provider"]:
                     continue
                 conv = self.uio.request("GET","/v1/conversations/"+Q(summary["id"]))
                 if not self.selected(conv):
