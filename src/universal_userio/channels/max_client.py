@@ -59,6 +59,7 @@ class MaxTransport:
 
     def __init__(self, *, socks_host: str = "", socks_port: int = 0, web_auth: bool = False) -> None:
         self._socks_host, self._socks_port = socks_host, socks_port
+        self._web_auth = web_auth
         self._host = 'api.oneme.ru' if web_auth else 'ws-api.oneme.ru'
         self._url = 'wss://' + self._host + '/websocket'
         self._options = {'origin':'https://web.max.ru'} if web_auth else {}
@@ -82,12 +83,14 @@ class MaxTransport:
             return ws
         return websocket.create_connection(self._url, timeout=timeout, **self._options)
 
-    @staticmethod
-    def send(ws: Any, text: str) -> None:
-        ws.send(text)
+    def send(self, ws: Any, text: str) -> None:
+        if self._web_auth:
+            from .max_wire import encode
+            ws.send(encode(json.loads(text)),opcode=websocket.ABNF.OPCODE_BINARY)
+        else:
+            ws.send(text)
 
-    @staticmethod
-    def recv(ws: Any, timeout: float) -> dict[str, Any] | None:
+    def recv(self, ws: Any, timeout: float) -> dict[str, Any] | None:
         ws.settimeout(timeout)
         try:
             raw = ws.recv()
@@ -95,6 +98,9 @@ class MaxTransport:
             return None
         if not raw:
             raise ConnectionError("MAX socket closed")
+        if self._web_auth:
+            from .max_wire import decode
+            return decode(raw)
         return json.loads(raw)
 
     @staticmethod
