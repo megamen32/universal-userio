@@ -5,12 +5,14 @@ Run on the Matrix host. Seed only IDs read from Telegram's native topic
 catalog. Future topic portal stubs made by mautrix are promoted for these
 same explicitly selected forums. No new Telegram client or group is created.
 """
-import argparse,hashlib,json,pathlib,sqlite3,subprocess,time,urllib.request,urllib.parse
+import argparse,hashlib,json,os,pathlib,sqlite3,subprocess,time,urllib.request,urllib.parse
 import yaml
 
 def main():
     p=argparse.ArgumentParser();p.add_argument("--root",required=True);p.add_argument("--catalog",required=True)
     a=p.parse_args();root=pathlib.Path(a.root);catalog=json.loads(pathlib.Path(a.catalog).read_text())
+    if not 1<=len(catalog.get("forums",[]))<=16 or sum(len(f["topics"]) for f in catalog["forums"])>256:
+        raise RuntimeError("work forum catalog exceeds reviewed bound")
     data=root/"mautrix-telegram/data";db_path=data/"mautrix-telegram.db"
     db=sqlite3.connect(str(db_path),timeout=5);db.row_factory=sqlite3.Row
     user=db.execute("SELECT user_mxid,id,space_room FROM user_login WHERE user_mxid=?",(catalog["owner"],)).fetchone()
@@ -48,8 +50,12 @@ def main():
                 created_stubs+=1
     if changed:
         cfg_path.write_text(yaml.safe_dump(cfg,allow_unicode=True,sort_keys=False))
-    if changed or created_stubs:
-        subprocess.run(["docker","restart","--timeout","15","mautrix-telegram"],check=True,stdout=subprocess.DEVNULL,timeout=25)
+    stamp=root/".tmp/userio-forums-filter-applied"
+    digest=hashlib.sha256(json.dumps(cfg["bridge"]["portal_create_filter"],sort_keys=True).encode()).hexdigest()
+    if changed or created_stubs or not stamp.exists() or stamp.read_text()!=digest:
+        subprocess.run(["docker","restart","-t","15","mautrix-telegram"],check=True,stdout=subprocess.DEVNULL,timeout=25,
+            env=dict(os.environ,GOMAXPROCS="2"))
+        stamp.write_text(digest)
     app=yaml.safe_load((data/"registration.yaml").read_text())
     puppet=yaml.safe_load((root/"data/mautrix-doublepuppet-registration.yaml").read_text())
     base_url="http://192.168.2.75:8008"
