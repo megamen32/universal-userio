@@ -88,6 +88,7 @@ async def run(request):
 
     class Writer:
         sample_rate=48000
+        paces_audio=True
         def __init__(self): self.pending=bytearray();self.closed=False
         def write(self,data): self.pending.extend(data)
         async def drain(self):
@@ -100,6 +101,9 @@ async def run(request):
                     await source.capture_frame(rtc.AudioFrame(pcm,48000,1,len(pcm)//2))
                 elif kind==voice.HANGUP_KIND: terminate()
         def close(self): self.closed=True;terminate()
+        async def finish_audio(self,*,interrupted=False):
+            if interrupted: source.clear_queue()
+            else: await source.wait_for_playout()
         def is_closing(self):return self.closed
         async def wait_closed(self):pass
         def get_extra_info(self,name,default=None):return default
