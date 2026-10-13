@@ -60,6 +60,8 @@ class UserIOService:
         self._inbound_listeners: list[object] = []
         self._manual_send_lock = threading.Lock()
         self.messenger_providers: dict[str, object] = {}
+        self._max_owned_lock=threading.RLock()
+        self._max_owned_clients={}
         if self.max_client is not None:
             from .messenger_max import MaxMessengerProvider
             self.messenger_providers['max'] = MaxMessengerProvider(self)
@@ -1054,6 +1056,16 @@ class UserIOService:
             "expected_text": text, "expected_chat_id": conversation_id, "expected_attachments": [],
         })
 
+    def max_client_for(self,conversation,user_id):
+        from .max_accounts import owned_client
+        return owned_client(self,user_id,str(conversation.get('account_ref') or 'max'))
+
+    def require_max_reply_account(self, conversation, user_id):
+        account_ref = str(conversation.get('account_ref') or 'max')
+        if not any(a['id']==account_ref and a['enabled'] and 'reply' in a['capabilities']
+                   for a in self._store.accounts(user_id=user_id)):
+            raise DeliveryUnavailableError('Отправка MAX выключена для этого аккаунта')
+
     def edit_max_message(self, conversation_id: str, *, message_id: str, body: str,
                          expected_body: str, user_id: str | None = None) -> dict:
         user = self._store._user(user_id)
@@ -1061,14 +1073,15 @@ class UserIOService:
         if conv and conv['source']=='vk':
             from .vk_web import VKWeb
             return VKWeb(self,user).edit(conversation_id,message_id,body.strip(),expected_body)
-        if not conv or conv["source"] != "max" or user != self.max_user_id or self.max_client is None:
+        if not conv or conv["source"] != "max":
             raise DeliveryUnavailableError("Редактирование MAX недоступно для этого аккаунта")
         if not self._store.send_enabled(user_id=user) or not self._store.route_allowed(
                 user_id=user, source="max", route_id=str(conv["route_id"])):
             raise DeliveryUnavailableError("Изменение сообщений запрещено настройками аккаунта")
+        self.require_max_reply_account(conv,user)
         record = self._store.message(source="max", message_id=message_id, user_id=user)
         peer = str(conv.get("peer_id") or conv["sender"])
-        prefix = f"max-{peer}-"
+        prefix = (str(conv["account_ref"])+"|"+peer+":" if str(conv.get("account_ref") or "").startswith("max:") else f"max-{peer}-")
         if not record or record["conversation_id"] != conversation_id or record["direction"] != "outgoing" or not message_id.startswith(prefix):
             raise ValueError("Можно изменять только своё сообщение в этом диалоге")
         raw_id = message_id[len(prefix):]
@@ -1076,14 +1089,16 @@ class UserIOService:
             raise ValueError("Некорректное сообщение")
         if record["body"] != expected_body:
             raise ValueError("Сообщение уже изменилось. Обновите диалог.")
-        row = self.max_client.edit(chat_id=peer, message_id=raw_id, text=body.strip(), expected_text=expected_body)
+        client=self.max_client_for(conv,user)
+        row = client.edit(chat_id=peer, message_id=raw_id, text=body.strip(), expected_text=expected_body)
         from .max_ingress import message_envelope, _own_id
         from .adapters import inbox_message_from_envelope
-        envelope = message_envelope(row, chat_id=peer, own_id=_own_id(self.max_client),
+        envelope = message_envelope(row, chat_id=peer, own_id=_own_id(client),
                                     kind=str(conv.get("conversation_kind") or "direct"),
                                     reconciliation=True, title=str(conv.get("display_name") or ""))
         if envelope is None:
             raise RuntimeError("MAX не вернул изменённое сообщение")
+        envelope["message_id"]=message_id
         self.receive(inbox_message_from_envelope(envelope, received_at=record["received_at"]),
                      route_id=str(conv["route_id"]), user_id=user, account_ref=str(conv.get("account_ref") or "max"))
         return self._store.message(source="max", message_id=message_id, user_id=user)
@@ -1252,18 +1267,21 @@ class UserIOService:
                 reconcile_vk_receipt(self,conversation,receipt,user_id=resolved_user_id)
             except Exception as error:
                 _LOG.warning('Accepted VK receipt mirror is pending: %s',type(error).__name__)
-        if conversation and conversation["source"] == "max" and self.max_client is not None:
+        if conversation and conversation["source"] == "max":
             try:
                 from .max_ingress import message_envelope, _own_id
                 from .adapters import inbox_message_from_envelope
+                client=self.max_client_for(conversation,resolved_user_id)
                 peer = str(conversation.get("peer_id") or conversation["sender"])
-                row = self.max_client.get_message(chat_id=peer, message_id=receipt)
-                if str(row.get("id")) != str(receipt) or str(row.get("sender")) != _own_id(self.max_client):
+                row = client.get_message(chat_id=peer, message_id=receipt)
+                if str(row.get("id")) != str(receipt) or str(row.get("sender")) != _own_id(client):
                     raise ValueError("MAX receipt read did not match the sent message")
-                envelope = message_envelope(row, chat_id=peer, own_id=_own_id(self.max_client),
+                envelope = message_envelope(row, chat_id=peer, own_id=_own_id(client),
                     kind=str(conversation.get("conversation_kind") or "direct"),
                     reconciliation=True, title=str(conversation.get("display_name") or ""))
                 if envelope is not None:
+                    if str(conversation.get('account_ref') or '').startswith('max:'):
+                        envelope['message_id']=str(conversation['account_ref'])+'|'+peer+':'+str(row['id'])
                     self.receive(inbox_message_from_envelope(envelope, received_at=float(envelope["received_at"])),
                         route_id=str(conversation["route_id"]), user_id=resolved_user_id,
                         account_ref=str(conversation.get("account_ref") or "max"))
@@ -1342,11 +1360,11 @@ class UserIOService:
                     raise ValueError('Android SMS adapter is not configured for this UserIO user')
                 send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
         elif conversation["source"] == "max":
-            if self.max_client is None or user_id != self.max_user_id:
-                raise ValueError("MAX adapter is not configured for this UserIO user")
+            self.require_max_reply_account(conversation,user_id)
+            max_client=self.max_client_for(conversation,user_id)
             chat_id = str(conversation.get("peer_id") or conversation.get("sender") or "")
 
-            def _send_max(client=self.max_client, chat_id=chat_id, body=draft.body) -> str:
+            def _send_max(client=max_client, chat_id=chat_id, body=draft.body) -> str:
                 receipt = client.send(chat_id=chat_id, text=body)
                 if isinstance(receipt, dict):
                     return str(receipt.get("message_id") or receipt.get("receipt") or "max-sent")

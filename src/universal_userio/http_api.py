@@ -91,6 +91,8 @@ def handler(
     oauth = OAuthProvider(service._store)
     personal_tokens = PersonalTokens(service._store)
     subscriptions = ResourceSubscriptionHub()
+    from .max_accounts import MaxAccounts
+    max_accounts = MaxAccounts(service)
     supplied_identity = runtime_identity or {}
     public_runtime_identity = {
         "schema_version": supplied_identity.get("schema_version", 1),
@@ -891,6 +893,20 @@ def handler(
                         user_id=user_id,
                     )
                     self._reply(202, {"accepted": True})
+                    return
+                if path.startswith('/v1/max/connections/'):
+                    if principal.service_account or principal.read_only or not service._store.capability_enabled('read',user_id=user_id):
+                        self._reply(403,{'error':'Войдите в свой UserIO для подключения MAX'});return
+                    try:
+                        if path=='/v1/max/connections/begin':result=max_accounts.begin(user_id)
+                        elif path=='/v1/max/connections/poll':result=max_accounts.poll(user_id,str(self._json().get('login_id') or ''))
+                        elif path=='/v1/max/connections/cancel':result=max_accounts.cancel(user_id,str(self._json().get('login_id') or ''))
+                        else:self._reply(404,{'error':'unknown MAX connection route'});return
+                        self._reply(200,result,{'Cache-Control':'no-store'})
+                    except Exception as error:
+                        _LOGGER = __import__('logging').getLogger('userio.max_connections')
+                        _LOGGER.warning('MAX connection %s failed: %s',path.rsplit('/',1)[-1],type(error).__name__)
+                        self._reply(400,{'error':'MAX не подтвердил подключение. Если QR истёк, начните новый вход. Действующие аккаунты не изменены.'})
                     return
                 if path == "/v1/accounts":
                     payload = self._json()
@@ -1748,9 +1764,12 @@ def handler(
                      if a["id"] == account_id), None,
                 )
                 deleted = service._store.delete_account(account_id, user_id=principal.user_id)
-                if deleted and existing and existing["provider"] in {"matrix", "email", "vk"}:
+                if deleted and existing and existing["provider"] in {"matrix", "email", "vk", "max"}:
                     ref = str(existing.get("credential_ref") or "")
                     if ref.startswith("connector:"):
+                        if existing['provider']=='max':
+                            from .max_accounts import close_owned_client
+                            close_owned_client(service,principal.user_id,account_id)
                         from .account_connections import ConnectorSecrets
                         try:
                             ConnectorSecrets().delete(ref, user_id=principal.user_id,
@@ -1782,6 +1801,7 @@ def handler(
         def log_message(self, _format: str, *_args: object) -> None:
             return
 
+    UserIOHandler.max_connections = max_accounts
     return UserIOHandler
 
 

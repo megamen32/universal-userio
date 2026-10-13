@@ -18,7 +18,7 @@ from .channels.max_client import MaxClient, MaxTransport
 
 class MaxQrLogin:
     def __init__(self, expected_user: str, *, client=None, socks_host='', socks_port=0):
-        if not re.fullmatch(r'[1-9][0-9]*', expected_user):
+        if expected_user and not re.fullmatch(r'[1-9][0-9]*', expected_user):
             raise ValueError('exact expected MAX account required')
         self.expected_user=expected_user
         self.device_id=str(uuid.uuid4())
@@ -56,7 +56,8 @@ class MaxQrLogin:
             raise ValueError('MAX additional confirmation required')
         profile=reply.get('profile',{}) if isinstance(reply,dict) else {}
         contact=profile.get('contact',{}) if isinstance(profile,dict) else {}
-        if str(contact.get('id') or '')!=self.expected_user:
+        actual=str(contact.get('id') or '')
+        if not re.fullmatch(r'[1-9][0-9]*',actual) or self.expected_user and actual!=self.expected_user:
             raise ValueError('MAX authenticated account differs from expected account')
         attrs=reply.get('tokenAttrs',{})
         login=attrs.get('LOGIN',{}) if isinstance(attrs,dict) else {}
@@ -64,7 +65,7 @@ class MaxQrLogin:
         if (not isinstance(token,str) or not 16<=len(token)<=8192
                 or any(ord(c)<32 for c in token)):
             raise ValueError('MAX login credential unavailable')
-        return {'token':token,'device_id':self.device_id,'user_id':self.expected_user}
+        return {'token':token,'device_id':self.device_id,'user_id':actual}
 
     def close(self):self.client.close()
 

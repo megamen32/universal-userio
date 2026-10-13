@@ -255,6 +255,7 @@ def main() -> None:
     class UserIOHTTPServer(ThreadingHTTPServer):
         def service_actions(self) -> None:
             maintenance.run_if_due()
+            self.RequestHandlerClass.max_connections.expire()
 
     server = UserIOHTTPServer(
         (environment.get("USERIO_HOST", "127.0.0.1"), int(environment.get("USERIO_PORT", "18093"))),
@@ -273,6 +274,11 @@ def main() -> None:
         server.serve_forever()
     finally:
         connected_poller.stop.set()
+        server.RequestHandlerClass.max_connections.close()
+        with service._max_owned_lock:
+            for _ref, client in service._max_owned_clients.values():
+                client.close()
+            service._max_owned_clients.clear()
         server.server_close()
 
 

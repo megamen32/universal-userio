@@ -179,6 +179,9 @@ class MaxClient:
         )
         if not isinstance(login, dict) or not login.get("profile"):
             raise RuntimeError("MAX LOGIN rejected the session token")
+        expected=str(getattr(self,'expected_user_id',''))
+        if expected and str((login['profile'].get('contact') or {}).get('id') or '')!=expected:
+            raise RuntimeError('MAX authenticated personal identity mismatch')
         self._profile = login
         self.authentication_required = False
         return login

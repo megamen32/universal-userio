@@ -44,6 +44,10 @@ class Messenger:
 
     def _provider(self, account_ref):
         provider = getattr(self.service, 'messenger_providers', {}).get(account_ref)
+        account=self._account(account_ref)
+        if account['provider']=='max' and account['enabled'] and str(account['credential_ref']).startswith('connector:'):
+            from .messenger_max import PersonalMaxMessengerProvider
+            provider=PersonalMaxMessengerProvider(self.service,account_ref,self.user)
         if provider is None:
             account=self._account(account_ref)
             if (account['provider']=='vk' and account_ref.startswith('vk:')
@@ -116,7 +120,7 @@ class Messenger:
     def _project(self, conv, msg):
         account_ref, peer, mid = conv['account_ref'], str(conv['peer_id']), str(msg['message_id'])
         provider_id = ''
-        if conv['source'] in {'telegram','vk'} and mid.startswith(account_ref+'|'+peer+':'):
+        if conv['source'] in {'telegram','vk','max'} and mid.startswith(account_ref+'|'+peer+':'):
             provider_id = mid[len(account_ref+'|'+peer+':'):]
         elif conv['source'] == 'max' and mid.startswith('max-'+peer+'-'):
             provider_id = mid[len('max-'+peer+'-'):]

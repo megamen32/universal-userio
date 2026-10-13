@@ -83,8 +83,8 @@ header{display:flex;align-items:center;justify-content:space-between}.brand{font
 <button class="submit" type="submit">Подключить VK-сообщество</button>
 </form>
 <section class="panel" id="telegram" hidden><h2>Telegram</h2><ol><li>Откройте Telegram на телефоне.</li><li>Перейдите в «Настройки → Устройства → Подключить устройство».</li><li>Запустите вход и отсканируйте QR-код. Если включён облачный пароль, введите его в форме.</li></ol><p>Новый аккаунт должен появиться здесь после подтверждения.</p><a class="submit" href="/telegram-qr/">Перейти к входу в Telegram</a><p class="hint">Не пересылайте код входа или пароль в чат. <a href="/docs#telegram">Подробная инструкция</a></p></section>
-<section class="panel" id="whatsapp" hidden><h2>WhatsApp</h2><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Отсканируйте QR-код своего подключения.</li></ol><p>Каждому пользователю нужен отдельный подключённый мост WhatsApp.</p><a class="submit" href="/whatsapp-qr/">Перейти к входу в WhatsApp</a><p class="hint"><a href="/docs#whatsapp">Инструкция и настройка моста</a></p></section>
-<section class="panel" id="max" hidden><h2>MAX</h2><ol><li>Войдите в MAX на телефоне.</li><li>Администратор подключает отдельную сессию к вашему пользователю UserIO.</li><li>Проверьте свой профиль и последнее сообщение.</li></ol><p class="note">Самостоятельный вход MAX для нового пользователя пока недоступен. Вход в приложение MAX сам по себе не подключает UserIO.</p><a href="/docs#max">Инструкция подключения MAX</a></section>
+<section class="panel" id="whatsapp" hidden><h2>WhatsApp</h2><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Отсканируйте QR-код своего подключения.</li></ol><p>Каждому пользователю нужен отдельный подключённый мост WhatsApp.</p><p class="note">Самостоятельное подключение нового пользователя пока не готово. Администратор должен выдать отдельный мост вашему аккаунту; общий QR сервера для этого не подходит.</p><p class="hint"><a href="/docs#whatsapp">Инструкция и настройка моста</a></p></section>
+<section class="panel" id="max" hidden><h2>MAX</h2><ol><li>Откройте MAX на телефоне, в котором уже выполнен вход.</li><li>Нажмите «Показать QR-код». В MAX выберите «Профиль → Устройства → Подключить устройство».</li><li>Отсканируйте QR-код и подтвердите вход на телефоне. Проверим профиль и сохраним его в вашем UserIO.</li></ol><button class="submit" type="button" id="max-begin">Показать QR-код</button><button class="secondary" type="button" id="max-cancel" hidden>Отменить вход</button><div id="max-qr" hidden><img alt="QR-код входа в MAX" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p><a id="max-mobile-link" class="secondary" rel="noopener noreferrer" target="_blank">Подключаю с телефона: открыть MAX ↗</a></p><p class="hint">QR действует недолго. Подтверждайте только вход, который начали здесь.</p></div><p id="max-status" role="status" aria-live="polite"></p><p class="hint">Сессии приложения на телефоне остаются на месте. <a href="/docs#max">Подробная инструкция</a></p></section>
 <section class="panel" id="sms" hidden><h2>SMS на Android</h2><ol><li>Установите SMS Agent APK. Подойдёт Android 8+ с root или без него.</li><li>Разрешите SMS и работу приложения в фоне. Скопируйте ID устройства.</li><li>Получите настройки своего телефона, вставьте их в приложение и запустите.</li></ol><a class="submit" href="/connect-phone#sms">Подключить свой телефон</a><a class="secondary" href="/sms-gateway/agent/download" download>Скачать APK</a><p class="hint">Токен выдаётся только вашему телефону. <a href="/docs#phone">Инструкция</a></p></section>
 <section class="panel" id="calls" hidden><h2>Звонки через SIM</h2><ol><li>Подготовьте совместимый Android с root и GSM2SIP.</li><li>Получите свой SIP-аккаунт у администратора.</li><li>Подключите маршрут звонков к своему UserIO и проверьте звук.</li></ol><p>SMS APK не подключает голосовые звонки. Для звонков нужна отдельная настройка шлюза.</p><a class="submit" href="/connect-phone#calls">Открыть инструкцию звонков</a></section>
 <p id="status" role="status" aria-live="polite"></p><section id="success" class="panel" hidden><h2>Аккаунт подключён</h2><p id="success-name"></p><a class="submit" href="/">Открыть сообщения</a><button class="secondary" id="connect-another" type="button">Подключить ещё</button></section>
@@ -117,7 +117,7 @@ async function connectedAccounts(){
     title.textContent=label+': '+account.display_name+' · '+(account.enabled===false?'Отключён':account.capabilities.includes('read')?'Подключён':'Чтение выключено');
     row.append(title);
     const managed=account.id.startsWith('matrix:')||account.id.startsWith('email:')||
-      account.id.startsWith('vk:')||account.id.startsWith('sms:user-');
+      account.id.startsWith('vk:')||account.id.startsWith('sms:user-')||account.id.startsWith('max:');
     if(managed){
       const remove=document.createElement('button');remove.type='button';remove.textContent='Отключить';
       remove.onclick=async()=>{
@@ -136,10 +136,33 @@ async function connectedAccounts(){
  }catch(error){container.textContent=error.message||'Ошибка';}
 }
 connectedAccounts();
+let maxLogin='',maxTimer=null;
+async function maxRequest(action,body={}){
+ const r=await fetch('/v1/max/connections/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ const d=await r.json();if(!r.ok)throw Error(d.error||'Не удалось подключить MAX');return d;
+}
+function stopMax(){clearTimeout(maxTimer);maxTimer=null;document.getElementById('max-qr').hidden=true;document.getElementById('max-cancel').hidden=true;document.getElementById('max-begin').disabled=false;}
+async function cancelMax(){const old=maxLogin;maxLogin='';stopMax();if(old){try{await maxRequest('cancel',{login_id:old});}catch{}}}
+document.getElementById('max-cancel').onclick=async()=>{await cancelMax();document.getElementById('max-status').textContent='Вход отменён.';};
+document.getElementById('max-begin').onclick=async()=>{
+ const status=document.getElementById('max-status');document.getElementById('max-begin').disabled=true;status.textContent='Подготавливаем QR-код…';
+ try{
+  const d=await maxRequest('begin');if(currentService!=='max'){await maxRequest('cancel',{login_id:d.login_id});stopMax();return;}maxLogin=d.login_id;const login=d.login_id;document.querySelector('#max-qr img').src=d.qr_image;document.getElementById('max-mobile-link').href=d.qr_link;document.getElementById('max-qr').hidden=false;document.getElementById('max-cancel').hidden=false;status.textContent='Отсканируйте QR-код и подтвердите вход на телефоне.';
+  async function poll(){
+   if(maxLogin!==login)return;
+   if(Date.now()/1000>=d.expires_at){await cancelMax();status.textContent='QR-код истёк. Нажмите «Показать QR-код» для нового входа.';return;}
+   try{const r=await maxRequest('poll',{login_id:login});if(maxLogin!==login)return;if(r.status==='connected'){maxLogin='';stopMax();connectedSuccess(r.display_name);return;}maxTimer=setTimeout(poll,d.poll_interval_ms);}
+   catch(e){if(maxLogin!==login)return;status.textContent=e.message;await cancelMax();}
+  }
+  maxTimer=setTimeout(poll,d.poll_interval_ms);
+ }catch(e){status.textContent=e.message;stopMax();}
+};
+window.addEventListener('pagehide',()=>{if(maxLogin)fetch('/v1/max/connections/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login_id:maxLogin}),keepalive:true}).catch(()=>{});});
 let currentService='';
 function show(key,push=true){
  const known=['','matrix','imap','gmail','yandex','vk-personal','vk-community','telegram','whatsapp','max','sms','calls'];if(!known.includes(key))key='';
  if(key!==currentService)document.querySelectorAll('input[type=password]').forEach(input=>input.value='');
+ if(currentService==='max' && key!=='max')void cancelMax();
  currentService=key;
  document.getElementById('overview').hidden=!!key;
  document.getElementById('setup-head').hidden=!key;

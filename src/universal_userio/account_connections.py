@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from .service import UserIOService
 
 log = logging.getLogger("userio.account_connections")
-_PROVIDER_TYPES = frozenset({"matrix", "email", "vk"})
+_PROVIDER_TYPES = frozenset({"matrix", "email", "vk", "max"})
 _ID_RE = re.compile(r"^[a-z0-9]{24,64}$")
 _HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,249}[a-z0-9]$")
 _MX_ID = re.compile(r"^@[^\s:]{1,255}:[a-zA-Z0-9.-]+(?::\d+)?$")
@@ -296,7 +296,7 @@ class UserAccountPoller:
                         accounts = [dict(r) for r in self.service._store._connection.execute(
                             """SELECT user_id,id,provider,credential_ref
                                FROM provider_accounts WHERE enabled=1
-                                 AND provider IN ('matrix','email','vk')
+                                 AND provider IN ('matrix','email','vk','max')
                                  AND credential_ref LIKE 'connector:%'
                                ORDER BY user_id,id""",
                         )]
@@ -326,7 +326,10 @@ class UserAccountPoller:
             )
             if secret.get("account_id") != account["id"]:
                 raise ValueError("account reference mismatch")
-            if account["provider"] == "matrix":
+            if account["provider"] == "max":
+                from .max_accounts import poll_personal_max
+                poll_personal_max(self.service,secret)
+            elif account["provider"] == "matrix":
                 self.poll_matrix(secret)
             elif account["provider"] == "email":
                 self.poll_imap(secret)

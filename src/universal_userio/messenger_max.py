@@ -23,7 +23,7 @@ class MaxMessengerProvider:
         self.authorized_user=service.max_user_id
 
     @property
-    def sender_id(self): return _own_id(self.client)
+    def sender_id(self): return _own_id(self.client) or str(getattr(self.client,'expected_user_id',''))
 
     @property
     def authentication_required(self):
@@ -32,6 +32,7 @@ class MaxMessengerProvider:
     def _projection(self, row, peer_id, conversation_id, kind='unknown'):
         env=message_envelope(row,chat_id=peer_id,own_id=self.sender_id,kind=kind,reconciliation=True)
         if env is None: raise ValueError('actual MAX source unavailable')
+        if self.account_ref!='max':env['message_id']=self.account_ref+'|'+peer_id+':'+str(row['id'])
         return {'source':{'account_ref':self.account_ref,'peer_id':peer_id,'conversation_id':conversation_id,
                 'message_id':env['message_id'],'provider_message_id':str(row['id']),
                 'channel':'max','direction':env['direction'],'conversation_kind':kind,
@@ -129,7 +130,7 @@ class MaxMessengerProvider:
                                attachment=attaches[attachment_index])
 
     def execute(self, e):
-        if e['account_ref']!=self.account_ref or e['user_id']!=self.service.max_user_id:
+        if e['account_ref']!=self.account_ref or e['user_id']!=self.authorized_user:
             raise PermissionError('MAX account route mismatch')
         try:
             row=self.client.get_message(chat_id=e['peer_id'],message_id=e['source_provider_message_id'])
@@ -175,7 +176,7 @@ class MaxMessengerProvider:
             try:
                 conv=self.service._store.conversation(e['conversation_id'],user_id=e['user_id'])
                 stored=self.service._store.message(p['media_message_id'],source='max',user_id=e['user_id'])
-                prefix='max-'+e['peer_id']+'-'
+                prefix=(self.account_ref+'|'+e['peer_id']+':' if self.account_ref!='max' else 'max-'+e['peer_id']+'-')
                 if not stored or stored['conversation_id']!=conv['id'] or not p['media_message_id'].startswith(prefix):
                     raise ValueError('owned media source required')
                 media=self.client.get_message(chat_id=e['peer_id'],message_id=p['media_message_id'][len(prefix):])
@@ -213,5 +214,13 @@ class MaxMessengerProvider:
         envelope=message_envelope(row,chat_id=e['peer_id'],own_id=self.sender_id,
                                   kind=conv['conversation_kind'],reconciliation=True)
         if envelope is None: raise ValueError('accepted MAX projection unavailable')
+        if self.account_ref!='max':envelope['message_id']=self.account_ref+'|'+e['peer_id']+':'+str(row['id'])
         self.service.receive(inbox_message_from_envelope(envelope,received_at=time.time()),
             route_id=conv['route_id'],user_id=e['user_id'],account_ref=self.account_ref)
+
+
+class PersonalMaxMessengerProvider(MaxMessengerProvider):
+    def __init__(self,service,account_ref,user_id):
+        from .max_accounts import owned_client
+        self.service=service;self.account_ref=account_ref;self.authorized_user=user_id
+        self.client=owned_client(service,user_id,account_ref)
