@@ -148,4 +148,7 @@ Matrix-сообщение только в Telegram Saved Messages и подтв�
 plaintext-событие в новой комнате. Медленная nightly не нужна.
 
 Обновление AST-графа после исходников: один bounded процесс, RAM256/512MiB,
-swap0,CPU1,Tasks32,wall120s,temporary output до100MiB,без GPU/LLM.
+swap0,CPU1,Tasks32,wall120s,temporary output до100MiB,без GPU/LLM. GRAPHIFY_MAX_WORKERS=2,
+OMP_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1: host cpu_count не используется
+как разрешение размножить процессы за конечный TasksMax. Первый AST проход
+без worker override достиг wall120s; повтор только с уменьшенной параллельностью.

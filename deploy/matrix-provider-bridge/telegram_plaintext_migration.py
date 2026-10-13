@@ -201,7 +201,9 @@ class Migration:
    r["finished"]=True;self.save()
    if (i+1)%10==0:print(json.dumps({"stage":"archive","rooms":i+1,"total":len(self.m["rows"])}),flush=True)
   # Personal-space child hints need not have a matching parent event.
-  for r in self.m["rows"]:self.state(self.personal,"m.space.child",r["old"],{})
+  for r in self.m["rows"]:
+   if (self.state(self.personal,"m.space.child",r["old"]) or {}).get("via"):
+    self.state(self.personal,"m.space.child",r["old"],{})
   direct=self.mx("GET","/user/"+Q(self.owner)+"/account_data/m.direct",user=self.owner,missing=True) or {}
   replace={r["old"]:r["new"] for r in self.m["rows"]}
   new={k:(list(dict.fromkeys(replace.get(v,v) for v in values)) if any(v in replace for v in values) else values) for k,values in direct.items()}

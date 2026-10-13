@@ -42,10 +42,10 @@ INSERT INTO user_portal VALUES('','user:1','10',1,123),('','user:1','20',1,456);
   a=self.a;a.personal="!personal";a.m.update(stage="cutover",archive="!archive",spaces=[],archive_spaces={})
   a.m["rows"][0]["finished"]=True
   direct={"@contact":["!old"],"@unrelated":["!keep","!keep"]}
-  a.mx=Mock(side_effect=[direct,{}]);a.link=Mock();a.finish()
+  a.mx=Mock(side_effect=[direct,{}]);a.link=Mock();a.state=Mock(side_effect=[{"via":[a.domain]},{}]);a.finish()
   saved=a.mx.call_args_list[-1].args[2]
   self.assertEqual(saved["@contact"],["!new"]);self.assertEqual(saved["@unrelated"],["!keep","!keep"])
-  a.state.assert_called_once_with(a.personal,"m.space.child","!old",{})
+  self.assertEqual(a.state.call_args_list[-1].args,(a.personal,"m.space.child","!old",{}))
  def prepare_create(self):
   a=self.a
   state=[{"type":"m.room.encryption","state_key":"","content":{"algorithm":"m.megolm.v1.aes-sha2"}},
