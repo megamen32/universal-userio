@@ -1177,14 +1177,14 @@ def handler(
             if requested_path in {"/vk-userio-extension.zip", "/vk-userio-extension-mv3.zip",
                                   "/chatgpt-cdp-setup.zip"} and self._static(requested_path):
                 return
-            if requested_path in {"/vk/connect/new", "/vk/callback"}:
+            if requested_path == "/vk/callback":
                 if self._principal(allow_proxy=True) is None:
                     self._redirect("/login")
                     return
                 body = _vk_connect_page(vkid_app_id).encode()
                 self._html(200, body)
                 return
-            if requested_path in {"/accounts/connect/new", "/matrix/connect/new", "/mail/connect/new",
+            if requested_path in {"/accounts", "/accounts/connect/new", "/vk/connect/new", "/matrix/connect/new", "/mail/connect/new",
                                    "/vk/community/connect/new", "/vk/personal/connect/new"}:
                 if self._principal(allow_proxy=True) is None:
                     self._redirect("/login")
@@ -1377,6 +1377,12 @@ def handler(
                 return
             if path == "/v1/preferences/context":
                 self._reply(200, {"context": _context_preferences(service, user_id)})
+                return
+            if path == '/v1/connection-principal':
+                self._reply(200,{'user_id':user_id,'username':principal.username,
+                    'can_manage':not principal.read_only and not principal.service_account
+                                 and service._store.capability_enabled('read',user_id=user_id)},
+                    {'Cache-Control':'no-store'})
                 return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)

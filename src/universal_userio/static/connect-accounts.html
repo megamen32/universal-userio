@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Добавить аккаунт · UserIO</title>
+<title>Аккаунты · UserIO</title>
 <style>
 :root{font:16px system-ui,sans-serif;color-scheme:dark;background:#101923;color:#e9eff5}
 *{box-sizing:border-box}body{margin:0 auto;max-width:780px;padding:28px 20px 80px}
@@ -21,24 +21,27 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
   padding:11px 0;border-bottom:1px solid #2e4355;font-size:14px}
 .connected button{font:inherit;padding:7px 11px;border-radius:9px;border:1px solid #53697b;
   color:#f3f7fc;background:transparent;cursor:pointer}
+header{display:flex;align-items:center;justify-content:space-between}.brand{font-size:20px;font-weight:750;color:inherit}.back-inbox,.back{padding:12px;border:1px solid #34495b;border-radius:10px;background:none;color:#b4d4ff;font:inherit;cursor:pointer}.choices span{display:block;color:#abb9c8;font-size:13px;margin-top:5px}.choices b{font-size:16px}.add-title{font-size:20px;margin-top:30px}.step-label{font-size:13px}form,.panel{max-width:none}.panel{background:#172534;border:1px solid #34495b;border-radius:16px;padding:22px}.panel h2{margin-top:0}.panel[hidden],[hidden]{display:none!important}li{margin:10px 0;color:#d5e4f4;line-height:1.5}form details{margin-top:16px}summary{cursor:pointer;padding:10px 0}.submit{display:inline-block;text-decoration:none}.secondary{display:inline-block;margin:12px 8px;padding:12px;border:1px solid #53697b;border-radius:10px;background:none;color:#f3f7fc;font:inherit;cursor:pointer}.connected{margin-top:20px}.empty{padding:18px;border:1px dashed #53697b;border-radius:12px}.note{padding:14px;border-radius:10px;background:#243b53}button,a,input{touch-action:manipulation}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #8cc1ff;outline-offset:3px}@media(max-width:600px){body{padding:18px 14px 50px}.choices{grid-template-columns:1fr 1fr}.connected .account{align-items:flex-start}.back-inbox{font-size:14px}.panel,form{padding:18px}}
 </style></head>
 <body>
-<a href="/">← Назад в UserIO</a>
-<h1>Добавить аккаунт</h1>
-<p>Подключения принадлежат только вашему пользователю UserIO. Данные входа не публикуются в списке аккаунтов.</p>
-<nav class="choices" aria-label="Тип аккаунта">
-<button type="button" data-open="matrix">Matrix</button>
-<button type="button" data-open="imap">Почта IMAP</button>
-<a href="/gmail/connect/new">Gmail</a>
-<button type="button" data-open="vk-personal">VK Мессенджер — личные чаты</button>
-<a href="/vk/connect/new">VK ID · профиль</a>
-<button type="button" data-open="vk-community">VK сообщество</button>
-<a href="/telegram-qr/new">Telegram</a>
-<a href="/whatsapp-qr/new">WhatsApp</a>
-<a href="/connect-phone">Android · SMS и звонки</a>
-</nav>
+<header><a class="brand" href="/">UserIO</a><a class="back-inbox" href="/">К сообщениям →</a></header>
+<section id="overview"><h1>Ваши аккаунты</h1><p>Все ваши сообщения в одном месте. Подключите нужные сервисы — каждый аккаунт остаётся вашим.</p>
+<section class="connected" aria-label="Подключённые аккаунты"><div id="connected-list">Загружаю ваши подключения…</div></section>
+<h2 class="add-title">Подключить аккаунт</h2><nav class="choices" aria-label="Выберите сервис">
+<button type="button" data-open="telegram"><b>Telegram</b><span>QR или номер телефона</span></button>
+<button type="button" data-open="max"><b>MAX</b><span>Личные переписки</span></button>
+<button type="button" data-open="whatsapp"><b>WhatsApp</b><span>Связанное устройство</span></button>
+<button type="button" data-open="vk-personal"><b>ВКонтакте</b><span>Личный Мессенджер</span></button>
+<button type="button" data-open="gmail"><b>Gmail</b><span>Пароль приложения Google</span></button>
+<button type="button" data-open="yandex"><b>Яндекс.Почта</b><span>Пароль приложения Яндекса</span></button>
+<button type="button" data-open="imap"><b>Другая почта</b><span>Любой ящик с IMAP</span></button>
+<button type="button" data-open="matrix"><b>Matrix</b><span>SSO или пароль</span></button>
+<button type="button" data-open="sms"><b>SMS на Android</b><span>С root и без root</span></button>
+<button type="button" data-open="calls"><b>Звонки</b><span>SIM-шлюз и SIP</span></button>
+</nav></section>
+<div id="setup-head" hidden><button id="back-accounts" type="button" class="back">← Все аккаунты</button><p class="step-label">Выберите сервис → Подключите → Проверьте</p></div>
 <form id="matrix">
-<h2>Подключить Matrix</h2>
+<h2>Matrix</h2><ol><li>Укажите адрес своего Matrix-сервера.</li><li>Нажмите «Войти через SSO» или введите Matrix ID и пароль.</li><li>Проверьте подключённый профиль и откройте сообщения.</li></ol>
 <label>Адрес Matrix-сервера<input name="homeserver" type="url" value="https://chat.bezrabotnyi.com" required autocomplete="url"></label>
 <label>Ваш Matrix ID<input name="user_id" placeholder="@bezrabotnyi:chat.bezrabotnyi.com" autocomplete="username"></label>
 <p class="hint">Для SSO Matrix ID можно не указывать: определим его после входа.</p>
@@ -52,23 +55,23 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <button class="submit" type="submit">Подключить Matrix</button>
 </form>
 <form id="imap">
-<h2>Подключить почту IMAP</h2>
+<h2 id="mail-title">Другая почта</h2><ol id="mail-steps"><li>Разрешите IMAP в настройках ящика.</li><li>Создайте пароль приложения для почты.</li><li>Введите адрес и пароль — проверим доступ.</li></ol><p id="mail-help"></p><details id="mail-server-settings"><summary>Настройки сервера</summary>
 <label>IMAP-сервер<input name="host" placeholder="imap.example.com" required autocomplete="off"></label>
 <label>Порт TLS<input name="port" type="number" min="1" max="65535" value="993" required></label>
-<label>Адрес почты / логин IMAP<input name="username" type="email" placeholder="you@example.com" required autocomplete="username"></label>
+</details><label>Адрес почты / логин IMAP<input name="username" type="email" placeholder="you@example.com" required autocomplete="username"></label>
 <label>Пароль приложения / IMAP<input name="password" type="password" required autocomplete="new-password"></label>
 <p class="hint">IMAP только через TLS. Письма загружаются без установки отметки «прочитано». Отправка SMTP пока не подключается.</p>
 <button class="submit" type="submit">Подключить почту</button>
 </form>
 <form id="vk-personal" autocomplete="off">
-<h2>Личный VK Мессенджер</h2>
+<h2>ВКонтакте</h2><ol><li>Нажмите «Войти через VK Мессенджер» и подтвердите свой аккаунт.</li><li>Скопируйте итоговый адрес из адресной строки и вставьте ниже.</li><li>Нажмите «Проверить и подключить».</li></ol>
 <p>Одноразовая авторизация, затем история и новые сообщения синхронизируются с сервера UserIO. Chrome или расширение постоянно держать открытыми не нужно.</p>
 <p><a id="vk-personal-login" href="https://id.vk.ru/auth?app_id=51453752&scope=messages%2Coffline&response_type=silent_token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=1.60.0" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
 <p class="hint">После подтверждения входа скопируйте полный адрес итоговой страницы <code>oauth.vk.ru/blank.html</code> из адресной строки и вставьте ниже. Поддерживаются оба ответа VK: токен и одноразовый результат входа. Если VK не дал доступ к сообщениям, UserIO сообщит об этом и не подключит пустой аккаунт. Не пересылайте адрес или токен в переписку.</p>
 <label>Адрес успешной авторизации или токен<input name="authorization" type="password" autocomplete="off" spellcheck="false" required placeholder="Вставьте адрес страницы авторизации VK"></label>
-<label>Ожидаемый VK ID (необязательно)<input name="user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Проверим, что это ваш аккаунт"></label>
+<details><summary>Проверить конкретный VK ID</summary><label>Ожидаемый VK ID (необязательно)<input name="user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Проверим, что это ваш аккаунт"></label></details>
 <p class="hint">UserIO самостоятельно проверит личные диалоги и историю. Если VK не разрешит чтение, аккаунт не будет помечен подключённым. Ваш текст отправляется из личного аккаунта через кнопку в диалоге. Предложения ИИ требуют подтверждения. Отметки о прочтении не отправляются.</p>
-<button class="submit" type="submit">Проверить и подключить личные чаты</button>
+<button class="submit" type="submit">Проверить и подключить</button><details><summary>Нужно подключить сообщество или расширение?</summary><p><button type="button" data-open="vk-community">Переписка сообщества</button></p><p><a href="/download">Расширение Chrome: альтернативный способ</a></p></details>
 </form>
 <form id="vk-community">
 <h2>Подключить переписку VK-сообщества</h2>
@@ -79,8 +82,12 @@ label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:blo
 <p class="hint">Токен хранится отдельно для вашего пользователя UserIO. Он не выводится в списке аккаунтов. Чтение без изменения статуса прочтения; отправка пока выключена.</p>
 <button class="submit" type="submit">Подключить VK-сообщество</button>
 </form>
-<p id="status" role="status" aria-live="polite"></p>
-<section class="connected" aria-label="Подключённые аккаунты"><h2>Ваши подключения</h2><div id="connected-list">Загружаю…</div></section>
+<section class="panel" id="telegram" hidden><h2>Telegram</h2><ol><li>Откройте Telegram на телефоне.</li><li>Перейдите в «Настройки → Устройства → Подключить устройство».</li><li>Запустите вход и отсканируйте QR-код. Если включён облачный пароль, введите его в форме.</li></ol><p>Новый аккаунт должен появиться здесь после подтверждения.</p><a class="submit" href="/telegram-qr/">Перейти к входу в Telegram</a><p class="hint">Не пересылайте код входа или пароль в чат. <a href="/docs#telegram">Подробная инструкция</a></p></section>
+<section class="panel" id="whatsapp" hidden><h2>WhatsApp</h2><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Отсканируйте QR-код своего подключения.</li></ol><p>Каждому пользователю нужен отдельный подключённый мост WhatsApp.</p><a class="submit" href="/whatsapp-qr/">Перейти к входу в WhatsApp</a><p class="hint"><a href="/docs#whatsapp">Инструкция и настройка моста</a></p></section>
+<section class="panel" id="max" hidden><h2>MAX</h2><ol><li>Войдите в MAX на телефоне.</li><li>Администратор подключает отдельную сессию к вашему пользователю UserIO.</li><li>Проверьте свой профиль и последнее сообщение.</li></ol><p class="note">Самостоятельный вход MAX для нового пользователя пока недоступен. Вход в приложение MAX сам по себе не подключает UserIO.</p><a href="/docs#max">Инструкция подключения MAX</a></section>
+<section class="panel" id="sms" hidden><h2>SMS на Android</h2><ol><li>Установите SMS Agent APK. Подойдёт Android 8+ с root или без него.</li><li>Разрешите SMS и работу приложения в фоне. Скопируйте ID устройства.</li><li>Получите настройки своего телефона, вставьте их в приложение и запустите.</li></ol><a class="submit" href="/connect-phone#sms">Подключить свой телефон</a><a class="secondary" href="/sms-gateway/agent/download" download>Скачать APK</a><p class="hint">Токен выдаётся только вашему телефону. <a href="/docs#phone">Инструкция</a></p></section>
+<section class="panel" id="calls" hidden><h2>Звонки через SIM</h2><ol><li>Подготовьте совместимый Android с root и GSM2SIP.</li><li>Получите свой SIP-аккаунт у администратора.</li><li>Подключите маршрут звонков к своему UserIO и проверьте звук.</li></ol><p>SMS APK не подключает голосовые звонки. Для звонков нужна отдельная настройка шлюза.</p><a class="submit" href="/connect-phone#calls">Открыть инструкцию звонков</a></section>
+<p id="status" role="status" aria-live="polite"></p><section id="success" class="panel" hidden><h2>Аккаунт подключён</h2><p id="success-name"></p><a class="submit" href="/">Открыть сообщения</a><button class="secondary" id="connect-another" type="button">Подключить ещё</button></section>
 <script>
 // VK binds its temporary result to the UUID supplied before authorization.
 // Each form load starts a new attempt. Adding a UUID after the callback
@@ -101,13 +108,13 @@ async function connectedAccounts(){
   const ownVks=accounts.filter(a=>a.provider==='vk' && /^vk:[0-9]+$/.test(a.id));
   const expected=forms['vk-personal'].elements.user_id;
   if(ownVks.length===1 && !expected.value)expected.value=ownVks[0].id.substring(3);
-  if(!accounts.length){container.textContent='Подключений пока нет.';return;}
+  if(!accounts.length){container.textContent='Подключений пока нет. Выберите сервис ниже.';container.className='empty';return;}
   for(const account of accounts){
     const row=document.createElement('div');row.className='account';
     const title=document.createElement('span');
     const label=account.id.startsWith('vk:community:')?'VK-сообщество':account.provider==='email'?'IMAP':account.provider==='gmail'?'Gmail':
       account.provider==='matrix'?'Matrix':account.provider==='vk'?'ВКонтакте':account.provider;
-    title.textContent=label+': '+account.display_name;
+    title.textContent=label+': '+account.display_name+' · '+(account.enabled===false?'Отключён':account.capabilities.includes('read')?'Подключён':'Чтение выключено');
     row.append(title);
     const managed=account.id.startsWith('matrix:')||account.id.startsWith('email:')||
       account.id.startsWith('vk:')||account.id.startsWith('sms:user-');
@@ -129,19 +136,43 @@ async function connectedAccounts(){
  }catch(error){container.textContent=error.message||'Ошибка';}
 }
 connectedAccounts();
-function show(key){
- Object.entries(forms).forEach(([type,form])=>form.classList.toggle('active',type===key));
- document.querySelectorAll('[data-open]').forEach(button=>
-   button.classList.toggle('active',button.dataset.open===key));
+let currentService='';
+function show(key,push=true){
+ const known=['','matrix','imap','gmail','yandex','vk-personal','vk-community','telegram','whatsapp','max','sms','calls'];if(!known.includes(key))key='';
+ if(key!==currentService)document.querySelectorAll('input[type=password]').forEach(input=>input.value='');
+ currentService=key;
+ document.getElementById('overview').hidden=!!key;
+ document.getElementById('setup-head').hidden=!key;
+ document.getElementById('success').hidden=true;
+ const formKey=['gmail','yandex'].includes(key)?'imap':key;
+ Object.entries(forms).forEach(([type,form])=>form.classList.toggle('active',type===formKey));
+ document.querySelectorAll('.panel').forEach(panel=>panel.hidden=panel.id!==key);
  document.getElementById('status').textContent='';
- history.replaceState(null,'',key==='matrix'?'/matrix/connect/new':key==='vk-community'?'/vk/community/connect/new':key==='vk-personal'?'/vk/personal/connect/new':'/mail/connect/new');
+ if(formKey==='imap'){
+  const host=forms.imap.elements.host;
+  const presets={gmail:['Gmail','imap.gmail.com','https://myaccount.google.com/apppasswords'],yandex:['Яндекс.Почта','imap.yandex.ru','https://id.yandex.ru/security/app-passwords']};
+  const preset=presets[key];document.getElementById('mail-title').textContent=preset?preset[0]:'Другая почта';
+  host.value=preset?preset[1]:'';forms.imap.elements.port.value='993';document.getElementById('mail-server-settings').open=!preset;
+  const help=document.getElementById('mail-help');help.textContent='';
+  if(preset){const a=document.createElement('a');a.href=preset[2];a.target='_blank';a.rel='noopener noreferrer';a.textContent='Создать пароль приложения ↗';help.append(a);}
+ }
+ const path='/accounts'+(key?'?service='+encodeURIComponent(key):'');
+ if(push)history.pushState({service:key},'',path);else history.replaceState({service:key},'',path);
+ if(key){const heading=document.querySelector('form.active h2,.panel:not([hidden]) h2');if(heading){heading.tabIndex=-1;heading.focus({preventScroll:true});}}
 }
 document.querySelectorAll('[data-open]').forEach(button=>button.onclick=()=>show(button.dataset.open));
+document.getElementById('back-accounts').onclick=()=>show('');
+document.getElementById('connect-another').onclick=()=>show('');
 const originalPath=location.pathname;
 const originalParams=new URLSearchParams(location.search);
-show(originalPath.startsWith('/matrix')?'matrix':originalPath.startsWith('/vk/community')?'vk-community':originalPath.startsWith('/vk/personal')?'vk-personal':'imap');
-if(originalPath.startsWith('/gmail')){
-  forms.imap.querySelector('[name="host"]').value='imap.gmail.com';
+const initialService=originalParams.get('service')||(originalPath.startsWith('/matrix')?'matrix':originalPath.startsWith('/vk/community')?'vk-community':originalPath.startsWith('/vk')?'vk-personal':originalPath.startsWith('/gmail')?'gmail':originalPath.startsWith('/mail')?'imap':'');
+show(initialService,false);
+window.addEventListener('popstate',()=>show(new URLSearchParams(location.search).get('service')||'',false));
+function connectedSuccess(name){
+ Object.values(forms).forEach(f=>f.classList.remove('active'));
+ document.querySelectorAll('.panel').forEach(p=>p.hidden=true);
+ document.getElementById('success').hidden=false;document.getElementById('success-name').textContent=name;
+ document.getElementById('status').textContent='';connectedAccounts();
 }
 const ssoStoreKey='userio-matrix-sso-pending-v1';
 document.getElementById('matrix-sso').onclick=()=>{
@@ -180,7 +211,7 @@ if(originalParams.has('loginToken')){
      const account=await response.json();
      if(!response.ok)throw Error(account.error||'SSO не удалось завершить');
      status.textContent='Аккаунт '+account.display_name+' подключён.';
-     setTimeout(()=>location.assign('/'),1000);
+     connectedSuccess(account.display_name);
    }catch(error){status.textContent=error.message;}
  })();
 }
@@ -212,8 +243,7 @@ for(const [kind,form] of Object.entries(forms)){
      const result=await response.json();
      if(!response.ok)throw new Error(result.error||'Не удалось подключить аккаунт');
      form.reset();
-     status.textContent='Аккаунт '+result.display_name+' подключён. Возвращаюсь в UserIO…';
-     setTimeout(()=>location.assign('/'),900);
+     connectedSuccess(result.display_name);
    }catch(error){status.textContent=error.message||'Ошибка подключения';}
    finally{button.disabled=false;}
  });

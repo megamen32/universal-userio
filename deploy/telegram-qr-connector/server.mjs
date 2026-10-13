@@ -1,4 +1,5 @@
 import http from "node:http";
+import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
@@ -67,6 +68,7 @@ if (!whisperApiKey) console.warn("Telegram auto-transcription disabled: Whisper 
 
 mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
 restoreAgentDeliverDebounce();
+const enrollmentOwners=new EnrollmentOwners(`${stateDir}/slot-owners.json`,process.env.USERIO_TELEGRAM_USER_ID||"user_owner");
 for (const file of readdirSync(sessionsDir)) {
   const match = /^account-(\d+)\.session$/.exec(file);
   if (!match) continue;
@@ -91,13 +93,14 @@ function credentials() {
 }
 
 function registerAccount(slot, user) {
+  const personalHeaders=enrollmentOwners.registrationHeaders(slot);
   const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || `Telegram ${user.id}`;
   const body = JSON.stringify({
     id: `telegram:${user.id}`,
     provider: "telegram",
     display_name: displayName,
     can_read: true,
-    can_reply: false,
+    can_reply: Boolean(personalHeaders),
     credential_ref: `telegram-qr:${slot}`,
     enabled: true,
   });
@@ -108,7 +111,7 @@ function registerAccount(slot, user) {
       headers: {
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(body),
-        Authorization: `Bearer ${process.env.USERIO_API_TOKEN || ""}`,
+        ...(personalHeaders||{Authorization:`Bearer ${process.env.USERIO_API_TOKEN || ""}`}),
       },
     }, (response) => {
       response.resume();
@@ -330,7 +333,7 @@ function newSyncClient(sessionString) {
 // Never dead-ends: the promise resolves when the form is submitted.
 function passwordCallback(slot) {
   return async (hint) => {
-    if (env2faPassword) return env2faPassword;
+    if (env2faPassword && !enrollmentOwners.owners[slot]) return env2faPassword;
     const state = slots.get(slot) || {};
     promptSeq += 1;
     return await new Promise((resolve) => {
@@ -358,10 +361,12 @@ async function finishLogin(slot, client, user) {
   const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || String(user.id);
   try {
     await registerAccount(slot, user);
+    enrollmentOwners.registered(slot);
     slots.set(slot, { status: "connected", name: displayName });
   } catch (error) {
     console.error("Telegram account registration error:", (error && error.message) || "unknown");
     slots.set(slot, { status: "connected-unregistered", name: displayName });
+    return;
   }
   void syncAccount(slot);
 }
@@ -888,18 +893,19 @@ function publicState() {
   return publicIngressState(slots, syncs, liveSlots);
 }
 
-const pageShell = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Connect Telegram</title><style>body{margin:0;font:16px system-ui;background:#111;color:#eee}main{max-width:680px;margin:40px auto;padding:24px}.card{background:#1d1d1d;border-radius:16px;padding:20px;margin:12px 0}button{padding:12px 16px;border:0;border-radius:10px;font-weight:700;cursor:pointer}input{box-sizing:border-box}.qr{width:min(300px,100%);background:#fff;padding:12px;border-radius:12px}form.inline{display:flex;gap:8px;margin:8px 0}form.inline input{flex:1;padding:12px;border:0;border-radius:10px}form.stack input{width:100%;padding:12px;border:0;border-radius:10px;margin:8px 0}</style><main><h1>Connect Telegram <a href="/" style="float:right;font-size:15px">&#8592; back to UserIO</a></h1><form class=inline method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off><button type=submit>Login by phone</button></form><p><a href="__PREFIX__/new"><button>+ Telegram account (QR)</button></a></p><div id=cards></div></main><script>
+const pageShell = `<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Telegram · Аккаунты UserIO</title><style>body{margin:0;font:16px system-ui;background:#111;color:#eee}main{max-width:680px;margin:40px auto;padding:24px}.card{background:#1d1d1d;border-radius:16px;padding:20px;margin:12px 0}button{padding:12px 16px;border:0;border-radius:10px;font-weight:700;cursor:pointer}input{box-sizing:border-box}.qr{width:min(300px,100%);background:#fff;padding:12px;border-radius:12px}form.inline{display:flex;gap:8px;margin:8px 0}form.inline input{flex:1;padding:12px;border:0;border-radius:10px}form.stack input{width:100%;padding:12px;border:0;border-radius:10px;margin:8px 0}</style><main><h1>Telegram <a href="/accounts?service=telegram" style="float:right;font-size:15px">&#8592; Все аккаунты</a></h1><form class=inline method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off><button type=submit>Войти по номеру</button></form><p><a href="__PREFIX__/new"><button>Показать QR-код</button></a></p><div id=cards></div></main><script>
 var prefix = location.pathname.replace(/\\/$/, "");
 var seen = new Map();
+var statusNames={idle:"Подготавливаем вход",waiting:"Отсканируйте QR-код",connecting:"Подключаем аккаунт",connected:"Аккаунт подключён","connected-unregistered":"Вход выполнен, сохранение аккаунта не завершено","code-required":"Введите код входа","password-required":"Введите облачный пароль",error:"Вход не завершён. Попробуйте заново"};
 function esc(v){return String(v==null?"":v).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 function card(s){
   var a = function(p){ return prefix + p; };
-  var html = '<div class=card id="card-'+s.id+'"><b>'+esc(s.id)+(s.mode==="phone"&&s.phone?" ("+esc(s.phone)+")":"")+'</b><p>'+esc(s.status)+(s.name?": "+esc(s.name):"")+'</p>';
-  if (s.sync) html += '<p>ingest: '+esc(s.sync)+(s.syncChats?' · '+s.syncChats+' chats':'')+(s.syncError?' · '+esc(s.syncError):'')+'</p>';
-  if (s.qr) html += '<img class=qr src="'+s.qr+'" alt="Telegram login QR"><p>Telegram \\u2192 Settings \\u2192 Devices \\u2192 Link Desktop Device</p>';
-  if (s.status === "code-required") html += '<form class=stack method=post action="'+a('/code?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Enter the login code'+(s.codeViaApp?" (sent in Telegram)":" (SMS)")+'</p><input name=code inputmode=numeric autocomplete=one-time-code autofocus><button type=submit>Confirm code</button></form>';
-  if (s.status === "password-required") html += '<form class=stack method=post action="'+a('/password?slot='+encodeURIComponent(s.id))+'" data-async=1><p>2FA password'+(s.passwordHint?" (hint: "+esc(s.passwordHint)+")":"")+'</p><input type=password name=password autocomplete=off><button type=submit>Confirm</button></form>';
-  if (s.status === "error") html += '<a href="'+a('/start?slot='+encodeURIComponent(s.id))+'"><button>Try again</button></a>';
+  var html = '<div class=card id="card-'+s.id+'"><b>'+esc(s.name||'Подключение Telegram')+(s.mode==="phone"&&s.phone?" ("+esc(s.phone)+")":"")+'</b><p>'+esc(statusNames[s.status]||'Проверяем подключение')+'</p>';
+  if (s.sync) html += '<p>'+esc(s.sync==='retrying'?'Синхронизация восстанавливается':'Синхронизация сообщений включена')+(s.syncChats?' · '+s.syncChats+' диалогов':'')+'</p>';
+  if (s.qr) html += '<img class=qr src="'+s.qr+'" alt="QR-код входа в Telegram"><p>Telegram \\u2192 Настройки → Устройства → Подключить устройство</p>';
+  if (s.status === "code-required") html += '<form class=stack method=post action="'+a('/code?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Введите код входа'+(s.codeViaApp?" (пришёл в Telegram)":" (SMS)")+'</p><input name=code inputmode=numeric autocomplete=one-time-code autofocus><button type=submit>Подтвердить код</button></form>';
+  if (s.status === "password-required") html += '<form class=stack method=post action="'+a('/password?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Облачный пароль'+(s.passwordHint?" (подсказка: "+esc(s.passwordHint)+")":"")+'</p><input type=password name=password autocomplete=off><button type=submit>Подтвердить</button></form>';
+  if (s.status === "error") html += '<a href="'+a('/start?slot='+encodeURIComponent(s.id))+'"><button>Начать заново</button></a>';
   html += '</div>';
   return html;
 }
@@ -932,6 +938,20 @@ poll();
 http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
+  let browserOwner=null;
+  if(['/','/state','/new','/phone','/code','/password','/start'].includes(url.pathname)){
+    try{
+      browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
+        const check=http.get(target,{headers:auth},response=>{
+          let data='';response.on('data',chunk=>{data+=chunk;if(data.length>8192)check.destroy();});
+          response.on('end',()=>{try{if(response.statusCode!==200)throw Error('login');resolve(JSON.parse(data));}catch(error){reject(error);}});
+        });check.setTimeout(4000,()=>check.destroy(Error('login timeout')));check.on('error',reject);
+      }));
+      if(slot&&!enrollmentOwners.allowed(slot,browserOwner.principal.user_id))throw Error('Not your enrollment');
+      if(!['/','/state'].includes(url.pathname)&&!browserOwner.principal.can_manage)throw Error('Personal login required');
+    }catch(error){res.writeHead(403,{'content-type':'application/json'});return res.end(JSON.stringify({error:'Войдите в свой UserIO для подключения аккаунта'}));}
+  }
+
   if (url.pathname === "/agent-deliver-callback" && req.method === "POST") {
     let raw = ""; req.on("data", (chunk) => { raw += chunk; });
     req.on("end", () => {
@@ -943,10 +963,11 @@ http.createServer(async (req, res) => {
   }
   if (url.pathname === "/state") {
     res.setHeader("content-type", "application/json");
-    return res.end(JSON.stringify(publicState()));
+    return res.end(JSON.stringify(enrollmentOwners.filter(publicState(),browserOwner.principal.user_id)));
   }
   if (url.pathname === "/new") {
     const created = `account-${nextSlot++}`;
+    enrollmentOwners.bind(created,browserOwner.principal,browserOwner.headers);
     slots.set(created, { status: "idle", mode: "qr" });
     void startQr(created);
     res.writeHead(302, { Location: `${publicPrefix}/?slot=${created}` });
@@ -1213,6 +1234,7 @@ http.createServer(async (req, res) => {
     const phone = (params.get("phone") || "").trim();
     if (phone) {
       const created = `account-${nextSlot++}`;
+      enrollmentOwners.bind(created,browserOwner.principal,browserOwner.headers);
       slots.set(created, { status: "idle", mode: "phone", phone });
       void startPhone(created);
       res.writeHead(302, { Location: `${publicPrefix}/?slot=${created}` });

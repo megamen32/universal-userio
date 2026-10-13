@@ -110,3 +110,16 @@ without phone/access-hash/session values or message text. Category flags remain
 separate; this option does not silently turn an automatic “all groups” filter
 into a UserIO allow-all policy. Missing known chats can then use the existing
 exact-account `/reconcile` history route; historical ingestion remains silent.
+
+
+## Personal browser enrollment
+
+NEW browser slots resolve the actual personal UserIO cookie through
+`GET /v1/connection-principal`. `slot-owners.json` stores only slot→user identity
+with mode0600; the cookie stays transient until registration and is never stored.
+`/state` and code/password/start are limited to that user's slots. Existing slots
+without metadata retain the deployment owner and their sessions are untouched.
+New accounts register through that same user's cookie, with normal reply support;
+failed registration does not start ingestion as the operator. Service ingress
+uses the existing unique registered account owner and refuses ambiguous bindings.
+Install `enrollment-owner.mjs` with `server.mjs` before the worker restart.

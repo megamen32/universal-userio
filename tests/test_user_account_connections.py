@@ -131,7 +131,7 @@ def test_connection_forms_and_http_account_scope(context,monkeypatch):
         with urlopen(Request(base+"/accounts/connect/new",headers={
             "Authorization":"Bearer "+token}),timeout=5) as response:
             html=response.read().decode()
-        assert all(x in html for x in ("Добавить аккаунт","Matrix","IMAP","ВКонтакте"))
+        assert all(x in html for x in ("Ваши аккаунты","Matrix","IMAP","ВКонтакте"))
         body=json.dumps({"homeserver":"https://chat.example.org",
             "user_id":"@alice:example.org","password":"secret"}).encode()
         request=Request(base+"/v1/matrix/accounts",data=body,method="POST",
