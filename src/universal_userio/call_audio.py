@@ -15,7 +15,7 @@ def archive_for(conversation):
 
 
 def recording(conversation, message, root=None):
-    if (conversation.get('source') != 'phone' and not str(conversation.get('source', '')).startswith('matrix:')
+    if (conversation.get('source') not in {'phone','telegram'} and not str(conversation.get('source', '')).startswith('matrix:')
             or message.get('source') != conversation.get('source')
             or message.get('conversation_id') != conversation.get('id')):
         return None
@@ -54,7 +54,7 @@ def recording(conversation, message, root=None):
                     text = '\n'.join(s['text'] for s in segments if isinstance(s, dict) and isinstance(s.get('text'), str))
                     if text: transcript[name] = text
         for name, label in TRACKS.items():
-            if name == 'assistant' and str(conversation.get('source', '')).startswith('matrix:'): label = 'ИИ'
+            if name == 'assistant' and conversation.get('source') != 'phone': label = 'ИИ'
             path = folder / (name + '.wav')
             if path.is_symlink() or not 44 <= path.stat().st_size <= 44 + rate * 2 * 7200:
                 return None
@@ -76,7 +76,7 @@ def recording(conversation, message, root=None):
 
 
 def enrich(conversation):
-    if conversation and (conversation.get('source') == 'phone' or str(conversation.get('source', '')).startswith('matrix:')):
+    if conversation and (conversation.get('source') in {'phone','telegram'} or str(conversation.get('source', '')).startswith('matrix:')):
         for message in conversation.get('messages', []):
             if message.get('direction') == 'system' and message.get('body', '').startswith('Звонок завершён'):
                 audio = recording(conversation, dict(message, conversation_id=conversation['id']))

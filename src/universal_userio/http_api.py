@@ -626,6 +626,19 @@ def handler(
                     record = calls_for(service).start(user_id=user_id, **payload)
                     self._reply(202, {'ok':True, 'call':record})
                     return
+                if path == '/v1/calls/telegram':
+                    from .telegram_calls import calls_for
+                    record = calls_for(service).start(user_id=user_id, **self._json())
+                    self._reply(202, {'ok':True, 'call':record})
+                    return
+                if path.startswith('/v1/calls/telegram/') and path.endswith('/stop'):
+                    if not service._store.capability_enabled('send', user_id=user_id):
+                        self._reply(403, {'error':'send_capability_disabled'})
+                        return
+                    from .telegram_calls import calls_for
+                    record = calls_for(service).stop(path.split('/')[-2],user_id)
+                    self._reply(200, {'ok':True,'call':record})
+                    return
                 if path == '/v1/calls/matrix/noticeplace':
                     from .matrix_calls import noticeplace_call
                     if not service._store.capability_enabled('send', user_id=user_id):
@@ -1277,6 +1290,13 @@ def handler(
                     self._reply(403, {'error':'read_capability_disabled'})
                     return
                 from .matrix_calls import calls_for
+                self._reply(200, {'ok':True,'call':calls_for(service).get(path.split('/')[-1],user_id)})
+                return
+            if path.startswith('/v1/calls/telegram/'):
+                if not service._store.capability_enabled('read', user_id=user_id):
+                    self._reply(403, {'error':'read_capability_disabled'})
+                    return
+                from .telegram_calls import calls_for
                 self._reply(200, {'ok':True,'call':calls_for(service).get(path.split('/')[-1],user_id)})
                 return
             audio_route = re.fullmatch(r'/v1/conversations/([^/]+)/call-audio/([^/]+)/(caller|assistant)', path)

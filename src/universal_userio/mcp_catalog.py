@@ -374,7 +374,24 @@ MATRIX_CALL_SPECS = (
 )
 TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS)
 
+TELEGRAM_CALL_SPECS = (
+    ToolSpec('userio.calls.telegram.start',
+        'Start one explicitly authorized AI Secretary voice call through its existing Telegram client. '
+        'Keep request_id: admitted or unknown calls must never be replayed.',
+        schema({'account_ref':{'type':'string'},'target':{'type':'string'},
+                'purpose':{'type':'string','maxLength':500},'greeting':{'type':'string','maxLength':1000},
+                'request_id':{'type':'string','minLength':16,'maxLength':128},
+                'max_seconds':{'type':'integer','minimum':30,'maximum':600},'confirm':{'type':'boolean'}},
+               ['account_ref','target','purpose','request_id','confirm'])),
+    ToolSpec('userio.calls.telegram.get','Read this owned Telegram call receipt without dialing again.',
+        schema({'call_id':{'type':'string'}},['call_id'])),
+    ToolSpec('userio.calls.telegram.stop','End this owned Telegram call; never dial another call.',
+        schema({'call_id':{'type':'string'}},['call_id'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
+
 TOOL_CAPABILITIES = {
+    'userio.calls.telegram.start':'send', 'userio.calls.telegram.get':'read', 'userio.calls.telegram.stop':'send',
     'userio.calls.matrix.start':'send', 'userio.calls.matrix.get':'read', 'userio.calls.matrix.stop':'send',
     'userio.messenger.upload': 'send',
     'userio.messenger.events': 'read',

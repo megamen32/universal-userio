@@ -103,6 +103,17 @@ class UserIOToolDispatcher:
                     call = calls.stop(self._required(arguments,'call_id'),user_id)
                 else: raise KeyError('unknown call operation')
                 return {'ok':True,'call':call}
+            if name.startswith('userio.calls.telegram.'):
+                from .telegram_calls import calls_for
+                calls = calls_for(self._service)
+                if name == 'userio.calls.telegram.start':
+                    call = calls.start(user_id=user_id, **arguments)
+                elif name == 'userio.calls.telegram.get':
+                    call = calls.get(self._required(arguments,'call_id'),user_id)
+                elif name == 'userio.calls.telegram.stop':
+                    call = calls.stop(self._required(arguments,'call_id'),user_id)
+                else: raise KeyError('unknown call operation')
+                return {'ok':True,'call':call}
             if name == "userio.channels.download":
                 file = channels.download(
                     file_ref=self._required(arguments, "file_ref")

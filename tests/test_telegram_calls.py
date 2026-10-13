@@ -1,0 +1,152 @@
+"""Fast unit<1s/max10s: durable caller-bound admission and private call audio."""
+import json
+from unittest.mock import Mock
+import wave
+import pytest
+
+from universal_userio import telegram_calls, call_audio
+
+
+def test_worker_counter_uses_existing_relay_durable_request_id_contract():
+    import re
+    request=telegram_calls.relay_request_id('1')
+    assert request=='rpc-00000001'
+    assert re.fullmatch(r'[A-Za-z0-9_-]{8,128}',request)
+    assert request==telegram_calls.relay_request_id('1')
+    for invalid in ('0','-1','bad-counter',None):
+        with pytest.raises(ValueError): telegram_calls.relay_request_id(invalid)
+
+
+def service_fixture():
+    service=Mock(); service._store.default_user_id='owner'
+    service._store.capability_enabled.return_value=True
+    service._store.accounts.return_value=[{'id':'telegram:100001','provider':'telegram','enabled':True}]
+    provider=Mock(account_ref='telegram:100001',authorized_user='owner',sender_id='100001')
+    service.messenger_providers={'telegram:100001':provider}
+    return service,provider
+
+
+def test_admitted_telegram_call_is_never_replayed_after_restart(tmp_path,monkeypatch):
+    service,provider=service_fixture()
+    monkeypatch.setattr(telegram_calls.threading.Thread,'start',lambda _:None)
+    args=dict(user_id='owner',account_ref='telegram:100001',target='100002',
+              purpose='Проверить голос',request_id='one-unique-request',confirm=True)
+    first=telegram_calls.TelegramCalls(service,tmp_path).start(**args)
+    after=telegram_calls.TelegramCalls(service,tmp_path)
+    assert after.start(**args)==dict(first,status='unknown')
+    provider._capabilities.assert_called_once(); provider._request.assert_not_called()
+    assert not after.active
+    with pytest.raises(KeyError): after.get(first['call_id'],'different-user')
+    with pytest.raises(ValueError,match='another call'): after.start(**dict(args,purpose='Изменённое поручение'))
+    with pytest.raises(ValueError,match='confirmation'): after.start(**dict(args,confirm=False))
+
+
+def test_only_existing_owner_and_exact_relay_sender_can_start(tmp_path,monkeypatch):
+    service,provider=service_fixture()
+    monkeypatch.setattr(telegram_calls.threading.Thread,'start',lambda _:None)
+    args=dict(user_id='owner',account_ref='telegram:100001',target='100002',
+              purpose='Проверить голос',request_id='one-unique-request',confirm=True)
+    manager=telegram_calls.TelegramCalls(service,tmp_path)
+    with pytest.raises(PermissionError): manager.start(**dict(args,user_id='other'))
+    provider.sender_id='100003'
+    with pytest.raises(ValueError,match='identity'): manager.start(**args)
+    assert not list(tmp_path.iterdir()); provider._request.assert_not_called()
+
+
+def test_poll_loss_preserves_final_rpc_channel_and_unknown_admission(tmp_path,monkeypatch):
+    import asyncio
+    import threading
+    from unittest.mock import AsyncMock
+    async def check():
+        reader=asyncio.StreamReader(); gate=threading.Event(); order=[]
+        class Provider:
+            def _request(self,method,path,payload=None):
+                if path.endswith('/start'): return {}
+                if '/updates?' in path: raise OSError('lost update page')
+                if path.endswith('/rpc'):
+                    assert payload['request_id']=='rpc-00000001'
+                    order.append('rpc-enter'); assert gate.wait(1)
+                    raise OSError('lost request receipt')
+                if path.endswith('/status'):
+                    return {'state':'CLAIMED','provider_attempted':True,'receipt':None}
+                if path.endswith('/close'): pytest.fail('unknown admission must remain open')
+                pytest.fail('unexpected relay route')
+        class Writer:
+            def write(self,line):
+                frame=json.loads(line)
+                if frame.get('action')=='telegram_transport':
+                    reader.feed_data(json.dumps({'event':'telegram_rpc','request_id':'1',
+                        'method':'phone.requestCall','params':{}}).encode()+b'\n')
+                elif frame.get('type')=='hangup': order.append('hangup'); gate.set()
+                elif frame.get('type')=='rpc_result':
+                    order.append('final-rpc-reply'); reader.feed_eof()
+            async def drain(self): pass
+            def close(self): order.append('socket-close')
+            async def wait_closed(self): pass
+        monkeypatch.setattr(telegram_calls.asyncio,'open_unix_connection',AsyncMock(return_value=(reader,Writer())))
+        service,_=service_fixture(); manager=telegram_calls.TelegramCalls(service,tmp_path)
+        record={'call_id':'22222222-3333-4444-8555-666666666666','admission_id':'test-admission',
+            'owner_user_id':'owner','account_ref':'telegram:100001','target':'100002',
+            'purpose':'Тест','greeting':'','max_seconds':30,'status':'accepted','answered':False}
+        with pytest.raises(OSError): await manager._call(record,Provider(),threading.Event())
+        assert order.index('hangup')<order.index('final-rpc-reply')<order.index('socket-close')
+        assert record['status']=='unknown' and record['relay_reconciliation']=='pending'
+    asyncio.run(check())
+
+
+def test_hangup_rejects_late_dial_but_allows_teardown_rpc(tmp_path,monkeypatch):
+    import asyncio
+    import threading
+    from unittest.mock import AsyncMock
+    async def check():
+        reader=asyncio.StreamReader(); invoked=[]; replies=[]
+        class Provider:
+            def _request(self,method,path,payload=None):
+                if path.endswith('/start'): return {}
+                if '/updates?' in path: raise OSError('lost update page')
+                if path.endswith('/rpc'):
+                    invoked.append(payload['method']); return {'result':True}
+                if path.endswith('/status'): return {'state':'PREPARED','provider_attempted':False}
+                if path.endswith('/close'): return {}
+                pytest.fail('unexpected relay route')
+        class Writer:
+            def write(self,line):
+                frame=json.loads(line)
+                if frame.get('type')=='hangup':
+                    for counter,method in (('1','phone.requestCall'),('2','phone.discardCall')):
+                        reader.feed_data(json.dumps({'event':'telegram_rpc','request_id':counter,
+                            'method':method,'params':{}}).encode()+b'\n')
+                elif frame.get('type')=='rpc_result':
+                    replies.append(frame)
+                    if frame['request_id']=='2': reader.feed_eof()
+            async def drain(self): pass
+            def close(self): pass
+            async def wait_closed(self): pass
+        monkeypatch.setattr(telegram_calls.asyncio,'open_unix_connection',AsyncMock(return_value=(reader,Writer())))
+        service,_=service_fixture(); manager=telegram_calls.TelegramCalls(service,tmp_path)
+        record={'call_id':'22222222-3333-4444-8555-666666666666','admission_id':'test-admission',
+            'owner_user_id':'owner','account_ref':'telegram:100001','target':'100002',
+            'purpose':'Тест','greeting':'','max_seconds':30,'status':'accepted','answered':False}
+        with pytest.raises(OSError): await manager._call(record,Provider(),threading.Event())
+        assert invoked==['phone.discardCall']
+        assert replies[0]['error'] is True and replies[1]['result'] is True
+        assert record['status']=='failed'
+    asyncio.run(check())
+
+
+def test_telegram_two_track_audio_is_bound_to_secretary_and_recipient(tmp_path):
+    call_id='22222222-3333-4444-8555-666666666666'; folder=tmp_path/call_id; folder.mkdir()
+    for track in ('caller','assistant'):
+        with wave.open(str(folder/(track+'.wav')),'wb') as audio:
+            audio.setparams((1,2,48000,0,'NONE','')); audio.writeframes(b'\x01\x00'*4800)
+    (folder/'manifest.json').write_text(json.dumps({'callId':call_id,'complete':True,'sampleRate':48000,
+        'peerFields':{'accountRef':'telegram:100001','peerRef':'100002'}}))
+    (folder/'live-transcript.json').write_text(json.dumps({'caller':'Да, слышу','assistant':'Здравствуйте'}))
+    conv={'source':'telegram','id':'conv','account_ref':'telegram:100001','peer_id':'100002'}
+    msg={'source':'telegram','conversation_id':'conv','sender':call_id,'message_id':'end'}
+    result=call_audio.recording(conv,msg,tmp_path)
+    assert result['complete'] and result['duration']==.1
+    assert [t['transcript'] for t in result['tracks']]==['Да, слышу','Здравствуйте']
+    assert result['tracks'][1]['label']=='ИИ'
+    assert call_audio.recording(dict(conv,account_ref='telegram:100003'),msg,tmp_path) is None
+    assert call_audio.recording(dict(conv,peer_id='100004'),msg,tmp_path) is None
