@@ -168,3 +168,14 @@ OMP_NUM_THREADS=1,OPENBLAS_NUM_THREADS=1: host cpu_count не используе
 PNG/JPEG/GIF/WebP с generic native MIME определяется по bytes signature.
 Автоматическое обозначение [Вложение]/[photo] и пустой текст удаляются после
 успешной публикации media; смысловая подпись сохраняется.
+
+
+Все импортированные media события несут io.userio.bridge, в том числе
+когда sender — сам Matrix-владелец. Транзакции с этой отметкой не уходят
+обратно к провайдеру. Отдельный regression проверяет весь путь
+native media -> Matrix event -> AS transaction -> ignored.
+
+MAX иногда подтверждает отправку файла раньше готовности download metadata.
+Для сообщений младше120s повтор raw media начинается через2s; старые
+недоступные вложения сохраняют backoff60s…3600s. Повторяется только чтение
+байтов, а не native send. PNG с generic FILE MIME отображается как m.image.

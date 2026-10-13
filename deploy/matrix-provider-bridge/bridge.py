@@ -274,7 +274,8 @@ class Bridge:
                 uploaded=json.loads(uploaded[0])
             kind = "m.image" if mime.startswith("image/") else "m.audio" if mime.startswith("audio/") else "m.video" if mime.startswith("video/") else "m.file"
             media_event=self.send_matrix(portal["room"], {"msgtype":kind,"body":message.get("attachments",[{}])[0].get("filename") or "Вложение "+portal["source"].upper(),
-                "url":uploaded["content_uri"],"info":{"mimetype":mime,"size":len(data)}},
+                "url":uploaded["content_uri"],"info":{"mimetype":mime,"size":len(data)},
+                BRIDGE_FIELD:{"account_ref":portal["account"],"message_id":mid}},
                 "media_"+HASH(cid+"|"+mid),sender)
             with self.lock,self.db:
                 self.db.execute("INSERT OR IGNORE INTO media_links VALUES (?,?,?)",(cid,mid,media_event))
@@ -282,7 +283,10 @@ class Bridge:
             self.hide_media_placeholder(portal,cid,mid,message)
         except Exception:
             attempts=(retry["attempts"] if retry and retry["fingerprint"]==fingerprint else 0)+1
-            delay=min(3600,60*2**min(attempts-1,6))
+            try:age=time.time()-float(message.get("received_at",0))
+            except (TypeError,ValueError):age=3600
+            base=2 if 0<=age<120 else 60
+            delay=min(3600,base*2**min(attempts-1,6))
             with self.lock,self.db:
                 self.db.execute("INSERT OR REPLACE INTO media_retries VALUES (?,?,?,?,?)",
                     (cid,mid,fingerprint,attempts,time.time()+delay))

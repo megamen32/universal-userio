@@ -1,5 +1,6 @@
 """Fast unit: delivery isolation, replay and leave safety (expected 2s, maximum 30s)."""
 import json
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -222,5 +223,22 @@ class Tests(unittest.TestCase):
         self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
         self.assertEqual(self.b.db.execute("SELECT count(*) FROM media_retries").fetchone()[0],0)
         self.assertEqual(self.b.db.execute("SELECT count(*) FROM media_links").fetchone()[0],1)
+
+    def test_native_media_projection_does_not_send_back_to_provider(self):
+        self.media_fixture()
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        content=next(c for m,p,c,k in self.mx.calls if "/send/m.room.message/" in p)
+        self.assertIn(BRIDGE_FIELD,content)
+        self.b.accept_transaction("native-media",{"events":[self.evt(content=content)]})
+        self.b.drain()
+        self.assertEqual(self.b.db.execute("SELECT status FROM jobs").fetchone()[0],"ignored")
+        self.assertEqual(len(self.media_calls),1)
+    def test_fresh_unavailable_file_retries_in_seconds_instead_of_a_minute(self):
+        self.media_fixture()
+        self.message["received_at"]=time.time()
+        self.uio.request=lambda *a,**k:(_ for _ in ()).throw(ValueError("file indexing pending"))
+        self.b.import_media(self.portal,"conv_vk","mid",self.message,self.b.owner)
+        row=self.b.db.execute("SELECT next_try FROM media_retries").fetchone()
+        self.assertLess(row[0]-time.time(),2.1)
 
 if __name__=="__main__":unittest.main()
