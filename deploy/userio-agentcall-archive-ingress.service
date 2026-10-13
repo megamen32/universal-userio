@@ -1,0 +1,32 @@
+[Unit]
+Description=Import completed reserve44 call recordings into UserIO
+After=network-online.target universal-userio.service
+Wants=network-online.target
+Requires=universal-userio.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/universal-userio
+Environment=PYTHONPATH=/opt/universal-userio/src
+Environment=USERIO_ACCOUNT_ID=phone100
+Environment=USERIO_ARCHIVE_SSH_HOST=192.168.2.5
+EnvironmentFile=/etc/universal-userio.env
+ExecStart=/usr/bin/python3 -m universal_userio.agentcall_archive_ingress
+Restart=on-failure
+RestartSec=15
+MemoryHigh=134217728
+MemoryMax=268435456
+MemorySwapMax=0
+CPUQuota=50%
+TasksMax=32
+IOWeight=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agentcall/recordings /var/lib/universal-userio
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
