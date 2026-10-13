@@ -1680,6 +1680,12 @@ def handler(
                 if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return
+                if source_hint=='max':
+                    from .matrix_max_media import download as max_binary
+                    try:file=max_binary(service,user_id,conv,message)
+                    except (ValueError,RuntimeError,OSError):
+                        self._reply(503,{'error':'MAX media is temporarily unavailable or exceeds 2 MiB'});return
+                    self._reply_raw(200,file.data,content_type=file.content_type,filename=file.filename);return
                 if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:'):
                     from .vk_web import VKWeb
                     try:file=VKWeb(service,user_id).download(real_id,message_id)

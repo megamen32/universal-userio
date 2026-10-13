@@ -65,6 +65,15 @@ class Tests(unittest.TestCase):
         self.b.reconcile_approved({"room":"!vk:example.org"},conv)
         self.assertEqual(self.b.db.execute("SELECT status,receipt FROM jobs").fetchone()[:],("sent","99"))
         self.assertFalse(self.uio.calls)
+    def test_confirmed_delivery_replaces_prior_projected_echo(self):
+        self.b.db.execute("INSERT INTO jobs(event_id,payload,status,receipt) VALUES (?,?,?,?)",
+            ("$human",json.dumps(self.evt()),"sent","99"))
+        self.b.db.execute("INSERT INTO mappings VALUES (?,?,?,?,?)",("conv_vk","vk:1|2:99","$echo",self.b.owner,"old"))
+        self.b.db.commit()
+        self.b.import_message(dict(self.b.db.execute("SELECT * FROM portals").fetchone()),self.uio.conv,
+            {"message_id":"vk:1|2:99","body":"hello","direction":"outgoing"})
+        self.assertEqual(self.b.db.execute("SELECT event FROM mappings").fetchone()[0],"$human")
+        self.assertTrue(any("/redact/" in p for _,p,_,_ in self.mx.calls))
     def test_transaction_replay_exactly_once(self):
         p={"events":[self.evt()]}
         self.b.accept_transaction("txn",p);self.b.accept_transaction("txn",p)

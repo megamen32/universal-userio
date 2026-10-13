@@ -70,6 +70,7 @@ class Bridge:
             CREATE TABLE IF NOT EXISTS mappings (
                 cid TEXT NOT NULL, mid TEXT NOT NULL, event TEXT NOT NULL,
                 sender TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(cid,mid));
+            CREATE TABLE IF NOT EXISTS media_links (cid TEXT NOT NULL, mid TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(cid,mid));
             CREATE TABLE IF NOT EXISTS jobs (
                 event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
                 receipt TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '');
@@ -195,15 +196,17 @@ class Bridge:
             suffix = mid.rsplit(":",1)[-1].rsplit("-",1)[-1]
             sent = self.db.execute("SELECT event_id FROM jobs WHERE status='sent' AND "
                 "json_extract(payload,'$.room_id')=? AND (receipt=? OR receipt LIKE ?) LIMIT 1", (portal["room"],suffix, "%:"+suffix)).fetchone()
-            if sent:
+            if sent and (not old or old["event"] != sent["event_id"]):
                 if old and old["event"] != sent["event_id"]:
                     self.client("PUT", "/rooms/"+Q(portal["room"])+"/redact/"+Q(old["event"])+"/"+Q("echo_"+HASH(cid+"|"+mid)),
                         {"reason":"Убран повтор подтверждённого сообщения моста"},user=old["sender"])
                 with self.lock,self.db:
-                    self.db.execute("INSERT INTO mappings VALUES (?,?,?,?,?)",
+                    self.db.execute("INSERT OR REPLACE INTO mappings VALUES (?,?,?,?,?)",
                         (cid,mid,sent["event_id"],self.owner,current))
                 return
         if old and old["body_hash"] == current:
+            if message.get("attachments"):
+                self.import_media(portal,cid,mid,message,old["sender"])
             return
         sender = old["sender"] if old else self.owner if message.get("direction") == "outgoing" and self.owner_http else self.ghost(portal["source"], portal["account"],
             "owner" if message.get("direction")=="outgoing" else str(message.get("sender") or portal["peer"]),
@@ -229,13 +232,12 @@ class Bridge:
         with self.lock,self.db:
             self.db.execute("INSERT OR REPLACE INTO mappings VALUES (?,?,?,?,?)",
                 (cid,mid,old["event"] if old else event,sender,current))
-        if message.get("attachments") and not old:
+        if message.get("attachments"):
             self.import_media(portal, cid, mid, message, sender)
 
     def import_media(self, portal, cid, mid, message, sender):
-        # Current UserIO's HTTP binary seam supports native VK photo/document.
-        # MAX binary transfer is kept explicitly unavailable, never a fake mxc.
-        if portal["source"] != "vk":
+        # Binary bytes come from the existing authenticated UserIO provider seam.
+        if self.db.execute("SELECT 1 FROM media_links WHERE cid=? AND mid=?",(cid,mid)).fetchone():
             return
         try:
             result = self.uio.request("GET","/v1/conversations/"+Q(cid)+"/media/"+Q(mid)+"/raw",limit=MAX_FILE)
@@ -245,12 +247,18 @@ class Bridge:
             # Upload is JSON even when request bytes are raw.
             if isinstance(uploaded,tuple):
                 uploaded=json.loads(uploaded[0])
-            kind = "m.image" if mime.startswith("image/") else "m.file"
-            self.send_matrix(portal["room"], {"msgtype":kind,"body":message.get("attachments",[{}])[0].get("filename") or "Вложение VK",
+            kind = "m.image" if mime.startswith("image/") else "m.audio" if mime.startswith("audio/") else "m.video" if mime.startswith("video/") else "m.file"
+            media_event=self.send_matrix(portal["room"], {"msgtype":kind,"body":message.get("attachments",[{}])[0].get("filename") or "Вложение "+portal["source"].upper(),
                 "url":uploaded["content_uri"],"info":{"mimetype":mime,"size":len(data)}},
                 "media_"+HASH(cid+"|"+mid),sender)
+            with self.lock,self.db:
+                self.db.execute("INSERT OR IGNORE INTO media_links VALUES (?,?,?)",(cid,mid,media_event))
+            old=self.db.execute("SELECT * FROM mappings WHERE cid=? AND mid=?",(cid,mid)).fetchone()
+            if old and re.fullmatch(r"\\[[^\\]]+\\]",str(message.get("body") or "")):
+                self.client("PUT","/rooms/"+Q(portal["room"])+"/redact/"+Q(old["event"])+"/"+Q("placeholder_"+HASH(cid+"|"+mid)),
+                    {"reason":"Вместо обозначения показано исходное вложение"},user=old["sender"])
         except Exception:
-            LOG.warning("VK media unavailable for portal %s", portal["room"])
+            LOG.warning("Provider media unavailable for portal %s", portal["room"])
 
     def reconcile_approved(self, portal, conv):
         """Restore confirmed outcomes after a lost HTTP response, without sending."""
