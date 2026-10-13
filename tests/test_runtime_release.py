@@ -138,6 +138,22 @@ def test_prepare_install_verify_and_restore_are_allowlisted(tmp_path: Path) -> N
     assert not (runtime / ".userio-release.json").exists()
 
 
+def test_verify_after_docs_commit_requires_identical_managed_closure(tmp_path: Path) -> None:
+    source=_source_repo(tmp_path)
+    runtime=tmp_path/'runtime';runtime.mkdir()
+    units=tmp_path/'units';units.mkdir()
+    manifest=build_manifest(source)
+    rollback=prepare_rollback(manifest,runtime,units,tmp_path/'rollbacks')
+    install_release(source,manifest,rollback,runtime,units)
+    (source/'README.md').write_text('Published acceptance evidence\n')
+    _git(source,'add','README.md');_git(source,'commit','-qm','docs only');_git(source,'push','-q','origin','main')
+    assert verify_release(source,manifest,runtime,units)['commit']==manifest['commit']
+    (source/'src/universal_userio/runtime.py').write_text('ACTUAL_CHANGE=True\n')
+    _git(source,'add','src/universal_userio/runtime.py');_git(source,'commit','-qm','runtime changed');_git(source,'push','-q','origin','main')
+    with pytest.raises(ReleaseError,match='source commit does not match'):
+        verify_release(source,manifest,runtime,units)
+
+
 def test_mid_install_failure_restores_before_returning(tmp_path: Path) -> None:
     source = _source_repo(tmp_path)
     runtime = tmp_path / "runtime"

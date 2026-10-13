@@ -545,8 +545,14 @@ def verify_release(
     source_root = Path(source).resolve(strict=True)
     runtime_root = Path(runtime).resolve(strict=True)
     units = Path(unit_root).resolve(strict=True)
-    if _source_identity(source_root, remote_ref) != manifest["commit"]:
-        raise ReleaseError("source commit does not match manifest")
+    current = _source_identity(source_root, remote_ref)
+    if current != manifest["commit"]:
+        # A post-canary documentation commit must not require reinstalling or
+        # relabelling a running release. Its entire published managed closure
+        # must still match, and the installed revision must be an ancestor.
+        _git(source_root, 'merge-base', '--is-ancestor', manifest['commit'], current)
+        if build_manifest(source_root, remote_ref)['entries'] != entries:
+            raise ReleaseError("source commit does not match manifest")
     for entry in entries:
         _verify_file(_target(runtime_root, entry["path"]), entry["sha256"], entry["mode"])
         if entry["path"] in _SERVICE_PATHS:
