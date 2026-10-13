@@ -1,0 +1,17 @@
+[Unit]
+Description=Keep selected Telegram work forums and topics visible in Matrix
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/roomhacker/matrix-synapse/ops/telegram_forums.py --root /home/roomhacker/matrix-synapse --catalog /home/roomhacker/matrix-synapse/ops/telegram-forums.catalog.json
+MemoryHigh=32M
+MemoryMax=64M
+MemorySwapMax=0
+CPUQuota=25%
+TasksMax=16
+IOWeight=10
+RuntimeMaxSec=60
+TimeoutStartSec=60
+UMask=0077

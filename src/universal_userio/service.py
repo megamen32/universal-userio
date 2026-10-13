@@ -1036,8 +1036,8 @@ class UserIOService:
             raise ValueError("Сообщение не может быть пустым")
         user = self._store._user(user_id)
         conv=self._store.conversation(conversation_id,user_id=user)
-        if upload_id and (not conv or conv['source']!='vk'):
-            raise ValueError('Вложения поддерживаются в личном VK')
+        if upload_id and (not conv or conv['source'] not in {'vk','max'}):
+            raise ValueError('Вложения поддерживаются в личных VK и MAX')
         draft_id = "draft_web_" + hashlib.sha256(f"{user}:{request_id}".encode()).hexdigest()
         with self._manual_send_lock:
             try:
@@ -1052,6 +1052,9 @@ class UserIOService:
             if conv and conv['source']=='vk':
                 from .vk_web import VKWeb
                 VKWeb(self,user).bind(draft,conv,upload_id)
+            if conv and conv['source']=='max' and upload_id:
+                from .max_web import MaxWeb
+                MaxWeb(self,user).bind(draft,conv,upload_id)
         return self.approve(draft.id, user_id=user, expected_snapshot={
             "expected_text": text, "expected_chat_id": conversation_id, "expected_attachments": [],
         })
@@ -1362,6 +1365,9 @@ class UserIOService:
         elif conversation["source"] == "max":
             self.require_max_reply_account(conversation,user_id)
             max_client=self.max_client_for(conversation,user_id)
+            from .max_web import MaxWeb
+            files=MaxWeb(self,user_id);file=files.for_draft(draft.id,conversation)
+            if file:return partial(files.send_file,max_client,conversation,draft,file)
             chat_id = str(conversation.get("peer_id") or conversation.get("sender") or "")
 
             def _send_max(client=max_client, chat_id=chat_id, body=draft.body) -> str:

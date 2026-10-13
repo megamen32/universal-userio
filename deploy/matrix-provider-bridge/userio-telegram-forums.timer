@@ -1,0 +1,8 @@
+[Unit]
+Description=Maintain topics of selected work forums
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+Unit=userio-telegram-forums.service
+[Install]
+WantedBy=timers.target

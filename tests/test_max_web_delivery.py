@@ -84,6 +84,7 @@ def test_edit_link_and_real_media_does_not_drop_the_media():
 def setup(tmp_path):
     store=SQLiteUserIOStore(tmp_path/'db.sqlite'); t=Transport(); c=MaxClient('fixture','device',transport=t)
     svc=UserIOService(store,object(),object(),max_client=c,max_user_id=store.default_user_id,max_manual_approve=True)
+    store.register_account(account_id='max',provider='max',display_name='fixture',can_read=True,can_reply=True,credential_ref='env:USERIO_MAX_TOKEN')
     conv,_=svc.receive(InboxMessage('max','max-0-123','77','before',1700000000,
         direction='outgoing',peer_id='0',reconciliation=True),route_id='max',account_ref='max')
     return store,t,svc,conv

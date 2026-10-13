@@ -254,7 +254,7 @@ class Bridge:
             with self.lock,self.db:
                 self.db.execute("INSERT OR IGNORE INTO media_links VALUES (?,?,?)",(cid,mid,media_event))
             old=self.db.execute("SELECT * FROM mappings WHERE cid=? AND mid=?",(cid,mid)).fetchone()
-            if old and re.fullmatch(r"\\[[^\\]]+\\]",str(message.get("body") or "")):
+            if old and str(message.get("body") or "").casefold() in {"[photo]","[image]","[document]","[sticker]","[file]","[voice]","[video]","[audio]"}:
                 self.client("PUT","/rooms/"+Q(portal["room"])+"/redact/"+Q(old["event"])+"/"+Q("placeholder_"+HASH(cid+"|"+mid)),
                     {"reason":"Вместо обозначения показано исходное вложение"},user=old["sender"])
         except Exception:
@@ -376,9 +376,7 @@ class Bridge:
         if relates.get("m.in_reply_to") and body.startswith(">") and "\n\n" in body:
             body=body.split("\n\n",1)[1]
             send["body"]=body
-        if msgtype in {"m.image","m.file"}:
-            if portal["source"]!="vk":
-                raise ValueError("Передача вложений из Matrix в MAX пока не подключена; отправьте файл в MAX.")
+        if msgtype in {"m.image","m.file","m.audio","m.video"}:
             url=content.get("url","")
             if not re.fullmatch(r"mxc://[^/]+/[^/?#]+",url) or content.get("file"):
                 raise ValueError("Нужно незашифрованное вложение Matrix.")
@@ -389,7 +387,7 @@ class Bridge:
                 {"filename":filename,"mime_type":mime,"data_base64":base64.b64encode(data).decode(),
                  "sha256":hashlib.sha256(data).hexdigest(),"request_id":request_id})
             send["upload_id"]=upload["upload_id"]
-            send["body"]=str(content.get("caption") or "")
+            send["body"]=str(content.get("caption") or (body if content.get("filename") and content["filename"]!=body else ""))
         elif msgtype not in {"m.text","m.emote"}:
             raise ValueError("Этот тип сообщения пока не передаётся мостом.")
         # Verify the configured account still owns the exact original dialog.

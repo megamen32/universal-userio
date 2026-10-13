@@ -888,6 +888,10 @@ def handler(
                         self._reply(413,{'error':'Вложение должно быть не больше 2 МБ'});return
                     from .vk_web import VKWeb
                     cid=unquote(path.removeprefix('/v1/conversations/').removesuffix('/uploads').strip('/'))
+                    conv=service._store.conversation(cid,user_id=user_id)
+                    if conv and conv['source']=='max':
+                        from .max_web import MaxWeb
+                        self._reply(201,MaxWeb(service,user_id).stage(cid,self._json()));return
                     self._reply(201,VKWeb(service,user_id).stage(cid,self._json()));return
                 if path.startswith("/v1/conversations/") and path.endswith("/send"):
                     if principal.service_account:
