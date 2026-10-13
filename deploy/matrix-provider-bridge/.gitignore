@@ -1,2 +1,10 @@
 __pycache__/
 *.pyc
+config.json
+registration.yaml
+*-registration.yaml
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+.env

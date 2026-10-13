@@ -1,12 +1,12 @@
 [Unit]
-Description=Matrix bridges for personal MAX and VK through UserIO
+Description=Matrix-мост MAX и VK через UserIO
 After=network-online.target universal-userio.service
 Wants=network-online.target
 Requires=universal-userio.service
 
 [Service]
 Type=simple
-User=roomhacker
+User=userio-matrix-bridge
 WorkingDirectory=/opt/userio-matrix-bridge
 ExecStart=/usr/bin/python3 /opt/userio-matrix-bridge/bridge.py --config /var/lib/userio-matrix-bridge/config.json
 Restart=on-failure

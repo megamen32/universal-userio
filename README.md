@@ -34,6 +34,12 @@ python -m pip install 'universal-userio[fast-agent] @ git+https://github.com/meg
 Then [configure credentials, connect providers and start the service](docs/guide/self-host.md).
 Authorize channels separately; installation does not connect them.
 
+## MAX и VK в Matrix
+
+[Matrix-мост через UserIO](deploy/matrix-provider-bridge/README.md) объединяет личные
+диалоги и группы MAX/ВКонтакте в пространствах Matrix. Текст, изображения и файлы
+до 2 МиБ передаются в обе стороны. Установка, ограничения и участие описаны на русском.
+
 ## Go deeper
 
 | I want to… | Open |

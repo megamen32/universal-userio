@@ -62,6 +62,7 @@
 - [SMS: native и непрерывная синхронизация](SMS.md)
 - [Airlock: идентичность, курсоры, точное подтверждение](airlock.md)
 - [Ресурсные бюджеты](resource-budget.md)
+- [Matrix-мост MAX и VK](../deploy/matrix-provider-bridge/README.md)
 - [WhatsApp bridge](../deploy/whatsapp-bridge/README.md)
 - [VK extension](../extensions/vk-inbox/README.md) · [Установка](../extensions/vk-inbox/INSTALL.md)
 - [Пример read-only API](../examples/userio/read_accounts.py)

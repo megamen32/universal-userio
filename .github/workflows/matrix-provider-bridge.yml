@@ -1,0 +1,39 @@
+name: Проверки Matrix-моста MAX и VK
+on:
+  push:
+    paths:
+      - 'deploy/matrix-provider-bridge/**'
+      - '.github/workflows/matrix-provider-bridge.yml'
+  pull_request:
+    paths:
+      - 'deploy/matrix-provider-bridge/**'
+      - '.github/workflows/matrix-provider-bridge.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: matrix-provider-bridge-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    name: Python 3.10 и 3.12 — проверки моста
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.10'
+      - name: Модульные проверки Python 3.10
+        working-directory: deploy/matrix-provider-bridge
+        run: |
+          sudo systemd-run --wait --pipe --collect --uid="$(id -u)" --property="WorkingDirectory=$PWD" --property=MemoryHigh=96M --property=MemoryMax=192M --property=MemorySwapMax=0 --property=CPUQuota=50% --property=TasksMax=32 --property=IOWeight=25 --property=LimitNOFILE=128 --property=LimitFSIZE=16M --property=RuntimeMaxSec=30 "$(command -v python)" -m unittest -v test_bridge
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Модульные проверки Python 3.12
+        working-directory: deploy/matrix-provider-bridge
+        run: |
+          sudo systemd-run --wait --pipe --collect --uid="$(id -u)" --property="WorkingDirectory=$PWD" --property=MemoryHigh=96M --property=MemoryMax=192M --property=MemorySwapMax=0 --property=CPUQuota=50% --property=TasksMax=32 --property=IOWeight=25 --property=LimitNOFILE=128 --property=LimitFSIZE=16M --property=RuntimeMaxSec=30 "$(command -v python)" -m unittest -v test_bridge
+      - name: Проверка примера конфигурации
+        run: python -m json.tool deploy/matrix-provider-bridge/config.example.json > /dev/null

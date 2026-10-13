@@ -9,7 +9,7 @@
   "userio_token": "PERSONAL_USERIO_TOKEN",
   "userio_user_id": "EXISTING_USERIO_USER_ID",
   "database": "/var/lib/userio-matrix-bridge/bridge.sqlite3",
-  "bind": "192.168.2.100",
+  "bind": "127.0.0.1",
   "port": 18097,
   "poll_seconds": 10,
   "initial_messages": 10,

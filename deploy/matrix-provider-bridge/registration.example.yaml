@@ -1,0 +1,16 @@
+# Приватная копия этого файла регистрируется в homeserver.
+# Замените токены и домен; реальные значения не коммитьте.
+id: userio-provider-bridge
+url: http://127.0.0.1:18097
+as_token: GENERATE_PRIVATE_AS_TOKEN
+hs_token: GENERATE_PRIVATE_HS_TOKEN
+sender_localpart: _userio_bridgebot
+rate_limited: false
+namespaces:
+  users:
+    - exclusive: true
+      regex: '^@_userio_.*:example\.org$'
+  aliases:
+    - exclusive: true
+      regex: '^#_userio_.*:example\.org$'
+  rooms: []
