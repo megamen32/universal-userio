@@ -31,6 +31,7 @@ class GmailMessage:
     body: str
     subject: str = ""
     mailbox_address: str = ""
+    reply_to: str = ""
 
 
 _BLOCK_TAGS = frozenset({
@@ -235,6 +236,7 @@ class HimalayaReader:
                 by_uid[uid] = {"id": str(uid),
                     "message-id": str(envelope.get("message_id") or "").strip("<>"),
                     "subject": envelope.get("subject") or "",
+                    "reply-to-message": str(envelope.get('in_reply_to') or '').strip('<>'),
                     "from": [{"email": parseaddr(sender)[1] or sender}]}
             # Missing UIDs were deleted since the snapshot; they do not shift
             # remaining IDs or manufacture a cursor for a missing message.
@@ -298,4 +300,5 @@ class HimalayaReader:
         if isinstance(senders, list) and senders and isinstance(senders[0], dict):
             sender = str(senders[0].get("email") or senders[0].get("name") or "")
         subject = str(env.get("subject") or "").strip()
-        return GmailMessage(message_id, fetch_id, sender or message_id, body, subject, self.mailbox_address)
+        return GmailMessage(message_id, fetch_id, sender or message_id, body, subject, self.mailbox_address,
+                            str(env.get('reply-to-message') or ''))

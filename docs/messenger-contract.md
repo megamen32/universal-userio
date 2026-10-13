@@ -249,3 +249,40 @@ from this conversation, without upload URLs/local paths. Media reads use actual
 provider CDN bytes: bounded first-frame images, UTF-8 text files or the existing
 Whisper service for audio. Unsupported formats return a readable status instead
 of invented content. These source checks alone do not certify live delivery.
+
+## Gmail/Himalaya: общий почтовый маршрут
+
+Для уже подключённых аккаунтов Himalaya общий messenger предоставляет `capabilities`,
+`resolve`, `history`, `events` и подтверждённый `reply`. Capability `history_mode=stored`
+означает действующее зеркало Inbox, обновляемое обычным Gmail ingress; resolve не
+читает письмо повторно с IMAP и возвращает `fresh=false, mode=stored, provider_read_acknowledged=false`.
+`refresh=true` не поддерживается. Edit/react/sticker/file/typing здесь не объявлены.
+
+`account_ref` — зарегистрированный UserIO ID, например `gmail-careviolan` или
+`gmail-megamen932`; `peer_id` — настоящий адрес собеседника; `provider_message_id` —
+нечисловой RFC Message-ID без угловых скобок (старый сохранённый UID также можно
+читать, но для точного threaded reply требуется RFC Message-ID). `source.channel=gmail`
+при этом внутренний источник `gmail`/`gmail:careviolan` и ID старого диалога сохраняются.
+Входящий автор — адрес From, исходящий — адрес собственного настроенного аккаунта.
+
+Новый mail ingress передаёт канонический ID аккаунта, настоящий peer, In-Reply-To
+и thread reference. `events` без `after` инициализирует текущий head без выдачи истории;
+старые alias-bound события также учитываются в head, поэтому уточнение account_ref
+не превращает старые письма в новые обращения. Recovery/outgoing не dispatch.
+
+Обычный `propose(reply,{text},request_id)` → `approve(id,hash,true)` фиксирует источник,
+адресата и точную тему. Существующий SMTP/Himalaya отправляет UTF-8 MIME с новым
+детерминированным Message-ID и In-Reply-To/References исходного письма. Receipt
+`delivery_status=smtp_accepted` означает принятие SMTP; доставку адресату проверяет
+реальный consumer. UNKNOWN сохраняет `sending`, не даёт повторить отправку.
+
+Новый отдельный personal token с `scope=messenger_actions` может перечислять собственные
+reply-capable Gmail IDs в `account_refs`. Старые readonly токены остаются readonly;
+управление токенами/чужие аккаунты не входят в scope. Значения передаются только через
+защищённый ресурс приложения.
+
+Для нового человеческого QA-вопроса между уже существующими почтовыми диалогами
+используется обычный UserIO `POST /v1/conversations/{id}/send` с `{body,request_id}`
+и полным собственным owner credential. Это новая отправка с новым Message-ID,
+а не пересылка старой операции. Дальнейший ответ Секретаря идёт через generic approval
+по точному новому входящему письму. SMTP напрямую для обхода UserIO не нужен.

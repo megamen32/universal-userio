@@ -18,6 +18,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import hashlib
+from email.message import EmailMessage
 from email.utils import parseaddr
 from pathlib import Path
 from dataclasses import dataclass, replace
@@ -306,12 +308,26 @@ class HimalayaGmailOutbox:
         self._binary, self._config, self._runner = binary, config, runner
 
     def send_reply(self, *, account: str, sender: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
+        return self.send_message(account=account, sender=sender, recipient=recipient,
+            message_id=message_id, body=body, draft_id=draft_id, subject='Re: UserIO reply')
+
+    @staticmethod
+    def outgoing_message_id(account: str, draft_id: str) -> str:
+        return hashlib.sha256((account+'\0'+draft_id).encode()).hexdigest()+'@userio.local'
+
+    def send_message(self, *, account: str, sender: str, recipient: str, message_id: str,
+                     body: str, draft_id: str, subject: str) -> str:
         address = parseaddr(recipient)[1]
         from_address = parseaddr(sender)[1]
         if not account or not from_address or not address or not message_id:
             raise ValueError("Gmail reply requires account, sender, recipient, and message id")
         reference = message_id.strip("<>")
-        raw = f"From: {from_address}\nTo: {address}\nSubject: Re: UserIO reply\nIn-Reply-To: <{reference}>\nReferences: <{reference}>\n\n{body}\n"
+        mail = EmailMessage()
+        mail['From'], mail['To'], mail['Subject'] = from_address, address, subject
+        mail['Message-ID'] = '<'+self.outgoing_message_id(account, draft_id)+'>'
+        mail['In-Reply-To'], mail['References'] = '<'+reference+'>', '<'+reference+'>'
+        mail.set_content(body)
+        raw = mail.as_string()
         try:
             completed = self._runner(
                 [self._binary, "--config", self._config, "--account", account, "message", "send"],

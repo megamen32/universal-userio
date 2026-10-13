@@ -213,6 +213,17 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
             environment.get("USERIO_DRAFT_NOTIFY_DELAY_SECONDS", "5") or "5"
         ),
     )
+    from .messenger_email import GmailMessengerProvider
+    from .channels.gmail import himalaya_mailbox_addresses
+    from email.utils import parseaddr
+    mail_accounts=[a for a in store.accounts() if a['provider']=='gmail' and a['enabled']
+                   and str(a['credential_ref']).startswith('himalaya:')]
+    addresses=himalaya_mailbox_addresses('/home/roomhacker/.config/himalaya/config.toml',
+        tuple(a['credential_ref'].removeprefix('himalaya:') for a in mail_accounts))
+    for account in mail_accounts:
+        alias=account['credential_ref'].removeprefix('himalaya:')
+        if addresses.get(alias) and parseaddr(account['display_name'])[1]==addresses[alias]:
+            service.messenger_providers[account['id']]=GmailMessengerProvider(service,account,store.default_user_id)
     messenger_url = environment.get('USERIO_MESSENGER_RELAY_URL','').strip()
     if messenger_url:
         from .messenger_relay import RelayMessengerProvider

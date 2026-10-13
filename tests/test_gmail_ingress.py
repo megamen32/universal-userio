@@ -195,6 +195,7 @@ def test_empty_html_body_does_not_duplicate_subject_in_ingress() -> None:
     message = reader._read({"id": "11", "subject": "Оплата"})
     sent = []
     client = UserIOIngressClient("http://userio.invalid", "token")
+    client.accounts = lambda: [{'id':'gmail-yandex','provider':'gmail','source':'gmail:yandex'}]
     client._json = lambda request: sent.append(json.loads(request.data)) or {}
 
     client.send("yandex", message)
@@ -222,6 +223,7 @@ def test_mailbox_address_comes_from_exact_himalaya_account(tmp_path) -> None:
 
 def test_ingress_uses_stable_account_ref_when_exact_address_is_unavailable() -> None:
     client = UserIOIngressClient("http://userio.invalid", "token")
+    client.accounts = lambda: [{'id':'gmail-owner','provider':'gmail','source':'gmail'}]
     sent = []
     client._json = lambda request: sent.append(json.loads(request.data)) or {}
 
@@ -230,6 +232,7 @@ def test_ingress_uses_stable_account_ref_when_exact_address_is_unavailable() -> 
     assert sent[0]["message"]["body"] == (
         "Почтовый аккаунт: account_ref:gmail\nТема: Subject\n\nbody"
     )
+    assert sent[0]['account_id']=='gmail-owner'
 
 
 def test_one_broken_account_does_not_block_other_accounts() -> None:

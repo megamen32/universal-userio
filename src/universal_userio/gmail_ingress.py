@@ -116,7 +116,7 @@ class UserIOIngressClient:
         )
         self._json(req)
 
-    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str, received_at: float | None = None, direction: str | None = None, reconciliation: bool | None = None, provider_read: bool | None = None, outbox_receipt: str = '') -> None:
+    def send_message(self, *, source: str, account_id: str, route_id: str, message_id: str, sender: str, body: str, received_at: float | None = None, direction: str | None = None, reconciliation: bool | None = None, provider_read: bool | None = None, outbox_receipt: str = '', peer_id: str = '', provider_reply_to: str = '', provider_thread_id: str = '') -> None:
         payload = {
             "route_id": route_id,
             "account_id": account_id,
@@ -127,6 +127,10 @@ class UserIOIngressClient:
         if reconciliation is not None: payload['message']['reconciliation']=reconciliation
         if provider_read is not None: payload['message']['provider_read']=provider_read
         if outbox_receipt: payload['message']['outbox_receipt']=outbox_receipt
+        if peer_id:
+            payload['message'].update(peer_id=peer_id, conversation_kind='direct')
+        if provider_reply_to:payload['message']['provider_reply_to']=provider_reply_to
+        if provider_thread_id:payload['message']['provider_thread_id']=provider_thread_id
         req = urllib.request.Request(
             self.base_url + "/v1/messages", data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",
             headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
@@ -135,10 +139,19 @@ class UserIOIngressClient:
 
     def send(self, account: str, message: GmailMessage) -> None:
         source = _source(account)
+        bindings = getattr(self, '_mail_account_bindings', None)
+        if bindings is None:
+            bindings = {str(a['source']):str(a['id']) for a in self.accounts()
+                        if a.get('provider')=='gmail' and a.get('source')}
+            self._mail_account_bindings = bindings
+        account_id = bindings.get(source)
+        if not account_id:raise ValueError('registered mail account binding required')
         self.send_message(
-            source=source, account_id=account, route_id="gmail-read-only",
+            source=source, account_id=account_id, route_id="gmail-read-only",
             message_id=message.message_id, sender=message.sender,
             body=readable_message_body(message, account),
+            peer_id=message.sender, provider_reply_to=message.reply_to,
+            provider_thread_id=message.reply_to or message.message_id,
         )
         notify = getattr(self.notifier, "notify", None)
         if callable(notify):

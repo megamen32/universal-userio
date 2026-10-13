@@ -1289,14 +1289,14 @@ class UserIOService:
                 raise DeliveryUnavailableError("Gmail delivery is not configured")
             account_alias = "gmail" if source == "gmail" else source.partition(":")[2]
             account_ref = str(conversation.get("account_ref") or "")
-            if account_ref and account_ref != account_alias:
-                raise DeliveryUnavailableError("Gmail conversation account does not match source")
             account = next((item for item in self._store.accounts(user_id=user_id)
                             if item["provider"] == "gmail"
                             and item["credential_ref"] == f"himalaya:{account_alias}"
                             and item["enabled"] and "reply" in item["capabilities"]), None)
             if account is None:
                 raise DeliveryUnavailableError("Gmail account is not configured")
+            if account_ref and account_ref not in {account_alias, str(account['id'])}:
+                raise DeliveryUnavailableError("Gmail conversation account does not match source")
             latest = list(conversation["messages"])[-1]
             send = partial(self.gmail_outbox.send_reply,
                 account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),

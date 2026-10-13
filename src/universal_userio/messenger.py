@@ -90,6 +90,10 @@ class Messenger:
 
     def _conversation(self, account_ref, conversation_id):
         conv = self.store.conversation(conversation_id, user_id=self.user)
+        if conv and self._account(account_ref)['provider']=='gmail':
+            provider=self._provider(account_ref)
+            if callable(getattr(provider,'conversation',None)):
+                return provider.conversation(conv)
         if not conv or conv['account_ref'] != account_ref:
             raise KeyError('conversation_not_found')
         if conv['source'] != self._account(account_ref)['provider']:
@@ -134,12 +138,15 @@ class Messenger:
                   'role':'owner' if outgoing else 'interlocutor'}
         author['first_name']=str(routing.get('author_first_name') or '')
         author['last_name']=str(routing.get('author_last_name') or '')
+        channel = self._account(account_ref)['provider']
+        if channel=='gmail':
+            author['id'] = self._provider(account_ref).sender_id if outgoing else msg['sender']
         source = {'account_ref':account_ref, 'conversation_id':conv['id'], 'peer_id':peer,
                   'conversation_kind':conv['conversation_kind'],
                   'message_id':mid, 'provider_message_id':provider_id,
                   'thread_id':str(msg.get('provider_thread_id') or routing.get('reply_to_top_id') or routing.get('thread_id') or ''),
                   'reply_to_provider_message_id':str(msg.get('provider_reply_to') or routing.get('reply_to_message_id') or routing.get('reply_to_msg_id') or ''),
-                  'channel':conv['source'], 'direction':msg['direction'],
+                  'channel':channel, 'direction':msg['direction'],
                   'invocation':{'mention':routing.get('is_exact_account_mention') is True,
                                 'reply':routing.get('is_reply_to_account') is True}}
         return {'source':source, 'author':author, 'text':str(msg['body']),
@@ -148,6 +155,14 @@ class Messenger:
     def resolve(self, account_ref, peer_id, provider_message_id):
         self._allow(account_ref,'read')
         channel=self._account(account_ref)['provider']
+        if channel=='gmail':
+            provider=self._provider(account_ref)
+            if not callable(getattr(provider,'resolve',None)):raise ValueError('provider_resolve_unavailable')
+            cid=provider.resolve(peer_id,provider_message_id)
+            conv=self._conversation(account_ref,cid)
+            return {'account_ref':account_ref,'conversation_id':cid,
+                'message':self._project(conv,self._message(conv,provider_message_id)),
+                'fresh':False,'mode':'stored','provider_read_acknowledged':False}
         if not isinstance(peer_id,str) or not (re.fullmatch(r'-?[1-9][0-9]*',peer_id)
                                               or peer_id=='0' and channel=='max'):
             raise ValueError('exact_peer_required')
@@ -231,11 +246,15 @@ class Messenger:
             raise ValueError('invalid_event_cursor')
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError('limit_must_be_1_to_100')
+        provider=self._provider(account_ref)
+        mail_source=getattr(provider,'source','') if self._account(account_ref)['provider']=='gmail' else ''
+        account_filter='c.source=?' if mail_source else 'c.account_ref=?'
+        feed_ref=mail_source or account_ref
         with self.store._lock:
             head = self.store._connection.execute('''SELECT COALESCE(MAX(e.seq),0)
                 FROM workspace_events e JOIN conversations c
                 ON c.user_id=e.user_id AND c.id=e.conversation_id
-                WHERE e.user_id=? AND c.account_ref=?''', (self.user, account_ref)).fetchone()[0]
+                WHERE e.user_id=? AND '''+account_filter, (self.user, feed_ref)).fetchone()[0]
             if after is None:
                 rows = []
             else:
@@ -243,9 +262,9 @@ class Messenger:
                     FROM workspace_events e JOIN conversations c
                     ON c.user_id=e.user_id AND c.id=e.conversation_id
                     JOIN messages m ON m.user_id=e.user_id AND m.source=e.source AND m.message_id=e.message_id
-                    WHERE e.user_id=? AND c.account_ref=? AND e.seq>? AND e.seq<=?
+                    WHERE e.user_id=? AND '''+account_filter+''' AND e.seq>? AND e.seq<=?
                     AND e.reconciled=0 AND m.direction='incoming' AND m.deleted_at IS NULL
-                    ORDER BY e.seq LIMIT ?''', (self.user, account_ref, after, head, limit+1)).fetchall()
+                    ORDER BY e.seq LIMIT ?''', (self.user, feed_ref, after, head, limit+1)).fetchall()
             more = len(rows) > limit
             events = []
             for row in rows[:limit]:
@@ -368,7 +387,7 @@ class Messenger:
             media, _ = self._binding(conv,payload['media_message_id'])
             media_hash = self._media_hash(media,payload['attachment_index'])
         envelope = {'schema':SCHEMA, 'user_id':self.user, 'account_ref':account_ref,
-                    'conversation_id':conv['id'],'peer_id':str(conv['peer_id']), 'channel':conv['source'],
+                    'conversation_id':conv['id'],'peer_id':str(conv['peer_id']), 'channel':self._account(account_ref)['provider'],
                     'source_message_id':source_message_id, 'source_provider_message_id':projected['source']['provider_message_id'],
                     'source_hash':source_hash,'source_binding':projected['binding'],
                     'thread_id':projected['source']['thread_id'],
@@ -434,8 +453,11 @@ class Messenger:
                     or str(result.get('peer_id'))!=e['peer_id'] or not result.get('receipt')):
                 raise RuntimeError('provider_receipt_identity_conflict')
             mid = result.get('provider_message_id')
-            if e['action'] in {'reply','edit','sticker','file'} and (
-                    not isinstance(mid,str) or not re.fullmatch(r'[1-9][0-9]*',mid)):
+            valid_id = isinstance(mid,str) and bool(re.fullmatch(r'[1-9][0-9]*',mid))
+            if e['channel']=='gmail':
+                from .messenger_email import mail_id
+                valid_id = mail_id(mid) and '@' in mid
+            if e['action'] in {'reply','edit','sticker','file'} and not valid_id:
                 raise RuntimeError('provider_receipt_id_required')
             if e['action']=='edit' and mid!=e['source_provider_message_id']:
                 raise RuntimeError('edit_receipt_id_conflict')
