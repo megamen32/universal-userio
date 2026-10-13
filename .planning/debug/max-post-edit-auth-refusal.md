@@ -60,13 +60,14 @@ credential, verifies native login/read, then updates its own configuration.
 Phone/root browser inputs must not be duplicated. Existing action/model IDs
 remain non-replayable. Current login is not yet accepted or persisted.
 
-Independent administrative QR source is owned WIP, not installed/tested. First
+Independent administrative QR source67402e0 is reviewed/published, not live-auth accepted. Final39focused checks11.57s/helper0/same-generation cleanup passed, including disconnected anonymous-session refusal without sender LOGIN fallback. First
 cases refused before payload on exact managed parent boundary mismatch. R38
 published98cdb corrects only measured registration (+12288B), with no cap change.
 New meaningful QR focused case then refused before payload on transient scope
 name run-r... not enrolled for this profile. Exact generation cleanup is proved;
-no tests or provider/auth action ran. Owner R38 received that new refusal in
-active turn. Evidence: `.tmp/max-reauth-20261013/resource-46bdb239ddeba37ec77ad2706613221a13b213fbd62707d9a280bb12a92ebc4a.json`.
+no tests or provider/auth action ran. Owner R38 fixed exact run-r enrollment in52d01297; the new scoped consumers completed38 then39checks. Old failures remain distinct. Evidence: `.tmp/max-reauth-20261013/resource-46bdb239ddeba37ec77ad2706613221a13b213fbd62707d9a280bb12a92ebc4a.json`.
+Final source GREEN proof is `.tmp/max-reauth-20261013/completed-8964a8a5a584cb8c72ea3d2a5f48ee6df8c9ba286ecd28bbe97c97f4401bf129.json`
+and `green-anonymous-disconnect.txt`. No live QR auth was attempted.
 Do not rerun the old cases or bypass resource admission. Existing valid browser
 reauthorization is an independent route and does not wait for QR source tests.
 
