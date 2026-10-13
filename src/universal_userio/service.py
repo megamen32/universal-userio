@@ -1385,8 +1385,14 @@ class UserIOService:
                 account_ref=str(conversation.get("account_ref") or ""),
             )
         elif conversation["source"] == "whatsapp" and self.whatsapp_outbox is not None:
+            account_ref=str(conversation.get('account_ref') or '')
+            personal=':account-' in account_ref
+            if personal and not any(a['id']==account_ref and a['enabled'] and 'reply' in a['capabilities']
+                    and str(a['credential_ref']).startswith('whatsapp-qr:') for a in self._store.accounts(user_id=user_id)):
+                raise DeliveryUnavailableError('Ваш аккаунт WhatsApp недоступен для отправки')
             send = partial(self.whatsapp_outbox.send,
-                chat_id=str(conversation["sender"]), text=draft.body
+                chat_id=str(conversation.get('peer_id') or conversation["sender"]), text=draft.body,
+                **({'user_id':user_id,'account_ref':account_ref} if personal else {})
             )
         else:
             send = partial(self._outbox.send_reply,

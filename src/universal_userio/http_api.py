@@ -908,6 +908,20 @@ def handler(
                         _LOGGER.warning('MAX connection %s failed: %s',path.rsplit('/',1)[-1],type(error).__name__)
                         self._reply(400,{'error':'MAX не подтвердил подключение. Если QR истёк, начните новый вход. Действующие аккаунты не изменены.'})
                     return
+                if path == '/v1/phone/sip/connections':
+                    if principal.service_account or principal.read_only or not service._store.capability_enabled('read',user_id=user_id):
+                        self._reply(403,{'error':'Войдите в свой личный кабинет'});return
+                    from .sip_connections import request as sip_request
+                    try:
+                        payload=self._json()
+                        result=sip_request('create',user_id,device_id=payload.get('device_id',''),display_name=payload.get('display_name',''))
+                        service._store.register_account(account_id=result['id'],provider='phone',
+                            display_name=result['display_name'],can_read=False,can_reply=False,
+                            credential_ref='sip-hosted:'+result['sip_username'],user_id=user_id)
+                        self._reply(201,result,{'Cache-Control':'no-store'})
+                    except (OSError,ValueError):
+                        self._reply(400,{'error':'Не удалось выдать SIP-настройки. Проверьте ID телефона и название; повторите позже, если сервер недоступен.'})
+                    return
                 if path == "/v1/accounts":
                     payload = self._json()
                     service._store.register_account(
@@ -1394,6 +1408,15 @@ def handler(
             if path == "/v1/preferences/context":
                 self._reply(200, {"context": _context_preferences(service, user_id)})
                 return
+            if path in {'/v1/phone/sip/connections','/v1/phone/sip/settings'}:
+                if principal.service_account or principal.read_only or not service._store.capability_enabled('read',user_id=user_id):
+                    self._reply(403,{'error':'Войдите в свой личный кабинет'});return
+                from .sip_connections import request as sip_request
+                try:
+                    result=sip_request('settings',user_id,account_id=query.get('account_id',[''])[0]) if path.endswith('/settings') else sip_request('list',user_id)
+                    self._reply(200,result,{'Cache-Control':'no-store'})
+                except (OSError,ValueError):self._reply(400,{'error':'SIP-настройки недоступны. Проверьте подключение и повторите позже.'})
+                return
             if path == '/v1/connection-principal':
                 self._reply(200,{'user_id':user_id,'username':principal.username,
                     'can_manage':not principal.read_only and not principal.service_account
@@ -1763,7 +1786,16 @@ def handler(
                     (a for a in service._store.accounts(user_id=principal.user_id)
                      if a["id"] == account_id), None,
                 )
+                if existing and account_id.startswith('phone:sip:'):
+                    from .sip_connections import request as sip_request
+                    try:sip_request('delete',principal.user_id,account_id=account_id)
+                    except (OSError,ValueError):
+                        self._reply(503,{'error':'Не удалось отключить SIP-аккаунт. Повторите позже; подключение сохранено.'});return
                 deleted = service._store.delete_account(account_id, user_id=principal.user_id)
+                if deleted and existing and existing['provider']=='whatsapp' and ':account-' in account_id:
+                    if service.whatsapp_outbox is not None:
+                        try:service.whatsapp_outbox.disconnect(user_id=principal.user_id,account_ref=account_id)
+                        except (OSError,ValueError):pass # Disabled account also refuses ingress after restart.
                 if deleted and existing and existing["provider"] in {"matrix", "email", "vk", "max"}:
                     ref = str(existing.get("credential_ref") or "")
                     if ref.startswith("connector:"):

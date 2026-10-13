@@ -1,0 +1,1 @@
+export default {toDataURL:async()=> 'data:image/png;base64,ZmFrZS1xci1maXh0dXJl'};

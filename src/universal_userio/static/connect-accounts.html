@@ -83,10 +83,15 @@ header{display:flex;align-items:center;justify-content:space-between}.brand{font
 <button class="submit" type="submit">Подключить VK-сообщество</button>
 </form>
 <section class="panel" id="telegram" hidden><h2>Telegram</h2><ol><li>Откройте Telegram на телефоне.</li><li>Перейдите в «Настройки → Устройства → Подключить устройство».</li><li>Запустите вход и отсканируйте QR-код. Если включён облачный пароль, введите его в форме.</li></ol><p>Новый аккаунт должен появиться здесь после подтверждения.</p><a class="submit" href="/telegram-qr/">Перейти к входу в Telegram</a><p class="hint">Не пересылайте код входа или пароль в чат. <a href="/docs#telegram">Подробная инструкция</a></p></section>
-<section class="panel" id="whatsapp" hidden><h2>WhatsApp</h2><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Отсканируйте QR-код своего подключения.</li></ol><p>Каждому пользователю нужен отдельный подключённый мост WhatsApp.</p><p class="note">Самостоятельное подключение нового пользователя пока не готово. Администратор должен выдать отдельный мост вашему аккаунту; общий QR сервера для этого не подходит.</p><p class="hint"><a href="/docs#whatsapp">Инструкция и настройка моста</a></p></section>
+<section class="panel" id="whatsapp" hidden><h2>WhatsApp</h2><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Нажмите «Показать QR-код» ниже и отсканируйте его. Ваш WhatsApp появится в вашем UserIO.</li></ol><button class="submit" type="button" id="wa-begin">Показать QR-код</button><button class="secondary" type="button" id="wa-cancel" hidden>Отменить вход</button><div id="wa-qr" hidden><img alt="QR-код входа в WhatsApp" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p class="hint">Подтверждайте только начатый вами вход. QR действует недолго.</p></div><p id="wa-status" role="status" aria-live="polite"></p><p class="hint">Приложение на телефоне продолжит работать. <a href="/docs#whatsapp">Подробная инструкция</a></p></section>
 <section class="panel" id="max" hidden><h2>MAX</h2><ol><li>Откройте MAX на телефоне, в котором уже выполнен вход.</li><li>Нажмите «Показать QR-код». В MAX выберите «Профиль → Устройства → Подключить устройство».</li><li>Отсканируйте QR-код и подтвердите вход на телефоне. Проверим профиль и сохраним его в вашем UserIO.</li></ol><button class="submit" type="button" id="max-begin">Показать QR-код</button><button class="secondary" type="button" id="max-cancel" hidden>Отменить вход</button><div id="max-qr" hidden><img alt="QR-код входа в MAX" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p><a id="max-mobile-link" class="secondary" rel="noopener noreferrer" target="_blank">Подключаю с телефона: открыть MAX ↗</a></p><p class="hint">QR действует недолго. Подтверждайте только вход, который начали здесь.</p></div><p id="max-status" role="status" aria-live="polite"></p><p class="hint">Сессии приложения на телефоне остаются на месте. <a href="/docs#max">Подробная инструкция</a></p></section>
 <section class="panel" id="sms" hidden><h2>SMS на Android</h2><ol><li>Установите SMS Agent APK. Подойдёт Android 8+ с root или без него.</li><li>Разрешите SMS и работу приложения в фоне. Скопируйте ID устройства.</li><li>Получите настройки своего телефона, вставьте их в приложение и запустите.</li></ol><a class="submit" href="/connect-phone#sms">Подключить свой телефон</a><a class="secondary" href="/sms-gateway/agent/download" download>Скачать APK</a><p class="hint">Токен выдаётся только вашему телефону. <a href="/docs#phone">Инструкция</a></p></section>
-<section class="panel" id="calls" hidden><h2>Звонки через SIM</h2><ol><li>Подготовьте совместимый Android с root и GSM2SIP.</li><li>Получите свой SIP-аккаунт у администратора.</li><li>Подключите маршрут звонков к своему UserIO и проверьте звук.</li></ol><p>SMS APK не подключает голосовые звонки. Для звонков нужна отдельная настройка шлюза.</p><a class="submit" href="/connect-phone#calls">Открыть инструкцию звонков</a></section>
+<section class="panel" id="calls" hidden><h2>Звонки через SIM</h2>
+<p>Нужен совместимый Android с <b>root</b>. Для телефона без root подключите <a href="/accounts?service=sms">SMS</a>.</p>
+<ol><li>Установите <a href="https://github.com/pulpoff/gsm2sip/releases" target="_blank" rel="noopener noreferrer">GSM2SIP APK ↗</a> и разрешите root, микрофон и звонки.</li><li>Получите личный SIP-аккаунт ниже. Он подключает ваш телефон к нашему серверу.</li><li>В GSM2SIP укажите SIP server, port 5060, UDP, username и password. Кодеки: PCMU или PCMA. Разрешите работу в фоне.</li></ol>
+<form id="sip-form" class="active"><label>Название телефона<input name="display_name" maxlength="80" required placeholder="Мой Android"></label><label>ID телефона<input name="device_id" pattern="[A-Za-z0-9_-]{3,64}" maxlength="64" required placeholder="Например, my-android"></label><p class="hint">Придумайте постоянный ID для этого телефона. При повторном подключении используйте тот же ID.</p><button class="submit" type="submit">Получить SIP-настройки</button></form>
+<p id="sip-status" role="status" aria-live="polite"></p><div id="sip-settings" hidden><h3>Настройки вашего телефона</h3><label>Сервер<input id="sip-server" readonly></label><label>Имя пользователя<input id="sip-username" readonly></label><label>Пароль<input id="sip-password" type="password" readonly autocomplete="off"></label><button class="secondary" type="button" id="sip-show-password">Показать пароль</button><p class="hint">Порт 5060 · UDP · PCMU / PCMA. Не передавайте пароль другим людям.</p></div>
+<div id="sip-connections"></div><button type="button" id="sip-refresh" class="secondary">Обновить статус телефона</button><p class="hint">Выдача настроек и регистрация SIP — первый шаг. Маршрут звонка и двухсторонний звук проверяются отдельно; пока звонки не прошли проверку, UserIO не показывает их доступными. <a href="/docs#phone">Подробная инструкция</a></p></section>
 <p id="status" role="status" aria-live="polite"></p><section id="success" class="panel" hidden><h2>Аккаунт подключён</h2><p id="success-name"></p><a class="submit" href="/">Открыть сообщения</a><button class="secondary" id="connect-another" type="button">Подключить ещё</button></section>
 <script>
 // VK binds its temporary result to the UUID supplied before authorization.
@@ -114,10 +119,10 @@ async function connectedAccounts(){
     const title=document.createElement('span');
     const label=account.id.startsWith('vk:community:')?'VK-сообщество':account.provider==='email'?'IMAP':account.provider==='gmail'?'Gmail':
       account.provider==='matrix'?'Matrix':account.provider==='vk'?'ВКонтакте':account.provider;
-    title.textContent=label+': '+account.display_name+' · '+(account.enabled===false?'Отключён':account.capabilities.includes('read')?'Подключён':'Чтение выключено');
+    title.textContent=label+': '+account.display_name+' · '+(account.enabled===false?'Отключён':account.id.startsWith('phone:sip:')?'Настройки SIP выданы':account.capabilities.includes('read')?'Подключён':'Чтение выключено');
     row.append(title);
     const managed=account.id.startsWith('matrix:')||account.id.startsWith('email:')||
-      account.id.startsWith('vk:')||account.id.startsWith('sms:user-')||account.id.startsWith('max:');
+      account.id.startsWith('vk:')||account.id.startsWith('sms:user-')||account.id.startsWith('max:')||account.id.includes(':account-')||account.id.startsWith('phone:sip:');
     if(managed){
       const remove=document.createElement('button');remove.type='button';remove.textContent='Отключить';
       remove.onclick=async()=>{
@@ -136,6 +141,47 @@ async function connectedAccounts(){
  }catch(error){container.textContent=error.message||'Ошибка';}
 }
 connectedAccounts();
+async function sipRequest(path,options={}){const r=await fetch('/v1/phone/sip/'+path,{cache:'no-store',...options});const data=await r.json();if(!r.ok)throw Error(data.error||'SIP-сервер недоступен');return data;}
+function sipSettings(data){document.getElementById('sip-server').value=data.sip_server+':'+data.sip_port;document.getElementById('sip-username').value=data.sip_username;document.getElementById('sip-password').value=data.sip_password;document.getElementById('sip-password').type='password';document.getElementById('sip-show-password').textContent='Показать пароль';document.getElementById('sip-settings').hidden=false;}
+async function sipList(){
+ const area=document.getElementById('sip-connections');
+ try{const data=await sipRequest('connections');area.textContent='';
+  for(const row of data.connections||[]){const card=document.createElement('div');card.className='account';const text=document.createElement('span');text.textContent=row.display_name+' · '+row.status_text;card.append(text);
+   const settings=document.createElement('button');settings.type='button';settings.textContent='Настройки';settings.onclick=async()=>{try{sipSettings(await sipRequest('settings?account_id='+encodeURIComponent(row.id)));}catch(e){document.getElementById('sip-status').textContent=e.message;}};card.append(settings);
+   const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Отключить';cancel.onclick=async()=>{cancel.disabled=true;try{const r=await fetch('/v1/accounts/'+encodeURIComponent(row.id),{method:'DELETE'});if(!r.ok)throw Error('Не удалось отключить телефон. Повторите позже.');document.getElementById('sip-password').value='';document.getElementById('sip-settings').hidden=true;document.getElementById('sip-status').textContent='SIP-аккаунт отключён.';await sipList();await connectedAccounts();}catch(e){cancel.disabled=false;document.getElementById('sip-status').textContent=e.message;}};card.append(cancel);area.append(card);
+  }if(!data.connections?.length)area.textContent='Ваших SIM-телефонов пока нет.';
+ }catch(e){area.textContent=e.message;}
+}
+document.getElementById('sip-form').onsubmit=async(event)=>{event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;const status=document.getElementById('sip-status');status.textContent='Создаём личный SIP-аккаунт…';try{const data=await sipRequest('connections',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(event.target)))});if(currentService==='calls')sipSettings(data);status.textContent=data.status_text;await sipList();await connectedAccounts();}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
+document.getElementById('sip-refresh').onclick=()=>sipList();
+document.getElementById('sip-show-password').onclick=()=>{const input=document.getElementById('sip-password');input.type=input.type==='password'?'text':'password';document.getElementById('sip-show-password').textContent=input.type==='password'?'Показать пароль':'Скрыть пароль';};
+let waSlot='',waTimer=null;
+async function waState(){const r=await fetch('/whatsapp-qr/state',{cache:'no-store'});if(!r.ok)throw Error('Вход WhatsApp временно недоступен. Проверьте вход в UserIO и повторите позже.');return r.json();}
+function stopWa(){clearTimeout(waTimer);waTimer=null;document.getElementById('wa-qr').hidden=true;document.getElementById('wa-cancel').hidden=true;document.getElementById('wa-begin').disabled=false;}
+async function cancelWa(){const old=waSlot;waSlot='';stopWa();if(!old)return true;try{const r=await fetch('/whatsapp-qr/cancel?slot='+encodeURIComponent(old));if(!r.ok)return false;const rows=await waState();return rows.some(x=>x.id===old&&x.status==='cancelled');}catch{return false;}}
+document.getElementById('wa-cancel').onclick=async()=>{const ok=await cancelWa();document.getElementById('wa-status').textContent=ok?'Вход отменён.':'Не удалось подтвердить отмену. Проверьте список аккаунтов; незавершённый QR скоро истечёт.';if(!ok)connectedAccounts();};
+document.getElementById('wa-begin').onclick=async()=>{
+ const status=document.getElementById('wa-status');document.getElementById('wa-begin').disabled=true;status.textContent='Подготавливаем QR-код…';
+ try{
+  const r=await fetch('/whatsapp-qr/new');if(!r.ok)throw Error('Не удалось начать вход. Завершите или отмените текущий QR и повторите позже.');
+  const slot=new URL(r.url).searchParams.get('slot');if(!/^account-\d+$/.test(slot||''))throw Error('Не удалось получить ваше подключение WhatsApp.');
+  waSlot=slot;if(currentService!=='whatsapp'){await cancelWa();return;}document.getElementById('wa-cancel').hidden=false;
+  const deadline=Date.now()+180000;
+  async function poll(){
+   if(waSlot!==slot)return;
+   try{
+    const rows=await waState();if(waSlot!==slot)return;const row=rows.find(x=>x.id===slot);
+    if(!row)throw Error('Ваш вход не найден. Начните новый QR-код.');
+    if(row.status==='connected'){waSlot='';stopWa();connectedSuccess('WhatsApp · '+row.name.split(':')[0].split('@')[0]);return;}
+    if(['error','logged-out','connected-unregistered'].includes(row.status))throw Error('WhatsApp не подтвердил сохранение аккаунта. Отмените вход и попробуйте снова.');
+    if(row.status==='cancelled'||Date.now()>deadline){await cancelWa();status.textContent='QR истёк. Нажмите «Показать QR-код» для нового входа.';return;}
+    if(row.qr){document.querySelector('#wa-qr img').src=row.qr;document.getElementById('wa-qr').hidden=false;status.textContent='Отсканируйте QR-код в WhatsApp на телефоне.';}
+    waTimer=setTimeout(poll,3000);
+   }catch(e){if(waSlot!==slot)return;status.textContent=e.message;await cancelWa();}
+  }
+  await poll();
+ }catch(e){status.textContent=e.message;stopWa();}
+};
 let maxLogin='',maxTimer=null;
 async function maxRequest(action,body={}){
  const r=await fetch('/v1/max/connections/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -157,13 +203,14 @@ document.getElementById('max-begin').onclick=async()=>{
   maxTimer=setTimeout(poll,d.poll_interval_ms);
  }catch(e){status.textContent=e.message;stopMax();}
 };
-window.addEventListener('pagehide',()=>{if(maxLogin)fetch('/v1/max/connections/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login_id:maxLogin}),keepalive:true}).catch(()=>{});});
+window.addEventListener('pagehide',()=>{if(waSlot)fetch('/whatsapp-qr/cancel?slot='+encodeURIComponent(waSlot),{keepalive:true}).catch(()=>{});if(maxLogin)fetch('/v1/max/connections/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login_id:maxLogin}),keepalive:true}).catch(()=>{});});
 let currentService='';
 function show(key,push=true){
  const known=['','matrix','imap','gmail','yandex','vk-personal','vk-community','telegram','whatsapp','max','sms','calls'];if(!known.includes(key))key='';
- if(key!==currentService)document.querySelectorAll('input[type=password]').forEach(input=>input.value='');
+ if(key!==currentService){document.querySelectorAll('input[type=password]').forEach(input=>input.value='');document.getElementById('sip-password').value='';document.getElementById('sip-password').type='password';document.getElementById('sip-settings').hidden=true;}
  if(currentService==='max' && key!=='max')void cancelMax();
- currentService=key;
+ if(currentService==='whatsapp' && key!=='whatsapp')void cancelWa();
+ currentService=key;if(key==='calls')void sipList();
  document.getElementById('overview').hidden=!!key;
  document.getElementById('setup-head').hidden=!key;
  document.getElementById('success').hidden=true;

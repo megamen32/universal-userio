@@ -666,14 +666,25 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
         self._bridge_url = (bridge_url or os.environ.get("USERIO_WHATSAPP_BRIDGE_URL", "")).rstrip("/")
         self._runner = runner
 
+    def _download_source(self, file_ref):
+        message=self._store.message(file_ref,source='whatsapp',user_id=self._user_id)
+        conv=self._store.conversation(message['conversation_id'],user_id=self._user_id) if message else None
+        ref=str(conv.get('account_ref') or '') if conv else ''
+        if ':account-' in ref:
+            peer=str(conv.get('peer_id') or conv['sender'])
+            prefix=ref+'|'+peer+':'
+            if not file_ref.startswith(prefix):raise ValueError('WhatsApp source identity changed')
+            return file_ref[len(prefix):],{**message,'sender':peer},{'user_id':self._user_id,'account_ref':ref}
+        return re.sub(r'^account-\d+:','',file_ref),message,{}
+
     def download(self, *, file_ref: str) -> ChannelFile:
         # Store ids are "{slot}:{baileys_id}" but the bridge (and Baileys'
         # store) know the bare id, so strip the slot prefix. The chat jid the
         # bridge needs is the message's sender.
-        bare_ref = re.sub(r"^account-\d+:", "", file_ref)
+        bare_ref,message,context=self._download_source(file_ref)
         return _download_via_bridge(
             channel="whatsapp",
-            message=self._store.message(file_ref, user_id=self._user_id),
+            message=message,
             file_ref=bare_ref,
             bridge_url=self._bridge_url,
             token_env="USERIO_API_TOKEN",
@@ -681,13 +692,14 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
             chat_id_field="chat_id",
             message_field="message_id",
             runner=self._runner,
+            bridge_context=context,
         )
 
     def download_for_ai(self, *, file_ref: str, max_bytes: int) -> ChannelFile:
-        bare_ref = re.sub(r"^account-\d+:", "", file_ref)
+        bare_ref,message,context=self._download_source(file_ref)
         return _download_via_bridge(
             channel="whatsapp",
-            message=self._store.message(file_ref, user_id=self._user_id),
+            message=message,
             file_ref=bare_ref,
             bridge_url=self._bridge_url,
             token_env="USERIO_API_TOKEN",
@@ -696,6 +708,7 @@ class WhatsAppChannelAdapter(StoredChannelAdapter):
             message_field="message_id",
             runner=self._runner,
             max_bytes=max_bytes,
+            bridge_context=context,
         )
 
 
@@ -908,6 +921,7 @@ def _download_via_bridge(
     chat_field: str, chat_id_field: str, message_field: str,
     runner: Any = urllib.request.urlopen, timeout: float = 60.0,
     max_bytes: int | None = None,
+    bridge_context: Mapping[str, str] | None = None,
 ) -> ChannelFile:
     """Single-shot HTTP round-trip to a media bridge.
 
@@ -934,6 +948,7 @@ def _download_via_bridge(
         chat_field: sender,
         chat_id_field: sender,
         message_field: str(file_ref),
+        **(bridge_context or {}),
     }).encode()
     request = urllib.request.Request(
         f"{bridge_url}/download",

@@ -1,0 +1,25 @@
+[Unit]
+Description=UserIO personal hosted SIM SIP account provisioner
+After=asterisk.service universal-userio.service
+Requires=asterisk.service
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/universal-userio
+Environment=PYTHONPATH=/opt/universal-userio/src
+ExecStart=/opt/universal-userio/.venv/bin/python -m universal_userio.sip_connections
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/universal-userio/sip /etc/asterisk/userio-peers
+MemoryHigh=64M
+MemoryMax=128M
+MemorySwapMax=0
+CPUQuota=50%
+TasksMax=16
+IOWeight=10
+[Install]
+WantedBy=multi-user.target

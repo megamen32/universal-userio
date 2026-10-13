@@ -99,8 +99,13 @@ class WhatsAppBridgeClient:
         result = self._request("GET", "/messages")
         return list(result or [])
 
-    def send(self, *, chat_id: str, text: str, reply_to: str | None = None) -> str:
+    def send(self, *, chat_id: str, text: str, reply_to: str | None = None,
+             user_id: str = "", account_ref: str = "") -> str:
         payload: dict[str, Any] = {"chatId": chat_id, "message": text}
+        if user_id or account_ref:
+            if not user_id or not account_ref:
+                raise ValueError("exact WhatsApp user and account required")
+            payload.update(user_id=user_id,account_ref=account_ref)
         if reply_to:
             payload["replyTo"] = reply_to
         result = self._request("POST", "/send", payload)
@@ -108,6 +113,9 @@ class WhatsAppBridgeClient:
         if not message_id:
             raise RuntimeError("bridge did not return a messageId")
         return str(message_id)
+
+    def disconnect(self, *, user_id: str, account_ref: str) -> None:
+        self._request('POST','/account/disconnect',{'user_id':user_id,'account_ref':account_ref})
 
     def edit(self, *, chat_id: str, message_id: str, text: str) -> None:
         self._request(

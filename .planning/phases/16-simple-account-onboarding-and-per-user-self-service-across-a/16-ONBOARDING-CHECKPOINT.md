@@ -81,3 +81,33 @@ Telegram, preserve legacy assignments and verify a bounded own-user pairing
 and exact-account delivery. The unified new-user screen does not send people
 to that shared operator QR. This remains implementation work, not an accepted
 self-service connection or a hold on Exmanager.
+
+## Hosted SIM choice and reviewed WhatsApp source — 13 October
+
+The user chose hosted SIP accounts on our PBX, not requiring users to own a
+separate SIP server. Rooted compatible GSM2SIP phones get unique per-owner peers;
+unrooted phones use SMS APK. New SIP accounts do not reuse gateway-s21.
+The own provisioning service manages one additive Asterisk include, unique
+secrets and authenticated create/list/settings/delete. Waiting/registration
+status remains distinct from routed-call/audio acceptance. Until a verified
+per-user voice selector exists, new SIP accounts advertise no call capability
+and cannot enter the existing S21 inbound context. Full per-user call routing
+and sound acceptance remain OPEN, owned by UserIO with the voice producer seam.
+
+The recovered WhatsApp QR connector is now reviewed canonical source, pinned
+to Baileys6.7.22. Personal slots filter by current ordinary principal, preserve
+legacy slots, register exact personal accounts and use exact user/account sender
+selection; group replies target the group. Restart resumes only durable bindings.
+QR cancellation, stale socket callbacks and failed registration cannot turn
+into an operator connection. The connector has a finite512MiB/1GiB RAM, CPU1,
+swap0, tasks128 service budget. New-user native pairing/read/send is still OPEN
+until a test phone is available.
+
+Focused regressions:44Python PASS13.12s plus actual wrapper HTTP/mock-provider
+registration/source/send/isolation and Node source syntax. Later final owned
+frame retains separate bounded receipt. Tests are not live phone acceptance.
+Next: install reviewed Node/core/provisioner, then normal new-user headed44
+WhatsApp QR/cancel/reload + hosted SIP settings/reload/disconnect/error/mobile.
+Full MAX login explicitly BLOCKED until a test phone is available; QR-only
+acceptance from the prior cycle remains distinct. Exmanager source/runtime is
+unaffected and is not a prerequisite for this UI/provisioning case.
