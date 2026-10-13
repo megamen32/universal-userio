@@ -101,3 +101,10 @@ SIP+SMS configuration issuance source+live; CONN-05 Pending new-user acceptance.
 All5 mapped to phase16. Overall current milestone11/19requirements accepted
 (58%), with2/5fullyclosedphases/plans (40%); phase16 remains1/5 (20%).
 See latest [checkpoint](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md) for exact phone and voice-binding closure criteria.
+
+Latest phase16 delta: MAX pending/status/cancel/reload/mobile accepted in installed
+4b9169e. S21 root/unlock and existing native MAX LOGIN separately accepted, no
+new enrollment. Camera-confirmed NEW MAX and physical WhatsApp pairing/read/send
+remain open; phone absence/password is no longer a blocker. Hosted SIP issuance
+and cleanup are accepted; call routing/audio are still unverified and disabled.
+No requirement checkbox or percentage inflated by these partial sub-results.

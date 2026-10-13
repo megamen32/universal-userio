@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: blocked
-last_updated: "2026-10-13T18:02:08.303584+00:00"
+last_updated: "2026-10-13T18:59:49.937828+00:00"
 last_activity: 2026-10-13
 progress:
   total_phases: 5
@@ -25,7 +25,7 @@ progress:
 
 [████░░░░░░] — current milestone phase/plan completion (2/5)
 **Last Activity:** 2026-10-13
-**Last Activity Description:** Deployed personal WhatsApp QR/cancel/reload and hosted per-owner SIP settings/reload/disconnect/error/mobile accepted on headed44; current271787c. Full new phone pairing and per-user voice selector/audio remain explicitly open; Exmanager15 independent.
+**Last Activity Description:** Deployed personal WhatsApp and hosted SIP self-service control accepted; MAX pending QR defect fixed and live two-poll/cancel/reload/mobile passed. S21 root and current native MAX LOGIN verified; new camera-confirmed account and per-user voice remain open.
 
 ## Current acceptance and next action
 
@@ -352,3 +352,24 @@ calling before registry-bound route/audio acceptance. Next exact source step
 and proof are in phase16 checkpoint; no Exmanager wait/hold or old intents.
 Phase15 external-inbound/retirement acceptance remains independently owned by
 Exmanager97, without moving it into this UI scope or overwriting its receipts.
+
+## Current phone correction — 13 October
+
+S21 is reachable and rooted; its ordinary swipe-only lock was unlocked with
+AgentDevice, without a password request. Existing MAX498 native LOGIN succeeded
+using exact phone session/device values in memory. No credential persisted,
+account replaced, message, model or read ACK occurred. This is current-session
+proof, not a new-user QR enrollment. The installed MAX scanner has camera/flash
+only; opening the fresh auth link shows instructions and does not confirm it.
+
+The new real pending-QR parser defect is fixed: provider omits false/default
+loginAvailable.19 focused regressions passed; installed4b9169e normal new-user
+browser passed two actual200 pending polls, cancel, reload and390px no overflow.
+Own browser/fixture/copies and phone session/lease were cleaned. The phone was
+then handed to the independent gateway boot-repair owner; UserIO has no phone hold.
+
+Remaining phase16: camera-confirmed NEW MAX enrollment/read/send, actual personal
+WhatsApp pairing/read/send, registry-bound hosted SIM voice selector plus physical
+registration/audio, and remaining new-user provider journeys. These are not
+closed by QR/configuration issuance or by the working operator's old accounts.
+Percentages unchanged: CONN-01 only1/5; milestone11/19 accepted and2/5phases closed.

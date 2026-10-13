@@ -147,8 +147,11 @@ removal, masked secrets and mobile controls. This does not close CONN-03/04.
 
 ### Exact remaining boundaries
 
-- Full new-user MAX login is explicitly **BLOCKED until a test phone is
-  available**. Prior QR-only acceptance is retained, not a full login PASS.
+- Full new-user MAX login is OPEN at native camera confirmation. S21 is now
+  available/unlocked/rooted and existing native MAX LOGIN passed; no password
+  or phone-absence blocker remains. The installed scanner offers camera/flash,
+  no gallery. The same-phone link opens instructions, not confirmation. Root
+  session verification does not substitute for a new ordinary QR enrollment.
 - Full new-user WhatsApp pairing, maintained read/send and reconnect need
   a consenting test phone. OwnerUserIO7bb. Proof: successful linked device →
   exact owned registry/account → incoming + own outgoing/native readback/reload.
@@ -195,3 +198,29 @@ positive pending shape asfalse, still rejects malformed fields and never grants
 AuthByTrack before true confirmation.19focusedregressions PASS5.11s. Old failed
 QR/private-link copies are consumed/removed, never replayed. Successful ordinary
 confirmation remains a distinct live boundary, not inferred from this repair.
+
+## Live pending-QR correction and phone result
+
+Source16edec1 fixes the false-field omission; installed4b9169e / manifest4f883a47
+includes truthful QR camera/second-screen guidance. A NEW ordinary fixture and
+headed44 resource passed actual two200 UI-driven pending polls (old code failed
+on firstpoll), normal cancel, reload-empty,390px no overflow and visible revised
+guidance. No AuthByTrack, accepted account, send, model or read ACK. Own fixture
+removed after empty history/accounts/drafts assertions; own Chrome/Xvfb gone.
+
+Root phone access was used: su uid0, normal AgentDevice swipe unlock, authenticated
+MAX UI/Devices/camera inspected, exact existing phone token+deviceId read ONLY in
+memory and native LOGIN verified SAME900000102. Secrets were not output or saved;
+provider message/ACK/config/SIP/APK writes0. An expired old lease caused one
+AgentDevice guard refusal: only own controller (sole owned session) was normally
+restarted under the valid continuation lease, then UI verified. Phone session
+closed and current lease actually released to the independent gateway repair.
+
+Protected proofs under .tmp/account-onboarding-20261013:
+max-phone-web-failure.json (retained prior RED), max-phone-fixture-cleanup.json,
+max-pending-tests.txt, max-guidance-verify.json, max-pending-web-proof.json,
+max-pending-fixture-cleanup.json, max-pending-browser-cleanup.json,
+root-native-identity-check.json, own-phone-session-close.json, phone-final-release.json.
+
+Final available UI/setup scope is accepted. Overall CONN-03/04 and phase16 remain
+PARTIAL: new phone confirmation/pairing and per-user SIM voice are not claimed.
