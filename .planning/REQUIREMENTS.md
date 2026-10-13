@@ -76,3 +76,21 @@ They are explicitly listed as closed in ROADMAP, without inventing new CAP IDs.
 VK read acknowledgements/session renewal and older-history viewport
 anchor are additional open follow-ups with their own owner and live evidence
 criteria there; completed VK text/edits/photo/document acceptance stays closed.
+
+
+## Phase16 — Own-user simple account onboarding
+
+- [x] CONN-01: one consistent account screen and short guides; real new-user
+  desktop/mobile/back/reload, normal own fixture SMS config issuance and cleanup.
+- [ ] CONN-02: ordinary Telegram QR/phone connection belongs to its user and
+  keeps real input/reply working. Source/ownership/live empty-state accepted;
+  new actual enrollment and message acceptance pending. OwnerUserIO7bb.
+- [ ] CONN-03: personal MAX and WhatsApp enrollments, persistence and maintained
+  input/reply work for arbitrary users. Global/shared operator path not substitute.
+- [ ] CONN-04: root/unrooted SMS and individual call setup have their own clear
+  connection route and live phone/SIP ownership proof. SMS source/UI accepted,
+  self-service voice and new physical enrollment pending.
+- [ ] CONN-05: new own-user mail/VK/Matrix connection/reconnect agrees with guides
+  and actual provider source/identity/readback; old operator acceptance preserved.
+
+All remaining phase16 work belongs to UserIO7bb, independent of Exmanager15.

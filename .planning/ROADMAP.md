@@ -111,3 +111,18 @@ generic UserIO MCP with original baseline restored, alongside fresh Telegram/MAX
 provider acceptance. [Reaction proof](quick/261013-oq5-userio-telegram-max-vk-reaction-lifecycl/SUMMARY.md).
 Native Secretary automatic reaction behavior remains Exmanager97-owned; UserIO
 work proceeds independently. No all-capabilities/milestone completion is inferred.
+
+### Phase 16: Simple account onboarding and per-user self-service across all providers
+
+**Goal:** Каждый пользователь подключает свои аккаунты из одного простого раздела с короткими понятными шагами.
+**Requirements**: CONN-01–05
+**Depends on:** Existing UserIO contracts/providers; independent of Exmanager Phase15.
+**Plans:** 1 plan, in progress
+**Status:** 1/5 requirements fully accepted (20%): unified UI; remaining per-provider self-service/live connection acceptance open.
+
+Plans:
+- [ ] [16-01](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md) — unified UI and personal connectors
+
+**Phase16 current status:** UI first slice real PASS; full provider outcome pending.
+OwnerUserIO7bb, independent of Exmanager15. Closure criteria in
+[16-01-PLAN](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md).

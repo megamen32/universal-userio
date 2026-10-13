@@ -185,6 +185,7 @@ anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clari
 
 | 261013-5gi | Две аудиодорожки звонка: прослушивание и WAV, живая веб-приёмка | 2026-10-13 | 787077b | Verified | [261013-5gi](./quick/261013-5gi-two-track-call-audio-playback-with-trans/) |
 
+| 261013-p68 | Единый экран аккаунтов и инструкции | 2026-10-13 | 047f304 | UI live PASS; all-provider self-service phase16 OPEN | [proof](./quick/261013-p68-unified-account-connection-screen-and-si/VERIFICATION.md) |
 | 261013-oq5 | Реакции UserIO в Telegram/MAX/VK: добавить, сменить, снять | 2026-10-13 | 23a4cda | Live provider PASS; Secretary behavior independently owned97 | [proof](./quick/261013-oq5-userio-telegram-max-vk-reaction-lifecycl/SUMMARY.md) |
 
 ## Historical checkpoint (superseded by final acceptance below)
@@ -316,3 +317,9 @@ Phase15 native acceptance and retirement
 remain pending; no full migration is claimed.
 Exact sender881 reuses the existing provider client; private readonly resource
 stays unchanged. Generic sender uses a separate explicit account-bound scope.
+
+## Roadmap Evolution
+
+- Phase16 added: simple own-user account onboarding and self-service across providers.
+- UI/instructions slice live-accepted047f304; MAX/WhatsApp/SIP remain UserIO-owned
+  implementation and live acceptance. Exmanager15 is independent, no mutual wait.
