@@ -142,8 +142,8 @@ async function maxRequest(action,body={}){
  const d=await r.json();if(!r.ok)throw Error(d.error||'Не удалось подключить MAX');return d;
 }
 function stopMax(){clearTimeout(maxTimer);maxTimer=null;document.getElementById('max-qr').hidden=true;document.getElementById('max-cancel').hidden=true;document.getElementById('max-begin').disabled=false;}
-async function cancelMax(){const old=maxLogin;maxLogin='';stopMax();if(old){try{await maxRequest('cancel',{login_id:old});}catch{}}}
-document.getElementById('max-cancel').onclick=async()=>{await cancelMax();document.getElementById('max-status').textContent='Вход отменён.';};
+async function cancelMax(){const old=maxLogin;maxLogin='';stopMax();if(old){try{await maxRequest('cancel',{login_id:old});}catch{return false;}}return true;}
+document.getElementById('max-cancel').onclick=async()=>{const cancelled=await cancelMax();document.getElementById('max-status').textContent=cancelled?'Вход отменён.':'Не удалось подтвердить отмену. Проверьте список аккаунтов; незавершённый QR скоро истечёт.';if(!cancelled)connectedAccounts();};
 document.getElementById('max-begin').onclick=async()=>{
  const status=document.getElementById('max-status');document.getElementById('max-begin').disabled=true;status.textContent='Подготавливаем QR-код…';
  try{

@@ -323,3 +323,13 @@ stays unchanged. Generic sender uses a separate explicit account-bound scope.
 - Phase16 added: simple own-user account onboarding and self-service across providers.
 - UI/instructions slice live-accepted047f304; MAX/WhatsApp/SIP remain UserIO-owned
   implementation and live acceptance. Exmanager15 is independent, no mutual wait.
+
+## Current account-onboarding checkpoint (13 October)
+
+Phase16 remains active1/5 accepted20%, independent of Exmanager. One consistent
+account screen is installed/live accepted on desktop/mobile. MAX personal QR
+source6b4bd74 is installed/verified: real QR + same-phone link/cancel/reload PASS,
+but actual account confirmation/read/send unverified because canonical S21
+reverse endpoints are absent. Own phone lease/browser/fixture cleanup complete.
+WhatsApp personal bridge and SIP self-service remain open.
+[Exact acceptance and owner/closure criteria](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md).

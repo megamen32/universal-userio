@@ -123,6 +123,6 @@ work proceeds independently. No all-capabilities/milestone completion is inferre
 Plans:
 - [ ] [16-01](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md) — unified UI and personal connectors
 
-**Phase16 current status:** UI first slice real PASS; full provider outcome pending.
+**Phase16 current status:** unified UI real PASS; personal MAX source/runtime and live QR/cancel/reload accepted, successful account confirmation/read/send pending canonical phone availability. WhatsApp/SIP and new-user provider acceptance remain open. See [checkpoint](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md).
 OwnerUserIO7bb, independent of Exmanager15. Closure criteria in
 [16-01-PLAN](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md).
