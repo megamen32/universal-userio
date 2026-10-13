@@ -183,6 +183,8 @@ Documentation accepted through actual headed BFFE consumer/owncleanup. Core
 fullsystemd not claimed/Root24humanStop preserved. The following next-step list is historical and superseded by final acceptance: secretary roles/latest
 anchor, draft source/time, dispatcher401/deepqueue, workchat policies/mail clarity.
 
+| 261013-5gi | Две аудиодорожки звонка: прослушивание и WAV, живая веб-приёмка | 2026-10-13 | 787077b | Verified | [261013-5gi](./quick/261013-5gi-two-track-call-audio-playback-with-trans/) |
+
 ## Historical checkpoint (superseded by final acceptance below)
 
 12 October later owner correction: automatic Telegram group/channel analysis is
