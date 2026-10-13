@@ -28,7 +28,7 @@
 - [ ] **LIVE-03**: Dedicated Secretary Telegram transport is retired only after real generic consumer acceptance; shared provider clients and rollback are preserved.
 
 ## Out of Scope
-New provider authorization/session clones, blanket read-only token upgrades,
+For phases12–15 only: new provider authorization/session clones, blanket read-only token upgrades,
 Airlock core forks or another reasoning loop, historical send/task replay,
 deletion of old customer content, and replacing business/task storage with UserIO.
 
@@ -57,7 +57,7 @@ login and protected persistence: installed c6cdf44, real UserIO MCP read and
 independent deployed Secretary source/history/media acceptance. Old receipts
 are preserved; this does not certify a new inbound/model/reply journey.
 
-Coverage: 14 requirements, 14 mapped, 0 unmapped. Previous v1.2 requirements
+Coverage including phase16:19requirements,19mapped,0unmapped. Original phases12–15 remain14requirements. Previous v1.2 requirements
 remain in milestones/v1.2-REQUIREMENTS.md; no prior acceptance is reset/replayed.
 
 ## Evidence reconciliation — 2026-10-12
@@ -89,8 +89,15 @@ criteria there; completed VK text/edits/photo/document acceptance stays closed.
   input/reply work for arbitrary users. Global/shared operator path not substitute.
 - [ ] CONN-04: root/unrooted SMS and individual call setup have their own clear
   connection route and live phone/SIP ownership proof. SMS source/UI accepted,
-  self-service voice and new physical enrollment pending.
+  hosted SIP issuance/settings/reload/disconnect/mobile now live accepted; actual per-user voice selector and new physical registration/call/audio pending.
 - [ ] CONN-05: new own-user mail/VK/Matrix connection/reconnect agrees with guides
   and actual provider source/identity/readback; old operator acceptance preserved.
 
 All remaining phase16 work belongs to UserIO7bb, independent of Exmanager15.
+
+Phase16 traceability: CONN-01 Complete; CONN-02 Partial/source; CONN-03
+Partial/personal QR and cancellation source+live; CONN-04 Partial/hosted
+SIP+SMS configuration issuance source+live; CONN-05 Pending new-user acceptance.
+All5 mapped to phase16. Overall current milestone11/19requirements accepted
+(58%), with2/5fullyclosedphases/plans (40%); phase16 remains1/5 (20%).
+See latest [checkpoint](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md) for exact phone and voice-binding closure criteria.

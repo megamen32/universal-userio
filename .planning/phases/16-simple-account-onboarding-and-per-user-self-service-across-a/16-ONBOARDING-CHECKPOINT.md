@@ -111,3 +111,70 @@ WhatsApp QR/cancel/reload + hosted SIP settings/reload/disconnect/error/mobile.
 Full MAX login explicitly BLOCKED until a test phone is available; QR-only
 acceptance from the prior cycle remains distinct. Exmanager source/runtime is
 unaffected and is not a prerequisite for this UI/provisioning case.
+
+## Live self-service acceptance — current deployed271787c
+
+Two separate owned headed44 cycles were captured, inspected and cleaned up.
+In installed11c312d, a NEW ordinary user saw no operator WhatsApp slots, received
+a real provider QR, cancelled it, reloaded with QR cleared and no account, and
+saw a403 wrong-slot error. Mobile390px had no horizontal overflow. The same
+user received a unique hosted SIP peer from the actual Asterisk provisioner,
+reopened masked settings after reload and disconnected it. Both UserIO account
+and native Asterisk peer were absent afterwards. No actual phone pairing,
+SMS/call/send/model/read-ACK occurred.
+
+That cycle deliberately remains PARTIAL: live Chrome ignored the unescaped
+hyphen in its new HTML pattern-v grammar. Source271787c fixes this, plus the
+tiny mobile SIP action buttons. The NEW ordinary-user corrective cycle verified
+normal browser invalid-ID rejection and actual API400 without provisioning,
+then created one new own peer, checked44px mobile controls and masked settings,
+reloaded and disconnected. An initial consumer Ctrl+A lacked native keycode;
+its pre-submit failure is retained separately. Corrected keyboard selection
+continued the SAME owned page, without signup/QR/provider replay. Final actual
+capture passed; stale error text in the raw inherited proof is historical,
+not a new failure. The selected proof records that distinction.
+
+Both fixtures were removed only after empty-account/history/draft assertions.
+Both owned Chrome/Xvfb/PID/cgroup trees and remote PNG copies are gone; foreign
+actions0. Deployed product manifest2fbe644c / commit271787c is verified.
+SIP unit sourcea3bbe5b fixed the discovered ProtectHome interpreter failure;
+current process is stable at~10MiB/1task. Its13 restarts are retained historical
+pre-fix failures; WhatsApp currently~91MiB/11tasks under its finite budget.
+
+Accepted available-without-phone scope: inline WhatsApp QR/error/cancel/reload,
+hosted per-owner SIP create/settings/status/reload/disconnect, actual peer
+removal, masked secrets and mobile controls. This does not close CONN-03/04.
+
+### Exact remaining boundaries
+
+- Full new-user MAX login is explicitly **BLOCKED until a test phone is
+  available**. Prior QR-only acceptance is retained, not a full login PASS.
+- Full new-user WhatsApp pairing, maintained read/send and reconnect need
+  a consenting test phone. OwnerUserIO7bb. Proof: successful linked device →
+  exact owned registry/account → incoming + own outgoing/native readback/reload.
+- Hosted SIM registration/call/audio remains OPEN. OwnerUserIO7bb integrates
+  the account; voice producer owner01a12c50 owns immutable accountRef+SIP peer
+  selector. Existing bridgeprepare uses global target/account metadata and
+  gateway-s21 correlation; no per-user sender is inferred. The active-only
+  handoff to that owner and owning voice root returned skipped_inactive; no
+  hidden session wake, foreign edits or whole-project hold. Next exact step:
+  owner source handoff or supported per-call selector, then registry-bound
+  UserIO call request/ingress and a real registered rooted phone with distinct
+  two-way audio. New peers remain call_ready=false until that proof; own SIP
+  inbound context rejects calls rather than using S21.
+
+Protected evidence: `.tmp/account-onboarding-20261013/{wa-sip-web-partial,
+wa-sip-web-cleanup,wa-sip-fixture-cleanup,sip-validation-web-proof-raw,
+sip-validation-web-proof,sip-validation-web-cleanup,
+sip-validation-fixture-cleanup,sip-native-cleanup-readback,
+validation-verify,connector-install}.json`. Final correction did not repeat
+the accepted WhatsApp QR intent; source/runtime stayed frozen per capture.
+
+Independent synthetic-reader/content review found obsolete administrator-first
+WhatsApp instructions and a mobile same-screen QR ambiguity. Both were fixed:
+self-service instructions first, deployment clearly separate, and explicit
+computer/second-screen QR guidance in both UI and docs. Hosted calls guide also
+points to personal SIP issuance and keeps unverified voice disabled. Independent
+delta reviewPASS; this is simulated content review, not human research or phone
+pairing. Final content-only browser capture follows this documentation/UI delta
+without another QR, SIP create, send, model or accepted provider replay.

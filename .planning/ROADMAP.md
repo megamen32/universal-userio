@@ -4,7 +4,7 @@
 - ✅ v1.0 MAX personal account — phases1–3 accepted.
 - ✅ v1.1 Human web send, edits and phone conversations — phases4–7 accepted.
 - ✅ v1.2 Reliable everyday communication — phases8–11 accepted.
-- 🚧 **v1.3 Messenger capabilities for the Airlock Secretary** — phases12–15.
+- 🚧 **v1.3 Messenger capabilities for the Airlock Secretary** — phases12–16 (including own-user onboarding).
 
 Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
 
@@ -13,6 +13,7 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
 - [x] **Phase 13: Source-bound history and approved replies** — real Telegram source/media/reply receipts and bounded MAX reads accepted.
 - [ ] **Phase 14: Telegram and MAX rich operations** — edit/reaction/sticker/file and capability-led progress.
 - [ ] **Phase 15: Native Secretary parity and transport retirement** — real consumer acceptance without interrupting business.
+- [ ] **Phase 16: Simple account onboarding** — one account screen, personal connectors and hosted SIM setup.
 
 ## Phase Details
 
@@ -75,8 +76,9 @@ Prior roadmap: [v1.2](milestones/v1.2-ROADMAP.md). No historical action repeats.
 | 13 | Complete | SRC-01–02, REPLY-01–02: 4/4 | 100% |
 | 14 | Recipient typing deferred until second test account | ACT-01–03: 3/4 | 75% |
 | 15 | Native MAX reply/edit and restored live auth/media accepted; new inbound/full parity/retirement open | 0/3 | 0% |
+| 16 | Unified UI accepted; personal QR and SIP issuance/control live-proven, full phone pairing/call route pending | CONN-01:1/5 | 20% |
 
-Current milestone: **2/4 phases/plans closed (50%); 10/14 requirements accepted (71%)**. These are different counters. The original GSD all-directory bar also counts retained historical phases and is not a product-readiness percentage. No full milestone completion is claimed.
+Current milestone: **2/5 phases/plans closed (40%); 11/19 requirements accepted (58%)**. These are different counters. The original GSD all-directory bar also counts retained historical phases and is not a product-readiness percentage. No full milestone completion is claimed.
 
 ## Already accepted user outcomes — retained, not reopened
 
@@ -123,6 +125,6 @@ work proceeds independently. No all-capabilities/milestone completion is inferre
 Plans:
 - [ ] [16-01](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md) — unified UI and personal connectors
 
-**Phase16 current status:** unified UI real PASS; personal MAX source/runtime and live QR/cancel/reload accepted, successful account confirmation/read/send pending canonical phone availability. WhatsApp/SIP and new-user provider acceptance remain open. See [checkpoint](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md).
+**Phase16 current status:** unified UI real PASS; personal MAX source/runtime and live QR/cancel/reload accepted, successful account confirmation/read/send pending canonical phone availability. WhatsApp personal QR/cancel/reload and hosted per-user SIP settings/reload/disconnect/error/mobile are live-accepted in271787c. Full WhatsApp pairing/read/send, SIM voice selector/phone/audio and new-user provider acceptance remain open. MAX full login is explicitly blocked until a test phone is available. See [checkpoint](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md).
 OwnerUserIO7bb, independent of Exmanager15. Closure criteria in
 [16-01-PLAN](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md).

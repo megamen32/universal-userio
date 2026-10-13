@@ -3,29 +3,29 @@ gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
 status: blocked
-last_updated: "2026-10-13T00:46:45.347733Z"
+last_updated: "2026-10-13T18:02:08.303584+00:00"
 last_activity: 2026-10-13
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 2
-  total_plans: 4
+  total_plans: 5
   completed_plans: 2
-  percent: 50
+  percent: 40
 ---
 
 # State
 
-**Current Phase:** 15
-**Current Phase Name:** Native Secretary parity and transport retirement
-**Total Phases:** 4
+**Current Phase:** 16
+**Current Phase Name:** Simple account onboarding and personal phone connections
+**Total Phases:** 5
 **Current Plan:** 01
 **Total Plans in Phase:** 1
 **Status:** blocked
-**Progress:** 50%
+**Progress:** 40%
 
-[█████░░░░░] — current milestone phase/plan completion (2/4)
+[████░░░░░░] — current milestone phase/plan completion (2/5)
 **Last Activity:** 2026-10-13
-**Last Activity Description:** Restored MAX confirmed by native Secretary read/history/media; ONE authorized request for a new Darja picture delivered and independently resolved after reconnect. Finite90s/18reads returned no new incoming source at50967; cleanup complete. Current UserIO contract ready, final native journey awaits genuine new input; typing/retirement separately deferred.
+**Last Activity Description:** Deployed personal WhatsApp QR/cancel/reload and hosted per-owner SIP settings/reload/disconnect/error/mobile accepted on headed44; current271787c. Full new phone pairing and per-user voice selector/audio remain explicitly open; Exmanager15 independent.
 
 ## Current acceptance and next action
 
@@ -45,7 +45,7 @@ and protected persistence, with deployed MCP live read accepted; no old send/mod
 - Phase14: ACT-01–03 complete,3/4 (75%); ACT-04 command ACK/stop-mode proved, recipient-visible typing/expiry explicitly deferred until a second test recipient is available.
 - Phase15: native MAX final parity/business preservation/transport retirement
   remain Exmanager97-owned acceptance,0/3fullyclosed; actual TG vertical and native MAX grounded final reply/two edits retained. Transport retirement explicitly excluded from this session.
-- Milestone2/4plans (50%),10/14requirements (71% rounded). Original all-directory
+- Milestone2/5plans (40%),11/19requirements (58% rounded), including independent phase16. Original all-directory
   progress includes historical phases and is not this milestone's percentage.
 
 Next route: Exmanager97 verifies ONE NEW native MAX inbound/image/final reply on
@@ -333,3 +333,22 @@ but actual account confirmation/read/send unverified because canonical S21
 reverse endpoints are absent. Own phone lease/browser/fixture cleanup complete.
 WhatsApp personal bridge and SIP self-service remain open.
 [Exact acceptance and owner/closure criteria](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md).
+
+## Latest owned UserIO delivery — 13 October hosted SIP/WhatsApp
+
+Installed271787c is current verified runtime. Phase16 unified account UI remains
+1/5 fully accepted (20%). New personal WhatsApp QR/error/cancel/reload and
+per-owner hosted SIP create/settings/reload/disconnect/error/mobile now pass
+real headed44 checks; owned native peer, test users and browser resources
+removed.44focusedPython checks and Node HTTP/provider regressions passed.
+Historical pattern-v and service interpreter REDs retained and fixed.
+
+The available-without-phone UI/provisioning slice is closed. Full new MAX
+login is BLOCKED until a test phone is available; new WhatsApp pairing/read/send
+and rooted SIP registration/audio still unverified. Per-user SIM voice selector
+remains an explicit source gap (global S21 target/account); UserIO7bb owns
+integration and voice producer01a12c50 owns its source. No new peer promises
+calling before registry-bound route/audio acceptance. Next exact source step
+and proof are in phase16 checkpoint; no Exmanager wait/hold or old intents.
+Phase15 external-inbound/retirement acceptance remains independently owned by
+Exmanager97, without moving it into this UI scope or overwriting its receipts.
