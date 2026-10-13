@@ -245,7 +245,9 @@ class UserIOMcpSurface:
         specs = tuple(
             spec for spec in TOOL_SPECS
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
-            and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.'))
+            and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
+                 or spec.name.startswith('userio.calls.telegram.')
+                 and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
                  or self._store.capability_enabled(required, user_id=principal.user_id))
         )
@@ -312,7 +314,7 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
-        if (principal.messenger_accounts is not None and not name.startswith('userio.messenger.')
+        if (principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.'))
                 and name not in {'tools/list','tools/call'}):
             return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS | {"tools/list", "tools/call"}:

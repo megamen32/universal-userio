@@ -134,6 +134,35 @@ def test_hangup_rejects_late_dial_but_allows_teardown_rpc(tmp_path,monkeypatch):
     asyncio.run(check())
 
 
+def test_secretary_scoped_tool_cannot_start_read_or_stop_another_account(monkeypatch):
+    from dataclasses import replace
+    from universal_userio.contracts import UserPrincipal
+    from universal_userio.mcp_surface import UserIOMcpSurface
+    from universal_userio.mcp_dispatch import UserIOToolDispatcher
+    service,_=service_fixture(); manager=Mock()
+    manager.get.return_value={'account_ref':'telegram:100003'}
+    manager.start.return_value={'account_ref':'telegram:100001','call_id':'owned'}
+    monkeypatch.setattr(telegram_calls,'calls_for',lambda _:manager)
+    principal=UserPrincipal('owner','owner','owner',messenger_accounts=('telegram:100001',))
+    for api in (UserIOMcpSurface(service._store,service),UserIOToolDispatcher(service._store,service)):
+        for operation,args in (('start',{'account_ref':'telegram:100003'}),
+                               ('get',{'call_id':'foreign'}),('stop',{'call_id':'foreign'})):
+            result=api.dispatch('userio.calls.telegram.'+operation,args,principal=principal)
+            assert result=={'ok':False,'error':'account_scope_denied'}
+        manager.start.assert_not_called(); manager.stop.assert_not_called()
+        assert api.dispatch('userio.calls.telegram.start',{'account_ref':'telegram:100001'},
+                            principal=replace(principal,read_only=True))['error']=='read_only_token'
+        assert api.dispatch('userio.calls.telegram.start',{'account_ref':'telegram:100001'},
+                            principal=principal)['ok'] is True
+        manager.start.reset_mock()
+    surface=UserIOMcpSurface(service._store,service)
+    names=lambda p:{t['name'] for t in surface.tool_manifest(principal=p)['tools'] if '.calls.' in t['name']}
+    assert names(principal)=={'userio.calls.telegram.start','userio.calls.telegram.get','userio.calls.telegram.stop'}
+    assert names(replace(principal,read_only=True))=={'userio.calls.telegram.get'}
+    assert names(replace(principal,messenger_accounts=('max',)))==set()
+    assert surface.dispatch('userio.calls.matrix.start',{},principal=principal)['error']=='messenger_scope_only'
+
+
 def test_telegram_two_track_audio_is_bound_to_secretary_and_recipient(tmp_path):
     call_id='22222222-3333-4444-8555-666666666666'; folder=tmp_path/call_id; folder.mkdir()
     for track in ('caller','assistant'):

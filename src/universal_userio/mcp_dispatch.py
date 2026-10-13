@@ -26,7 +26,7 @@ class UserIOToolDispatcher:
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
-        if principal.messenger_accounts is not None and not name.startswith('userio.messenger.'):
+        if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.')):
             return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS:
             return {"ok": False, "error": "read_only_token"}
@@ -106,6 +106,11 @@ class UserIOToolDispatcher:
             if name.startswith('userio.calls.telegram.'):
                 from .telegram_calls import calls_for
                 calls = calls_for(self._service)
+                if principal.messenger_accounts is not None:
+                    account_ref=(arguments.get('account_ref') if name=='userio.calls.telegram.start'
+                        else calls.get(self._required(arguments,'call_id'),user_id)['account_ref'])
+                    if account_ref not in principal.messenger_accounts:
+                        raise PermissionError('account_scope_denied')
                 if name == 'userio.calls.telegram.start':
                     call = calls.start(user_id=user_id, **arguments)
                 elif name == 'userio.calls.telegram.get':

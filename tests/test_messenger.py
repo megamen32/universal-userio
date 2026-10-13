@@ -150,7 +150,8 @@ def test_sender_token_scoped_to_explicit_account_no_legacy_or_management(case):
         assert api.dispatch('userio.messenger.capabilities',{'account_ref':provider.account_ref},principal=principal)['credential_scope']=='messenger_actions'
     api=UserIOMcpSurface(store,service)
     assert api.resource_manifest(principal=principal)=={'resources':[]}
-    assert all(t['name'].startswith('userio.messenger.') for t in api.tool_manifest(principal=principal)['tools'])
+    assert all(t['name'].startswith(('userio.messenger.','userio.calls.telegram.'))
+               for t in api.tool_manifest(principal=principal)['tools'])
     with pytest.raises(ValueError):tokens.create(store.default_user_id,'bad',scope='messenger_actions',account_refs=['telegram:900000101'])
 
 
