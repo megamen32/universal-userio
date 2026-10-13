@@ -55,6 +55,10 @@ one genuine new image+caption from the interlocutor. Root97 requested it from th
 owner; UserIO7bb also delivered ONE authorized transparent MAX request directly
 to Darja117430793777467441 with fresh native body/author readback. That outgoing
 request does not substitute for an incoming source or a native model response.
+A fresh normal MAX provider-history read also confirms that the newest message
+is our outgoing request117430793777467441; the last incoming remains the older
+Darja sticker117429138456803118. Thus the missing source is not merely an empty
+UserIO cursor; no new interlocutor input exists at the provider either.
 No UserIO-wide source/runtime hold is required while that input is pending. UserIO7bb recovery is closed: normal same-account login,
 protected runtime persistence and deployed MCP fresh read accepted; see
 [resolved auth debug](debug/max-post-edit-auth-refusal.md).
