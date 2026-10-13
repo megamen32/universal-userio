@@ -34,8 +34,11 @@ def server_voice_config(config):
     return config
 
 
-async def finish_rtc_audio(source, should_stop):
+async def finish_rtc_audio(source, should_stop=None, *, interrupted=False):
     """Flush the bounded RTC tail, observing interruptions during playback."""
+    # A rolling deployment can launch the new worker from a gateway that
+    # still supplies the original boolean argument. Keep that seam compatible.
+    if should_stop is None: should_stop=lambda: interrupted
     playing=asyncio.create_task(source.wait_for_playout())
     try:
         while not playing.done():
@@ -117,8 +120,8 @@ async def run(request):
                     await source.capture_frame(rtc.AudioFrame(pcm,48000,1,len(pcm)//2))
                 elif kind==voice.HANGUP_KIND: terminate()
         def close(self): self.closed=True;terminate()
-        async def finish_audio(self,*,should_stop):
-            await finish_rtc_audio(source,should_stop)
+        async def finish_audio(self,*,should_stop=None,interrupted=False):
+            await finish_rtc_audio(source,should_stop,interrupted=interrupted)
         def is_closing(self):return self.closed
         async def wait_closed(self):pass
         def get_extra_info(self,name,default=None):return default

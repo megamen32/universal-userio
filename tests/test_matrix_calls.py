@@ -27,6 +27,23 @@ def test_late_barge_in_clears_the_rtc_tail_while_playout_is_waiting():
     asyncio.run(check())
 
 
+def test_rtc_tail_accepts_the_previous_gateway_during_rolling_deployment():
+    import asyncio
+    from universal_userio.matrix_call_worker import finish_rtc_audio
+    async def check():
+        released=asyncio.Event()
+        class Source:
+            cleared=0
+            async def wait_for_playout(self):await released.wait()
+            def clear_queue(self):self.cleared+=1;released.set()
+        source=Source()
+        await asyncio.wait_for(finish_rtc_audio(source,interrupted=True),1)
+        assert source.cleared==1
+        await finish_rtc_audio(source,interrupted=False)
+        assert source.cleared==1
+    asyncio.run(check())
+
+
 def test_matrix_binds_frozen_voice_preparation_without_mutating_phone_peer():
     from dataclasses import dataclass
     from universal_userio.matrix_call_worker import bind_prepared
