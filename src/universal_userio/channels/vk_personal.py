@@ -20,6 +20,12 @@ from typing import Any, Callable
 from ..contracts import DeliveryNotSubmittedError
 
 
+class VKUploadRefused(DeliveryNotSubmittedError):
+    def __init__(self, code):
+        self.code=code
+        super().__init__(f'VK отказал в загрузке файла (HTTP {code}); сообщение не отправлено')
+
+
 class VKPermissionDenied(ValueError):
     """This VK token cannot access personal messages."""
 
@@ -197,6 +203,19 @@ class VKPersonalClient(VKPersonalReader):
         return row
 
     def upload(self, *, peer_id, data, filename, mime_type):
+        # HTTP405 is a definite upload refusal before any messages.send.
+        # Refresh this native upload slot once; never replay an uncertain send.
+        for attempt in range(2):
+            try:
+                return self._upload_once(peer_id=peer_id,data=data,filename=filename,mime_type=mime_type)
+            except VKUploadRefused as error:
+                if error.code!=405 or attempt:
+                    raise
+                logging.getLogger(__name__).warning('VK upload slot refused HTTP405; obtaining one fresh slot')
+                time.sleep(0.4)
+        raise AssertionError('unreachable upload loop')
+
+    def _upload_once(self, *, peer_id, data, filename, mime_type):
         if not isinstance(data,bytes) or not 1<=len(data)<=2*1024*1024:
             raise ValueError('Вложение VK должно быть не больше 2 МБ')
         if not isinstance(filename,str) or not 1<=len(filename)<=128 or any(c in filename for c in '/\\\r\n"'):
@@ -221,7 +240,7 @@ class VKPersonalClient(VKPersonalReader):
                     raise
         except urllib.error.HTTPError as error:
             logging.getLogger(__name__).warning('VK file upload refused: HTTP%s',error.code)
-            raise DeliveryNotSubmittedError(f'VK отказал в загрузке файла (HTTP {error.code}); сообщение не отправлено') from error
+            raise VKUploadRefused(error.code) from error
         except (OSError,ValueError) as error:
             logging.getLogger(__name__).warning('VK file upload failed before message send: %s',type(error).__name__)
             raise RuntimeError('Загрузка VK не подтверждена; не отправляйте повторно') from error
