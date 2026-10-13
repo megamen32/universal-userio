@@ -49,7 +49,10 @@ and protected persistence, with deployed MCP live read accepted; no old send/mod
   progress includes historical phases and is not this milestone's percentage.
 
 Next route: Exmanager97 verifies ONE NEW native MAX inbound/image/final reply on
-the restored account. UserIO7bb recovery is closed: normal same-account login,
+the restored account. Independent native source/history/media restoration is
+accepted in Exmanager3e58f39. Cursor50967 has no new event: the missing input is
+one genuine new image+caption from the interlocutor, already requested by Root97.
+No UserIO-wide source/runtime hold is required while that input is pending. UserIO7bb recovery is closed: normal same-account login,
 protected runtime persistence and deployed MCP fresh read accepted; see
 [resolved auth debug](debug/max-post-edit-auth-refusal.md).
 Exmanager97 independently finishes fresh external inbound/rich SDK parity and

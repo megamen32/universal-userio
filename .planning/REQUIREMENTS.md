@@ -46,14 +46,16 @@ deletion of old customer content, and replacing business/task storage with UserI
 | ACT-02 | 14 | Complete — actual add/change/remove and native readback on both providers |
 | ACT-03 | 14 | Complete — actual stickers and byte-identical files on both providers; native Secretary remains phase15 |
 | ACT-04 | 14 | Partial — recipient typing explicitly deferred until second test account |
-| LIVE-01 | 15 | Partial — native MAX model reply and repeated edits delivered; current provider auth refused; external inbound/full rich parity pending |
+| LIVE-01 | 15 | Partial — native MAX model reply and repeated edits delivered; authorization restored with deployed Secretary live read/media; new external inbound/full rich parity pending |
 | LIVE-02 | 15 | Partial — live acceptance pending |
 | LIVE-03 | 15 | Deferred in this session by explicit owner instruction; later Exmanager retirement acceptance |
 
 Latest [native MAX final verification](phases/15-native-secretary-parity-and-transport-retirement/15-native-max-final-VERIFICATION.md)
 retains the real model/normal confirmation/send/two-edit proof separately from
-later `login.token` refusal. Current installed f0cd37a exposes reconnection and
-retains stored history/accepted receipts; it does not renew invalid provider auth.
+later `login.token` refusal. That refusal is now resolved by ordinary same-account
+login and protected persistence: installed c6cdf44, real UserIO MCP read and
+independent deployed Secretary source/history/media acceptance. Old receipts
+are preserved; this does not certify a new inbound/model/reply journey.
 
 Coverage: 14 requirements, 14 mapped, 0 unmapped. Previous v1.2 requirements
 remain in milestones/v1.2-REQUIREMENTS.md; no prior acceptance is reset/replayed.
