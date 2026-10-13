@@ -71,6 +71,7 @@ class Bridge:
                 cid TEXT NOT NULL, mid TEXT NOT NULL, event TEXT NOT NULL,
                 sender TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(cid,mid));
             CREATE TABLE IF NOT EXISTS media_links (cid TEXT NOT NULL, mid TEXT NOT NULL, event TEXT NOT NULL, PRIMARY KEY(cid,mid));
+            CREATE INDEX IF NOT EXISTS media_links_event_idx ON media_links(event);
             CREATE TABLE IF NOT EXISTS media_retries (cid TEXT NOT NULL, mid TEXT NOT NULL, fingerprint TEXT NOT NULL, attempts INTEGER NOT NULL, next_try REAL NOT NULL, PRIMARY KEY(cid,mid));
             CREATE TABLE IF NOT EXISTS jobs (
                 event_id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
@@ -380,7 +381,9 @@ class Bridge:
             raise ValueError("Эта комната моста поддерживает сообщения без сквозного шифрования.")
         if "state_key" in event:
             return "ignored",""
-        if BRIDGE_FIELD in content:
+        if BRIDGE_FIELD in content or self.db.execute(
+                "SELECT 1 FROM media_links WHERE cid=? AND event=?",
+                (portal["cid"],event["event_id"])).fetchone():
             return "ignored",""
         msgtype=content.get("msgtype")
         relates=content.get("m.relates_to",{})

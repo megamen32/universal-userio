@@ -250,4 +250,11 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.b.db.execute("SELECT status,receipt FROM jobs").fetchone()[:],("sent","99"))
         self.assertEqual([p for m,p,c,k in self.uio.calls],["/v1/conversations/conv_vk"])
 
+    def test_legacy_unmarked_media_replay_is_not_forwarded(self):
+        self.b.db.execute("INSERT INTO media_links VALUES (?,?,?)",("conv_vk","native-99","$human"))
+        self.b.db.commit()
+        event=self.evt(content={"msgtype":"m.image","body":"photo.png","url":"mxc://example.org/legacy"})
+        self.b.accept_transaction("legacy",{"events":[event]});self.b.drain()
+        self.assertEqual(self.b.db.execute("SELECT status FROM jobs").fetchone()[0],"ignored")
+        self.assertFalse(self.uio.calls)
 if __name__=="__main__":unittest.main()
