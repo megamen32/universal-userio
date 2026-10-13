@@ -129,7 +129,7 @@ class MatrixCalls:
         try: asyncio.run(self._call(record, secret, identity, stop))
         except Exception as error:
             # Provider responses may contain credentials; retain only the error class.
-            record.update(status='failed', error=type(error).__name__)
+            record.update(status='failed', error=record.get('error') or type(error).__name__)
             self._emit(record, 'Не удалось завершить Matrix-звонок. Запись сохранена, если звук поступал.', suffix='error')
         finally:
             self._save(record)
@@ -188,8 +188,9 @@ class MatrixCalls:
                 from .call_audio import ARCHIVE
                 folder = ARCHIVE/record['voice_call_id']
                 path = folder/'live-transcript.json'
-                path.write_text(json.dumps({k:'\n'.join(v) for k,v in transcripts.items()},ensure_ascii=False))
-                os.chmod(path,0o600)
+                if folder.is_dir():
+                    path.write_text(json.dumps({k:'\n'.join(v) for k,v in transcripts.items()},ensure_ascii=False))
+                    os.chmod(path,0o600)
             self._emit(record,'Звонок завершён через Matrix',suffix='ended')
         finally:
             writer.close()

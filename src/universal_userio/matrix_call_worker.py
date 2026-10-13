@@ -24,12 +24,22 @@ def bind_prepared(entry, record):
                    peer_ref=record['room_id'], peer_label=record['target'])
 
 
+def server_voice_config(config):
+    # Matrix never needs a device. Reuse AgentCall's deployed server speech
+    # endpoint when its telephone profile selects Android synthesis.
+    if config.tts_provider == 'android-phone':
+        return replace(config, tts_provider='qwen-warm', tts_engine='silero',
+            tts_url=os.environ.get('AGENTCALL_TTS_SILERO_URL','http://127.0.0.1:30802/synthesize'))
+    return config
+
+
 async def run(request):
     from livekit import rtc
     sys.path.insert(0,'/usr/local/lib/agentcall')
     import agentcall_realtime_bridge as voice
     record, account, identity = request['call'],request['account'],request['identity']
-    config = voice.BackendConfig.from_environment()
+    config = server_voice_config(voice.BackendConfig.from_environment())
+    os.environ['AGENTCALL_TTS_PHONE_FALLBACK']='0'
     rtc_url = os.environ['USERIO_MATRIX_RTC_AUTH_URL'].rstrip('/')
     server, token = account['homeserver'],account['access_token']
     room_id,target = record['room_id'],record['target']
@@ -146,8 +156,11 @@ async def run(request):
             engine_task.cancel();await asyncio.gather(engine_task,return_exceptions=True)
         for task in media_tasks:task.cancel()
         await asyncio.gather(*media_tasks,return_exceptions=True)
-        await media.disconnect();await source.aclose()
-        if joined:await api('PUT',state_path,{})
+        try:
+            try: await media.disconnect()
+            finally: await source.aclose()
+        finally:
+            if joined:await api('PUT',state_path,{})
 
 
 def main():

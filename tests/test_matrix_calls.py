@@ -25,6 +25,23 @@ def test_matrix_binds_frozen_voice_preparation_without_mutating_phone_peer():
     assert original.account_ref == 'phone'
 
 
+def test_matrix_server_speech_keeps_dialogue_settings_without_phone(monkeypatch):
+    from dataclasses import dataclass
+    from universal_userio.matrix_call_worker import server_voice_config
+    @dataclass(frozen=True)
+    class Config:
+        tts_provider: str = 'android-phone'
+        tts_engine: str = 'android'
+        tts_url: str = 'phone'
+        speech_speed: float = 1.35
+        model: str = 'existing'
+    monkeypatch.setenv('AGENTCALL_TTS_SILERO_URL','http://server/synthesize')
+    original=Config();bound=server_voice_config(original)
+    assert (bound.tts_provider,bound.tts_url)==('qwen-warm','http://server/synthesize')
+    assert (bound.speech_speed,bound.model)==(original.speech_speed,original.model)
+    assert original.tts_provider=='android-phone'
+
+
 def test_only_fresh_target_membership_is_an_answer():
     event = {'type':MEMBER,'sender':'@b:hs','event_id':'$new','origin_server_ts':101,
              'content':{'application':'m.call','expires':1000,

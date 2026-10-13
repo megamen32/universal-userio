@@ -6,10 +6,10 @@ appears in the owner's Matrix conversation with separate received/sent audio
 players and a transcript beneath each player.
 
 The optional `matrix-calls` extra installs the LiveKit native SDK. AgentCall must
-already be running on the same deployment. Its configured voice, model, speech
-speed, interruption, hangup and recording/transcription path are reused.
-A phone-backed configured TTS still requires the existing phone lease even
-though Matrix media itself does not use SIP or the phone.
+already be running on the same deployment. Its model, speech speed, interruption, hangup and recording/transcription
+path are reused. Matrix does not use a phone. When the telephone profile selects
+Android TTS, Matrix uses the existing server Silero speech endpoint instead;
+the telephone profile is unaffected.
 
 Use `userio.calls.matrix.start` with `account_ref`, an existing two-person
 `room_id`, the recipient's `target` Matrix ID, `purpose`, a stable `request_id`,
