@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
-status: executing
-last_updated: "2026-10-13T00:27:22.688803Z"
+status: blocked
+last_updated: "2026-10-13T00:46:45.347733Z"
 last_activity: 2026-10-13
 progress:
   total_phases: 4
@@ -20,7 +20,7 @@ progress:
 **Total Phases:** 4
 **Current Plan:** 01
 **Total Plans in Phase:** 1
-**Status:** executing
+**Status:** blocked
 **Progress:** 50%
 
 [█████░░░░░] — current milestone phase/plan completion (2/4)
@@ -69,6 +69,29 @@ Typing awaits a second recipient test account, not a password for this account.
 Latest protected proof root: `.tmp/native-max-final-20261013/` (delivery, both
 same-ID edits, 68-test bounded GREEN, installed manifest and real auth/cached
 history read). Recovered ordinary tests and auth/MCP consumers completed with exact cleanup; old refusals remain separate. The handed browser is returned to Root97 as the original blank page, and all own plaintext credential/PNG copies are removed.
+
+## Current blocking audit — genuine external input
+
+Three consecutive goal turns observed the same missing final MAX input. Latest
+ordinary events read after50967 still returns events[]/head50967/ACKfalse. A fresh
+MAX provider-history read independently confirms the newest message is the
+already delivered outgoing QA request117430793777467441; no newer incoming
+Darja message/picture exists. The ingress service is active, PID570191/NRestarts0,
+and the canonical source/runtime are unchanged. No sender/model intent is replayed.
+
+Remaining native acceptance requires one genuine new Darja image+caption; the
+request is already delivered, and Root97's separate human request is pending.
+There is no UserIO-owned implementation defect proven by this absence. Source,
+provider contracts, restored authorization, native reads/media and prior receipts
+remain accepted. No useful independent action within this milestone can create
+the missing interlocutor input without inventing provenance or duplicating work.
+
+Goal closure is blocked on that external input, not a service pause or global
+source/resource hold. Continuous UserIO synchronization and Exmanager's deployed
+consumer continue normally. Resume on an actual new source at the existing native
+Exmanager boundary; then capture model/normal approval/delivery/readback. Typing
+recipient verification and transport retirement retain the owner's explicit
+separate deferrals. Full LIVE-01–03 completion and milestone archive are unproven.
 
 ## Historical records below
 
