@@ -109,7 +109,7 @@ See [staging and provider packet](contracts/messenger-upload-v1.md).
 ## Current sender and protected provider route
 
 The Secretary Telegram sender is **900000103**, owned by the existing relay
-client. The private owner900000101 is a separate account. The UserIO QR connector
+client. The private owner<owner-telegram-id> is a separate account. The UserIO QR connector
 does not currently have an881 slot; never send via540 as fallback. The original
 private read-only Airlock `userio` resource remains unchanged.
 

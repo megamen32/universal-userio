@@ -8,7 +8,7 @@ Root Exmanager owns final credential issuance into encrypted UserIO resource and
 
 ## Installed real API acceptance
 
-Published source `5c372ca20dd5dad242b3e595a547eef92602ce7f`, installed manifest `e8a588033a15308b1f639318128bdc58ce6ffdcc408f9d1e0b702faa0238c3a0`. Only core restarted; voice and dispatcher unchanged. Actual temporary personal read-only token read owned MAX and Telegram900000101 accounts and stored messages through public MCP. Nine mutation/credential-management checks refused; no sends/mark-read. Own test token revoked→HTTP401, all previous named token records unchanged. Exact protected evidence `.tmp/readonly-token-20261012/live-receipt.json` and contract.json (no credential values).
+Published source `5c372ca20dd5dad242b3e595a547eef92602ce7f`, installed manifest `e8a588033a15308b1f639318128bdc58ce6ffdcc408f9d1e0b702faa0238c3a0`. Only core restarted; voice and dispatcher unchanged. Actual temporary personal read-only token read owned MAX and Telegram<owner-telegram-id> accounts and stored messages through public MCP. Nine mutation/credential-management checks refused; no sends/mark-read. Own test token revoked→HTTP401, all previous named token records unchanged. Exact protected evidence `.tmp/readonly-token-20261012/live-receipt.json` and contract.json (no credential values).
 
 Current Codex client uses a GPTAdmin Hub JWT, which correctly fails direct UserIO authentication. Use the canonical existing UserIO upstream personal credential in protected supervisor ref UserIO-Codex100 only in memory for issuance; never reuse Hub JWT as direct UserIO credential. This metadata finding is not a broken MCP connection.
 

@@ -94,7 +94,7 @@ These belong to accepted v1.0–v1.2 or completed quick tasks; they are not new 
 | Meaningful work-chat and Gmail/Yandex notifications | [Phase10](phases/10-timely-notifications/10-01-SUMMARY.md): real mail/incoming → analysis → delivered source/summary/action; later positive Yandex delivery supersedes the earlier SMTP refusal |
 | Personal Bearer/revoke/read-only access and ChatGPT OAuth | [Phase08](phases/08-everyday-connections/08-01-SUMMARY.md), [read-only native acceptance](quick/261012-hj3-named-personal-bearer-with-server-enforc/SUMMARY.md); existing OAuth account consumer accepted, no new M1 browser authority implied |
 | Landing, authenticated cabinet, visible cabinet/GitHub links, docs | [Phase08](phases/08-everyday-connections/08-01-SUMMARY.md), [docs acceptance](quick/261012-6tp-update-userio-documentation-and-short-pu/261012-6tp-SUMMARY.md) |
-| MAX authorization recovery | [Resolved auth debug](debug/max-post-edit-auth-refusal.md): ordinary SAME900000102 login, protected persistence, actual deployed UserIO MCP and independent Secretary source/history/media read accepted; no old action replay |
+| MAX authorization recovery | [Resolved auth debug](debug/max-post-edit-auth-refusal.md): ordinary SAME<owner-max-id> login, protected persistence, actual deployed UserIO MCP and independent Secretary source/history/media read accepted; no old action replay |
 | Personal VK authorization/read/send, repeated edits and photo/document delivery | [VK rich acceptance](quick/261012-vkr-vk-edit-attachments/VERIFICATION.md): same message changed twice, photo and byte-identical document retained after reload |
 
 ## Remaining work — owner and closure proof

@@ -55,7 +55,7 @@ Current authorization recovery: Root97 owns the ordinary MAX phone confirmation
 on the leased S21 and the exact server44 page77C282A6B65C3AEE01FEBA1F0C7EDCED,
 session exmanager-original-final-261012. QR camera confirmation was unavailable
 remotely; the same page now uses ordinary phone-number login. UserIO7bb accepts
-ONLY that page after actual login, checks exact900000102, privately stages the
+ONLY that page after actual login, checks exact<owner-max-id>, privately stages the
 credential, verifies native login/read, then updates its own configuration.
 Phone/root browser inputs must not be duplicated. Existing action/model IDs
 remain non-replayable. Current login is not yet accepted or persisted.
@@ -71,7 +71,7 @@ and `green-anonymous-disconnect.txt`. No live QR auth was attempted.
 Do not rerun the old cases or bypass resource admission. Existing valid browser
 reauthorization is an independent route and does not wait for QR source tests.
 
-Close recovery only when SAME900000102 native LOGIN19 and fresh existing-message
+Close recovery only when SAME<owner-max-id> native LOGIN19 and fresh existing-message
 read succeed after protected configuration persistence and core/ingress readback.
 Then Exmanager owns new external inbound/image/final reply acceptance. Old
 transport stays enabled in this session; typing recipient observation is deferred.
@@ -81,12 +81,12 @@ transport stays enabled in this session; typing recipient observation is deferre
 
 13October00:23Z: Root97 completed ordinary phone-number login on the leased S21
 and the existing server44 MAX page. The authorized page was handed to UserIO7bb.
-Only official auth/device storage keys for exact900000102 were read in memory
+Only official auth/device storage keys for exact<owner-max-id> were read in memory
 through the actual root/HOME context. The first two reads refused before auth
 access because roomhacker selected another existing blank namespace; neither
 changed a page or created a browser. The corrected root-context stage completed.
 
-Normal installed MaxClient LOGIN19 accepted SAME900000102 and read existing
+Normal installed MaxClient LOGIN19 accepted SAME<owner-max-id> and read existing
 message117430265913625196 with exact restored bodySHA d372403d…. Only the two
 MAX runtime parameters were atomically replaced; all other configuration and
 MCP/SDK credentials were preserved. Publishedc6cdf44/manifest71e5667c was installed,
@@ -94,7 +94,7 @@ one core/MAX-ingress restart completed, daemon reload and runtime verification
 finished before the final canary. Current core570170 is verified active.
 
 Final ordinary UserIO MCP resolve accepted the exact message; capabilities show
-sender900000102, configured provider/history and reply allowed. All three old
+sender<owner-max-id>, configured provider/history and reply allowed. All three old
 accepted action receipts/body remain unchanged. No provider mutation/model/read
 ACK or auth-intent replay ran in this recovery. Local plaintext credential and
 owned rollback-key copies were removed after successful persistence/readback.
@@ -118,7 +118,7 @@ and unknown intents must not be replayed. No old transport was retired here.
 Under the owner's retained explicit authorization for test messages to Darja,
 UserIO7bb created ONE new immutable reply asking for a new picture and caption.
 Action7597aed0… was explicitly approved once, accepted by MAX as new message
-117430793777467441, then freshly resolved: actual author900000102/outgoing and
+117430793777467441, then freshly resolved: actual author<owner-max-id>/outgoing and
 exact request body. Thus current post-recovery sending is also accepted, without
 repeating any former provider/model intent. This is an operator-authored request,
 not the Secretary response and not a genuine incoming source. It cannot close

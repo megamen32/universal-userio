@@ -17,7 +17,7 @@ no provider send, approval, model request or read ACK was issued by these probes
 Private artifacts: `.tmp/native-v13-final-20261013/` under UserIO. Credential
 values, signed resource URLs and private message bodies are not published here.
 The existing private `userio_accounts` resource still reads13 accounts, including
-owner Telegram900000101 and MAX. This proves current functionality, not a claim
+owner Telegram<owner-telegram-id> and MAX. This proves current functionality, not a claim
 that no other authorized owner has ever changed its encrypted resource.
 
 ## Results

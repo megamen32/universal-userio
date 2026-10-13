@@ -210,7 +210,7 @@ removed after empty history/accounts/drafts assertions; own Chrome/Xvfb gone.
 
 Root phone access was used: su uid0, normal AgentDevice swipe unlock, authenticated
 MAX UI/Devices/camera inspected, exact existing phone token+deviceId read ONLY in
-memory and native LOGIN verified SAME900000102. Secrets were not output or saved;
+memory and native LOGIN verified SAME<owner-max-id>. Secrets were not output or saved;
 provider message/ACK/config/SIP/APK writes0. An expired old lease caused one
 AgentDevice guard refusal: only own controller (sole owned session) was normally
 restarted under the valid continuation lease, then UI verified. Phone session

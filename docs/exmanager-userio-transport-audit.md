@@ -68,7 +68,7 @@ The account/credential intersection, common MCP catalog, paged stored/provider
 history, actual media/source resolve, source-bound action journal, distinct
 `messenger_actions` credential and current-client provider routes are implemented
 in the v1.3 source slice. See [callable contract](messenger-contract.md).
-Native Secretary sender remains900000103; private900000101 readonly access
+Native Secretary sender remains900000103; private<owner-telegram-id> readonly access
 is unchanged. Source/focused checks do not claim deployment, rich media parity
 or native acceptance; Exmanager owns its thin SDK/relay installation and cutover.
 

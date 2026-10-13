@@ -18,7 +18,7 @@ The original b5ab/9214 checkpoint remains historical evidence, not current state
 
 | Journey | Telegram | MAX | Required real evidence |
 |---|---|---|---|
-| Exact effective account and credential caps | Current native881 caps PASS | Restored SAME900000102 sender and current native provider history/read/media PASS | Native encrypted sender connection; private readonly unchanged |
+| Exact effective account and credential caps | Current native881 caps PASS | Restored SAME<owner-max-id> sender and current native provider history/read/media PASS | Native encrypted sender connection; private readonly unchanged |
 | New inbound and durable current cursor | NEW QA sources25/27/29 and source-bound replies26/28/30 accepted on native original SDK | Current head50967 initialized; after50967 returned no new input | New actual provider source→normal UserIO ingress→SDK, no historical request replay |
 | Real history and author/owner/thread | Current native source/author and two pages PASS | Current native three-page history/source/author PASS; known older source reached without duplicates/ACK | Native paged source/body/account, honest partial flags |
 | Image/voice/source media context | Retained real native Vision PASS; fresh post-cutover pending | Current native SDK PNG resource bytes/SHA PASS; model understood actual sleeping-tiger PNG and owner/interlocutor correctly in new native run6e; current restored native media ready90258B/exact SHA PASS; fresh external image/model journey pending | Actual pixels/ASR in official SDK attachment/tool result |

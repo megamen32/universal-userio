@@ -25,7 +25,7 @@ The model produced one unsent proposal. Its normal native approve tool created
 the pending confirmation; the genuine owner HTTP confirmation checked the
 rendered exact recipient/body preview and submitted once. Delivered MAX
 message `117430265913625196` replies to source `117429138456803118` in peer
-`900000105`, author `900000102`. Two fresh provider reads confirmed the exact
+`900000105`, author `<owner-max-id>`. Two fresh provider reads confirmed the exact
 252-character body, blank-line paragraphs and separate URL line, with no
 literal Markdown or internal diagnostic report.
 

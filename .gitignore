@@ -14,3 +14,12 @@ build/
 node_modules/
 extension.pem
 /graphify-out/.graphify_*
+
+# Local account credentials, sessions and operator evidence
+.env
+.env.*
+!.env.example
+*.session
+*.session-*
+.fast-agent/sessions/
+.agents/tasks/

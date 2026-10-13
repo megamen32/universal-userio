@@ -25,7 +25,7 @@ No runtime changes occurred during final VK/TG captures.
 Live generic operations:
 - Telegram881 / QA-1009000002001 / source24: 👍 then🔥 thennone, independently
   read by Telegram Helper with sender881. Add228a/change0c9b/remove accepted.
-- MAX900000102 /900000105 /ownedfile117429938010356944: native counters👍1→🔥1→none,
+- MAX<owner-max-id> /900000105 /ownedfile117429938010356944: native counters👍1→🔥1→none,
   actionsb307/8a05/1f63 accepted.
 - VK200000000106 /bezrabotniq46887791 /source8, nativecmid1:
   ownreaction4/👍→2/🔥→0, nativeauthor200000000106, actionsf0b2/6cb0/7afb accepted.

@@ -128,7 +128,7 @@ real normal browser roundtrip/reload preserves login, both visible. Own tabs and
 PNG copies cleaned; proof in .tmp/auto-read/cabinet-nav-browser-result.json.
 Cancelled Exmanager extra remote-delete scope unchanged; no deletion implemented.
 Telegram automatic-read live account-bound acknowledgement accepted on existing
-900000101/peer900000300/cursor1983326, provider_acknowledged true; cursor was already
+<owner-telegram-id>/peer900000300/cursor1983326, provider_acknowledged true; cursor was already
 native-read, no artificial unread state/new incoming manufactured. Local visible
 read/stealth accepted. Original mirror/cache/FastAgent retained, no model replay.
 No parent/global AI unpause or unrelated historical provider replay.
@@ -223,7 +223,7 @@ live read/refused-write/revoke passed. Exmanager outcome
 `/home/roomhacker/agents-projects/exmanager/.agents/tasks/outcomes/20261012-userio-readonly-activation.json`
 now proves encrypted app-specific readonly resource installed (HTTP200), no
 parent credential bound, no core restart/send/mark-read, and actual native
-accounts MAX+Telegram900000101 read. The initial bounded-page observer failure
+accounts MAX+Telegram<owner-telegram-id> read. The initial bounded-page observer failure
 was resolved by its owner. Latest native Telegram read returns10 real messages.
 Remaining MAX read was refused inside Exmanager validUserIOChannel before
 reaching UserIO; Root01a11197 reproduced/fixed its absent max value and is running
