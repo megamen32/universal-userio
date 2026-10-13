@@ -61,3 +61,23 @@ phone-unavailable-disposition}.json`; accepted tests and earlier REDs retained.
 Phase remains1/5 fully accepted (20%). No completed plan summary or whole-phase
 completion is generated. Exmanager Phase15 proceeds independently; no holds,
 transport retirement or changes to its source/core/credentials.
+
+## Final installed readback / next WhatsApp slice
+
+Published/installeda532efa, manifest87cd077c: actual HTTPS `/accounts?service=max`
+bytes exactly match reviewed source; authenticated `/v1/runtime` verifies this
+release. This read-only check did not repeat provider/QR/model/send intents.
+Prior6b4 real headed QR consumer and cancellation-loss unit remain separately
+identified; no successful MAX account confirmation is inferred.
+
+The existing WhatsApp wrapper source is deployed-only
+`/opt/userio-whatsapp-qr/server.mjs` (SHA3a67b725...) and has shared slots without
+a UserIO principal/owner mapping; its registration posts to the operator's
+account and marks it read-only. The pinned `deploy/whatsapp-bridge` source is
+not this wrapper. Existing active wrapper/session data was read, not changed.
+The UserIO-owned next slice must bring the reviewed wrapper into canonical
+source, bind/filter NEW slots through the same ordinary principal used by
+Telegram, preserve legacy assignments and verify a bounded own-user pairing
+and exact-account delivery. The unified new-user screen does not send people
+to that shared operator QR. This remains implementation work, not an accepted
+self-service connection or a hold on Exmanager.
