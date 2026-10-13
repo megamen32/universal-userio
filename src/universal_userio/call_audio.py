@@ -37,6 +37,8 @@ def recording(conversation, message, root=None):
             return None
         tracks = []
         frames = []
+        rate=data.get('sampleRate',8000)
+        if type(rate) is not int or rate not in (8000,12000,16000,24000,32000,44100,48000):return None
         transcript = {}
         transcript_path = folder / 'live-transcript.json'
         if transcript_path.is_file() and not transcript_path.is_symlink() and transcript_path.stat().st_size <= 131072:
@@ -54,10 +56,10 @@ def recording(conversation, message, root=None):
         for name, label in TRACKS.items():
             if name == 'assistant' and str(conversation.get('source', '')).startswith('matrix:'): label = 'ИИ'
             path = folder / (name + '.wav')
-            if path.is_symlink() or not 44 <= path.stat().st_size <= 44 + 8000 * 2 * 7200:
+            if path.is_symlink() or not 44 <= path.stat().st_size <= 44 + rate * 2 * 7200:
                 return None
             with wave.open(str(path)) as audio:
-                if (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) != (1, 2, 8000):
+                if (audio.getnchannels(), audio.getsampwidth(), audio.getframerate()) != (1, 2, rate):
                     return None
                 count = audio.getnframes()
             if path.stat().st_size != 44 + count * 2:
@@ -65,10 +67,10 @@ def recording(conversation, message, root=None):
             frames.append(count)
             base = f"/v1/conversations/{quote(conversation['id'], safe='')}/call-audio/{quote(message['message_id'], safe='')}"
             tracks.append({'name': name, 'label': label, 'url': base + '/' + name,
-                           'duration': count / 8000,
+                           'duration': count / rate,
                            'transcript': transcript.get(name, '') if isinstance(transcript.get(name, ''), str) else ''})
         return {'complete': data.get('complete') is True and frames[0] == frames[1],
-                'duration': max(frames) / 8000, 'tracks': tracks}
+                'duration': max(frames) / rate, 'tracks': tracks}
     except (OSError, ValueError, KeyError, TypeError, wave.Error):
         return None
 

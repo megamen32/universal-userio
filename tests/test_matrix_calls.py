@@ -73,13 +73,14 @@ def test_restart_never_replays_an_admitted_call(tmp_path, monkeypatch):
     with pytest.raises(ValueError,match='confirmation'):after_restart.start(**dict(args,confirm=False))
 
 
-def test_matrix_recording_transcript_is_bound_to_room_and_account(tmp_path):
+@pytest.mark.parametrize('rate',[8000,48000])
+def test_matrix_recording_transcript_is_bound_to_room_and_account(tmp_path,rate):
     import wave
     call_id=str(uuid.uuid4()); folder=tmp_path/call_id;folder.mkdir()
     for track in ('caller','assistant'):
         with wave.open(str(folder/(track+'.wav')),'wb') as audio:
-            audio.setparams((1,2,8000,0,'NONE',''));audio.writeframes(b'\0\0'*8000)
-    (folder/'manifest.json').write_text(json.dumps({'callId':call_id,'complete':True,
+            audio.setparams((1,2,rate,0,'NONE',''));audio.writeframes(b'\0\0'*rate)
+    (folder/'manifest.json').write_text(json.dumps({'callId':call_id,'complete':True,'sampleRate':rate,
         'peerFields':{'accountRef':'matrix:owned','peerRef':'!room:hs'}}))
     (folder/'live-transcript.json').write_text(json.dumps({'caller':'Да, слышу.','assistant':'Здравствуйте.'}))
     conv={'id':'conv','source':'matrix:owned','account_ref':'matrix:owned','peer_id':'!room:hs'}
@@ -87,5 +88,6 @@ def test_matrix_recording_transcript_is_bound_to_room_and_account(tmp_path):
     audio=call_audio.recording(conv,msg,tmp_path)
     assert [t['transcript'] for t in audio['tracks']]==['Да, слышу.','Здравствуйте.']
     assert audio['tracks'][1]['label']=='ИИ'
+    assert audio['duration']==1
     assert call_audio.recording(dict(conv,peer_id='!different:hs'),msg,tmp_path) is None
     assert call_audio.recording(dict(conv,account_ref='matrix:other'),msg,tmp_path) is None

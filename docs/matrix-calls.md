@@ -9,7 +9,11 @@ The optional `matrix-calls` extra installs the LiveKit native SDK. AgentCall mus
 already be running on the same deployment. Its model, speech speed, interruption, hangup and recording/transcription
 path are reused. Matrix does not use a phone. When the telephone profile selects
 Android TTS, Matrix uses the existing server Silero speech endpoint instead;
-the telephone profile is unaffected.
+the telephone profile is unaffected. The owner-selected server quality uses
+native24kHz TTS → one whole-phrase tempo pass →48kHz Matrix audio. Audio
+packets are framed after that pass; there is no intermediate8kHz conversion.
+Both recording tracks retain48kHz. The existing VAD/STT receives its8kHz
+analysis copy, which is never played or substituted into the recording.
 
 Use `userio.calls.matrix.start` with `account_ref`, an existing two-person
 `room_id`, the recipient's `target` Matrix ID, `purpose`, a stable `request_id`,

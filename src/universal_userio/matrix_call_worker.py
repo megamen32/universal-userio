@@ -8,6 +8,7 @@ UserIO owner; credentials arrive on stdin, never process arguments or logs.
 from __future__ import annotations
 import asyncio
 from dataclasses import replace
+import gc
 import json
 import os
 import signal
@@ -58,7 +59,7 @@ async def run(request):
     openid = await api('POST','/_matrix/client/v3/user/'+quote(account['matrix_user_id'],safe='')+'/openid/request_token',{})
     sfu = await asyncio.to_thread(request_json,rtc_url+'/sfu/get','',
         {'room':room_id,'openid_token':openid,'device_id':device},'POST')
-    media = rtc.Room(); source = rtc.AudioSource(8000,1,queue_size_ms=200)
+    media = rtc.Room(); source = rtc.AudioSource(48000,1,queue_size_ms=200)
     reader = asyncio.StreamReader(limit=1024*1024)
     ended = asyncio.Event(); transport_ready = asyncio.Event(); media_tasks = set(); engine_task = None; joined=False
     current_id = None
@@ -68,12 +69,14 @@ async def run(request):
         if not reader.at_eof(): reader.feed_eof()
     loop.add_signal_handler(signal.SIGTERM,terminate)
     async def receive(track):
-        stream = rtc.AudioStream(track,sample_rate=8000,num_channels=1,frame_size_ms=20,capacity=100)
+        stream = rtc.AudioStream(track,sample_rate=48000,num_channels=1,frame_size_ms=20,capacity=100)
         try:
             await transport_ready.wait()
             async for event in stream:
                 if ended.is_set(): break
-                reader.feed_data(voice.pack_audiosocket_frame(voice.AUDIO_KIND,bytes(event.frame.data)))
+                if len(reader._buffer)+len(event.frame.data)+3>256000:
+                    raise BufferError('Matrix incoming audio exceeds finite buffer')
+                reader.feed_data(voice.pack_audiosocket_frame(0x16,bytes(event.frame.data)))
         finally: await stream.aclose()
     @media.on('track_subscribed')
     def subscribed(track,publication,participant):
@@ -84,6 +87,7 @@ async def run(request):
     def disconnected(participant): terminate()
 
     class Writer:
+        sample_rate=48000
         def __init__(self): self.pending=bytearray();self.closed=False
         def write(self,data): self.pending.extend(data)
         async def drain(self):
@@ -92,8 +96,8 @@ async def run(request):
                 length=struct.unpack('!H',self.pending[1:3])[0]
                 if len(self.pending)<3+length: break
                 kind=self.pending[0];pcm=bytes(self.pending[3:3+length]);del self.pending[:3+length]
-                if kind==voice.AUDIO_KIND:
-                    await source.capture_frame(rtc.AudioFrame(pcm,8000,1,len(pcm)//2))
+                if kind==0x16:
+                    await source.capture_frame(rtc.AudioFrame(pcm,48000,1,len(pcm)//2))
                 elif kind==voice.HANGUP_KIND: terminate()
         def close(self): self.closed=True;terminate()
         def is_closing(self):return self.closed
@@ -168,6 +172,9 @@ def main():
     except Exception as error:
         print(json.dumps({'event':'error','reason':type(error).__name__}),flush=True)
         raise SystemExit(1) from None
+    finally:
+        # Release callback cycles while LiveKit's native client still exists.
+        gc.collect()
 
 
 if __name__=='__main__': main()
