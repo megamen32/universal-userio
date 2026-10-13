@@ -100,3 +100,47 @@ mautrix: сообщения пользователей Telegram шифруютс
 решения владельца, не является автоматическим исправлением.
 
 Источник: [официальный FAQ mautrix](https://docs.mau.fi/bridges/general/troubleshooting.html#why-are-messages-showing-up-as-encrypted-by-a-deleted-session).
+
+
+## Перенос Telegram-комнат без шифрования
+
+telegram_plaintext_migration.py — разовая возобновляемая миграция, явно
+разрешённая владельцем 2026-10-14. Исходники в этом каталоге; выполнение только
+в canonical Matrix runtime на server-88. Новый checkout не создаётся.
+Стадии inventory/create/cutover/finish/verify используют защищённый manifest.
+Выбираются только уже зашифрованные Telegram portals, в которых владелец
+состоит. Пространства и обычные Matrix-чаты не перепривязываются.
+
+Перед cutover создаются отдельные комнаты без m.room.encryption,
+с теми же bridge metadata, именами, разрешениями и Telegram ghosts.
+Существующие пространства форумов сохраняют ID и получают новые дочерние
+комнаты. Короткая остановка только mautrix-telegram нужна для атомарной
+перепривязки portal rows и удаления старых event mappings из bridge SQLite.
+Это не удаляет историю Synapse: старые Matrix-комнаты, участники,
+зашифрованные события и ключи сохраняются. Старые комнаты получают
+ссылку на продолжение, права только для чтения и отдельное дерево архива.
+
+encryption.default=false применяется только к mautrix-telegram. allow=true
+сохраняет поддержку зашифрованной management-комнаты; глобальные настройки
+Synapse, MAS, клиентские устройства и обычные Matrix-чаты не меняются.
+Backfill остаётся выключенным. Скрипт не вызывает Telegram API, remote leave,
+logout, remote edit/delete или send.
+
+Бюджет server-88: RAM256/384MiB,swap0,CPU0.5,Tasks32,IO25;
+один последовательный проход, не более256portals,512ghosts на комнату,
+ответ Matrix до4MiB, manifest до32MiB, два SQLite backup до256MiB каждый,
+всего временное состояние до600MiB; без GPU/браузеров. Каждая стадия
+oneshot с wall600s и checkpoint; после timeout повторяется та же стадия,
+новая комната восстанавливается по стабильному alias.
+Измеренная свободная память перед миграцией — 98GiB; штатный мост ограничен
+512MiB/swap0/CPU1/Tasks128, его бюджет не повышается.
+
+Fast unit migration tests: expected2s/max30s; проверяют изоляцию portal keys,
+атомарный отказ при чужой перепривязке, сохранение чужих mappings,
+отсутствие encryption в создаваемой комнате и восстановление после
+потерянного ответа createRoom.
+Focused integration: отдельная партия проверки expected30s/max180s;
+настоящие Matrix state/membership/portal rows, обычные чаты,
+дерево форумов и архива. Последний canary после всех рестартов:
+Matrix-сообщение только в Telegram Saved Messages и подтверждённое
+plaintext-событие в новой комнате. Медленная nightly не нужна.
