@@ -328,7 +328,7 @@ class UserIOMcpSurface:
         if name.startswith('userio.messenger.'):
             from .messenger import dispatch
             return dispatch(self._store, self._service, principal, name, arguments)
-        if name.startswith(('userio.calls.matrix.','userio.calls.telegram.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
+        if name.startswith(('userio.calls.matrix.','userio.calls.telegram.','userio.meetings.telemost.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
             # Keep the compatibility HTTP surface on the authoritative MAX
             # reader, including its bounded cached-history contract.
             from .mcp_dispatch import UserIOToolDispatcher

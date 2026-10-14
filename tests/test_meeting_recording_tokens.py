@@ -34,3 +34,33 @@ def test_recorder_http_is_limited_to_meetings():
         assert meeting_recorder_http_allowed(method,path)
     for method, path in [('GET','/v1/accounts'),('POST','/v1/personal-tokens'),('GET','/v1/personal-tokens'),('POST','/v1/conversations/id/send'),('DELETE','/v1/meetings/telemost/id'),('POST','/v1/meetings/telemost-other'),('PATCH','/v1/meetings/telemost/id'),('GET','/v1/meetings/telemost/id/audio/track/extra')]:
         assert not meeting_recorder_http_allowed(method,path)
+
+
+@pytest.mark.parametrize('operation', ['start', 'get', 'stop'])
+def test_scoped_recorder_compatibility_surface_executes(operation, tmp_path, monkeypatch):
+    """Focused integration, expected 1s/max10s; detect advertised-but-unrouted tools."""
+    from universal_userio.telemost import meetings
+    store = SQLiteUserIOStore(tmp_path/'dispatch.sqlite')
+    owner, _ = store.create_user('recorder-dispatch', 'a correct test password')
+    child = PersonalTokens(store).create(owner.user_id, 'Recorder', scope='meeting_recording')
+    principal = store.authenticate_token(child['token'])
+    calls = []
+    class Recorder:
+        def start(self, *, user_id, **arguments):
+            calls.append(('start', user_id, arguments))
+            return {'id': 'synthetic-meeting', 'mic_enabled': False, 'camera_enabled': False}
+        def get(self, meeting_id, user_id):
+            calls.append(('get', user_id, meeting_id))
+            return {'id': meeting_id}
+        def stop(self, meeting_id, user_id):
+            calls.append(('stop', user_id, meeting_id))
+            return {'id': meeting_id, 'status': 'stopped'}
+    monkeypatch.setattr(meetings, 'meetings_for', lambda _: Recorder())
+    arguments = {'url': 'https://telemost.yandex.ru/j/12345678901234',
+                 'request_id': 'synthetic-source-request', 'confirm': True} if operation == 'start' else {'meeting_id': 'synthetic-meeting'}
+    surface = UserIOMcpSurface(store, UserIOService(store, object(), object()))
+    result = surface.dispatch('tools/call', {'name': 'userio.meetings.telemost.'+operation,
+                                            'arguments': arguments}, principal=principal)
+    assert result['ok'] is True, result
+    assert result['meeting']['id'] == 'synthetic-meeting'
+    assert len(calls) == 1 and calls[0][:2] == (operation, owner.user_id)
