@@ -172,6 +172,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
+|261015-087|Five-minute unread-only batches, per-chat token grants, persistent global AI pause/resume|2026-10-15|fcf63da/c09f37e|Live HTTP batch + actual preflight + headed44 persisted controls/MCP refusals PASS|[proof](./quick/261015-087-batch-userio-incoming-analysis-after-5-m/SUMMARY.md)|
 |261012-ogc|Personal VK ordinary authorization, server reading, maintained import and native direct-kind|2026-10-12|2c71175|Real fresh maskedwebform + native/persisted session/read/reload PASS; read-only|[proof](./quick/261012-ogc-connect-consented-vk-messenger-test-acco/SUMMARY.md)|
 |261012-pxe|Retain native image instead of overwriting with routing metadata|2026-10-12|3477df9|Actual generic MCP exact image bytes/SHA and stored history PASS; native Secretary independently accepted|[proof](./quick/261012-pxe-preserve-relay-media-when-routing-metada/SUMMARY.md)|
 |261012-j88|Named work groups, per-chat web analysis checkbox and sidebar/search status; quadratic search repaired|2026-10-12|640501d|Real web ON/reload/OFF/reload, OFF/ON search badges and exact reading baseline restore PASS|[proof](./quick/261012-j88-per-chat-secretary-switch-and-explicit-w/SUMMARY.md)|
