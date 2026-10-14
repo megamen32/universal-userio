@@ -17,6 +17,15 @@ ROOT = Path('/var/lib/universal-userio/telegram-calls')
 PREFIX = '/userio/telegram/calls/'
 
 
+def record_call_error(record, event):
+    if event.get('recoverable') is True:
+        record['warning'] = str(event.get('reason') or 'voice_recognition_incomplete')[:80]
+    else:
+        record['error'] = str(event.get('reason') or 'voice_transport_error')[:80]
+        if record['status'] != 'unknown':
+            record['status'] = 'failed'
+
+
 def relay_request_id(worker_id):
     # Existing relay ledger requires8..128 safe characters; preserve the local
     # short counter separately for the worker's pending Future.
@@ -172,8 +181,7 @@ class TelegramCalls:
                                        'incoming' if remote else 'outgoing',suffix='turn-'+str(turns))
                     elif kind=='ended': record['status']='completed' if record['answered'] else 'unanswered'
                     elif kind=='error':
-                        record['error']=str(event.get('reason') or 'voice_transport_error')[:80]
-                        if record['status']!='unknown': record['status']='failed'
+                        record_call_error(record, event)
                     self._save(record)
             async def poll():
                 cursor=0

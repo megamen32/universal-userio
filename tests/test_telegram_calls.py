@@ -7,6 +7,19 @@ import pytest
 from universal_userio import telegram_calls, call_audio
 
 
+def test_recoverable_asr_warning_keeps_the_live_call_visible_for_restart_gates():
+    # Actual62d80 kept answering after this warning. Hiding it as failed
+    # incorrectly allows an API restart during a real call.
+    record = {'status':'active', 'answered':True}
+    telegram_calls.record_call_error(record, {'recoverable':True, 'reason':'Речь сохранена для проверки.'})
+    assert record['status']=='active' and 'warning' in record and 'error' not in record
+    telegram_calls.record_call_error(record, {'reason':'voice_transport_error'})
+    assert record['status']=='failed'
+    unknown={'status':'unknown'}
+    telegram_calls.record_call_error(unknown, {'reason':'voice_transport_error'})
+    assert unknown['status']=='unknown'
+
+
 def test_worker_counter_uses_existing_relay_durable_request_id_contract():
     import re
     request=telegram_calls.relay_request_id('1')

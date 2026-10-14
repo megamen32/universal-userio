@@ -174,7 +174,7 @@ class MatrixCalls:
                         record['status'] = 'completed' if record['answered'] else 'unanswered'
                     elif kind == 'error':
                         reason = str(event.get('reason') or '')
-                        record['error'] = reason if reason.isidentifier() and len(reason)<80 else 'voice_transport_error'
+                        record['warning' if event.get('recoverable') is True else 'error'] = reason if reason.isidentifier() and len(reason)<80 else 'voice_transport_error'
                     self._save(record)
             consumer = asyncio.create_task(consume())
             deadline = time.monotonic()+record['max_seconds']+240
