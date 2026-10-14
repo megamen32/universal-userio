@@ -13,6 +13,7 @@ from pathlib import Path
 import signal
 import struct
 import sys
+import traceback
 import uuid
 
 from .telegram_call_transport import TelegramCallTransport, RecipientUnanswered
@@ -213,6 +214,11 @@ def main():
     except RecipientUnanswered:
         emit({"event": "ended", "reason": "unanswered"})
     except Exception as error:
+        # Stack locations diagnose native/pre-answer failures without logging
+        # exception messages or provider/session payloads.
+        for frame in traceback.extract_tb(error.__traceback__):
+            print(f"Telegram worker {type(error).__name__}: {frame.filename}:{frame.lineno} {frame.name}",
+                  file=sys.stderr, flush=True)
         emit({"event": "error", "reason": type(error).__name__})
         raise SystemExit(1) from None
 

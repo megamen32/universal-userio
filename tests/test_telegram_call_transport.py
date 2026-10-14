@@ -173,6 +173,21 @@ def test_unanswered_worker_reports_normal_end(monkeypatch):
     assert events==[{'event':'ended','reason':'unanswered'}]
 
 
+def test_worker_failure_logs_locations_without_provider_details(monkeypatch, capsys):
+    from universal_userio import telegram_call_worker as worker
+    events = []
+    async def broken():
+        raise BufferError('private-provider-payload')
+    monkeypatch.setattr(worker, '_main', broken)
+    monkeypatch.setattr(worker, 'emit', events.append)
+    with pytest.raises(SystemExit):
+        worker.main()
+    output = capsys.readouterr().err
+    assert 'BufferError' in output and 'broken' in output
+    assert 'private-provider-payload' not in output
+    assert events == [{'event':'error', 'reason':'BufferError'}]
+
+
 def test_early_discard_is_not_mistaken_for_an_answer():
     async def check():
         transport, native, operations, _ = setup(early={"id": "11", "type": "phoneCallDiscarded"})
