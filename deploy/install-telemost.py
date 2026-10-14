@@ -2,6 +2,7 @@
 from pathlib import Path
 import io
 import subprocess
+import shlex
 import tarfile
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -26,5 +27,5 @@ if __name__=='__main__':
     remote('mkdir -p '+REMOTE+'/source; tar -xf - -C '+REMOTE+'/source',archive.getvalue())
     unit=(ROOT/'deploy/userio-telemost.service').read_bytes()
     remote('mkdir -p ~/.config/systemd/user; cat > ~/.config/systemd/user/userio-telemost.service',unit)
-    remote(REMOTE+'/venv/bin/python -c "import aiortc,aiohttp;print(\"RTC dependency imports ready\")"')
+    remote(REMOTE+'/venv/bin/python -c '+shlex.quote('import aiortc,aiohttp;print("RTC dependency imports ready")'))
     remote('systemctl --user daemon-reload && systemctl --user enable --now userio-telemost.service')
