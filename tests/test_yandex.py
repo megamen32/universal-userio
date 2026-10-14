@@ -49,7 +49,7 @@ def test_initial_history_never_dispatches_old_messages(monkeypatch):
             assert kwargs['user_id']=='test-owner'
             assert kwargs['account_ref']==ACCOUNT['account_id']
             return 'conversation-test',True
-    monkeypatch.setattr(sync,'read',lambda *args,**kwargs:{'chats':[chat()]})
+    monkeypatch.setattr(sync,'read',lambda *args,**kwargs:{'chats':[] if kwargs else [chat()]})
     service=Service()
     assert poll(service,ACCOUNT)['initial_history']
     assert service.messages[0].reconciliation
@@ -97,3 +97,20 @@ def test_global_latest_message_does_not_mark_history_complete(monkeypatch):
     monkeypatch.setattr(sync,'read',read)
     sync.poll(Service(),ACCOUNT)
     assert calls==[{}, {'chat_id':'group-test','before':1700000000000000,'limit':50}]
+
+
+def test_projection_repair_preserves_message_id_without_fake_edit(tmp_path):
+    from dataclasses import replace
+    from universal_userio.service import UserIOService
+    from universal_userio.store import SQLiteUserIOStore
+    store=SQLiteUserIOStore(tmp_path/'test.db');service=UserIOService(store,None,None)
+    message=list(project(chat(peer='0/0/synthetic-room'),ACCOUNT))[0]
+    cid,_=service.receive(replace(message,body="{'MessageText': 'Synthetic message'}",conversation_kind='direct'),route_id='manual',account_ref=ACCOUNT['account_id'])
+    service.receive(message,route_id='manual',account_ref=ACCOUNT['account_id'])
+    result=store.conversation(cid)
+    assert result['conversation_kind']=='group'
+    assert len(result['messages'])==1
+    assert result['messages'][0]['body']=='Synthetic message'
+    assert result['messages'][0]['edited_at'] is None
+    assert result['messages'][0]['received_at']==1700000000
+    store.close()
