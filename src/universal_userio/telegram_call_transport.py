@@ -12,6 +12,7 @@ import base64
 import json
 import secrets
 import sys
+import threading
 import time
 from typing import Any, Awaitable, Callable
 
@@ -53,6 +54,7 @@ class TelegramCallTransport:
         self.engine = native.NTgCalls()
         self.user_id, self.rpc, self.receive_pcm = user_id, rpc, receive_pcm
         self.loop = asyncio.get_running_loop()
+        self.loop_thread = threading.get_ident()
         self.call: dict | None = None
         self.attempted = False
         self.created = False
@@ -63,10 +65,14 @@ class TelegramCallTransport:
         self.failure: BaseException | None = None
         self.updates: asyncio.Queue = asyncio.Queue(maxsize=256)
         self.pending_update_bytes = 0
+        self.update_space = asyncio.Event()
+        self.update_space.set()
         self.tasks: set[asyncio.Task] = set()
         self.outgoing_signals = asyncio.Queue(maxsize=256)
         self.pending_signal_bytes = 0
         self.signal_senders = set()
+        self.signal_space = asyncio.Event()
+        self.signal_space.set()
         self.pending_pcm_bytes = 0
         self.started_at: float | None = None
         self.engine.on_connection_change(self._connection)
@@ -83,6 +89,7 @@ class TelegramCallTransport:
             print(str(error), file=sys.stderr, flush=True)
         self.failure = error
         self.ended.set()
+        self.signal_space.set()
 
     def _spawn(self, coroutine):
         if self.closed:
@@ -117,7 +124,33 @@ class TelegramCallTransport:
 
     def _signaling(self, user_id, data):
         if user_id == self.user_id and not self.closed:
-            self.loop.call_soon_threadsafe(self._queue_signaling, bytes(data))
+            data = bytes(data)
+            if threading.get_ident() == self.loop_thread:
+                # Synchronous test/native-loop callbacks cannot block their loop.
+                self._queue_signaling(data)
+                return
+            # Admit on the owning loop before returning to the native producer.
+            # This bounds both our queue and call_soon_threadsafe's hidden backlog.
+            admitted = asyncio.run_coroutine_threadsafe(self._admit_signaling(data), self.loop)
+            try:
+                admitted.result(timeout=30)
+            except Exception:
+                admitted.cancel()
+                if not self.closed:
+                    self.loop.call_soon_threadsafe(self._fail,
+                        TimeoutError("Telegram signalling admission did not complete"))
+
+    async def _admit_signaling(self, data):
+        if len(data) > self.signaling_queue_bytes:
+            self._fail(BufferError("Telegram signalling byte queue exceeded"))
+            return
+        while not self.closed and not self.ended.is_set():
+            if (self.pending_signal_bytes + len(data) <= self.signaling_queue_bytes
+                    and not self.outgoing_signals.full()):
+                self._queue_signaling(data)
+                return
+            self.signal_space.clear()
+            await self.signal_space.wait()
 
     def _queue_signaling(self, data):
         if self.closed or self.ended.is_set():
@@ -147,6 +180,7 @@ class TelegramCallTransport:
                 await self._send_signaling(data)
             finally:
                 self.pending_signal_bytes -= len(data)
+                self.signal_space.set()
 
     async def _send_signaling(self, data):
         if self.call is None:
@@ -207,6 +241,28 @@ class TelegramCallTransport:
         except asyncio.QueueFull:
             self._fail(BufferError("Telegram update buffer exceeded"))
 
+    async def admit_update(self, update):
+        """Apply connector backpressure while keeping RPC replies independent."""
+        size = len(json.dumps(update, separators=(',', ':'), ensure_ascii=True).encode('ascii'))
+        if size > self.signaling_queue_bytes:
+            self._fail(BufferError("Telegram update buffer exceeded"))
+            return
+        while not self.closed and not self.ended.is_set():
+            if (update.get('type') in {'phoneCallWaiting', 'phoneCallDiscarded'}
+                    or self.call and str(update.get('id')) != str(self.call['id'])
+                    or self.pending_update_bytes + size <= self.signaling_queue_bytes
+                       and not self.updates.full()):
+                self.update(update)
+                return
+            self.update_space.clear()
+            space = asyncio.create_task(self.update_space.wait())
+            end = asyncio.create_task(self.ended.wait())
+            try:
+                await asyncio.wait((space,end),return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                space.cancel(); end.cancel()
+                await asyncio.gather(space,end,return_exceptions=True)
+
     def _peer(self):
         return {"id": str(self.call["id"]), "access_hash": str(self.call["access_hash"])}
 
@@ -234,6 +290,7 @@ class TelegramCallTransport:
                 raise RecipientUnanswered("Telegram recipient did not answer")
             update, size = get.result()
             self.pending_update_bytes -= size
+            self.update_space.set()
             return update
         finally:
             get.cancel(); end.cancel()
@@ -335,6 +392,11 @@ class TelegramCallTransport:
             return
         self.closed = True
         self.ended.set()
+        self.signal_space.set()
+        self.update_space.set()
+        # Release any native producer waiting on loop-side admission before
+        # stopping its native threads.
+        await asyncio.sleep(0)
         # Release native→bound-method→transport cycles while its asyncio loop
         # still exists; late callbacks must not touch a closed Python loop.
         self.engine.on_signaling_data(lambda *args: None)

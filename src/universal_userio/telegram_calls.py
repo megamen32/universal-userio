@@ -131,6 +131,7 @@ class TelegramCalls:
             return await asyncio.to_thread(provider._request,method,path+suffix,payload)
         reader=writer=None; consumer=updates=None; rpc_tasks=set(); transcripts={'caller':[],'assistant':[]}
         rpc_attempted=rpc_uncertain=teardown_confirmed=hangup_sent=False; turns=0
+        update_ack=None; update_id=0
         try:
             # Claim the existing client's durable admission before any worker RPC.
             await asyncio.to_thread(provider._request,'POST',PREFIX+'start',{
@@ -170,6 +171,10 @@ class TelegramCalls:
                     if len(line)>65536: raise ValueError('voice event exceeds limit')
                     event=json.loads(line); kind=event.get('event')
                     if event.get('ok') is False: raise RuntimeError('voice gateway refused Telegram transport')
+                    if kind=='telegram_update_admitted':
+                        if update_ack and str(event.get('update_id'))==str(update_id) and not update_ack.done():
+                            update_ack.set_result(True)
+                        continue
                     if kind=='telegram_rpc':
                         # Handshake packets need concurrent MTProto receipts;
                         # one slow request must not block all control events.
@@ -196,6 +201,7 @@ class TelegramCalls:
                         record_call_error(record, event)
                     self._save(record)
             async def poll():
+                nonlocal update_ack,update_id
                 cursor=0
                 while True:
                     result=await relay('GET','/updates?after='+str(cursor))
@@ -204,7 +210,10 @@ class TelegramCalls:
                         raise ValueError('invalid relay update page')
                     for item in events:
                         update=item.get('update',item)
-                        await send({'type':'telegram_update','update':update})
+                        update_id+=1
+                        update_ack=asyncio.get_running_loop().create_future()
+                        await send({'type':'telegram_update','update':update,'update_id':str(update_id)})
+                        await asyncio.wait_for(update_ack,75)
                     cursor=next_cursor
                     await asyncio.sleep(.25)
             consumer,updates=asyncio.create_task(consume()),asyncio.create_task(poll())

@@ -44,3 +44,11 @@ Fresh admission measurement: hostavailable33GiB; core197MiB/6tasks under384/512M
 64tasks; gateway40MiB/2tasks under1.5/2GiB,128tasks. Existing cgroup limits stay
 unchanged; queue allowance512KiB aggregate, no extra provider account or worker.
 Real recipient canary must confirm this budget after installation.
+Native callbacks now wait for queue admission (maximum30s) instead of enqueueing
+unlimited loop callbacks or aborting a valid burst. This provides backpressure
+without increasing the256KiB queue caps; close releases a blocked producer.
+Input packets have an admission acknowledgement: the connector sends the next
+packet only after the worker admitted the previous one. A separate pending
+admission task keeps crypto/discard RPC replies flowing even when input is full.
+Slow100ms native8.0.0 loopback and full-input/RPC coexistence are focused
+integration checks; neither requires a provider call or reuses a live receipt.

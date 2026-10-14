@@ -30,6 +30,11 @@ class ConnectorRPC:
         self.pending = {}
         self.counter = 0
         self.transport = None
+        self.update_task = None
+
+    async def admit_update(self, message):
+        await self.transport.admit_update(message['update'])
+        emit({'event':'telegram_update_admitted', 'update_id':message['update_id']})
 
     async def invoke(self, method, params):
         if len(self.pending) >= 64:
@@ -63,7 +68,17 @@ class ConnectorRPC:
                         else:
                             future.set_result(message.get("result"))
                 elif message.get("type") == "telegram_update":
-                    self.transport.update(message["update"])
+                    if 'update_id' in message:
+                        if self.update_task and not self.update_task.done():
+                            raise BufferError('connector update admission queue exceeded')
+                        if self.update_task: self.update_task.result()
+                        self.update_task = asyncio.create_task(self.admit_update(message))
+                        def admitted(task):
+                            if not task.cancelled() and task.exception():
+                                self.transport._fail(task.exception())
+                        self.update_task.add_done_callback(admitted)
+                    else:
+                        self.transport.update(message["update"])
                 elif message.get("type") == "hangup":
                     self.transport.ended.set()
                 else:
@@ -76,6 +91,10 @@ class ConnectorRPC:
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(error)
+        finally:
+            if self.update_task:
+                self.update_task.cancel()
+                await asyncio.gather(self.update_task,return_exceptions=True)
 
 
 class AudioSocketWriter:

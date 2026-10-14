@@ -315,7 +315,7 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
         peer_start = None
         async def forward(data):
             # Real connector input is queued until native connect_p2p finishes.
-            transport.update({'type':'signaling', 'id':'11', 'data':encode_bytes(data)})
+            await transport.admit_update({'type':'signaling', 'id':'11', 'data':encode_bytes(data)})
         def signal(user_id, data):
             # Native methods return asyncio.Future, not coroutine objects.
             # Invoke them inside the owning loop, never the native callback thread.
@@ -347,6 +347,8 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
                         "protocol": {"library_versions": versions}, "connections": [], "p2p_allowed": True}
             if method == "phone.sendSignalingData":
                 nonlocal peer_start
+                # Model a real MTProto round trip instead of an immediate sink.
+                await asyncio.sleep(.1)
                 # Match the successful direct probe: outgoing engine starts first.
                 # Starting the peer during confirmation consumes its ICE timeout
                 # before the outgoing engine can produce its first signalling.
@@ -358,7 +360,10 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
                                 native.MediaSource.EXTERNAL, 48000, 1, "", False), None, None, None))
                     peer_start = asyncio.create_task(start_peer())
                 await peer_start
-                await peer.send_signaling_data(8, decode_bytes(params["data"]))
+                async def deliver():
+                    await peer.send_signaling_data(8, decode_bytes(params["data"]))
+                # MTProto receipt does not wait for the remote native engine.
+                forwarded.append(asyncio.create_task(deliver()))
             return True
         transport = TelegramCallTransport(7, rpc, source_received.append, native=native)
         try:
@@ -377,7 +382,8 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
             peer.on_signaling_data(lambda *args: None)
             peer.on_frames(lambda *args: None)
             peer.on_connection_change(lambda *args: None)
-            await asyncio.gather(*(asyncio.wrap_future(future) for future in forwarded),
+            await asyncio.gather(*(future if isinstance(future,asyncio.Task)
+                                   else asyncio.wrap_future(future) for future in forwarded),
                                  return_exceptions=True)
             await transport.close()
             await peer.stop(8)
@@ -438,6 +444,67 @@ def test_native_signaling_queue_retains_a_finite_byte_budget():
         transport._queue_signaling(b'x' * (transport.signaling_queue_bytes + 1))
         assert isinstance(transport.failure, BufferError)
         assert transport.pending_signal_bytes == 0
+        await transport.close()
+    asyncio.run(check())
+
+
+def test_native_producer_waits_for_capacity_instead_of_ending_the_call():
+    """Focused integration1s/max10s: callback thread obeys a slow RPC sink."""
+    async def check():
+        transport, native, _, _ = setup()
+        await transport.dial()
+        transport.signaling_queue_bytes = 600
+        blocked = asyncio.Event(); sent = []
+        original = transport.rpc
+        async def rpc(method, params):
+            if method == 'phone.sendSignalingData':
+                await blocked.wait()
+                sent.append(decode_bytes(params['data']))
+                return True
+            return await original(method, params)
+        transport.rpc = rpc
+        payloads = [bytes([i]) * 100 for i in range(20)]
+        def produce():
+            for data in payloads: native.signaling(7, data)
+        producer = asyncio.create_task(asyncio.to_thread(produce))
+        while transport.pending_signal_bytes < 600:
+            await asyncio.sleep(.001)
+        assert not producer.done() and not transport.ended.is_set()
+        assert transport.pending_signal_bytes <= 600
+        blocked.set()
+        await asyncio.wait_for(producer, 2)
+        while len(sent) < len(payloads): await asyncio.sleep(0)
+        assert sorted(sent) == sorted(payloads) and not transport.ended.is_set()
+        await transport.close()
+    asyncio.run(check())
+
+
+def test_pending_update_admission_never_blocks_connector_rpc_replies(monkeypatch):
+    """Focused integration1s/max10s: crypto RPC passes a full incoming queue."""
+    import json
+    from universal_userio import telegram_call_worker as worker
+    async def check():
+        transport, _, _, _ = setup()
+        packet={'type':'signaling', 'id':'11', 'data':'x'*100}
+        packet_size=len(json.dumps(packet,separators=(',',':')).encode())
+        transport.signaling_queue_bytes=packet_size
+        transport.update(packet)
+        reader=asyncio.StreamReader(); events=[]
+        monkeypatch.setattr(worker,'emit',events.append)
+        rpc=ConnectorRPC(reader); rpc.transport=transport
+        ingest=asyncio.create_task(rpc.read())
+        reader.feed_data(json.dumps({'type':'telegram_update', 'update_id':'1',
+                                    'update':packet}).encode()+b'\n')
+        request=asyncio.create_task(rpc.invoke('messages.getDhConfig',{}))
+        while not rpc.pending: await asyncio.sleep(0)
+        reader.feed_data(b'{"type":"rpc_result","request_id":"1","result":true}\n')
+        assert await asyncio.wait_for(request,1) is True
+        assert not any(event.get('event')=='telegram_update_admitted' for event in events)
+        await transport._next_update(float('inf'))
+        while not any(event.get('event')=='telegram_update_admitted' for event in events):
+            await asyncio.sleep(0)
+        assert not transport.ended.is_set()
+        ingest.cancel(); await asyncio.gather(ingest,return_exceptions=True)
         await transport.close()
     asyncio.run(check())
 
