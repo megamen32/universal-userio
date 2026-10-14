@@ -9,7 +9,7 @@ def chat(author='other-guid',peer='group-test'):
     return {'ChatId':peer,'ChatInfo':{'Name':'Synthetic group'},'Messages':[
         {'ServerMessage':{'ServerMessageInfo':{'Timestamp':1700000000000000,
           'From':{'Guid':author,'DisplayName':'Test author'}},
-          'ClientMessage':{'Plain':{'Text':'Synthetic message'}}}}]}
+          'ClientMessage':{'Plain':{'Text':{'MessageText':'Synthetic message'}}}}}]}
 
 def test_wire_packet_roundtrip():
     data=packet(5,'history',{'Limit':20})
@@ -27,9 +27,13 @@ def test_authors_do_not_become_chat_destination():
     assert a.message_id.startswith(ACCOUNT['account_id']+'|')
 
 def test_owner_direction_and_private_chat():
-    message=list(project(chat(author='own-guid',peer='0/own-guid/other-guid'),ACCOUNT))[0]
+    value=chat(author='own-guid',peer='11111111-1111-1111-1111-111111111111_22222222-2222-2222-2222-222222222222')
+    value['PartnerInfo']={'Guid':'other-guid','DisplayName':'Synthetic partner'}
+    message=list(project(value,ACCOUNT))[0]
     assert message.direction=='outgoing' and message.conversation_kind=='direct'
     assert message.received_at==1700000000
+    assert message.conversation_title=='Synthetic partner'
+    assert message.body=='Synthetic message'
 
 def test_initial_history_never_dispatches_old_messages(monkeypatch):
     from universal_userio.yandex import sync
@@ -72,6 +76,7 @@ def test_group_identity_names_and_tenant_isolation(tmp_path):
     result=store.conversation(ids[0],user_id=account['user_id'])
     assert result['display_name']=='Synthetic group'
     assert len(result['messages'])==2
+    assert result['messages'][0]['sender_name']=='Test author'
     assert store.conversation(ids[0],user_id='different-tenant') is None
     store.close()
 

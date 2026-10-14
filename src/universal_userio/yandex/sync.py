@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import re
 from ..contracts import InboxMessage
 
 
@@ -45,7 +46,11 @@ def read(account, *, chat_id='', before=0, limit=20):
 
 def project(chat, account, *, reconciliation=True):
     peer = chat['ChatId']
-    title = str(chat.get('ChatInfo',{}).get('Name') or '')[:200]
+    private = bool(chat.get('PartnerInfo')) or bool(re.fullmatch(
+        r'[a-z0-9-]{36}_[a-z0-9-]{36}',peer))
+    title = str((chat.get('PartnerInfo',{}) if private else chat.get('ChatInfo',{})).get(
+        'DisplayName' if private else 'Name') or '')[:200]
+    kind = 'direct' if private else ('channel' if peer.startswith('1/') else 'group')
     for item in chat.get('Messages', []):
         server = item.get('ServerMessage',{})
         info = server.get('ServerMessageInfo',{})
@@ -55,12 +60,13 @@ def project(chat, account, *, reconciliation=True):
         if not guid or type(stamp) is not int or stamp <= 0:
             continue
         plain = server.get('ClientMessage',{}).get('Plain',{})
-        body = str(plain.get('Text') or '')
+        text = plain.get('Text') or ''
+        body = str(text.get('MessageText') or '') if isinstance(text,dict) else str(text)
         attachments = []
-        for name,kind in [('Image','image'),('File','file'),('Voice','voice')]:
+        for name,attachment_kind in [('Image','image'),('MiscFile','file'),('Voice','voice')]:
             if name in plain:
                 data = plain[name].get('FileInfo',{})
-                attachments.append({'kind':kind,'provider_ref':json.dumps(data),
+                attachments.append({'kind':attachment_kind,'provider_ref':json.dumps(data),
                     'idx':len(attachments)})
         if not body and not attachments:
             # System/control frames must not masquerade as a person's message.
@@ -72,7 +78,7 @@ def project(chat, account, *, reconciliation=True):
             edited_at=float(info.get('LastEditTimestamp') or 0)/1000000,
             direction='outgoing' if guid==account['guid'] else 'incoming',
             peer_id=peer, conversation_title=title,
-            conversation_kind='direct' if peer.startswith('0/') else 'group',
+            conversation_kind=kind,
             sender_is_bot=bool(author.get('IsRobot')), reconciliation=reconciliation)
 
 

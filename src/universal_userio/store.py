@@ -1555,6 +1555,10 @@ class SQLiteUserIOStore:
                 ),
             ).rowcount == 1
             if message_kind != "unknown":
+                if message.source == 'yandex' and account_ref.startswith('yandex:'):
+                    self._connection.execute("""UPDATE conversations SET conversation_kind=?
+                        WHERE user_id=? AND id=? AND source='yandex' AND account_ref=?""",
+                        (message_kind,user_id,conversation_id,account_ref))
                 if message_kind == "telegram_bot":
                     changed_to_bot = self._connection.execute("""UPDATE conversations
                         SET conversation_kind='telegram_bot'
@@ -1778,7 +1782,8 @@ class SQLiteUserIOStore:
                     )
                 elif new_is_text and new_body != old_body:
                     self._invalidate_message_summary(user_id, message.source, message.message_id)
-                    edited_at = float(message.edited_at or 0.0) or now
+                    edited_at = ((float(message.edited_at) if message.edited_at else None)
+                        if message.source == 'yandex' else float(message.edited_at or 0.0) or now)
                     self._connection.execute(
                         """UPDATE messages SET body=?,edited_at=?
                            WHERE user_id=? AND source=? AND message_id=?""",
@@ -2458,11 +2463,11 @@ class SQLiteUserIOStore:
                     draft["context_status"] = "current" if current["fingerprint"] == saved["fingerprint"] else "stale"
                 except KeyError:
                     draft["context_status"] = "stale"
-        if row['source'] == 'max' and row['conversation_kind'] in {'group','channel'}:
+        if row['source'] in {'max','yandex'} and row['conversation_kind'] in {'group','channel'}:
             with self._lock:
                 author_names = dict(self._connection.execute(
-                    "SELECT sender,name FROM contact_names WHERE user_id=? AND source='max'",
-                    (user_id,)).fetchall())
+                    "SELECT sender,name FROM contact_names WHERE user_id=? AND source=?",
+                    (user_id,row['source'])).fetchall())
             for item in message_records:
                 item['sender_name'] = author_names.get(item['sender'], '')
         for item in message_records:
