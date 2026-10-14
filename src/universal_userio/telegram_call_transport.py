@@ -37,6 +37,7 @@ class TelegramCallTransport:
     sample_rate = 48000
     frame_bytes = sample_rate * 2 // 100  # NTgCalls consumes exactly 10ms.
     queue_bytes = sample_rate * 2 * 2    # At most two seconds in callbacks.
+    signaling_queue_bytes = 65536
 
     def __init__(self, user_id: int, rpc: Callable[..., Awaitable[Any]],
                  receive_pcm: Callable[[bytes], None], *, native=None):
@@ -58,6 +59,9 @@ class TelegramCallTransport:
         self.failure: BaseException | None = None
         self.updates: asyncio.Queue = asyncio.Queue(maxsize=32)
         self.tasks: set[asyncio.Task] = set()
+        self.outgoing_signals = asyncio.Queue(maxsize=256)
+        self.pending_signal_bytes = 0
+        self.signal_sender = None
         self.pending_pcm_bytes = 0
         self.started_at: float | None = None
         self.engine.on_connection_change(self._connection)
@@ -101,7 +105,33 @@ class TelegramCallTransport:
 
     def _signaling(self, user_id, data):
         if user_id == self.user_id and not self.closed:
-            self.loop.call_soon_threadsafe(self._spawn, self._send_signaling(bytes(data)))
+            self.loop.call_soon_threadsafe(self._queue_signaling, bytes(data))
+
+    def _queue_signaling(self, data):
+        if self.closed or self.ended.is_set():
+            return
+        if (self.pending_signal_bytes + len(data) > self.signaling_queue_bytes
+                or self.outgoing_signals.full()):
+            self._fail(BufferError("Telegram signalling byte queue exceeded"))
+            return
+        self.pending_signal_bytes += len(data)
+        self.outgoing_signals.put_nowait(data)
+        if self.signal_sender is None or self.signal_sender.done():
+            self.signal_sender = asyncio.create_task(self._pump_signaling())
+            self.tasks.add(self.signal_sender)
+            def finished(task):
+                self.tasks.discard(task)
+                if not task.cancelled() and task.exception():
+                    self._fail(task.exception())
+            self.signal_sender.add_done_callback(finished)
+
+    async def _pump_signaling(self):
+        while not self.closed and not self.ended.is_set():
+            data = await self.outgoing_signals.get()
+            try:
+                await self._send_signaling(data)
+            finally:
+                self.pending_signal_bytes -= len(data)
 
     async def _send_signaling(self, data):
         if self.call is None:

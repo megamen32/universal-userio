@@ -392,6 +392,47 @@ def test_ringing_updates_cannot_abort_a_call_before_answer():
     asyncio.run(check())
 
 
+def test_native_signaling_burst_waits_for_serial_rpc_without_aborting():
+    """Fast unit1s/max10s: recipient handshake burst exceeds old64task cap."""
+    async def check():
+        transport, native, _, _ = setup()
+        await transport.dial()
+        blocked = asyncio.Event()
+        sent = []
+        original = transport.rpc
+        async def rpc(method, params):
+            if method == 'phone.sendSignalingData':
+                await blocked.wait()
+                sent.append(decode_bytes(params['data']))
+                await asyncio.sleep(0)
+                return True
+            return await original(method, params)
+        transport.rpc = rpc
+        payloads = [i.to_bytes(2, 'big') * 100 for i in range(80)]
+        for data in payloads:
+            native.signaling(7, data)
+        await asyncio.sleep(0); await asyncio.sleep(0)
+        assert not transport.ended.is_set()
+        assert len(transport.tasks) <= 2  # Update pump plus one RPC sender.
+        assert transport.pending_signal_bytes == sum(map(len, payloads))
+        blocked.set()
+        while len(sent) < len(payloads):
+            await asyncio.sleep(0)
+        assert sent == payloads and not transport.ended.is_set()
+        await transport.close()
+    asyncio.run(check())
+
+
+def test_native_signaling_queue_retains_a_finite_byte_budget():
+    async def check():
+        transport, _, _, _ = setup()
+        transport._queue_signaling(b'x' * (transport.signaling_queue_bytes + 1))
+        assert isinstance(transport.failure, BufferError)
+        assert transport.pending_signal_bytes == 0
+        await transport.close()
+    asyncio.run(check())
+
+
 def test_slow_recipient_and_media_can_start_beyond_the_previous_deadlines(monkeypatch):
     """Focused integration expected1s/max10s: answer75s +connect35s, virtual time."""
     async def check():
