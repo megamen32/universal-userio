@@ -343,7 +343,7 @@ def handler(
                 return
             principal = self._principal(allow_proxy=path != "/mcp")
             matrix_notice_token = os.environ.get('USERIO_MATRIX_NOTICE_TOKEN','')
-            if (principal is None and path == '/v1/calls/matrix/noticeplace' and matrix_notice_token
+            if (principal is None and path in {'/v1/calls/matrix/noticeplace', '/v1/calls/telegram/noticeplace'} and matrix_notice_token
                     and hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+matrix_notice_token)):
                 principal = service._store.owner()
             if principal is None:
@@ -647,12 +647,12 @@ def handler(
                     record = calls_for(service).stop(path.split('/')[-2],user_id)
                     self._reply(200, {'ok':True,'call':record})
                     return
-                if path == '/v1/calls/matrix/noticeplace':
-                    from .matrix_calls import noticeplace_call
+                if path in {'/v1/calls/matrix/noticeplace', '/v1/calls/telegram/noticeplace'}:
+                    from .noticeplace_calls import noticeplace_call
                     if not service._store.capability_enabled('send', user_id=user_id):
                         self._reply(403, {'error':'send_capability_disabled'})
                         return
-                    self._reply(200, noticeplace_call(service,user_id,self._json()))
+                    self._reply(200, noticeplace_call(service,user_id,self._json(),channel=path.split('/')[3]))
                     return
                 if path.startswith('/v1/calls/matrix/') and path.endswith('/stop'):
                     if not service._store.capability_enabled('send', user_id=user_id):

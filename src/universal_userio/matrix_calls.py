@@ -210,21 +210,5 @@ def calls_for(service):
 
 
 def noticeplace_call(service, user_id, payload):
-    """Keep the existing Notice Place MatrixCallSender request/result contract."""
-    incident_id = str(payload.get('incident_id') or '')
-    title = str(payload.get('title') or '').strip()
-    body = str(payload.get('body') or '').strip()
-    if not incident_id or len(incident_id)>128 or not title or len(title)>1000 or len(body)>12000:
-        raise ValueError('invalid Notice Place call')
-    calls = calls_for(service)
-    call = calls.start(user_id=user_id, account_ref=os.environ['USERIO_MATRIX_NOTICE_ACCOUNT'],
-        room_id=os.environ['USERIO_MATRIX_NOTICE_ROOM'], target=os.environ['USERIO_MATRIX_NOTICE_TARGET'],
-        purpose=title+'\n'+body, greeting='Здравствуйте. Я ИИ-помощник Notice Place. '+title[:400],
-        request_id='noticeplace:'+incident_id, max_seconds=120, confirm=True)
-    deadline = time.monotonic()+140
-    while call['status'] in {'accepted','ringing','active'} and not call['acknowledged'] and time.monotonic()<deadline:
-        time.sleep(.25)
-        call = calls.get(call['call_id'], user_id)
-    if call['status'] == 'unknown': raise RuntimeError('call outcome unknown; do not replay')
-    return {'ok':True,'answered':call['acknowledged'], 'target':call['target'],
-            'call_id':call['call_id'],'status':call['status']}
+    from .noticeplace_calls import noticeplace_call as deliver
+    return deliver(service, user_id, payload, channel='matrix')
