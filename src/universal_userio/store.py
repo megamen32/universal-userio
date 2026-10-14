@@ -4166,6 +4166,15 @@ class SQLiteUserIOStore:
                 self._bump_workspace_policy(scoped_user)
         return cursor.rowcount > 0
 
+    def automatic_ai_paused(self, *, user_id: str | None = None) -> bool:
+        return self.user_preference('automatic_ai_paused', user_id=user_id, default='0') == '1'
+
+    def set_automatic_ai_paused(self, paused: bool, *, user_id: str | None = None) -> dict[str, object]:
+        if type(paused) is not bool:
+            raise ValueError('paused must be a boolean')
+        self.set_user_preference('automatic_ai_paused', '1' if paused else '0', user_id=user_id)
+        return {'paused': self.automatic_ai_paused(user_id=user_id)}
+
     def automatic_event_check(self, event_seq: int, *, user_id: str | None = None) -> dict[str, object]:
         """Cheap live facts only. Never refresh summaries, mark read, or invoke a model."""
         user = self._user(user_id)
@@ -4178,6 +4187,8 @@ class SQLiteUserIOStore:
                 FROM messages WHERE user_id=? AND source=? AND message_id=?""",
                 (user,event["source"],event["message_id"])).fetchone()
         reason = ""
+        if self.automatic_ai_paused(user_id=user):
+            return {"needed": False, "reason": "automatic_ai_paused", "event_seq": event_seq}
         # Trusted provider metadata and stable peers, never keywords in message bodies.
         automated_peers = {"8810909089", "8612415098", "8619283086", "8910872784"}
         if event["sender_is_bot"] or event["source"].split(":",1)[0] == "chatgpt" or (
@@ -4203,6 +4214,8 @@ class SQLiteUserIOStore:
                 if self.automatic_event_check(seq, user_id=user)["needed"]]
 
     def _prepare_automatic_batch(self, *, user: str, after: int, now: float, direct_only: bool) -> int | None:
+        if self.automatic_ai_paused(user_id=user):
+            return None
         # Called inside the same BEGIN IMMEDIATE as the lease. Active/terminal
         # claims never join a new batch. Failed leaders retain their exact membership.
         rows = self._connection.execute("""SELECT e.seq,e.conversation_id,e.queued_at,

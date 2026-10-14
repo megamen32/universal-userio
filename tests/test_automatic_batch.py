@@ -105,3 +105,24 @@ def test_direct_worker_post_waits_and_manual_button_remains_immediate(tmp_path):
         manual = service.triage_workspace_event(event_seq=1, request_id="manual")
         assert manual["triage"]["decision"] == "notify"
     assert len(gen.calls) == 1
+
+
+def test_pause_preserves_queue_and_resume_filters_read_messages(tmp_path):
+    store,gen,service,cid=setup(tmp_path)
+    store.set_automatic_ai_paused(True)
+    assert claim(store,1500) is None
+    assert store.workspace_events()['events'][0]['seq']==1
+    assert gen.calls==[]
+    store.set_automatic_ai_paused(False)
+    assert claim(store,1500)['event']['seq']==1
+    store.set_automatic_ai_paused(True)
+    assert triage(service,1)['triage']['decision']=='silent'
+    assert gen.calls==[]
+
+
+def test_pause_persists_and_is_user_scoped(tmp_path):
+    store,gen,service,cid=setup(tmp_path)
+    user,_=store.create_user('another-reader','correct horse battery staple')
+    store.set_automatic_ai_paused(True)
+    assert not store.automatic_ai_paused(user_id=user.user_id)
+    assert SQLiteUserIOStore(tmp_path/'state.sqlite3').automatic_ai_paused()

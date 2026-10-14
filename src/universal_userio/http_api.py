@@ -382,6 +382,14 @@ def handler(
                     self._reply(200, personal_tokens.update_permissions(user_id,token_id,self._json().get('grants')),
                         headers={'Cache-Control':'no-store'})
                     return
+                if path == '/v1/preferences/ai':
+                    if principal.service_account:
+                        raise PermissionError('personal login required')
+                    payload = self._json()
+                    if set(payload) != {'paused'}:
+                        raise ValueError('paused boolean required')
+                    self._reply(200, service._store.set_automatic_ai_paused(payload['paused'],user_id=user_id))
+                    return
                 if path == "/v1/personal-tokens":
                     if principal.service_account:
                         self._reply(403, {"error": "personal login required"})
@@ -1418,6 +1426,9 @@ def handler(
                     return
                 from .phone_setup import phone_binding
                 self._reply(200,phone_binding(service,query.get('user_id',[''])[0],query.get('account_id',[''])[0]))
+                return
+            if path == '/v1/preferences/ai':
+                self._reply(200, {'paused': service._store.automatic_ai_paused(user_id=user_id)})
                 return
             if path == "/v1/runtime":
                 self._reply(200, public_runtime_identity)

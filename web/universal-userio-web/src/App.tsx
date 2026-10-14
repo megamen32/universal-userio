@@ -219,6 +219,9 @@ export function App() {
   const [secretaryBusy, setSecretaryBusy] = useState(false)
   const [secretaryError, setSecretaryError] = useState("")
   const [secretaryLoading, setSecretaryLoading] = useState(false)
+  const [aiPaused, setAiPaused] = useState<boolean | null>(null)
+  const [aiPauseBusy, setAiPauseBusy] = useState(false)
+  const [aiPauseError, setAiPauseError] = useState("")
   const [analysisPolicy, setAnalysisPolicy] = useState<AnalysisPolicy | null>(null)
   const [analysisPolicyBusy, setAnalysisPolicyBusy] = useState(false)
   const [analysisPolicyError, setAnalysisPolicyError] = useState("")
@@ -291,6 +294,24 @@ export function App() {
     setToast(message)
     window.clearTimeout(toastTimer.current)
     toastTimer.current = window.setTimeout(() => setToast(""), 2800)
+  }
+
+  useEffect(() => {
+    void api<{paused:boolean}>("/v1/preferences/ai").then(value => setAiPaused(value.paused))
+      .catch(error => setAiPauseError((error as Error).message))
+  }, [])
+  const toggleAiPause = async () => {
+    if (aiPaused === null || aiPauseBusy) return
+    setAiPauseBusy(true)
+    setAiPauseError("")
+    try {
+      const value = await api<{paused:boolean}>("/v1/preferences/ai", {
+        method: "POST", body: JSON.stringify({paused: !aiPaused}),
+      })
+      setAiPaused(value.paused)
+      notify(value.paused ? "Автоматический ИИ приостановлен. Сообщения продолжают поступать." : "Автоматический ИИ возобновлён. Уже прочитанное будет пропущено.")
+    } catch (error) { setAiPauseError((error as Error).message) }
+    finally { setAiPauseBusy(false) }
   }
 
   // Escape closes overlays first; otherwise it returns from an open conversation to the wide list.
@@ -977,6 +998,15 @@ export function App() {
 
   const sidebar = <>
     <header className="flex items-center gap-3 px-4 pb-3 pt-4"><div className="grid size-9 place-items-center rounded-xl bg-[#2f80ed] text-white"><Inbox className="size-5" /></div><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">UNIVERSAL USERIO</p><h1 className="truncate text-base font-semibold">Все сообщения</h1></div><Button className="ml-auto md:hidden" variant="ghost" size="icon" onClick={() => setDrawerOpen(false)} title="Закрыть"><X /></Button></header>
+    <div className="px-3 pb-3">
+      <Button className="w-full justify-start" variant={aiPaused ? "secondary" : "outline"}
+        disabled={aiPaused === null || aiPauseBusy} onClick={() => void toggleAiPause()}
+        aria-pressed={aiPaused === true} title="Пауза автоматических разборов и уведомлений по всем чатам. Приём и чтение сообщений продолжаются.">
+        <Sparkles className="mr-2 size-4" />{aiPauseBusy ? "Сохраняю…" : aiPaused ? "Возобновить ИИ" : "Приостановить ИИ"}
+      </Button>
+      {aiPaused && <p className="mt-1 text-xs text-muted-foreground" role="status">Автоматический ИИ на паузе</p>}
+      {aiPauseError && <p className="mt-1 text-xs text-destructive" role="alert">{aiPauseError}</p>}
+    </div>
     <ScrollArea className="min-h-0 flex-1 px-2">
       <Button className="mb-2 h-11 w-full justify-start rounded-xl" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><span className="grid size-7 place-items-center rounded-lg bg-[#2f80ed]/10 text-[#2f80ed]"><Inbox className="size-4" /></span><span className="ml-2 text-left"><span className="block text-sm font-medium">Все аккаунты</span><span className="block text-[10px] text-muted-foreground">единая лента и поиск</span></span></Button>
       <Button className="mb-3 h-10 w-full justify-start rounded-xl border border-dashed" variant="outline" onClick={() => window.location.assign("/accounts")}><Plus className="mr-2 size-4" /> Аккаунты · подключить и настроить</Button>
