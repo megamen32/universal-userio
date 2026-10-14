@@ -71,3 +71,9 @@ new authorized Secretary-started meeting with silent join, real incoming voice,
 audio/transcript receipt and ordinary UserIO reload, without upgrading readonly.
 Yandex messenger.* integration, attachments/edits/reactions and all-user sign-in
 are not advertised as accepted by this text-send checkpoint.
+
+Documentation deployment: generated27-page site is publishedfc536e8 and installed
+through the normal rollback-first release. Public /docs/ returned200 with the
+new Yandex chat instructions and4096-character limit. Reproducibility/link/
+JSON checks passed. This static-only release preserved the exact API PID and
+NRestarts0; no source send/recording/model was replayed.
