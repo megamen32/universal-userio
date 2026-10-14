@@ -56,8 +56,10 @@ def setup(monkeypatch):
     for key, value in {'USERIO_MATRIX_NOTICE_ACCOUNT': 'matrix:caller',
                        'USERIO_MATRIX_NOTICE_ROOM': '!test:example.invalid',
                        'USERIO_MATRIX_NOTICE_TARGET': '@test:example.invalid',
-                       'USERIO_MESSENGER_RELAY_ACCOUNT': 'telegram:100001',
-                       'USERIO_TELEGRAM_RELAY_PEER': '100002'}.items():
+                       'USERIO_TELEGRAM_NOTICE_ACCOUNT': 'telegram:100001',
+                       'USERIO_TELEGRAM_NOTICE_TARGET': '100002',
+                       'USERIO_MESSENGER_RELAY_ACCOUNT': 'telegram:100003',
+                       'USERIO_TELEGRAM_RELAY_PEER': '100004'}.items():
         monkeypatch.setenv(key, value)
     clock = SimpleNamespace(now=0)
     monkeypatch.setattr(noticeplace_calls, 'time', SimpleNamespace(
@@ -77,6 +79,18 @@ def test_native_answer_without_phrase_stops_chain_and_keeps_dialogue_running(set
     assert result['ok'] and result['answered'] is True
     assert not result['acknowledged'] and not result['ended'] and not result['safe_to_fallback']
     assert ledger.reads == 1 and ledger.active
+    if channel == 'telegram':
+        assert ledger.starts[0]['account_ref'] == 'telegram:100001'
+        assert ledger.starts[0]['target'] == result['target'] == '100002'
+
+
+@pytest.mark.parametrize('key', ['USERIO_TELEGRAM_NOTICE_ACCOUNT', 'USERIO_TELEGRAM_NOTICE_TARGET'])
+def test_missing_noticeplace_destination_never_uses_generic_read_peer(setup, monkeypatch, key):
+    ledger = setup([])
+    monkeypatch.delenv(key)
+    with pytest.raises(KeyError, match=key):
+        noticeplace_calls.noticeplace_call(Mock(), 'owner', PAYLOAD, channel='telegram')
+    assert not ledger.starts
 
 
 @pytest.mark.parametrize('channel', ['matrix', 'telegram'])

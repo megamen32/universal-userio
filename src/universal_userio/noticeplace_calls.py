@@ -51,8 +51,8 @@ def noticeplace_call(service, user_id, payload, *, channel='matrix'):
                            target=os.environ['USERIO_MATRIX_NOTICE_TARGET'])
     elif channel == 'telegram':
         from .telegram_calls import calls_for
-        destination = dict(account_ref=os.environ['USERIO_MESSENGER_RELAY_ACCOUNT'],
-                           target=os.environ['USERIO_TELEGRAM_RELAY_PEER'])
+        destination = dict(account_ref=os.environ['USERIO_TELEGRAM_NOTICE_ACCOUNT'],
+                           target=os.environ['USERIO_TELEGRAM_NOTICE_TARGET'])
     else:
         raise ValueError('unsupported Notice Place call channel')
     calls = calls_for(service)
