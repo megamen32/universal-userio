@@ -92,6 +92,14 @@ class UserIOToolDispatcher:
                 if conversation_id in ignored_chats:
                     raise KeyError("chat not found")
                 return {"ok": True, **result}
+            if name.startswith('userio.meetings.telemost.'):
+                from .telemost.meetings import meetings_for
+                meetings=meetings_for(self._service)
+                if name.endswith('.start'):record=meetings.start(user_id=user_id,**arguments)
+                elif name.endswith('.get'):record=meetings.get(self._required(arguments,'meeting_id'),user_id)
+                elif name.endswith('.stop'):record=meetings.stop(self._required(arguments,'meeting_id'),user_id)
+                else:raise KeyError('unknown meeting operation')
+                return {'ok':True,'meeting':record}
             if name.startswith('userio.calls.matrix.'):
                 from .matrix_calls import calls_for
                 calls = calls_for(self._service)

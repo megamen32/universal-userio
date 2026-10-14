@@ -1,6 +1,7 @@
 """Personal read-only credentials: explicit read operations, default deny."""
 
 READ_ONLY_TOOLS = frozenset({
+    'userio.meetings.telemost.get',
     'userio.calls.matrix.get',
     'userio.calls.telegram.get',
     'userio.messenger.events',
@@ -23,6 +24,8 @@ def read_only_http_allowed(method: str, path: str) -> bool:
                 "/v1/workspace/events", "/v1/inbox", "/v1/drafts/pending"}:
         return True
     if path.startswith(('/v1/calls/matrix/','/v1/calls/telegram/')) and len(path.split('/')) == 5:
+        return True
+    if path.startswith('/v1/meetings/telemost') and len(path.split('/')) in {4,5,7}:
         return True
     parts = path.split("/")
     if len(parts) >= 4 and parts[:3] == ["", "v1", "conversations"] and parts[3]:

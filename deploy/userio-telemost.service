@@ -1,0 +1,22 @@
+[Unit]
+Description=UserIO receive-only Telemost recorder
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/share/userio-telemost/venv/bin/python -m universal_userio.telemost.worker
+Environment=PYTHONPATH=%h/.local/share/userio-telemost/source
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+UMask=0077
+MemoryHigh=1G
+MemoryMax=2G
+MemorySwapMax=0
+CPUQuota=200%
+TasksMax=128
+IOWeight=10
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

@@ -390,7 +390,21 @@ TELEGRAM_CALL_SPECS = (
 )
 TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
 
+TELEMOST_SPECS = (
+    ToolSpec('userio.meetings.telemost.start',
+        'Join one explicitly requested Telemost meeting as a visible, muted recorder. Never replay UNKNOWN joins.',
+        schema({'url':{'type':'string','maxLength':2048},'request_id':{'type':'string','minLength':16,'maxLength':128},
+                'confirm':{'type':'boolean'},'max_seconds':{'type':'integer','minimum':30,'maximum':7200}},
+               ['url','request_id','confirm'])),
+    ToolSpec('userio.meetings.telemost.get','Read recording, audio links and transcription for this owned meeting.',
+        schema({'meeting_id':{'type':'string'}},['meeting_id'])),
+    ToolSpec('userio.meetings.telemost.stop','Stop this owned recording without joining another meeting.',
+        schema({'meeting_id':{'type':'string'}},['meeting_id'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *TELEMOST_SPECS)
+
 TOOL_CAPABILITIES = {
+    'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send',
     'userio.calls.telegram.start':'send', 'userio.calls.telegram.get':'read', 'userio.calls.telegram.stop':'send',
     'userio.calls.matrix.start':'send', 'userio.calls.matrix.get':'read', 'userio.calls.matrix.stop':'send',
     'userio.messenger.upload': 'send',

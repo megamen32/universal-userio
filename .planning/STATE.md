@@ -373,3 +373,6 @@ WhatsApp pairing/read/send, registry-bound hosted SIM voice selector plus physic
 registration/audio, and remaining new-user provider journeys. These are not
 closed by QR/configuration issuance or by the working operator's old accounts.
 Percentages unchanged: CONN-01 only1/5; milestone11/19 accepted and2/5phases closed.
+
+## Roadmap Evolution
+- Phase17 added by direct human mandate: WhiteTransport-backed Telemost chats and quiet meeting recording. Work is independent of pending Exmanager acceptance.

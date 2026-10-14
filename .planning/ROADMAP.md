@@ -128,3 +128,13 @@ Plans:
 **Phase16 current status:** unified UI real PASS; personal MAX source/runtime and live QR/cancel/reload accepted, successful new account confirmation/read/send pending the native camera confirmation. WhatsApp personal QR/cancel/reload and hosted per-user SIP settings/reload/disconnect/error/mobile are live-accepted in271787c. Full WhatsApp pairing/read/send, SIM voice selector/phone/audio and new-user provider acceptance remain open. S21 is now available, root and current native MAX LOGIN were verified; it is not password-blocked. New QR account confirmation remains unverified because this MAX scanner accepts camera input only; a same-phone link opens instructions. The pending-status parser defect was fixed and live two-poll/cancel/reload/mobile acceptance passed in4b9169e. See [checkpoint](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-ONBOARDING-CHECKPOINT.md).
 OwnerUserIO7bb, independent of Exmanager15. Closure criteria in
 [16-01-PLAN](phases/16-simple-account-onboarding-and-per-user-self-service-across-a/16-01-PLAN.md).
+
+### Phase 17: Telemost chats and quiet meeting recording
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 16
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 17 to break down)

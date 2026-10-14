@@ -620,6 +620,14 @@ def handler(
                         record = service._store.create_conversation(source, sender, user_id=user_id)
                     self._reply(201, {"conversation": record})
                     return
+                if path == '/v1/meetings/telemost' or (path.startswith('/v1/meetings/telemost/') and path.endswith('/stop')):
+                    if not service._store.capability_enabled('send',user_id=user_id):
+                        self._reply(403,{'error':'send_capability_disabled'});return
+                    from .telemost.meetings import meetings_for
+                    meetings=meetings_for(service)
+                    if path.endswith('/stop'):record=meetings.stop(path.split('/')[-2],user_id)
+                    else:record=meetings.start(user_id=user_id,**self._json())
+                    self._reply(200,{'ok':True,'meeting':record});return
                 if path == '/v1/calls/matrix':
                     from .matrix_calls import calls_for
                     payload = self._json()
@@ -1230,6 +1238,8 @@ def handler(
                     return
                 self._html(200, _dashboard_signup_page().encode())
                 return
+            if requested_path == '/telemost':
+                self._static('/telemost.html');return
             if requested_path.startswith("/assets/") and self._static(requested_path):
                 return
             if requested_path in {"/docs", "/docs/", "/docs/index.html"}:
@@ -1285,6 +1295,40 @@ def handler(
                 self._reply(403, {"error": "read_only_token"})
                 return
             user_id = principal.user_id
+            if path == '/v1/meetings/telemost' or path.startswith('/v1/meetings/telemost/'):
+                if not service._store.capability_enabled('read',user_id=user_id):
+                    self._reply(403,{'error':'read_capability_disabled'});return
+                from .telemost.meetings import meetings_for
+                meetings=meetings_for(service);parts=path.split('/')
+                if len(parts)==4:
+                    self._reply(200,{'meetings':meetings.list(user_id)});return
+                if len(parts)==5:
+                    self._reply(200,{'meeting':meetings.get(parts[4],user_id)});return
+                if len(parts)==7 and parts[5]=='audio':
+                    if not service._store.capability_enabled('download',user_id=user_id):
+                        self._reply(403,{'error':'download_capability_disabled'});return
+                    audio=meetings.audio(parts[4],user_id,int(parts[6]));size=audio.stat().st_size
+                    start,end=0,size-1;requested=self.headers.get('Range','')
+                    if requested:
+                        match=re.fullmatch(r'bytes=([0-9]+)-([0-9]*)',requested)
+                        if not match:
+                            self._reply(416,{'error':'invalid_range'});return
+                        start=int(match[1]);end=min(size-1,int(match[2]) if match[2] else size-1)
+                        if start>end or start>=size:
+                            self._reply(416,{'error':'invalid_range'});return
+                    self.send_response(206 if requested else 200)
+                    self.send_header('Content-Type','audio/wav');self.send_header('Accept-Ranges','bytes')
+                    self.send_header('Content-Length',str(end-start+1));self.send_header('Cache-Control','private, max-age=0')
+                    if requested:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
+                    self.end_headers()
+                    with audio.open('rb') as stream:
+                        stream.seek(start);remaining=end-start+1
+                        while remaining:
+                            data=stream.read(min(65536,remaining))
+                            if not data:break
+                            self.wfile.write(data);remaining-=len(data)
+                    return
+                self._reply(404,{'error':'meeting_route_not_found'});return
             if path.startswith('/v1/calls/matrix/'):
                 if not service._store.capability_enabled('read', user_id=user_id):
                     self._reply(403, {'error':'read_capability_disabled'})
