@@ -170,7 +170,8 @@ async def run(request):
     controller=voice.CallController(config,prepared,originate=originate)
     try:
         # This is the same production preparation and conversation path as GSM.
-        await controller.prepare(record['greeting'] or record['purpose'],context=record['purpose'],repeat=1)
+        await controller.prepare(record['greeting'] or record['purpose'],context=record['purpose'],repeat=1,
+            agent_context=dict(record.get('agent_context') or {}, voice_transport='matrix', voice_target=record['target']))
         if engine_task:
             done,_=await asyncio.wait({engine_task},timeout=record['max_seconds'])
             if not done:terminate()

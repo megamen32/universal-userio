@@ -176,9 +176,28 @@ def test_unanswered_worker_reports_normal_end(monkeypatch):
 def test_early_discard_is_not_mistaken_for_an_answer():
     async def check():
         transport, native, operations, _ = setup(early={"id": "11", "type": "phoneCallDiscarded"})
-        with pytest.raises(ConnectionError): await transport.dial()
+        with pytest.raises(RecipientUnanswered): await transport.dial()
         await transport.close()
         assert not any(method == "phone.confirmCall" for method, _ in operations)
+    asyncio.run(check())
+
+
+def test_discard_after_request_receipt_is_an_unanswered_invitation():
+    async def check():
+        transport, native, operations, _ = setup()
+        original = transport.rpc
+        async def rpc(method, params):
+            if method == 'phone.requestCall':
+                operations.append((method, params))
+                asyncio.get_running_loop().call_soon(transport.update,
+                    {'id': '11', 'type': 'phoneCallDiscarded'})
+                return {'id': '11', 'access_hash': '22', 'participant_id': '7'}
+            return await original(method, params)
+        transport.rpc = rpc
+        with pytest.raises(RecipientUnanswered): await transport.dial()
+        await transport.close()
+        assert native.stops == 1
+        assert not any(method in {'phone.confirmCall', 'phone.discardCall'} for method, _ in operations)
     asyncio.run(check())
 
 

@@ -19,6 +19,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+MemoryHigh=128M
+MemoryMax=128M
+MemorySwapMax=16M
+CPUQuota=50%
+TasksMax=16
+IOWeight=50
 
 [Install]
 WantedBy=multi-user.target

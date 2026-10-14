@@ -62,7 +62,10 @@ def noticeplace_call(service, user_id, payload, *, channel='matrix'):
         call = calls.get(call_id, user_id)
     except KeyError:
         call = calls.start(user_id=user_id, **destination, purpose=purpose, greeting=greeting,
-                           request_id=request_id, max_seconds=120, confirm=True)
+                           request_id=request_id, max_seconds=120, confirm=True,
+                           agent_context={'incident_id':payload['incident_id'],
+                               'event_type':'noticeplace.call','title':_text(payload['title'],512),
+                               'body':_text(payload.get('body',''),1200)})
     else:
         if any(call.get(key) != value for key, value in destination.items()):
             raise ValueError('Notice Place call destination changed')
