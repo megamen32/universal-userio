@@ -1038,6 +1038,8 @@ class UserIOService:
             raise ValueError("Сообщение не может быть пустым")
         user = self._store._user(user_id)
         conv=self._store.conversation(conversation_id,user_id=user)
+        if conv and conv['source']=='diagnostic':
+            raise DeliveryUnavailableError('Это диагностический чат UserIO; используйте diagnostic.message, внешняя отправка невозможна.')
         if upload_id and (not conv or conv['source'] not in {'vk','max'}):
             raise ValueError('Вложения поддерживаются в личных VK и MAX')
         draft_id = "draft_web_" + hashlib.sha256(f"{user}:{request_id}".encode()).hexdigest()
@@ -1310,6 +1312,8 @@ class UserIOService:
         ):
             raise ValueError("route is not assigned to user")
         source = str(conversation["source"])
+        if source == 'diagnostic':
+            raise DeliveryUnavailableError('Diagnostic chats never select an external outbox/provider.')
         if source=='yandex':
             from .yandex.web import YandexWeb
             return YandexWeb(self,user_id).prepare(conversation,draft)

@@ -38,6 +38,9 @@ class UserIOToolDispatcher:
             return dispatch(self._store, self._service, principal, name, arguments)
         channels = UnifiedChannels(self._store, self._service, user_id)
         try:
+            if name.startswith('userio.diagnostic.'):
+                from .diagnostic_chats import dispatch
+                return dispatch(self._store, principal, name, arguments)
             required_capability = TOOL_CAPABILITIES.get(name)
             if required_capability and not self._store.capability_enabled(
                 required_capability, user_id=user_id

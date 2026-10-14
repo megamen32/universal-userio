@@ -608,6 +608,11 @@ def handler(
                     )
                     self._reply(201, {"accepted": True})
                     return
+                if path in {"/v1/diagnostic/chats", "/v1/diagnostic/messages"}:
+                    from .diagnostic_chats import dispatch
+                    operation = 'create' if path.endswith('/chats') else 'message'
+                    self._reply(200, dispatch(service._store, principal, 'userio.diagnostic.'+operation, self._json()))
+                    return
                 if path == "/v1/conversations":
                     payload = self._json()
                     source = str(payload.get("source") or "").strip().lower()
@@ -1510,6 +1515,14 @@ def handler(
                 return
             if path == '/v1/preferences/reading':
                 self._reply(200,{'auto_read':service._store.user_preference('auto_read',user_id=user_id,default='true')=='true'})
+                return
+            if path == '/v1/diagnostic/chat':
+                from .diagnostic_chats import dispatch
+                try:
+                    self._reply(200, dispatch(service._store, principal, 'userio.diagnostic.get',
+                        {'conversation_id': query.get('conversation_id', [''])[0]}))
+                except (PermissionError, KeyError, ValueError) as error:
+                    self._reply(403 if isinstance(error, PermissionError) else 404, {'error': str(error)})
                 return
             if path == "/v1/preferences/capabilities":
                 self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})

@@ -403,7 +403,22 @@ TELEMOST_SPECS = (
 )
 TOOL_SPECS = (*TOOL_SPECS, *TELEMOST_SPECS)
 
+DIAGNOSTIC_SPECS = (
+    ToolSpec('userio.diagnostic.create',
+        'Create an owned virtual test chat in UserIO. actor_ref is a test label, not identity or permission. No external provider.',
+        schema({'request_id':{'type':'string','minLength':16,'maxLength':128},
+                'title':{'type':'string','maxLength':160},'actor_ref':{'type':'string','maxLength':160}}, ['request_id'])),
+    ToolSpec('userio.diagnostic.get', 'Read this owned UserIO diagnostic conversation and its actual persisted test messages.',
+        schema({'conversation_id':{'type':'string'}}, ['conversation_id'])),
+    ToolSpec('userio.diagnostic.message', 'Write ONE virtual test input or answer in an owned diagnostic chat. Durable request dedup; never invokes any real messaging provider.',
+        schema({'conversation_id':{'type':'string'},'request_id':{'type':'string','minLength':16,'maxLength':128},
+                'body':{'type':'string','maxLength':16384},'direction':{'type':'string','enum':['incoming','outgoing']}},
+               ['conversation_id','request_id','body'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *DIAGNOSTIC_SPECS)
+
 TOOL_CAPABILITIES = {
+    'userio.diagnostic.create':'send','userio.diagnostic.get':'read','userio.diagnostic.message':'send',
     'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send',
     'userio.calls.telegram.start':'send', 'userio.calls.telegram.get':'read', 'userio.calls.telegram.stop':'send',
     'userio.calls.matrix.start':'send', 'userio.calls.matrix.get':'read', 'userio.calls.matrix.stop':'send',
