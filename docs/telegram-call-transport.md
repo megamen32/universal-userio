@@ -1,9 +1,11 @@
 # Telegram transport for the existing AgentCall engine
 
-The transport, worker and UserIO call lifecycle are deployed on server100.
-They are not yet accepted by a real Telegram recipient. Do not expose a working-call claim or
-enable automatic incident calls until the connector seam and recipient canary
-below pass. Matrix calls have already passed their separate acceptance.
+The transport, worker and UserIO call lifecycle are deployed on server100 and
+accepted by the real authorized Telegram recipient. The existing AI Secretary
+called the owner, heard them and answered; the human confirmed clear audio.
+Both separate audio tracks and transcripts are available in UserIO. Automatic
+incident calls require their own explicit integration/policy; none is enabled
+by this call acceptance. Matrix passed its separate acceptance previously.
 
 ## UserIO call lifecycle
 
@@ -251,9 +253,17 @@ One real UserIO MCP call attempt was accepted by Telegram, remained unanswered,
 then ended with completed discard and CLOSED admission. No media connection or
 archive was created. The initial TimeoutError result is retained privately;
 source now distinguishes an unanswered invitation from transport failure.
-Actual speech/recording acceptance is pending: the human requested no calls
-while sleeping. No retry or wake-up is scheduled; resume the remaining dialogue
-check only after the human returns. Never replay that accepted attempt.
+The human paused testing while sleeping; no retry or wake-up was scheduled.
+
+After the human explicitly returned and requested a fresh call, one new UserIO
+MCP request completed with nativeCONNECTED and a real dialogue. Human verdict:
+“Да, поговорили, голос чистый”. Provider admission is CLOSED. Both48000Hz mono
+PCM16 tracks are complete/equal1444949samples/30.103104s/2889942bytes each; final
+transcription and its job COMPLETE. The authenticated UserIO conversation exposes
+both transcripts and tracks; range206/RIFF and full200downloads match originals.
+Private proof: .tmp/telegram-call-runtime-install-20261014/canary02-*.json.
+No new headed browser check was performed for this Telegram recording; the
+shared player UI had already passed Matrix/reserve44 acceptance. No extra call.
 
 Settled owner relay API on30192, existing protected bearer:
 `POST /userio/telegram/calls/start` with admission_id/account_id/recipient_id/purpose;
