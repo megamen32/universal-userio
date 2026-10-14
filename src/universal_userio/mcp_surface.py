@@ -226,8 +226,9 @@ TOOL_CAPABILITIES = {
     "userio.ai.propose": "send",
 }
 
-from .mcp_catalog import MATRIX_CALL_SPECS, TELEGRAM_CALL_SPECS, TELEMOST_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS, *TELEGRAM_CALL_SPECS, *TELEMOST_SPECS)
+from .mcp_catalog import MATRIX_CALL_SPECS, TELEGRAM_CALL_SPECS, TELEMOST_SPECS, DIAGNOSTIC_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS, *TELEGRAM_CALL_SPECS, *TELEMOST_SPECS, *DIAGNOSTIC_SPECS)
+TOOL_CAPABILITIES.update({'userio.diagnostic.create':'send','userio.diagnostic.get':'read','userio.diagnostic.message':'send'})
 TOOL_CAPABILITIES.update({'userio.calls.matrix.start':'send','userio.calls.matrix.get':'read','userio.calls.matrix.stop':'send'})
 TOOL_CAPABILITIES.update({'userio.calls.telegram.start':'send','userio.calls.telegram.get':'read','userio.calls.telegram.stop':'send'})
 TOOL_CAPABILITIES.update({'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send'})
@@ -328,7 +329,7 @@ class UserIOMcpSurface:
         if name.startswith('userio.messenger.'):
             from .messenger import dispatch
             return dispatch(self._store, self._service, principal, name, arguments)
-        if name.startswith(('userio.calls.matrix.','userio.calls.telegram.','userio.meetings.telemost.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
+        if name.startswith(('userio.calls.matrix.','userio.calls.telegram.','userio.meetings.telemost.','userio.diagnostic.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
             # Keep the compatibility HTTP surface on the authoritative MAX
             # reader, including its bounded cached-history contract.
             from .mcp_dispatch import UserIOToolDispatcher

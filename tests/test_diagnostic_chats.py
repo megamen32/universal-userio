@@ -42,12 +42,17 @@ def test_create_identity_is_immutable(tmp_path):
 def test_standard_mcp_and_real_outbox_are_separate(tmp_path):
     from universal_userio.service import UserIOService, DeliveryUnavailableError
     from universal_userio.mcp_dispatch import UserIOToolDispatcher
+    from universal_userio.mcp_surface import UserIOMcpSurface
     class NoProvider:
         def send(self, *args, **kwargs):pytest.fail('real provider reached by diagnostic chat')
     store=SQLiteUserIOStore(tmp_path/'db.sqlite');service=UserIOService(store,None,NoProvider())
     dispatcher=UserIOToolDispatcher(store,service);principal=store.owner()
+    surface=UserIOMcpSurface(store,service)
+    assert {'userio.diagnostic.create','userio.diagnostic.get','userio.diagnostic.message'} <= {t['name'] for t in surface.tool_manifest()['tools']}
+    assert not any(t['name'].startswith('userio.diagnostic.') for t in surface.tool_manifest(principal=replace(principal,read_only=True))['tools'])
     result=dispatcher.dispatch('userio.diagnostic.create',{'request_id':'diagnostic-chat-mcp-00001'},principal=principal)
     assert result['diagnostic'];cid=result['conversation']['id']
+    assert surface.dispatch('userio.diagnostic.get',{'conversation_id':cid})['diagnostic'] is True
     dispatcher.dispatch('userio.diagnostic.message',{'conversation_id':cid,'request_id':'diagnostic-message-mcp-01','body':'Новый тест'},principal=principal)
     assert dispatcher.dispatch('userio.diagnostic.get',{'conversation_id':cid},principal=principal)['messages'][0]['body']=='Новый тест'
     with pytest.raises(DeliveryUnavailableError):
