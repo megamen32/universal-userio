@@ -43,7 +43,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     sender = str(payload.get("sender") or "").strip()
     body = str(payload.get("body") or "").strip()
     if (
-        source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail", "chatgpt", "max"}
+        source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail", "chatgpt", "max", "yandex"}
         and not source.startswith("gmail:")
         and not source.startswith("email:")
         and not source.startswith("matrix:")
@@ -410,6 +410,13 @@ class StoredChannelAdapter:
         if self.channel == "matrix":
             return source == "matrix" or source.startswith("matrix:")
         return source == self.channel
+
+
+class YandexChannelAdapter(StoredChannelAdapter):
+    channel = "yandex"
+
+    def send(self, **kwargs):
+        raise AdapterNotSupported("Yandex sending is not connected")
 
 
 class MailChannelAdapter(StoredChannelAdapter):
@@ -1566,6 +1573,7 @@ class UnifiedChannels(StoredChannelAdapter):
         "vk": VKChannelAdapter,
         "sms": AndroidSmsChannelAdapter,
         "max": MaxChannelAdapter,
+        "yandex": YandexChannelAdapter,
         "chatgpt": ChatGPTCDPChannelAdapter,
     }
 

@@ -187,6 +187,8 @@ class UserIOService:
                 account_ref: str = "") -> tuple[str, bool]:
         user_id = self._store.default_user_id if user_id is None else user_id
         conversation_key = message.conversation_key
+        if message.source == "yandex" and account_ref.startswith("yandex:") and message.peer_id:
+            conversation_key = f"yandex:{account_ref}:{message.peer_id}"
         if message.source == "max" and account_ref and message.peer_id:
             # Group participants and our own messages belong to the same provider
             # chat. Sender identity must never become the destination of a reply.
