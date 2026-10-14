@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import secrets
+import sys
 import time
 from typing import Any, Awaitable, Callable
 
@@ -57,7 +59,8 @@ class TelegramCallTransport:
         self.connected = asyncio.Event()
         self.ended = asyncio.Event()
         self.failure: BaseException | None = None
-        self.updates: asyncio.Queue = asyncio.Queue(maxsize=32)
+        self.updates: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self.pending_update_bytes = 0
         self.tasks: set[asyncio.Task] = set()
         self.outgoing_signals = asyncio.Queue(maxsize=256)
         self.pending_signal_bytes = 0
@@ -69,6 +72,13 @@ class TelegramCallTransport:
         self.engine.on_frames(self._frames)
 
     def _fail(self, error: BaseException):
+        # Only our fixed buffer labels are safe to expose, never provider text.
+        if isinstance(error, BufferError) and str(error) in {
+            "Telegram signalling tasks exceeded", "Telegram signalling byte queue exceeded",
+            "Telegram update buffer exceeded", "inbound PCM queue exceeded",
+            "connector RPC queue exceeded", "AgentCall inbound AudioSocket queue exceeded",
+        }:
+            print(str(error), file=sys.stderr, flush=True)
         self.failure = error
         self.ended.set()
 
@@ -181,8 +191,14 @@ class TelegramCallTransport:
         if update.get("type") == "phoneCallDiscarded" and self.call:
             self.discarded = True
             self.ended.set()
+            return
+        size = len(json.dumps(update, separators=(',', ':'), ensure_ascii=True).encode('ascii'))
+        if self.pending_update_bytes + size > self.signaling_queue_bytes:
+            self._fail(BufferError("Telegram update buffer exceeded"))
+            return
         try:
-            self.updates.put_nowait(update)
+            self.updates.put_nowait((update, size))
+            self.pending_update_bytes += size
         except asyncio.QueueFull:
             self._fail(BufferError("Telegram update buffer exceeded"))
 
@@ -211,7 +227,9 @@ class TelegramCallTransport:
                 raise self.failure or ConnectionError("Telegram call ended")
             if get not in done:
                 raise RecipientUnanswered("Telegram recipient did not answer")
-            return get.result()
+            update, size = get.result()
+            self.pending_update_bytes -= size
+            return update
         finally:
             get.cancel(); end.cancel()
             await asyncio.gather(get, end, return_exceptions=True)

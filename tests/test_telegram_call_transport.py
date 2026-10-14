@@ -5,6 +5,7 @@ Telegram recipient acceptance; the native local probe is separately recorded.
 """
 import asyncio
 import gc
+import json
 import os
 import struct
 from types import SimpleNamespace
@@ -429,6 +430,27 @@ def test_native_signaling_queue_retains_a_finite_byte_budget():
         transport._queue_signaling(b'x' * (transport.signaling_queue_bytes + 1))
         assert isinstance(transport.failure, BufferError)
         assert transport.pending_signal_bytes == 0
+        await transport.close()
+    asyncio.run(check())
+
+
+def test_recipient_signaling_burst_survives_native_connection_setup():
+    """Fast unit1s/max10s: observed65 packets before media can finish setup."""
+    async def check():
+        transport, _, _, _ = setup()
+        packets = [{'type':'signaling', 'id':'11', 'data':encode_bytes(b'x' * 150)}
+                   for _ in range(80)]
+        for packet in packets:
+            transport.update(packet)
+        assert not transport.ended.is_set()
+        assert transport.pending_update_bytes == sum(len(json.dumps(
+            p, separators=(',', ':'), ensure_ascii=True).encode('ascii')) for p in packets)
+        for packet in packets:
+            assert await transport._next_update(float('inf')) == packet
+        assert transport.pending_update_bytes == 0
+        transport.update({'type':'signaling', 'id':'11',
+                          'data':'x' * (transport.signaling_queue_bytes + 1)})
+        assert isinstance(transport.failure, BufferError)
         await transport.close()
     asyncio.run(check())
 
