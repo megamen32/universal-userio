@@ -100,17 +100,25 @@ class Receiver:
             async with session.ws_connect(media_url,timeout=15,max_msg_size=1024*1024) as ws:
                 self.websocket=ws
                 await ws.send_json(hello(connection['peer_id'],connection['room_id'],connection['credentials'],config['service_name']))
-                next_ping=0;next_states=0
-                while not self.stop.is_set() and time.monotonic()<deadline:
-                    now=time.monotonic()
-                    if now>=next_ping:
-                        await ws.send_json({'uid':str(uuid.uuid4()),'ping':{}});next_ping=now+5
-                    if now>=next_states:
+                async def maintain():
+                    while not self.stop.is_set() and time.monotonic()<deadline:
+                        await ws.send_json({'uid':str(uuid.uuid4()),'ping':{}})
+                        await asyncio.sleep(5)
+                async def states():
+                    while not self.stop.is_set() and time.monotonic()<deadline:
                         await request('/request-states','POST',{'peers':[{'peer_id':connection['peer_id']}],
                                       'permissions':{},'conference':{'version':-1}})
-                        next_states=now+max(10,min(60,config.get('state_check_interval_seconds',30)))
-                    try:msg=await asyncio.wait_for(ws.receive(),timeout=1)
-                    except asyncio.TimeoutError:continue
+                        await asyncio.sleep(max(10,min(60,config.get('state_check_interval_seconds',30))))
+                self.maintenance=[asyncio.create_task(maintain()),asyncio.create_task(states())]
+                receive_task=asyncio.create_task(ws.receive());self.maintenance.append(receive_task)
+                while not self.stop.is_set() and time.monotonic()<deadline:
+                    # Cancellation of aiohttp.receive poisons its close status. Keep
+                    # one pending read across timer ticks, independent of HTTP keepalive.
+                    done,_=await asyncio.wait({receive_task},timeout=1)
+                    if not done:continue
+                    msg=receive_task.result()
+                    receive_task=asyncio.create_task(ws.receive());self.maintenance.append(receive_task)
+                    self.maintenance=[t for t in self.maintenance if not t.done()]
                     if msg.type!=aiohttp.WSMsgType.TEXT:
                         if msg.type in {aiohttp.WSMsgType.CLOSE,aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.ERROR}:
                             self.record['provider_close_code']=ws.close_code or (msg.data if isinstance(msg.data,int) else None);self.save();break
@@ -125,7 +133,7 @@ class Receiver:
                     if payload.get('uid') and 'ack' not in payload:
                         await ws.send_json({'uid':payload['uid'],'ack':{'status':{'code':'OK','description':''}}})
                     if 'serverHello' in payload:
-                        self.record['server_hello_fields']=sorted(payload['serverHello'].keys());self.save()
+                        self.record['server_hello_fields']=sorted(payload['serverHello'].keys());self.record['negotiated_capabilities']=payload['serverHello'].get('capabilitiesAnswer',{});self.save()
                         await ws.send_json({'uid':str(uuid.uuid4()),'setSlots':{'slots':[],
                             'audioSlotsCount':8,'key':1,'withSelfView':False,'shutdownAllVideo':True,'gridConfig':{}}})
                     if 'subscriberSdpOffer' in payload:
@@ -153,6 +161,8 @@ class Receiver:
                         self.record['participants']=[{'id':str(d.get('id','')),
                             'name':str(d.get('meta',{}).get('name',''))[:200]} for d in descriptions[:100]]
                         self.save()
+                for task in self.maintenance:task.cancel()
+                await asyncio.gather(*self.maintenance,return_exceptions=True)
                 self.record['status']='finalizing';self.save()
         if self.pc:await self.pc.close()
         for task in self.tasks:task.cancel()
@@ -196,4 +206,6 @@ class Receiver:
 
     async def close(self):
         self.stop.set()
+        for task in getattr(self,'maintenance',[]):task.cancel()
+        await asyncio.gather(*getattr(self,'maintenance',[]),return_exceptions=True)
         if self.pc:await self.pc.close()
