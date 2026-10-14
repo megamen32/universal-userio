@@ -17,12 +17,8 @@ from . import meeting_url
 
 API='https://cloud-api.yandex.ru/telemost_front/v2/telemost'
 ORIGIN='https://telemost.yandex.ru'
-CAPABILITIES={
-    'offerAnswerMode':['SEPARATE'], 'initialSubscriberOffer':['ON_HELLO'],
-    'slotsMode':['FROM_CONTROLLER'], 'simulcastMode':['DISABLED'],
-    'selfVadStatus':['FROM_SERVER'], 'sdkDefaultDeviceManagement':['SDK_DEFAULT_DEVICE_MANAGEMENT_DISABLED'],
-    'subscriberOfferAsyncAck':['SUBSCRIBER_OFFER_ASYNC_ACK_DISABLED'],
-}
+# SDK6 capability negotiation from WhiteTransport telemost/api.go.
+CAPABILITIES={'offerAnswerMode': ['SEPARATE'], 'initialSubscriberOffer': ['ON_HELLO'], 'slotsMode': ['FROM_CONTROLLER'], 'simulcastMode': ['DISABLED', 'STATIC'], 'selfVadStatus': ['FROM_SERVER', 'FROM_CLIENT'], 'dataChannelSharing': ['TO_RTP'], 'videoEncoderConfig': ['NO_CONFIG', 'ONLY_INIT_CONFIG', 'RUNTIME_CONFIG'], 'dataChannelVideoCodec': ['VP8', 'UNIQUE_CODEC_FROM_TRACK_DESCRIPTION'], 'bandwidthLimitationReason': ['BANDWIDTH_REASON_DISABLED', 'BANDWIDTH_REASON_ENABLED'], 'sdkDefaultDeviceManagement': ['SDK_DEFAULT_DEVICE_MANAGEMENT_DISABLED', 'SDK_DEFAULT_DEVICE_MANAGEMENT_ENABLED'], 'joinOrderLayout': ['JOIN_ORDER_LAYOUT_DISABLED', 'JOIN_ORDER_LAYOUT_ENABLED'], 'pinLayout': ['PIN_LAYOUT_DISABLED'], 'sendSelfViewVideoSlot': ['SEND_SELF_VIEW_VIDEO_SLOT_DISABLED', 'SEND_SELF_VIEW_VIDEO_SLOT_ENABLED'], 'serverLayoutTransition': ['SERVER_LAYOUT_TRANSITION_DISABLED'], 'sdkPublisherOptimizeBitrate': ['SDK_PUBLISHER_OPTIMIZE_BITRATE_DISABLED', 'SDK_PUBLISHER_OPTIMIZE_BITRATE_FULL', 'SDK_PUBLISHER_OPTIMIZE_BITRATE_ONLY_SELF'], 'sdkNetworkLostDetection': ['SDK_NETWORK_LOST_DETECTION_DISABLED'], 'sdkNetworkPathMonitor': ['SDK_NETWORK_PATH_MONITOR_DISABLED'], 'publisherVp9': ['PUBLISH_VP9_DISABLED', 'PUBLISH_VP9_ENABLED'], 'svcMode': ['SVC_MODE_DISABLED', 'SVC_MODE_L3T3', 'SVC_MODE_L3T3_KEY'], 'subscriberOfferAsyncAck': ['SUBSCRIBER_OFFER_ASYNC_ACK_DISABLED', 'SUBSCRIBER_OFFER_ASYNC_ACK_ENABLED'], 'subscriberDtlsPassiveMode': ['SUBSCRIBER_DTLS_PASSIVE_MODE_DISABLED', 'SUBSCRIBER_DTLS_PASSIVE_MODE_ENABLED'], 'androidBluetoothRoutingFix': ['ANDROID_BLUETOOTH_ROUTING_FIX_DISABLED'], 'fixedIceCandidatesPoolSize': ['FIXED_ICE_CANDIDATES_POOL_SIZE_DISABLED'], 'sdkAndroidTelecomIntegration': ['SDK_ANDROID_TELECOM_INTEGRATION_DISABLED'], 'setActiveCodecsMode': ['SET_ACTIVE_CODECS_MODE_DISABLED', 'SET_ACTIVE_CODECS_MODE_VIDEO_ONLY'], 'publisherOpusDred': ['PUBLISHER_OPUS_DRED_DISABLED'], 'publisherOpusLowBitrate': ['PUBLISHER_OPUS_LOW_BITRATE_DISABLED'], 'sdkAndroidDestroySessionOnTaskRemoved': ['SDK_ANDROID_DESTROY_SESSION_ON_TASK_REMOVED_DISABLED'], 'svcModes': ['FALSE'], 'reportTelemetryModes': ['TRUE'], 'keepDefaultDevicesModes': ['FALSE']}
 
 
 def hello(peer,room,credentials,service_name):
@@ -34,7 +30,7 @@ def hello(peer,room,credentials,service_name):
         'sendAudio':False,'sendVideo':False,'sendSharing':False,
         'participantId':peer,'roomId':room,'credentials':credentials,'serviceName':service_name,
         'disablePublisher':True,'disableSubscriber':False,'disableSubscriberAudio':False,
-        'capabilitiesOffer':CAPABILITIES,'sdkInfo':{'implementation':'browser','version':'6.0.0'},
+        'capabilitiesOffer':CAPABILITIES,'sdkInfo':{'implementation':'browser','version':'6.0.0','userAgent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36','hwConcurrency':2},
         'sdkInitializationId':str(uuid.uuid4())}}
 
 
@@ -53,13 +49,14 @@ class Receiver:
         self.pc=None; self.tasks=[]; self.total_bytes=0; self.websocket=None
         self.started=time.monotonic(); self.pending=[]; self.remote=False
         self.seq=0; self.media_deadline=0; self.track_count=0
+        self.record['protocol_events']=[]
 
     async def run(self):
         import aiohttp
         from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
         from aiortc.sdp import candidate_from_sdp
         headers={'Origin':ORIGIN,'Referer':ORIGIN+'/', 'Client-Instance-Id':str(uuid.uuid4()),
-                 'User-Agent':'UserIO-Telemost-Recorder/1.0'}
+                 'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'}
         url=meeting_url(self.record['url'])
         path='/conferences/'+quote(url,safe='')
         deadline=self.started+self.record['max_seconds']
@@ -100,7 +97,7 @@ class Receiver:
                 if self.pc.connectionState=='connected':
                     self.record['status']='recording'; self.record['connected_at']=time.time();self.save()
                 elif self.pc.connectionState in {'failed','closed'}:self.stop.set()
-            async with session.ws_connect(media_url,timeout=15,max_msg_size=1024*1024,heartbeat=5) as ws:
+            async with session.ws_connect(media_url,timeout=15,max_msg_size=1024*1024) as ws:
                 self.websocket=ws
                 await ws.send_json(hello(connection['peer_id'],connection['room_id'],connection['credentials'],config['service_name']))
                 next_ping=0;next_states=0
@@ -115,9 +112,16 @@ class Receiver:
                     try:msg=await asyncio.wait_for(ws.receive(),timeout=1)
                     except asyncio.TimeoutError:continue
                     if msg.type!=aiohttp.WSMsgType.TEXT:
-                        if msg.type in {aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.ERROR}:break
+                        if msg.type in {aiohttp.WSMsgType.CLOSE,aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.ERROR}:
+                            self.record['provider_close_code']=ws.close_code or (msg.data if isinstance(msg.data,int) else None);self.save();break
                         continue
                     payload=json.loads(msg.data)
+                    if len(self.record['protocol_events'])<32:
+                        self.record['protocol_events'].append(sorted(k for k in payload if k!='uid'));self.save()
+                    if isinstance(payload.get('ack'),dict):
+                        code=payload['ack'].get('status',{}).get('code')
+                        if code and code!='OK':
+                            self.record['provider_error_code']=str(code)[:100];self.save()
                     if payload.get('uid') and 'ack' not in payload:
                         await ws.send_json({'uid':payload['uid'],'ack':{'status':{'code':'OK','description':''}}})
                     if 'serverHello' in payload:
