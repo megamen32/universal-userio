@@ -74,3 +74,21 @@ def test_group_identity_names_and_tenant_isolation(tmp_path):
     assert len(result['messages'])==2
     assert store.conversation(ids[0],user_id='different-tenant') is None
     store.close()
+
+
+def test_global_latest_message_does_not_mark_history_complete(monkeypatch):
+    from universal_userio.yandex import sync
+    class Store:
+        prefs={}
+        def user_preference(self,key,**kwargs):return self.prefs.get(key)
+        def set_user_preference(self,key,value,**kwargs):self.prefs[key]=value
+    class Service:
+        _store=Store()
+        def receive(self,*args,**kwargs):return 'test-chat',True
+    calls=[]
+    def read(account,**kwargs):
+        calls.append(kwargs)
+        return {'chats':[chat()]} if not kwargs else {'chats':[]}
+    monkeypatch.setattr(sync,'read',read)
+    sync.poll(Service(),ACCOUNT)
+    assert calls==[{}, {'chat_id':'group-test','before':1700000000000000,'limit':50}]

@@ -93,7 +93,7 @@ def poll(service, account):
                           for m in chat.get('Messages',[])]
             timestamps = [t for t in timestamps if type(t) is int and t>0]
             service._store.set_user_preference(page_key,
-                str(min(timestamps)) if len(timestamps)>=20 else 'done',user_id=user)
+                str(min(timestamps)) if timestamps else 'done',user_id=user)
     # Bounded fair backfill: one historical page per poll, never old AI dispatch.
     pending = [(chat, 'yandex:backfill:'+account['account_id']+':'+chat['ChatId'])
                for chat in result['chats']]
