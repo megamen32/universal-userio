@@ -17,6 +17,11 @@ Canonical source: `/home/roomhacker/agents-projects/universal-userio/deploy/tele
 server-100. `/opt/userio-telegram-qr/` is only the installed Node runtime and
 dependency directory; it is never a competing source of truth.
 
+`TELEGRAM_HTTP_PROXY_URL` selects an explicit HTTP CONNECT proxy for the existing
+GramJS clients. Unset retains the existing SOCKS/MTProxy/direct configuration.
+It changes transport, not saved sessions, API credentials, account selection
+or read receipts.
+
 The systemd unit is `userio-telegram-ingress.service`; the historical
 `userio-telegram-qr.service` name is retained only as an alias. QR/phone login
 at `/telegram-qr/` is the account-enrollment UI inside the ingress worker.

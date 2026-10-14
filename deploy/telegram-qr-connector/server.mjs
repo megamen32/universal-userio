@@ -18,6 +18,8 @@ import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirr
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
 import { readDialogFolders } from './dialog-folders.mjs';
+import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
+import { httpConnectOptions } from './http-connect-socket.mjs';
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -314,6 +316,8 @@ function telegramProxy() {
 function telegramClientOptions(connectionRetries, retryDelay) {
   const options = { connectionRetries };
   if (retryDelay) options.retryDelay = retryDelay;
+  const httpProxy = String(process.env.TELEGRAM_HTTP_PROXY_URL || '').trim();
+  if (httpProxy) return { ...options, ...httpConnectOptions(httpProxy, PromisedNetSockets) };
   const proxy = telegramProxy();
   if (proxy) options.proxy = proxy;
   return options;
