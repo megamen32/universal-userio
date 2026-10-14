@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -343,7 +344,7 @@ class UserIOService:
     def _cached_summary_and_refresh(
         self, *, conversation_id: str, current_message_id: str,
         current_message_source: str = "",
-        generator: object, user_id: str,
+        generator: object, user_id: str, should_continue: Callable[[], bool] | None = None,
     ) -> str:
         """Refresh the cache and return the newest summary for this triage.
 
@@ -364,6 +365,8 @@ class UserIOService:
             return previous
         model_messages = self._hydrate_ai_images(messages, user_id=user_id)
         try:
+            if should_continue is not None and not should_continue():
+                return previous
             updated = summarize(
                 conversation_id=conversation_id,
                 previous_summary=previous,
@@ -407,13 +410,43 @@ class UserIOService:
             )
         return previous
 
+    @staticmethod
+    def _bounded_batch(events: list[dict[str, object]], token_budget: int) -> dict[str, object]:
+        from .store import _estimated_tokens, _prefix_for_tokens
+        remaining = max(64, token_budget // 2)
+        messages = []
+        for event in events:
+            text = str(event["body"])
+            body = _prefix_for_tokens(text, min(4000, remaining))
+            if not body and text:
+                break
+            remaining -= _estimated_tokens(body)
+            messages.append({key: event[key] for key in ("seq", "source", "message_id", "sender", "received_at")} |
+                {"body": body, "body_truncated": body != text})
+            if remaining <= 0:
+                break
+        return {"messages": messages, "total_messages": len(events),
+                "omitted_messages": len(events)-len(messages)}
+
     def triage_workspace_event(
         self, *, event_seq: int, request_id: str, max_drafts: int = 2,
-        user_id: str | None = None, retry_failed: bool = False,
+        user_id: str | None = None, retry_failed: bool = False, automatic: bool = False,
     ) -> dict[str, object]:
         if type(max_drafts) is not int or not 0 <= max_drafts <= 2:
             raise ValueError("max_drafts must be between 0 and 2")
         resolved_user = self._store._user(user_id)
+        batch_events = []
+        if automatic:
+            # Even a direct worker POST must wait. A leased batch ages from its
+            # first arrival, not its latest message; preserve that sealed window.
+            with self._store._lock:
+                arrived = self._store._connection.execute("""SELECT MIN(e.queued_at) FROM workspace_events e
+                    WHERE e.user_id=? AND (e.seq=? OR e.seq IN (SELECT event_seq FROM workspace_batches
+                      WHERE user_id=? AND leader_seq=?))""", (resolved_user,event_seq,resolved_user,event_seq)).fetchone()[0]
+            if arrived is not None and time.time() < float(arrived)+300:
+                return {"event_seq": event_seq, "request_id": request_id,
+                        "status": "pending", "retryable": True, "drafts": []}
+            batch_events = self._store.automatic_batch_events(event_seq, user_id=resolved_user)
         current, should_run = self._store.begin_workspace_triage(
             event_seq=event_seq, request_id=request_id, user_id=resolved_user,
             retry_failed=retry_failed,
@@ -426,6 +459,23 @@ class UserIOService:
                 }
             return current
         event = self._store.workspace_event(event_seq, user_id=resolved_user)
+        def silent_if_unneeded() -> dict[str, object] | None:
+            if not automatic:
+                return None
+            check = self._store.automatic_event_check(event_seq, user_id=resolved_user)
+            if check["needed"]:
+                return None
+            return self._store.complete_workspace_triage(
+                event_seq=event_seq, request_id=request_id, user_id=resolved_user, draft_bodies=[],
+                result={"decision": "silent", "importance": 0.0, "urgency": "none", "confidence": 1.0,
+                    "reason_codes": [check["reason"]], "reason_ru": "Автоматический разбор больше не нужен.",
+                    "action_required": False, "action_summary": "", "deadline_at": None,
+                    "suggested_replies": [], "safety_override": False,
+                    "policy_version": self._store.workspace_triage_settings(user_id=resolved_user)["policy_version"]})
+
+        skipped = silent_if_unneeded()
+        if skipped is not None:
+            return skipped
         # Freeze the version before context preparation. Any reply/edit arriving
         # while history or images are read must make the eventual draft stale.
         try:
@@ -461,6 +511,8 @@ class UserIOService:
                 event_seq=event_seq, request_id=request_id, result=result,
                 draft_bodies=[], user_id=resolved_user,
             )
+        if automatic:
+            batch_events = self._store.automatic_batch_events(event_seq, user_id=resolved_user)
         generator = self._generator_for(resolved_user)
         if not callable(getattr(generator, "triage_with_context", None)):
             # Per-user BYOK currently owns opt-in draft generation only. Inbox
@@ -468,10 +520,14 @@ class UserIOService:
             # agent so every user gets the same bounded tool loop.
             generator = self._generator
         context_settings = self._store.context_settings(user_id=resolved_user)
+        skipped = silent_if_unneeded()
+        if skipped is not None:
+            return skipped
         cached_summary = self._cached_summary_and_refresh(
             conversation_id=str(event["conversation_id"]), generator=generator,
             current_message_id=str(event["message_id"]), user_id=resolved_user,
             current_message_source=str(event["source"]),
+            should_continue=(lambda: bool(self._store.automatic_event_check(event_seq, user_id=resolved_user)["needed"])) if automatic else None,
         )
         history = self._store.bounded_conversation_context(
             str(event["conversation_id"]),
@@ -523,12 +579,16 @@ class UserIOService:
         try:
             if not callable(triage):
                 raise RuntimeError("configured AI generator does not support importance triage")
+            skipped = silent_if_unneeded()
+            if skipped is not None:
+                return skipped
+            batch_events = self._store.automatic_batch_events(event_seq, user_id=resolved_user) if automatic else []
             generated = triage(
                 conversation_id=anchor_conversation_id, latest_message=message,
                 history=history, max_drafts=max_drafts,
-                actor_context=({**(self._triage_actor_context(event, resolved_user) or {}),
-                    "owner_messages_after_current": owner_followups} if owner_followups
-                    else self._triage_actor_context(event, resolved_user)),
+                actor_context={**(self._triage_actor_context(event, resolved_user) or {}),
+                    **({"owner_messages_after_current": owner_followups} if owner_followups else {}),
+                    **({"incoming_batch": self._bounded_batch(batch_events, int(context_settings["max_token_budget"]))} if batch_events else {})} or None,
                 history_reader=_older_context,
                 cached_summary=cached_summary,
                 initial_context_messages=int(context_settings["message_count"]),
@@ -582,6 +642,9 @@ class UserIOService:
                 "policy_version": settings["policy_version"],
             }
         except Exception as error:
+            skipped = silent_if_unneeded()
+            if skipped is not None:
+                return skipped
             if override:
                 result = {
                     "decision": "notify", "importance": 1.0, "urgency": "high", "confidence": 1.0,
@@ -602,6 +665,9 @@ class UserIOService:
                     f"{str(error).strip()[:280] or 'triage generation failed'}"
                 ), user_id=resolved_user,
             )
+        skipped = silent_if_unneeded()
+        if skipped is not None:
+            return skipped
         return self._store.complete_workspace_triage(
             event_seq=event_seq, request_id=request_id, result=result,
             draft_bodies=draft_bodies, user_id=resolved_user, context_snapshot=draft_context,

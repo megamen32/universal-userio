@@ -174,3 +174,15 @@ Protected receipts stay in Admin `.tmp/fleet-capacity-20261011/userio-core-budge
 and UserIO `.tmp/max-web-budget-*.json`. Previous PID/restart count and initial502
 remain historical evidence; property adoption alone is not a completed
 web/business canary.
+
+## Batched unread analysis validation —15October2026
+
+Focused Python delta:768MiB high/hard,256MiB swap,CPU2,tasks128,IO10,
+noGPU,project fixture temp128MiB; expected40s/emergency400s. Actual selected
+61cases31.11s and summary/scoped delta54cases38.21s; dispatcher90cases4.56s.
+UI build uses existing512MiB/swap0/CPU1/tasks64/IO10 profile:26.63s.
+Automatic batches retain at most100 event identities; model batch text shares
+half the existing max context token budget with4,000tokens/message ceiling.
+Live acceptance uses an owned browser on44: measured98GiB available, reserve20GiB,
+2GiB high/hard,swap0,CPU2,tasks384,IO10,128MiB temporary profile, noGPU,
+expected120s/emergency1200s. Native runtime budgets stay unchanged.

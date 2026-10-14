@@ -194,6 +194,9 @@ class OpenAICompatibleDraftGenerator:
             context["raw_sender_label"] = context["sender"]
             context["sender"] = actor_context.get("sender_display_name") or context["sender"]
         prompt = (
+            "When actor_context.incoming_batch exists, analyze ALL its messages together as one situation: "
+            "connect clarifications, corrections and requests; explain what matters and what does not. "
+            "The latest message anchors any reply. Respect body_truncated/omitted_messages and never invent missing contents. "
             "Classify this incoming message for the owner's private inbox. Return exactly one JSON "
             "object and no markdown. Required keys: decision, importance, urgency, confidence, "
             "reason_codes, reason_ru, action_required, action_summary, deadline_at, "

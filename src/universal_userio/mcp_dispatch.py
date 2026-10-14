@@ -26,6 +26,17 @@ class UserIOToolDispatcher:
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
+        if principal.messenger_grants is not None:
+            from .scoped_permissions import enforce, dispatch_scoped
+            try:
+                enforce(self._store, principal, name, arguments)
+                if name == 'userio.accounts.list':
+                    return {'ok':True, 'accounts':[{k:v for k,v in a.items() if k!='credential_ref'}
+                        for a in self._store.accounts(user_id=principal.user_id) if a['id'] in principal.messenger_accounts]}
+                if name.startswith('userio.messenger.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
+            except (PermissionError,ValueError,KeyError) as error:
+                return {'ok':False,'error':str(error).strip("'")}
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.')):
@@ -194,6 +205,7 @@ class UserIOToolDispatcher:
                     lease_seconds=arguments.get("lease_seconds", 600),
                     after=arguments.get("after", 0),
                     telegram_direct_only=arguments.get("telegram_direct_only", False),
+                        automatic=True,
                     user_id=user_id,
                 )
                 if claimed is None:

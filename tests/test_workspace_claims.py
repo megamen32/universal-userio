@@ -57,6 +57,8 @@ def receive_one(store: SQLiteUserIOStore) -> UserIOService:
         InboxMessage("gmail:self", "lease-1", "sender@example.test", "claim me", 1.0),
         route_id="workspace-claim-test",
     )
+    with store._lock, store._connection:
+        store._connection.execute('UPDATE workspace_events SET queued_at=0')  # Mature fixture arrivals.
     return service
 
 
@@ -276,6 +278,8 @@ def test_mcp_exclusion_tools_filter_claims_for_each_surface(tmp_path, modular: b
         InboxMessage("telegram", "42:2", "quiet chat", "fresh", 2.0),
         route_id="telegram",
     )
+    with store._lock, store._connection:
+        store._connection.execute('UPDATE workspace_events SET queued_at=0')
     assert dispatch("userio.workspace.claim", {"worker_id": "automatic"})["claimed"] is True
 
 
@@ -960,6 +964,8 @@ def test_http_triage_contract_is_service_only_and_returns_stable_draft_ids(tmp_p
         InboxMessage("telegram", "42:1", "anna", "Вопрос", 1.0, conversation_kind="direct"),
         route_id="telegram",
     )
+    with store._lock, store._connection:
+        store._connection.execute('UPDATE workspace_events SET queued_at=0')
     event_seq = store.workspace_events()["events"][0]["seq"]
     with store._lock, store._connection:
         personal_token = store._issue_token(store.default_user_id)

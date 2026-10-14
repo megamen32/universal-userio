@@ -99,3 +99,12 @@ def test_sidebar_policy_metadata_matches_effective_chat_rules(policy_http):
     assert status == 200
     search_policies = {row["id"]: row["analysis_policy"] for row in search["results"]}
     assert search_policies == policies
+
+
+def test_analysis_off_works_even_when_sending_is_disabled(policy_http):
+    store, _, ids, _, _, request = policy_http
+    store.set_user_capability('send', False)
+    path = f"/v1/conversations/{ids['gmail']}/analysis-policy"
+    status, changed = request('POST',path,{'enabled':False})
+    assert status == 200 and changed['analysis_policy']['allowed'] is False
+    assert request('GET',path)[1]['analysis_policy']['allowed'] is False

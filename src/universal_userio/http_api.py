@@ -375,6 +375,13 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path.startswith('/v1/personal-tokens/') and path.endswith('/permissions'):
+                    if principal.service_account:
+                        raise PermissionError('personal login required')
+                    token_id = unquote(path.removeprefix('/v1/personal-tokens/').removesuffix('/permissions'))
+                    self._reply(200, personal_tokens.update_permissions(user_id,token_id,self._json().get('grants')),
+                        headers={'Cache-Control':'no-store'})
+                    return
                 if path == "/v1/personal-tokens":
                     if principal.service_account:
                         self._reply(403, {"error": "personal login required"})
@@ -382,7 +389,7 @@ def handler(
                     payload = self._json()
                     self._reply(201, personal_tokens.create(user_id, payload.get("name", ""),
                                                           scope=payload.get("scope", "full_access"),
-                                                          account_refs=payload.get('account_refs')),
+                                                          account_refs=payload.get('account_refs'), grants=payload.get('grants')),
                                 headers={"Cache-Control": "no-store"})
                     return
                 if path.startswith("/v1/workspace/secretary/deep-jobs/") and path.endswith("/progress"):
@@ -416,7 +423,7 @@ def handler(
                         result = service.triage_workspace_event(
                             event_seq=payload.get("event_seq"),
                             request_id=str(payload.get("request_id") or ""),
-                            max_drafts=payload.get("max_drafts", 2), user_id=user_id,
+                            max_drafts=payload.get("max_drafts", 2), user_id=user_id, automatic=True,
                         )
                         self._reply(200, {"ok": True, **result})
                         return
@@ -515,9 +522,6 @@ def handler(
                         "policy_revision": chat["policy_revision"]})
                     return
                 if path.startswith("/v1/conversations/") and path.endswith("/analysis-policy"):
-                    if not service._store.capability_enabled("send", user_id=user_id):
-                        self._reply(403, {"error": "send_capability_disabled"})
-                        return
                     payload = self._json()
                     if set(payload) != {"enabled"} or not isinstance(payload["enabled"], bool):
                         raise ValueError("analysis policy requires an enabled boolean")
@@ -540,6 +544,7 @@ def handler(
                         lease_seconds=payload.get("lease_seconds", 600),
                         after=payload.get("after", 0),
                         telegram_direct_only=payload.get("telegram_direct_only", False),
+                        automatic=True,
                         user_id=user_id,
                     )
                     self._reply(200, {"claimed": claimed is not None, **(claimed or {})})
@@ -1457,6 +1462,13 @@ def handler(
                     self._reply(404, {"error": "secretary job not found"})
                     return
                 self._reply(200, {"job": job})
+                return
+            if path.startswith("/v1/workspace/preflight/"):
+                if not principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "service account with read capability required"})
+                    return
+                event_seq = int(path.removeprefix("/v1/workspace/preflight/"))
+                self._reply(200, service._store.automatic_event_check(event_seq, user_id=user_id))
                 return
             if path == "/v1/workspace/events":
                 if not service._store.capability_enabled("read", user_id=user_id):

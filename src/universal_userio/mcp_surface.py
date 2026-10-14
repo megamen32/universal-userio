@@ -247,9 +247,12 @@ class UserIOMcpSurface:
         specs = tuple(
             spec for spec in TOOL_SPECS
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
+            and (principal.messenger_grants is None or any(g['access']=='read_write' for g in principal.messenger_grants)
+                 or spec.name in READ_ONLY_TOOLS)
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
-                 or spec.name.startswith('userio.calls.telegram.')
+                 or principal.messenger_grants is not None and spec.name=='userio.accounts.list'
+                 or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
                  or self._store.capability_enabled(required, user_id=principal.user_id))
@@ -319,6 +322,17 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if principal.messenger_grants is not None:
+            from .scoped_permissions import enforce, dispatch_scoped
+            try:
+                enforce(self._store, principal, name, arguments)
+                if name == 'userio.accounts.list':
+                    return {'ok':True, 'accounts':[{k:v for k,v in a.items() if k!='credential_ref'}
+                        for a in self._store.accounts(user_id=principal.user_id) if a['id'] in principal.messenger_accounts]}
+                if name.startswith('userio.messenger.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
+            except (PermissionError,ValueError,KeyError) as error:
+                return {'ok':False,'error':str(error).strip("'")}
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if (principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.'))
@@ -440,6 +454,7 @@ class UserIOMcpSurface:
                     lease_seconds=arguments.get("lease_seconds", 600),
                     after=arguments.get("after", 0),
                     telegram_direct_only=arguments.get("telegram_direct_only", False),
+                        automatic=True,
                     user_id=user_id,
                 )
                 if claimed is None:

@@ -89,6 +89,7 @@ class UserPrincipal:
     # generic messenger tools and these explicitly assigned accounts.
     messenger_accounts: tuple[str, ...] | None = None
     meeting_recorder: bool = False
+    messenger_grants: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

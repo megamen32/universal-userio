@@ -128,6 +128,14 @@ class SQLiteUserIOStore:
                 fetched_count INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL,
                 PRIMARY KEY(user_id,account_ref,peer_id))""")
             self._backfill_workspace_events()
+            columns = {r["name"] for r in self._connection.execute("PRAGMA table_info(workspace_events)")}
+            if "queued_at" not in columns:
+                self._connection.execute("ALTER TABLE workspace_events ADD COLUMN queued_at REAL NOT NULL DEFAULT 0")
+                self._connection.execute("UPDATE workspace_events SET queued_at=?", (time.time(),))
+            self._connection.execute("""CREATE TABLE IF NOT EXISTS workspace_batches (
+                user_id TEXT NOT NULL,leader_seq INTEGER NOT NULL,event_seq INTEGER NOT NULL,
+                PRIMARY KEY(user_id,event_seq))""")
+            self._connection.execute("CREATE INDEX IF NOT EXISTS workspace_batches_leader_idx ON workspace_batches(user_id,leader_seq,event_seq)")
             self.maintain_conversation_summaries()
 
     @property
@@ -855,8 +863,9 @@ class SQLiteUserIOStore:
             str(row["id"]), str(row["username"]), str(row["role"]),
             read_only=row["kind"] == "personal" and row["scope"] == "read_only",
             messenger_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
-                                if row['scope']=='messenger_actions' else None),
+                                if row['scope']=='messenger_actions' else tuple(g['account_ref'] for g in json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None),
             meeting_recorder=row['kind']=='personal' and row['scope']=='meeting_recording',
+            messenger_grants=tuple(json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None,
         )
 
     def register_oauth_client(
@@ -1706,11 +1715,11 @@ class SQLiteUserIOStore:
                         conversation_id=conversation_id, user_id=user_id)["allowed"])
                 self._connection.execute(
                     """
-                    INSERT INTO workspace_events(user_id,source,message_id,conversation_id,eligible,reconciled)
-                    VALUES (?,?,?,?,?,?)
+                    INSERT INTO workspace_events(user_id,source,message_id,conversation_id,eligible,reconciled,queued_at)
+                    VALUES (?,?,?,?,?,?,?)
                     """,
                     (user_id, message.source, message.message_id, conversation_id,
-                     int(eligible), int(message.reconciliation)),
+                     int(eligible), int(message.reconciliation), time.time()),
                 )
             elif not inserted and message.direction == "incoming" and not message.reconciliation:
                 # The live listener can race startup reconciliation. Only a
@@ -4157,9 +4166,86 @@ class SQLiteUserIOStore:
                 self._bump_workspace_policy(scoped_user)
         return cursor.rowcount > 0
 
+    def automatic_event_check(self, event_seq: int, *, user_id: str | None = None) -> dict[str, object]:
+        """Cheap live facts only. Never refresh summaries, mark read, or invoke a model."""
+        user = self._user(user_id)
+        event = self.workspace_event(event_seq, user_id=user)
+        policy = self.evaluate_workspace_event(
+            conversation_id=str(event["conversation_id"]), source=str(event["source"]),
+            message_id=str(event["message_id"]), user_id=user)
+        with self._lock:
+            message = self._connection.execute("""SELECT seen_at,provider_read,deleted_at
+                FROM messages WHERE user_id=? AND source=? AND message_id=?""",
+                (user,event["source"],event["message_id"])).fetchone()
+        reason = ""
+        # Trusted provider metadata and stable peers, never keywords in message bodies.
+        automated_peers = {"8810909089", "8612415098", "8619283086", "8910872784"}
+        if event["sender_is_bot"] or event["source"].split(":",1)[0] == "chatgpt" or (
+            event["source"] == "telegram" and str(event["peer_id"]) in automated_peers):
+            reason = "automated_source"
+        elif message is None or message["deleted_at"] is not None:
+            reason = "source_deleted"
+        elif message["seen_at"] is not None or message["provider_read"] == 1:
+            reason = "already_read"
+        elif self.owner_messages_after(str(event["conversation_id"]), str(event["message_id"]), user_id=user):
+            reason = "owner_already_replied"
+        elif not policy["allowed"]:
+            reason = "workspace_policy_denied"
+        return {"needed": not reason, "reason": reason, "event_seq": event_seq}
+
+    def automatic_batch_events(self, event_seq: int, *, user_id: str | None = None) -> list[dict[str, object]]:
+        user = self._user(user_id)
+        with self._lock:
+            rows = self._connection.execute("SELECT event_seq FROM workspace_batches WHERE user_id=? AND leader_seq=? ORDER BY event_seq",
+                (user,event_seq)).fetchall()
+        sequences = [int(r["event_seq"]) for r in rows] or [event_seq]
+        return [self.workspace_event(seq, user_id=user) for seq in sequences
+                if self.automatic_event_check(seq, user_id=user)["needed"]]
+
+    def _prepare_automatic_batch(self, *, user: str, after: int, now: float, direct_only: bool) -> int | None:
+        # Called inside the same BEGIN IMMEDIATE as the lease. Active/terminal
+        # claims never join a new batch. Failed leaders retain their exact membership.
+        rows = self._connection.execute("""SELECT e.seq,e.conversation_id,e.queued_at,
+                wc.status,wc.lease_expires_at
+            FROM workspace_events e LEFT JOIN workspace_claims wc
+              ON wc.user_id=e.user_id AND wc.event_seq=e.seq
+            JOIN conversations c ON c.user_id=e.user_id AND c.id=e.conversation_id
+            WHERE e.user_id=? AND e.seq>? AND e.eligible=1
+              AND (?=0 OR e.source!='telegram' OR c.conversation_kind='direct')
+              AND (wc.event_seq IS NULL OR wc.status='failed' OR
+                (wc.status='claimed' AND wc.lease_expires_at<=?))
+            ORDER BY e.seq LIMIT 1000""", (user,after,int(direct_only),now)).fetchall()
+        pending = []
+        for row in rows:
+            check = self.automatic_event_check(int(row["seq"]), user_id=user)
+            if not check["needed"]:
+                self._connection.execute("UPDATE workspace_events SET eligible=0 WHERE user_id=? AND seq=?", (user,row["seq"]))
+                continue
+            pending.append(row)
+        first = next((r for r in pending if float(r["queued_at"]) <= now-300), None)
+        if first is None:
+            return None
+        old = self._connection.execute("SELECT 1 FROM workspace_batches WHERE user_id=? AND leader_seq=?", (user,first["seq"])).fetchone()
+        if old or first["status"] is not None:
+            return int(first["seq"])
+        # Fixed five minutes from the first arrival; newer traffic cannot postpone it.
+        batch = [r for r in pending if r["conversation_id"] == first["conversation_id"] and r["status"] is None][:100]
+        if not batch:
+            return int(first["seq"])
+        leader = int(batch[-1]["seq"])
+        for member in batch:
+            seq = int(member["seq"])
+            self._connection.execute("INSERT OR IGNORE INTO workspace_batches VALUES (?,?,?)", (user,leader,seq))
+            if seq != leader:
+                self._connection.execute("""INSERT INTO workspace_claims
+                    (user_id,event_seq,worker_id,lease_token_hash,status,lease_expires_at,attempts,claimed_at,updated_at,completed_at,last_error)
+                    VALUES (?,?,'batch','', 'completed',?,0,?,?,?,?)""",
+                    (user,seq,now,now,now,now,f"coalesced into event {leader}"))
+        return leader
+
     def claim_workspace_event(
         self, *, worker_id: str, lease_seconds: int = 600,
-        after: int = 0, telegram_direct_only: bool = False,
+        after: int = 0, telegram_direct_only: bool = False, automatic: bool = False,
         user_id: str | None = None,
     ) -> dict[str, object] | None:
         """Atomically lease the oldest available inbound event to one worker."""
@@ -4175,6 +4261,11 @@ class SQLiteUserIOStore:
         token_hash = self._workspace_token_hash(token)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
+            selected = None
+            if automatic:
+                selected = self._prepare_automatic_batch(user=scoped_user, after=after, now=now, direct_only=telegram_direct_only)
+                if selected is None:
+                    return None
             row = self._connection.execute(
                 """
                 SELECT e.seq,e.source,e.message_id,e.conversation_id,
@@ -4193,7 +4284,7 @@ class SQLiteUserIOStore:
                     AND wr.conversation_id=e.conversation_id
                 LEFT JOIN workspace_policy_defaults AS wd ON wd.user_id=e.user_id
                     AND wd.conversation_kind=c.conversation_kind
-                WHERE e.user_id=? AND e.seq>? AND m.direction='incoming' AND e.eligible=1
+                WHERE e.user_id=? AND e.seq>? AND (? IS NULL OR e.seq=?) AND m.direction='incoming' AND e.eligible=1
                   AND (?=0 OR e.source!='telegram' OR c.conversation_kind='direct')
                   AND NOT EXISTS (
                       SELECT 1 FROM workspace_exclusions AS wx
@@ -4205,7 +4296,7 @@ class SQLiteUserIOStore:
                        OR (wc.status='claimed' AND wc.lease_expires_at<=?))
                 ORDER BY e.seq LIMIT 1
                 """,
-                (scoped_user, after, int(telegram_direct_only), now),
+                (scoped_user, after, selected, selected, int(telegram_direct_only), now),
             ).fetchone()
             if row is None:
                 return None
@@ -4241,6 +4332,7 @@ class SQLiteUserIOStore:
             )
         return {
             "event": event | {
+                "batch_messages": self.automatic_batch_events(int(event["seq"]), user_id=scoped_user) if automatic else [],
                 "recent_context": self.bounded_conversation_context(
                     str(event["conversation_id"]),
                     current_message_id=str(event["message_id"]),

@@ -1064,9 +1064,9 @@ export function App() {
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <label className="flex h-8 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs" title={analysisPolicyError || "Автоматический разбор новых сообщений и уведомления. Сообщения остаются в диалоге при выключении."}>
-              <input type="checkbox" aria-label="Разбирать секретарём" checked={!!analysisPolicy?.allowed} disabled={!analysisPolicy || analysisPolicyBusy || !sendEnabled} onChange={event => void setChatAnalysis(event.target.checked)} className="size-4 accent-[#2f80ed]" />
-              <span className="hidden sm:inline">Разбирать</span><Sparkles className={`size-3.5 ${analysisPolicy?.allowed ? "text-[#2f80ed]" : "text-muted-foreground"}`} />
-            </label>
+              <input type="checkbox" aria-label="Разбирать секретарём" checked={!!analysisPolicy?.allowed} disabled={!analysisPolicy || analysisPolicyBusy} onChange={event => void setChatAnalysis(event.target.checked)} className="size-4 accent-[#2f80ed]" />
+              <span>{analysisPolicyBusy ? "Сохраняю…" : analysisPolicy?.allowed ? "ИИ: включён" : "ИИ: выключен"}</span><Sparkles className={`size-3.5 ${analysisPolicy?.allowed ? "text-[#2f80ed]" : "text-muted-foreground"}`} />
+            </label>{analysisPolicyError && <span role="alert" className="text-xs text-destructive">Настройка не сохранена: {analysisPolicyError}</span>}
             <Popover.Root key={conversation.id}>
               <Popover.Trigger asChild><Button variant="ghost" size="sm" className="h-8 px-2" title="Открыть секретаря: оценка важности, подробный разбор и результаты" aria-label="Открыть секретаря"><Sparkles className="size-4 text-[#2f80ed]" /><span className="hidden sm:inline">Секретарь</span>{(secretaryError || currentSecretaryDeep?.status === "failed") && <span className="text-destructive">!</span>}{currentSecretaryDeep?.status === "running" && <span className="size-1.5 rounded-full bg-[#2f80ed]" />}</Button></Popover.Trigger>
               <Popover.Portal><Popover.Content align="end" sideOffset={8} collisionPadding={12} aria-label="Секретарь" className="z-50 flex max-h-[min(70vh,var(--radix-popover-content-available-height))] w-[min(420px,calc(100vw-24px))] flex-col gap-3 overflow-y-auto rounded-xl border bg-card p-3 text-foreground shadow-xl">

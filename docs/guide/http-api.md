@@ -58,3 +58,18 @@ python examples/userio/read_accounts.py
 - [UserIO · README и контракт каналов](https://github.com/megamen32/universal-userio/blob/main/README.md)
 
 </details>
+
+## Права отдельных токенов
+
+В `/connect-mcp` выберите «Выбранные аккаунты и чаты»: платформы сгруппированы,
+для каждого аккаунта доступны чтение либо чтение и запись, все чаты либо явный
+список. В списке чатов можно назначить разные права. «Настроить права» изменяет
+действующий токен после сохранения, без выдачи нового значения.
+
+`POST /v1/personal-tokens` принимает `scope: scoped_messenger` и `grants`:
+`[{account_ref, access: read_only|read_write, chats: null|[{conversation_id, access}]}]`.
+`POST /v1/personal-tokens/{id}/permissions` сохраняет тот же `grants`.
+Не выбранные аккаунты/чаты недоступны. Этот токен предоставляет generic
+`userio.messenger.*` и ограниченный `userio.accounts.list`; широкие legacy
+инструменты, настройки, личная память и сторонние операции недоступны.
+Права проверяются до провайдера; запись по-прежнему требует точного одобрения.
