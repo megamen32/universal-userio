@@ -69,9 +69,10 @@ def noticeplace_call(service, user_id, payload, *, channel='matrix'):
     else:
         if any(call.get(key) != value for key, value in destination.items()):
             raise ValueError('Notice Place call destination changed')
-    # Native transports may need their max_seconds+240 deadline and70s teardown.
+    # Telegram allows120s ringing +60s connection before the talk budget starts.
+    # Cover its max_seconds+340 deadline and70s teardown; Matrix keeps its bound.
     # Stop waiting at a finite bound, retaining uncertainty rather than redialling.
-    deadline = time.monotonic() + 435
+    deadline = time.monotonic() + (535 if channel == 'telegram' else 435)
     while True:
         ended = call['call_id'] not in calls.active and call['status'] in {'completed', 'unanswered'}
         result = dict(call_id=call['call_id'], target=call['target'], channel=channel,

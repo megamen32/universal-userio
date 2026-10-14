@@ -196,7 +196,9 @@ class TelegramCalls:
                     cursor=next_cursor
                     await asyncio.sleep(.25)
             consumer,updates=asyncio.create_task(consume()),asyncio.create_task(poll())
-            deadline=time.monotonic()+record['max_seconds']+240
+            # Preparation/ringing/connection are separate from the talk budget.
+            # Allow the extra100s granted by the120s answer +60s media windows.
+            deadline=time.monotonic()+record['max_seconds']+340
             while not consumer.done() and not updates.done() and not stop.is_set() and time.monotonic()<deadline:
                 await asyncio.sleep(.1)
             poll_error=None

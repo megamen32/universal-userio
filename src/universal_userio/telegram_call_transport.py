@@ -186,7 +186,7 @@ class TelegramCallTransport:
             get.cancel(); end.cancel()
             await asyncio.gather(get, end, return_exceptions=True)
 
-    async def dial(self, *, answer_seconds=60, connect_seconds=20):
+    async def dial(self, *, answer_seconds=120, connect_seconds=60):
         if self.attempted:
             raise RuntimeError("this outgoing call was already attempted; reconcile its receipt")
         def check_stopped():

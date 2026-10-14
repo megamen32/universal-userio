@@ -375,3 +375,30 @@ def test_ringing_updates_cannot_abort_a_call_before_answer():
         assert [m for m,p in operations].count('phone.requestCall') == 1
         await transport.close()
     asyncio.run(check())
+
+
+def test_slow_recipient_and_media_can_start_beyond_the_previous_deadlines(monkeypatch):
+    """Focused integration expected1s/max10s: answer75s +connect35s, virtual time."""
+    async def check():
+        import time
+        transport,native,operations,_=setup()
+        async def late_answer(deadline, *, waiting_for_answer=False):
+            if not waiting_for_answer:
+                await asyncio.Future()
+            # The old60s invitation budget rejected this still-ringing peer.
+            if deadline - time.monotonic() < 75:
+                raise RecipientUnanswered('invitation ended before recipient could answer')
+            return {'type':'phoneCallAccepted','id':'11','g_b':encode_bytes(b'gb')}
+        monkeypatch.setattr(transport,'_next_update',late_answer)
+        wait=asyncio.wait
+        async def slow_media(tasks, *, timeout, return_when):
+            # The old20s media window closed while a slow client was attaching.
+            if timeout < 35:
+                return set(),set(tasks)
+            return await wait(tasks,timeout=timeout,return_when=return_when)
+        monkeypatch.setattr(asyncio,'wait',slow_media)
+        await transport.dial()
+        assert transport.connected.is_set() and not transport.ended.is_set()
+        assert [m for m,p in operations].count('phone.requestCall')==1
+        await transport.close()
+    asyncio.run(check())

@@ -2408,7 +2408,9 @@ class CallController:
                     writer.write(line); await writer.drain()
                 await process.wait()
             upstream, downstream = asyncio.create_task(send()), asyncio.create_task(receive())
-            done, _ = await asyncio.wait((upstream, downstream), timeout=duration+240,
+            # Keep the gateway alive for120s ringing and60s media negotiation,
+            # plus preparation and the independent conversation budget.
+            done, _ = await asyncio.wait((upstream, downstream), timeout=duration+340,
                                         return_when=asyncio.FIRST_COMPLETED)
             for task in done: task.result()
         finally:
