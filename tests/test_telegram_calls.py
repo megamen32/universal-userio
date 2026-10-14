@@ -147,6 +147,51 @@ def test_hangup_rejects_late_dial_but_allows_teardown_rpc(tmp_path,monkeypatch):
     asyncio.run(check())
 
 
+def test_handshake_rpc_does_not_block_other_signaling_or_connected_event(tmp_path, monkeypatch):
+    """Focused integration1s/max10s: second packet must pass a slow first RPC."""
+    import asyncio
+    import threading
+    from unittest.mock import AsyncMock
+    async def check():
+        reader=asyncio.StreamReader(); second=threading.Event(); replies=[]
+        class Provider:
+            def _request(self, method, path, payload=None):
+                if path.endswith('/start'): return {}
+                if '/updates?' in path: return {'events':[], 'next_cursor':0}
+                if path.endswith('/rpc'):
+                    if payload['request_id']=='rpc-00000001':
+                        assert second.wait(1), 'first RPC blocked the second packet'
+                    else: second.set()
+                    return {'result':True}
+                if path.endswith('/status'): return {'state':'ACCEPTED', 'provider_attempted':True}
+                if path.endswith('/close'): return {}
+                pytest.fail('unexpected route')
+        class Writer:
+            def write(self, line):
+                frame=json.loads(line)
+                if frame.get('action')=='telegram_transport':
+                    for counter in ('1','2'):
+                        reader.feed_data(json.dumps({'event':'telegram_rpc','request_id':counter,
+                            'method':'phone.sendSignalingData','params':{}}).encode()+b'\n')
+                    reader.feed_data(b'{"event":"connected"}\n')
+                elif frame.get('type')=='rpc_result':
+                    replies.append(frame)
+                    if len(replies)==2:
+                        reader.feed_data(b'{"event":"ended"}\n'); reader.feed_eof()
+            async def drain(self): pass
+            def close(self): pass
+            async def wait_closed(self): pass
+        monkeypatch.setattr(telegram_calls.asyncio,'open_unix_connection',AsyncMock(return_value=(reader,Writer())))
+        service,_=service_fixture(); manager=telegram_calls.TelegramCalls(service,tmp_path)
+        record={'call_id':'22222222-3333-4444-8555-666666666666','admission_id':'test-admission',
+            'owner_user_id':'owner','account_ref':'telegram:100001','target':'100002',
+            'purpose':'Тест','greeting':'','max_seconds':30,'status':'accepted','answered':False}
+        await manager._call(record, Provider(), threading.Event())
+        assert record['answered'] and record['status']=='completed'
+        assert len(replies)==2 and all(reply.get('result') is True for reply in replies)
+    asyncio.run(check())
+
+
 def test_secretary_scoped_tool_cannot_start_read_or_stop_another_account(monkeypatch):
     from dataclasses import replace
     from universal_userio.contracts import UserPrincipal

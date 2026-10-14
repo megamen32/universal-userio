@@ -129,7 +129,7 @@ class TelegramCalls:
         path=PREFIX+quote(record['admission_id'],safe='')
         async def relay(method,suffix,payload=None):
             return await asyncio.to_thread(provider._request,method,path+suffix,payload)
-        reader=writer=None; consumer=updates=None; transcripts={'caller':[],'assistant':[]}
+        reader=writer=None; consumer=updates=None; rpc_tasks=set(); transcripts={'caller':[],'assistant':[]}
         rpc_attempted=rpc_uncertain=teardown_confirmed=hangup_sent=False; turns=0
         try:
             # Claim the existing client's durable admission before any worker RPC.
@@ -144,30 +144,42 @@ class TelegramCalls:
             async def send(frame):
                 writer.write(json.dumps(frame,ensure_ascii=False).encode()+b'\n'); await writer.drain()
             await send({'action':'telegram_transport','call':call})
+            async def handle_rpc(event):
+                nonlocal rpc_attempted,rpc_uncertain
+                if event['method']=='phone.requestCall' and (hangup_sent or stop.is_set()):
+                    await send({'type':'rpc_result','request_id':event['request_id'],'error':True})
+                    return
+                if event['method']=='phone.requestCall': rpc_attempted=True
+                try:
+                    result=await relay('POST','/rpc',{'request_id':relay_request_id(event['request_id']),
+                        'method':event['method'],'params':event['params']})
+                    await send({'type':'rpc_result','request_id':event['request_id'],'result':result['result']})
+                except Exception:
+                    if rpc_attempted:
+                        rpc_uncertain=True
+                        record['status']='unknown'
+                    await send({'type':'rpc_result','request_id':event['request_id'],'error':True})
             async def consume():
                 nonlocal rpc_attempted,rpc_uncertain,teardown_confirmed,turns
                 while True:
                     line=await reader.readline()
                     if not line:
+                        if rpc_tasks: await asyncio.shield(asyncio.gather(*rpc_tasks))
                         teardown_confirmed=True
                         break
                     if len(line)>65536: raise ValueError('voice event exceeds limit')
                     event=json.loads(line); kind=event.get('event')
                     if event.get('ok') is False: raise RuntimeError('voice gateway refused Telegram transport')
                     if kind=='telegram_rpc':
-                        if event['method']=='phone.requestCall' and (hangup_sent or stop.is_set()):
-                            await send({'type':'rpc_result','request_id':event['request_id'],'error':True})
-                            continue
-                        if event['method']=='phone.requestCall': rpc_attempted=True
-                        try:
-                            result=await relay('POST','/rpc',{'request_id':relay_request_id(event['request_id']),
-                                'method':event['method'],'params':event['params']})
-                            await send({'type':'rpc_result','request_id':event['request_id'],'result':result['result']})
-                        except Exception:
-                            if rpc_attempted:
-                                rpc_uncertain=True
-                                record['status']='unknown'
-                            await send({'type':'rpc_result','request_id':event['request_id'],'error':True})
+                        # Handshake packets need concurrent MTProto receipts;
+                        # one slow request must not block all control events.
+                        if len(rpc_tasks)>=8:
+                            done,_=await asyncio.wait(rpc_tasks,return_when=asyncio.FIRST_COMPLETED)
+                            for task in done:
+                                rpc_tasks.remove(task); task.result()
+                        for task in list(rpc_tasks):
+                            if task.done(): rpc_tasks.remove(task); task.result()
+                        rpc_tasks.add(asyncio.create_task(handle_rpc(event)))
                         continue
                     if event.get('callId'): record['voice_call_id']=str(uuid.UUID(event['callId']))
                     if kind=='prepared': record['status']='ringing'; self._emit(record,'ИИ-секретарь звонит через Telegram',suffix='ringing')
@@ -229,6 +241,8 @@ class TelegramCalls:
             for task in (consumer,updates):
                 if task and not task.done(): task.cancel()
             await asyncio.gather(*(t for t in (consumer,updates) if t),return_exceptions=True)
+            if rpc_tasks:
+                await asyncio.gather(*rpc_tasks,return_exceptions=True)
             if writer:
                 writer.close()
                 try: await writer.wait_closed()

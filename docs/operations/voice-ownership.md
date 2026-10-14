@@ -34,3 +34,13 @@ CPU2,tasks128,swap256MiB,IO10,temp128MiB; expected40s/emergency400s.
 Это конечное время на подготовку/ожидание, без повышенияCPU/RAM/parallelism;
 время разговора начинается после установления медиа. Отказ собеседника или
 завершение вызова самимTelegram прекращает ожидание раньше.
+
+Telegram handshake budget15Oct: native8.0.0 fixture on this66-interface host
+produced53packets/207307bytes (largest10358bytes). Two signalling queues are
+bounded256KiB and256items each; up to8 outgoing RPCs per active voice transport,
+also capped8 in the parent. This replaces64 eagerly created callback tasks and
+one serial parent RPC. Native peer packets wait until connect_p2p initialization.
+Fresh admission measurement: hostavailable33GiB; core197MiB/6tasks under384/512MiB,
+64tasks; gateway40MiB/2tasks under1.5/2GiB,128tasks. Existing cgroup limits stay
+unchanged; queue allowance512KiB aggregate, no extra provider account or worker.
+Real recipient canary must confirm this budget after installation.

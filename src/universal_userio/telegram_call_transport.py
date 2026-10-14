@@ -39,7 +39,9 @@ class TelegramCallTransport:
     sample_rate = 48000
     frame_bytes = sample_rate * 2 // 100  # NTgCalls consumes exactly 10ms.
     queue_bytes = sample_rate * 2 * 2    # At most two seconds in callbacks.
-    signaling_queue_bytes = 65536
+    # Native8.0.0 handshake measured207KiB total on this66-interface host.
+    # Retain one bounded handshake burst while up to8 RPCs drain it.
+    signaling_queue_bytes = 256 * 1024
 
     def __init__(self, user_id: int, rpc: Callable[..., Awaitable[Any]],
                  receive_pcm: Callable[[bytes], None], *, native=None):
@@ -64,7 +66,7 @@ class TelegramCallTransport:
         self.tasks: set[asyncio.Task] = set()
         self.outgoing_signals = asyncio.Queue(maxsize=256)
         self.pending_signal_bytes = 0
-        self.signal_sender = None
+        self.signal_senders = set()
         self.pending_pcm_bytes = 0
         self.started_at: float | None = None
         self.engine.on_connection_change(self._connection)
@@ -126,14 +128,17 @@ class TelegramCallTransport:
             return
         self.pending_signal_bytes += len(data)
         self.outgoing_signals.put_nowait(data)
-        if self.signal_sender is None or self.signal_sender.done():
-            self.signal_sender = asyncio.create_task(self._pump_signaling())
-            self.tasks.add(self.signal_sender)
+        if not self.signal_senders:
             def finished(task):
                 self.tasks.discard(task)
+                self.signal_senders.discard(task)
                 if not task.cancelled() and task.exception():
                     self._fail(task.exception())
-            self.signal_sender.add_done_callback(finished)
+            for _ in range(8):
+                sender = asyncio.create_task(self._pump_signaling())
+                self.signal_senders.add(sender)
+                self.tasks.add(sender)
+                sender.add_done_callback(finished)
 
     async def _pump_signaling(self):
         while not self.closed and not self.ended.is_set():
@@ -283,12 +288,13 @@ class TelegramCallTransport:
             bool(item.get("turn")), bool(item.get("stun")), bool(item.get("tcp")),
             decode_bytes(item["peer_tag"]) if item.get("peer_tag") else None)
             for item in confirmed["connections"]]
-        await self.engine.set_stream_sources(self.user_id, self.module.StreamMode.PLAYBACK,
-            self.module.MediaDescription(self._audio(), None, None, None))
-        self._spawn(self._pump_updates())
         await self.engine.connect_p2p(self.user_id, servers,
             confirmed["protocol"]["library_versions"], bool(confirmed.get("p2p_allowed")),
             confirmed.get("custom_parameters"))
+        await self.engine.set_stream_sources(self.user_id, self.module.StreamMode.PLAYBACK,
+            self.module.MediaDescription(self._audio(), None, None, None))
+        # Never deliver early peer packets into an uninitialized native call.
+        self._spawn(self._pump_updates())
         ready = asyncio.create_task(self.connected.wait())
         end = asyncio.create_task(self.ended.wait())
         try:

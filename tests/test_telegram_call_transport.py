@@ -312,9 +312,10 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
         peer = native.NTgCalls()
         source_received, peer_received, forwarded = [], [], []
         transport = None
-        peer_started = False
+        peer_start = None
         async def forward(data):
-            await transport.engine.send_signaling_data(7, data)
+            # Real connector input is queued until native connect_p2p finishes.
+            transport.update({'type':'signaling', 'id':'11', 'data':encode_bytes(data)})
         def signal(user_id, data):
             # Native methods return asyncio.Future, not coroutine objects.
             # Invoke them inside the owning loop, never the native callback thread.
@@ -325,7 +326,7 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
             if mode == native.StreamMode.PLAYBACK else None)
         peer.on_connection_change(lambda *args: None)
         await peer.create_p2p_call(8)
-        for mode in (native.StreamMode.CAPTURE, native.StreamMode.PLAYBACK):
+        for mode in (native.StreamMode.CAPTURE,):
             await peer.set_stream_sources(8, mode, native.MediaDescription(
                 native.AudioDescription(native.MediaSource.EXTERNAL, 48000, 1, "", False),
                 None, None, None))
@@ -339,17 +340,24 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
                 return {"id": "11", "access_hash": "22", "participant_id": "7"}
             if method == "phone.confirmCall":
                 await peer.exchange_keys(8, decode_bytes(params["g_a"]), int(params["key_fingerprint"]))
-                versions = native.NTgCalls.get_protocol().library_versions
+                # The real owner's phone.confirmCall selects8.0.0. Test that
+                # exact protocol rather than a different13.0.0 loopback.
+                versions = ['8.0.0']
                 return {"id": "11", "participant_id": "7", "key_fingerprint": params["key_fingerprint"],
                         "protocol": {"library_versions": versions}, "connections": [], "p2p_allowed": True}
             if method == "phone.sendSignalingData":
-                nonlocal peer_started
+                nonlocal peer_start
                 # Match the successful direct probe: outgoing engine starts first.
                 # Starting the peer during confirmation consumes its ICE timeout
                 # before the outgoing engine can produce its first signalling.
-                if not peer_started:
-                    peer_started = True
-                    await peer.connect_p2p(8, [], native.NTgCalls.get_protocol().library_versions, True, None)
+                if peer_start is None:
+                    async def start_peer():
+                        await peer.connect_p2p(8, [], ['8.0.0'], True, None)
+                        await peer.set_stream_sources(8, native.StreamMode.PLAYBACK,
+                            native.MediaDescription(native.AudioDescription(
+                                native.MediaSource.EXTERNAL, 48000, 1, "", False), None, None, None))
+                    peer_start = asyncio.create_task(start_peer())
+                await peer_start
                 await peer.send_signaling_data(8, decode_bytes(params["data"]))
             return True
         transport = TelegramCallTransport(7, rpc, source_received.append, native=native)
@@ -414,7 +422,7 @@ def test_native_signaling_burst_waits_for_serial_rpc_without_aborting():
             native.signaling(7, data)
         await asyncio.sleep(0); await asyncio.sleep(0)
         assert not transport.ended.is_set()
-        assert len(transport.tasks) <= 2  # Update pump plus one RPC sender.
+        assert len(transport.tasks) <= 9  # Update pump plus eight bounded senders.
         assert transport.pending_signal_bytes == sum(map(len, payloads))
         blocked.set()
         while len(sent) < len(payloads):
