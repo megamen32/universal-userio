@@ -154,7 +154,8 @@ class Meetings:
                 track['transcription_status']='ready'
             except Exception as error:track.update(transcription_status='failed',transcription_error=type(error).__name__)
             self._save(record)
-        self._emit(record,'Запись встречи завершена. '+('Расшифровка готова.' if all(t.get('transcription_status')=='ready' for t in record['tracks']) and record['tracks'] else 'Расшифровка пока недоступна.')+'\nОткрыть аудио: /telemost?id='+record['id'],'completed')
+        voice_tracks=[t for t in record['tracks'] if t.get('bytes',0)>44]
+        self._emit(record,'Запись встречи завершена. '+('Расшифровка готова.' if voice_tracks and all(t.get('transcription_status')=='ready' for t in voice_tracks) else 'Расшифровка пока недоступна.')+'\nОткрыть аудио: /telemost?id='+record['id'],'completed')
         self._save(record)
 
     def audio(self,identity,owner,index):
