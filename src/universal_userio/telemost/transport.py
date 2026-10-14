@@ -50,6 +50,7 @@ class Receiver:
         self.pc=None; self.publisher=None; self.tasks=[]; self.total_bytes=0; self.websocket=None
         self.started=time.monotonic(); self.pending=[]; self.remote=False
         self.seq=0; self.media_deadline=0; self.track_count=0
+        self.normal_shutdown=False
         self.record['protocol_events']=[]
 
     async def run(self):
@@ -101,7 +102,10 @@ class Receiver:
             async def state_changed():
                 if self.pc.connectionState=='connected':
                     self.record['status']='recording'; self.record['connected_at']=time.time();self.save()
-                elif self.pc.connectionState in {'failed','closed'}:self.stop.set()
+                elif self.pc.connectionState in {'failed','closed'}:
+                    if not self.normal_shutdown:
+                        self.record['partial']=True;self.record['error']='rtc_connection_ended';self.save()
+                    self.stop.set()
             async with session.ws_connect(media_url,timeout=15,max_msg_size=1024*1024) as ws:
                 self.websocket=ws
                 await ws.send_json(hello(connection['peer_id'],connection['room_id'],connection['credentials'],config['service_name']))
@@ -139,6 +143,8 @@ class Receiver:
                                 # Do not serialize exceptions that can contain endpoints or credentials.
                                 if isinstance(error,aiohttp.WebSocketError):
                                     self.record['provider_frame_error_code']=error.code
+                            if self.record['provider_close_code'] not in {1000,1001}:
+                                self.record['partial']=True
                             self.save();break
                         continue
                     payload=json.loads(msg.data)
@@ -194,6 +200,7 @@ class Receiver:
                 for task in self.maintenance:task.cancel()
                 await asyncio.gather(*self.maintenance,return_exceptions=True)
                 self.record['status']='finalizing';self.save()
+        self.normal_shutdown=True
         if self.pc:await self.pc.close()
         if self.publisher:await self.publisher.close()
         for task in self.tasks:task.cancel()
@@ -223,7 +230,10 @@ class Receiver:
                         output.writeframesraw(data);frames+=pcm.samples
         except asyncio.CancelledError:pass
         except Exception as error:
-            self.record['partial']=True;item['error']=type(error).__name__
+            # Closing the PC at the requested duration ends an awaited recv()
+            # with MediaStreamError. That is normal shutdown, not lost audio.
+            if not self.normal_shutdown:
+                self.record['partial']=True;item['error']=type(error).__name__
         finally:
             if path.exists():
                 import os

@@ -50,7 +50,43 @@ async def main():
     assert len(pings)>=3,(len(pings),record)
     assert record['status']=='no_audio'
     print('Websocket beyond15s PASS; muted hello/ping/lifetime/cleanup',round(elapsed,2))
+def test_requested_stop_is_not_partial():
+    import os
+    from aiortc.mediastreams import MediaStreamError
+    async def check():
+        stop=asyncio.Event()
+        record={'tracks':[]}
+        class EndingTrack:
+            async def recv(self):
+                stop.set()
+                raise MediaStreamError
+        folder=Path(os.environ['TELEMOST_TEST_TEMP'])/'normal-stop'
+        folder.mkdir(parents=True,exist_ok=True)
+        receiver=transport.Receiver(record,folder,lambda:None,stop)
+        receiver.normal_shutdown=True
+        await receiver.capture(EndingTrack(),1)
+        assert not record.get('partial')
+        assert 'error' not in record['tracks'][0]
+    asyncio.run(check())
+
+def test_unexpected_media_end_is_partial():
+    import os
+    from aiortc.mediastreams import MediaStreamError
+    async def check():
+        record={'tracks':[]}
+        class EndingTrack:
+            async def recv(self):raise MediaStreamError
+        folder=Path(os.environ['TELEMOST_TEST_TEMP'])/'unexpected-stop'
+        folder.mkdir(parents=True,exist_ok=True)
+        receiver=transport.Receiver(record,folder,lambda:None,asyncio.Event())
+        await receiver.capture(EndingTrack(),1)
+        assert record['partial'] and record['tracks'][0]['error']=='MediaStreamError'
+    asyncio.run(check())
+
 def test_signaling_handshake_and_delayed_http():
     asyncio.run(main())
 
-if __name__=="__main__":test_signaling_handshake_and_delayed_http()
+if __name__=="__main__":
+    test_requested_stop_is_not_partial()
+    test_unexpected_media_end_is_partial()
+    print("Requested stop vs unexpected media end PASS")
