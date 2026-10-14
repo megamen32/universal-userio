@@ -108,3 +108,17 @@ new enrollment. Camera-confirmed NEW MAX and physical WhatsApp pairing/read/send
 remain open; phone absence/password is no longer a blocker. Hosted SIP issuance
 and cleanup are accepted; call routing/audio are still unverified and disabled.
 No requirement checkbox or percentage inflated by these partial sub-results.
+
+## Phase17 — Telemost recording and Yandex chats
+
+- [x] TM-01: quiet automatic meeting join, camera/mic off, real incoming audio.
+- [x] TM-02: private persistent recording/transcript; real play/download/reload.
+- [x] TM-03: same-owner personal/group Yandex chats, correct authors/full text,
+  maintained sync/history and one authorized normal web send/receipt/reload.
+- [ ] TM-04: narrow recorder authorization and actual native Secretary-started
+  journey. UserIO7bb owns scope; Exmanager97 owns its consumer, without mutual
+  project holds or upgrading readonly. Exact closing proof in phase17 verification.
+
+All4 map to phase17;3accepted75%. Current total14/23accepted61%rounded.
+Separate follow-ups: arbitrary-user Yandex enrollment; generic messenger rich
+actions and Secretary Yandex adapter; atomic shared API admission/drain.

@@ -132,15 +132,16 @@ OwnerUserIO7bb, independent of Exmanager15. Closure criteria in
 ### Phase 17: Telemost chats and quiet meeting recording
 
 **Goal:** A meeting link joins visibly but silently, archives received voices and
-transcription, and exposes meeting chat through UserIO web/MCP for the Secretary.
+transcription, and exposes personal/group Yandex chats through UserIO web/MCP for the Secretary.
 **Requirements:** TM-01, TM-02, TM-03, TM-04
 **Dependencies:** independent of pending onboarding and Exmanager acceptance.
-**Plans:** 1 plan; implementation in progress, 2/4 complete requirements (50%).
+**Plans:** 1 plan; implementation in progress, 3/4 complete requirements (75%).
 
 - [ ] [17-01-PLAN.md](phases/17-telemost-chats-and-quiet-meeting-recording/17-01-PLAN.md)
 
 TM-01/TM-02: NEW native automatic recording, real voice/Whisper and ordinary
 web playback/reload/download are accepted. TM-03 now explicitly covers ALL
-personal/group Yandex chats; account sign-in/history/sync remain open. TM-04
+personal/group Yandex chats; same-account sign-in, persistent sync/history and
+one normal web send/native receipt/reload are accepted. TM-04
 Secretary start authorization/integration remains open. Historical failures retained. See the
 [verification checkpoint](phases/17-telemost-chats-and-quiet-meeting-recording/17-VERIFICATION.md).

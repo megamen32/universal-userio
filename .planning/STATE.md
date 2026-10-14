@@ -386,3 +386,17 @@ old receipts. Current task: ALL personal/group Yandex chats of the mail-linked
 account, clarified directly by the user; ordinary sign-in/history/sync and narrow
 Secretary start permission remain open. See17-VERIFICATION and17-01-PLAN.
 Existing Exmanager/onboarding phases and their evidence remain unchanged.
+
+## Latest phase17 live Yandex checkpoint — 14 October
+Phase17 now3/4 requirements75%: TM-01/TM-02 recording retained; TM-03 personal/
+group Yandex chats accepted through ordinary same-account auth,12real chats,
+continuous background sync and exact plain text/authors. ONE authorized normal
+web send obtained native receipt/history and survived reload/reopen. Sender
+source9fba9ed installed/verified; API NRestarts0. All own browser resources and
+transient headers removed. Historical UI/harness failures remain distinct and
+were never mistaken for accepted delivery. No old send/join/model was repeated.
+TM-04 remains open: narrow UserIO recorder grant plus separate Exmanager-native
+Secretary journey. All-user Yandex enrollment and rich operations remain
+unverified; shared atomic restart/drain race remains owned by UserIO7bb.
+Current milestone including phase17:14/23 mapped requirements accepted61%
+(rounded),2/6fullyclosedphases33%; earlier19-requirement totals are history.
