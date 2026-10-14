@@ -115,10 +115,11 @@ No requirement checkbox or percentage inflated by these partial sub-results.
 - [x] TM-02: private persistent recording/transcript; real play/download/reload.
 - [x] TM-03: same-owner personal/group Yandex chats, correct authors/full text,
   maintained sync/history and one authorized normal web send/receipt/reload.
-- [ ] TM-04: narrow recorder authorization and actual native Secretary-started
-  journey. UserIO7bb owns scope; Exmanager97 owns its consumer, without mutual
-  project holds or upgrading readonly. Exact closing proof in phase17 verification.
+- [x] TM-04: narrow recorder authorization and actual native Secretary-started
+  journey. Separate encrypted meeting_recording resource; NEW Telegram link →
+  quiet join → real voice/Whisper → native stop → play/reload/download accepted.
+  Exmanager PR3 merged and installed; existing readonly resource unchanged.
 
-All4 map to phase17;3accepted75%. Current total14/23accepted61%rounded.
+All4 map to phase17;4accepted100%. Current total15/23accepted65%rounded.
 Separate follow-ups: arbitrary-user Yandex enrollment; generic messenger rich
 actions and Secretary Yandex adapter; atomic shared API admission/drain.

@@ -2,30 +2,30 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: Messenger capabilities for the Airlock Secretary
-status: blocked
-last_updated: "2026-10-13T18:59:49.937828+00:00"
-last_activity: 2026-10-13
+status: in_progress
+last_updated: "2026-10-14T14:13:13.196426+00:00"
+last_activity: 2026-10-14
 progress:
-  total_phases: 5
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 2
-  percent: 40
+  total_phases: 6
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 3
+  percent: 50
 ---
 
 # State
 
-**Current Phase:** 16
-**Current Phase Name:** Simple account onboarding and personal phone connections
-**Total Phases:** 5
+**Current Phase:** 17
+**Current Phase Name:** Telemost chats and quiet meeting recording
+**Total Phases:** 6
 **Current Plan:** 01
 **Total Plans in Phase:** 1
-**Status:** blocked
-**Progress:** 40%
+**Status:** Phase complete
+**Progress:** 50%
 
-[████░░░░░░] — current milestone phase/plan completion (2/5)
-**Last Activity:** 2026-10-13
-**Last Activity Description:** Deployed personal WhatsApp and hosted SIP self-service control accepted; MAX pending QR defect fixed and live two-poll/cancel/reload/mobile passed. S21 root and current native MAX LOGIN verified; new camera-confirmed account and per-user voice remain open.
+[█████░░░░░] — current milestone phase/plan completion (3/6)
+**Last Activity:** 2026-10-14
+**Last Activity Description:** Phase17 live-complete: NEW Telegram link → Secretary silent join →189.599s voice/Whisper →native stop →play/reload/exact download. Other phases remain independent.
 
 ## Current acceptance and next action
 
@@ -400,3 +400,16 @@ Secretary journey. All-user Yandex enrollment and rich operations remain
 unverified; shared atomic restart/drain race remains owned by UserIO7bb.
 Current milestone including phase17:14/23 mapped requirements accepted61%
 (rounded),2/6fullyclosedphases33%; earlier19-requirement totals are history.
+
+
+## Latest phase17 closure — automatic Secretary link recording
+All four requirements accepted (100% phase17). NEW ordinary meeting +ONE Helper
+link → native Secretary token109 → quiet recorder → actual189.599s voice WAV/
+622char automatic transcription →ONE native stop →headed44 playback/reload/
+exact download PASS. PR3 merged/installed; separate encrypted narrow recorder
+resource bound, readonly unchanged. Compatibility dispatch defect reproduced
+then repaired377212c/sevenfocusedPASS. Task-created worktree cleanup follows
+proved remote-main ancestry; preserved foreign WIP is not called clean.
+Current milestone15/23requirements65%rounded;3/6phases50%. Other pending phases
+and shared restart/admission, public enrollment/rich Yandex follow-ups remain
+open. See17-VERIFICATION; no accepted model, send or meeting replay.

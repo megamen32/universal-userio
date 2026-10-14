@@ -1,13 +1,13 @@
 # Phase17 live verification checkpoint
 
-Status: IN_PROGRESS, TM-01/TM-02/TM-03 accepted; 3/4 requirements (75%). Owner: UserIO7bb; Secretary SDK integration belongs to Exmanager97.
+Status: PASS for all four mapped requirements; 4/4 (100%). UserIO7bb owns recorder scope and the explicitly isolated Secretary PR3; existing Exmanager business work is preserved. Historical checkpoints below retain their original boundaries.
 
 | Requirement | Observed result | Closure evidence still required |
 | --- | --- | --- |
 | TM-01 Quiet automated join | ACCEPTED: one NEW normal UserIO start connected with mic/camera off, actual RTP and34.739s voice WAV. | Closed by native receive and normal web proof. |
 | TM-02 Archive/transcription | ACCEPTED: automatic archive1111692B WAV and98character real speech transcript; headed44 playback progresses, reload persists, native download SHA matches. Browser manual clip remains separate. | Closed for this bounded single-speaker journey; mixed streams are not asserted to identify individual people. |
 | TM-03 Yandex personal/group chats | ACCEPTED: ordinary same-account sign-in, exact Whoami identity, 12 chats, private/group authors and text, permanent polling/backfill. One authorized normal web send confirmed by native receipt/history; reload/reopen retains the exact body. | Closed for the connected owner account. Arbitrary-user enrollment and rich actions are separate unaccepted follow-ups. |
-| TM-04 Web/MCP/Secretary | Normal web start and actual automatic audio/play/reload/download accepted. | Separate narrow Secretary recorder authorization and actual Secretary-started journey, owned by Exmanager97 after UserIO contract readiness. |
+| TM-04 Web/MCP/Secretary | ACCEPTED: NEW Helper DM triggers installed Secretary quiet join, real voice/automatic ASR, native stop and ordinary play/reload/exact download. | Closed by the new live journey below; no readonly upgrade or old action replay. |
 
 The browser clip is separate from failed native records. No synthetic audio or
 historical clip is attached to them. Actual native failures remain retained.
@@ -77,3 +77,49 @@ through the normal rollback-first release. Public /docs/ returned200 with the
 new Yandex chat instructions and4096-character limit. Reproducibility/link/
 JSON checks passed. This static-only release preserved the exact API PID and
 NRestarts0; no source send/recording/model was replayed.
+
+
+## Automatic Secretary link journey — 14 October: PASS
+
+The human explicitly authorized an isolated Exmanager worktree, PR and merge.
+PR3 is merged in published main; installer6d installed native candidate token109,
+including this handler, without another competing upgrade. The separate native
+`userio_meetings` encrypted resource uses exactly three meeting tools. Its child
+scope cannot read accounts, inbox or manage tokens; the readonly resource was
+not upgraded. Transient credential file removed after normal binding/readback.
+
+A NEW meeting was created with the ordinary Telemost button, with mic/camera
+permissions denied. ONE Telegram Helper message reached the actual Secretary
+and its normal reply returned the new private recording link. The recorder
+joined and received the human's voice, with mic/camera off. ONE native Secretary
+stop completed; automatic archive contains189.599s/6067212B WAV and622characters
+of real Whisper text. The empty secondary SFU lane44B remains separate and is
+not transcription evidence. Speaker names/multi-speaker separation are not
+inferred from this single-human check.
+
+The real compatibility MCP initially advertised tools but returned unknown_tool;
+three focused regressions reproduced it. Published/installed377212c delegates
+the meeting operations correctly; seven focused checks passed, native existing
+record reading then passed before the new business intent. Earlier full SDK
+old-fixture405 failure remains retained; physical installer6d's corrected
+candidate completed. No failed business start was retried.
+
+Headed44 normal UserIO proof: player advanced0.55→1.57s, duration189.599,
+no playback error; reload retained actual text; downloaded WAV matches the
+native SHA exactly. Two earlier readonly harness failures (first-segment-only
+assertion and JS escaping) are separate from the corrected consumer PASS;
+they caused no new join, transcription or provider action. All five owned
+browser scopes/cgroups/Chrome/configs and remote screenshot/download copies are
+gone; private screenshots/receipts retained. No API/RTC restart during canary.
+
+Private exact receipts: `.tmp/telemost-20261014/secretary-native-audio-proof.json`,
+`helper-send-receipt.json`, `helper-native-auto-reply.json`,
+`secretary-recorder-resource.json`, `secretary-audio-web-proof.json` and
+`secretary-browser-cleanup.json`. No real account IDs, links, text or credentials
+are copied into public test examples or this verification document.
+
+Scope: the configured owner sends ONE exact meeting link. Negative recording
+instructions, unrelated business messages and unauthorized authors do not start
+recording. Different permission/new-user/multi-speaker/long-duration journeys
+remain unverified. Atomic shared restart/admission and full Yandex generic rich
+capabilities remain independent follow-ups, not closed by phase17.
