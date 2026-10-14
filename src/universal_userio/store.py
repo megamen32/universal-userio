@@ -856,6 +856,7 @@ class SQLiteUserIOStore:
             read_only=row["kind"] == "personal" and row["scope"] == "read_only",
             messenger_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
                                 if row['scope']=='messenger_actions' else None),
+            meeting_recorder=row['kind']=='personal' and row['scope']=='meeting_recording',
         )
 
     def register_oauth_client(

@@ -88,6 +88,7 @@ class UserPrincipal:
     # None preserves existing credentials. Scoped app credentials use only
     # generic messenger tools and these explicitly assigned accounts.
     messenger_accounts: tuple[str, ...] | None = None
+    meeting_recorder: bool = False
 
 
 @dataclass(frozen=True, slots=True)

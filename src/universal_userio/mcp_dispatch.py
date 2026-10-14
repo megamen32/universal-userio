@@ -7,7 +7,7 @@ from typing import Any
 
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
-from .token_permissions import READ_ONLY_TOOLS
+from .token_permissions import READ_ONLY_TOOLS, MEETING_RECORDING_TOOLS
 from .mcp_catalog import TOOL_CAPABILITIES
 from .service import UserIOService
 from .store import SQLiteUserIOStore
@@ -26,6 +26,8 @@ class UserIOToolDispatcher:
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
+        if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS:
+            return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.')):
             return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS:

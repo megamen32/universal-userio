@@ -8,7 +8,7 @@ from typing import Any
 
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
-from .token_permissions import READ_ONLY_TOOLS
+from .token_permissions import READ_ONLY_TOOLS, MEETING_RECORDING_TOOLS
 from .service import UserIOService
 from .store import SQLiteUserIOStore
 
@@ -226,10 +226,11 @@ TOOL_CAPABILITIES = {
     "userio.ai.propose": "send",
 }
 
-from .mcp_catalog import MATRIX_CALL_SPECS, TELEGRAM_CALL_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS, *TELEGRAM_CALL_SPECS)
+from .mcp_catalog import MATRIX_CALL_SPECS, TELEGRAM_CALL_SPECS, TELEMOST_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS, *TELEGRAM_CALL_SPECS, *TELEMOST_SPECS)
 TOOL_CAPABILITIES.update({'userio.calls.matrix.start':'send','userio.calls.matrix.get':'read','userio.calls.matrix.stop':'send'})
 TOOL_CAPABILITIES.update({'userio.calls.telegram.start':'send','userio.calls.telegram.get':'read','userio.calls.telegram.stop':'send'})
+TOOL_CAPABILITIES.update({'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send'})
 
 
 class UserIOMcpSurface:
@@ -245,6 +246,7 @@ class UserIOMcpSurface:
         specs = tuple(
             spec for spec in TOOL_SPECS
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
+            and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
                  or spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
@@ -255,7 +257,7 @@ class UserIOMcpSurface:
 
     def resource_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
-        if principal.messenger_accounts is not None: return {'resources':[]}
+        if principal.messenger_accounts is not None or principal.meeting_recorder: return {'resources':[]}
         if not self._store.capability_enabled("read", user_id=principal.user_id):
             return {"resources": []}
         return {"resources": [
@@ -266,7 +268,7 @@ class UserIOMcpSurface:
 
     def resource_template_manifest(self, *, principal: UserPrincipal | None = None) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
-        if principal.messenger_accounts is not None: return {'resourceTemplates':[]}
+        if principal.messenger_accounts is not None or principal.meeting_recorder: return {'resourceTemplates':[]}
         if not self._store.capability_enabled("read", user_id=principal.user_id):
             return {"resourceTemplates": []}
         return {"resourceTemplates": [
@@ -281,6 +283,8 @@ class UserIOMcpSurface:
         self, uri: str, *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if principal.meeting_recorder:
+            raise PermissionError('meeting_recording_scope_only')
         user_id = principal.user_id
         if principal.messenger_accounts is not None: raise PermissionError('messenger_scope_only')
         if not self._store.capability_enabled("read", user_id=user_id):
@@ -314,6 +318,8 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
+            return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if (principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.'))
                 and name not in {'tools/list','tools/call'}):
             return {'ok':False,'error':'messenger_scope_only'}

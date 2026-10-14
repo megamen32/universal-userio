@@ -26,8 +26,8 @@ class PersonalTokens:
         return [dict(row) for row in rows]
 
     def create(self, user_id: str, name: str, *, scope: str = "full_access", account_refs=None) -> dict:
-        if not isinstance(scope, str) or scope not in {"full_access", "read_only", "messenger_actions"}:
-            raise ValueError("scope must be full_access, read_only or messenger_actions")
+        if not isinstance(scope, str) or scope not in {"full_access", "read_only", "messenger_actions", "meeting_recording"}:
+            raise ValueError("scope must be full_access, read_only, messenger_actions or meeting_recording")
         if scope == 'messenger_actions':
             if (not isinstance(account_refs,list) or not 1<=len(account_refs)<=16
                     or any(not isinstance(ref,str) for ref in account_refs) or len(set(account_refs))!=len(account_refs)):

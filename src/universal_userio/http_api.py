@@ -34,7 +34,7 @@ from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
 from .personal_tokens import PersonalTokens
-from .token_permissions import read_only_http_allowed
+from .token_permissions import read_only_http_allowed, meeting_recorder_http_allowed
 from .search import search_conversations
 from .service import DeliveryUnavailableError, UserIOService
 
@@ -250,6 +250,9 @@ def handler(
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
+                self._reply(403, {'error': 'meeting_recording_scope_only'})
+                return
             if restricted is not None and restricted.messenger_accounts is not None and path!='/mcp':
                 self._reply(403, {'error':'messenger_scope_only'})
                 return
@@ -1149,6 +1152,9 @@ def handler(
         def do_PATCH(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
+                self._reply(403, {'error': 'meeting_recording_scope_only'})
+                return
             if restricted is not None and restricted.messenger_accounts is not None:
                 self._reply(403, {'error':'messenger_scope_only'})
                 return
@@ -1192,6 +1198,9 @@ def handler(
             query = parse_qs(urlparse(self.path).query)
             requested_path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
+                self._reply(403, {'error': 'meeting_recording_scope_only'})
+                return
             if restricted is not None and restricted.messenger_accounts is not None and requested_path!='/mcp':
                 self._reply(403, {'error':'messenger_scope_only'})
                 return
@@ -1872,6 +1881,9 @@ def handler(
         def do_DELETE(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
             restricted = self._principal()
+            if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
+                self._reply(403, {'error': 'meeting_recording_scope_only'})
+                return
             if restricted is not None and restricted.messenger_accounts is not None:
                 self._reply(403, {'error':'messenger_scope_only'})
                 return

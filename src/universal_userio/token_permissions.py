@@ -14,6 +14,27 @@ READ_ONLY_TOOLS = frozenset({
     "userio.workspace.triage.get",
 })
 
+MEETING_RECORDING_TOOLS = frozenset({
+    'userio.meetings.telemost.start', 'userio.meetings.telemost.get',
+    'userio.meetings.telemost.stop',
+})
+
+
+def meeting_recorder_http_allowed(method: str, path: str) -> bool:
+    if path == '/mcp':
+        return method in {'GET', 'POST', 'DELETE'}
+    parts = path.split('/')
+    if parts[:4] != ['', 'v1', 'meetings', 'telemost']:
+        return False
+    if len(parts) == 4:
+        return method in {'GET', 'POST'}
+    if len(parts) == 5 and parts[4]:
+        return method == 'GET'
+    if len(parts) == 6 and parts[4] and parts[5] == 'stop':
+        return method == 'POST'
+    return (method == 'GET' and len(parts) == 7 and bool(parts[4])
+            and parts[5] == 'audio' and bool(parts[6]))
+
 
 def read_only_http_allowed(method: str, path: str) -> bool:
     if path == "/mcp":
