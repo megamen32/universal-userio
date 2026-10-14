@@ -63,3 +63,17 @@ publication blocked by existing9ahead/13behind main plus foreign bridge/session
 WIP. Do not merge or push foreign commits merely to publish this note. Product
 ownership doc is published inUserIOdocs/operations/voice-ownership.md. Existing
 source WIP and unreviewedPR5 remain unchanged; canonical runtime does not use it.
+
+## Owner's timing extension after Matrix acceptance
+Direct request: “make timeout for waiting call to start on telegram longer please”.
+Published/installedUserIO3ec9ba1: answer120s/connect60s, independent talk budget;
+manager/gateway+340s, wrapper535s. NoticePlace058f7f1 HTTPfloor550s installed100/44/88.
+Delayed-recipient75s+media35s virtual scenario passed; selected50PASS/1optionalskip
+2.182s, NoticePlace20PASS9.914s. First timing fixture had an immediate-return
+pump loop; only its owned bounded unit was stopped, corrected and rerun green.
+No real call was made for this timing change. No new account/token/model or RAM/
+CPU/parallelism increase. Rejection/provider termination still ends the wait early.
+Core/gateway activated with no live model claims or nativeRTC/telephone calls;
+retained14Oct10:18UTCringing JSON is historical, not a live call, preserved.
+Relevant ingress services active; runtime_release verify passed, quiet gate remains
+00:00–12:00 and critical_allowed=false. New Telegram live dialogue remains unclaimed.
