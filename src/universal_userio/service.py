@@ -241,7 +241,8 @@ class UserIOService:
             message, conversation_id=conversation_id, policy=policy, user_id=user_id,
             conversation_key=conversation_key, account_ref=account_ref,
         )
-        if accepted and message.direction == "incoming" and not message.reconciliation:
+        if (accepted and message.direction == "incoming" and not message.reconciliation
+                and not self._store.account_ai_disabled(account_ref, user_id=user_id)):
             for listener in tuple(self._inbound_listeners):
                 listener(user_id, conversation_id, message)
         return conversation_id, accepted
@@ -1139,8 +1140,11 @@ class UserIOService:
         conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
         if limit < 1:
             raise ValueError("draft limit must be positive")
-        if self._store.conversation(conversation_id, user_id=user_id) is None:
+        conversation = self._store.conversation(conversation_id, user_id=user_id)
+        if conversation is None:
             raise KeyError("conversation not found")
+        if self._store.account_ai_disabled(str(conversation.get("account_ref") or ""), user_id=user_id):
+            raise ValueError("AI processing is disabled for this account")
         generator = self._generator_for(user_id)
         context_snapshot, current_source = self._store.reply_generation_context(
             conversation_id, source=message.source, message_id=message.message_id, user_id=user_id,

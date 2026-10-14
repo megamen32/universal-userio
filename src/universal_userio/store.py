@@ -1281,6 +1281,33 @@ class SQLiteUserIOStore:
         defaults.update({str(row["conversation_kind"]): bool(row["enabled"]) for row in rows})
         return {"defaults": defaults, "revision": int(revision or 0)}
 
+    def account_ai_disabled(self, account_ref: str, *, user_id: str | None = None) -> bool:
+        """Keep an operator-excluded account readable without Secretary processing."""
+        return bool(account_ref) and self.user_preference(
+            "ai_disabled_account:" + account_ref, user_id=user_id, default="0",
+        ) == "1"
+
+    def set_account_ai_enabled(self, account_ref: str, enabled: bool, *,
+                               user_id: str | None = None) -> None:
+        user = self._user(user_id)
+        if type(enabled) is not bool or not account_ref or len(account_ref) > 256:
+            raise ValueError("invalid account AI policy")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO user_preferences(user_id,key,value,updated_at) VALUES (?,?,?,?)",
+                (user, "ai_disabled_account:" + account_ref, "0" if enabled else "1", time.time()),
+            )
+            if not enabled:
+                self._connection.execute("""UPDATE workspace_events SET eligible=0
+                    WHERE user_id=? AND conversation_id IN (
+                        SELECT id FROM conversations WHERE user_id=? AND account_ref=?)""",
+                    (user, user, account_ref))
+                self._connection.execute("""DELETE FROM conversation_summaries
+                    WHERE user_id=? AND conversation_id IN (
+                        SELECT id FROM conversations WHERE user_id=? AND account_ref=?)""",
+                    (user, user, account_ref))
+            self._bump_workspace_policy(user)
+
     def _bump_workspace_policy(self, user_id: str) -> int:
         self._connection.execute("""INSERT INTO user_preferences(user_id,key,value,updated_at)
             VALUES (?,'workspace_policy_revision','1',?)
@@ -1440,6 +1467,8 @@ class SQLiteUserIOStore:
             chat = dict(row)
             chat["allowed"] = chat["action"] == "allow" or (
                 chat["action"] == "inherit" and defaults[chat["conversation_kind"]])
+            chat["account_ai_disabled"] = self.account_ai_disabled(str(chat["account_ref"]), user_id=user)
+            chat["allowed"] = bool(chat["allowed"] and not chat["account_ai_disabled"])
             chat["effective_action"] = "allow" if chat["allowed"] else "ignore"
             result.append(chat)
         return result
@@ -1462,7 +1491,9 @@ class SQLiteUserIOStore:
         with self._lock:
             excluded = self._connection.execute("""SELECT 1 FROM workspace_exclusions
                 WHERE user_id=? AND conversation_id=?""", (user, conversation_id)).fetchone() is not None
-        return {**row, "allowed": bool(allowed and not excluded),
+        account_disabled = self.account_ai_disabled(str(row["account_ref"]), user_id=user)
+        return {**row, "allowed": bool(allowed and not excluded and not account_disabled),
+                "account_ai_disabled": account_disabled,
                 "policy_revision": defaults["revision"]}
 
     def evaluate_workspace_event(
@@ -2920,11 +2951,13 @@ class SQLiteUserIOStore:
         with self._lock, self._connection:
             self._purge_conversation_summaries(user_id=user)
             conversation = self._connection.execute(
-                "SELECT source,conversation_kind FROM conversations WHERE user_id=? AND id=?",
+                "SELECT source,conversation_kind,account_ref FROM conversations WHERE user_id=? AND id=?",
                 (user, conversation_id),
             ).fetchone()
             if conversation is None:
                 raise KeyError("conversation not found")
+            if self.account_ai_disabled(str(conversation["account_ref"]), user_id=user):
+                return None
             if not self._summary_cache_enabled_for(
                 conversation["source"], conversation["conversation_kind"], settings,
             ):
@@ -3045,11 +3078,13 @@ class SQLiteUserIOStore:
                     if attachments != snapshot.get("attachments", []):
                         return False
             conversation = self._connection.execute(
-                "SELECT source,conversation_kind FROM conversations WHERE user_id=? AND id=?",
+                "SELECT source,conversation_kind,account_ref FROM conversations WHERE user_id=? AND id=?",
                 (user, conversation_id),
             ).fetchone()
             if conversation is None:
                 raise KeyError("conversation not found")
+            if self.account_ai_disabled(str(conversation["account_ref"]), user_id=user):
+                return False
             if not self._summary_cache_enabled_for(
                 conversation["source"], conversation["conversation_kind"], settings,
             ):
