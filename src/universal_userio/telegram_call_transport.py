@@ -22,6 +22,10 @@ def decode_bytes(value: str) -> bytes:
     return base64.b64decode(value, validate=True)
 
 
+class RecipientUnanswered(TimeoutError):
+    """Invitation expired before acceptance; not a media/provider failure."""
+
+
 class TelegramCallTransport:
     """48 kHz mono signed little-endian PCM, matching AgentCall AudioSocket.
 
@@ -169,7 +173,7 @@ class TelegramCallTransport:
             if self.ended.is_set():
                 raise self.failure or ConnectionError("Telegram call ended")
             if get not in done:
-                raise TimeoutError("Telegram recipient did not answer")
+                raise RecipientUnanswered("Telegram recipient did not answer")
             return get.result()
         finally:
             get.cancel(); end.cancel()

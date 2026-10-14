@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from universal_userio.telegram_call_transport import TelegramCallTransport, encode_bytes, decode_bytes
+from universal_userio.telegram_call_transport import TelegramCallTransport, RecipientUnanswered, encode_bytes, decode_bytes
 from universal_userio.telegram_call_worker import AudioSocketWriter, ConnectorRPC
 
 
@@ -143,6 +143,34 @@ def test_wrong_recipient_receipt_never_discards_a_foreign_call():
         await transport.close()
         assert not any(method == "phone.discardCall" for method, _ in operations)
     asyncio.run(check())
+
+
+def test_unanswered_invitation_is_distinct_from_media_timeout():
+    async def check():
+        transport, native, operations, _ = setup()
+        original = transport.rpc
+        async def rpc(method, params):
+            if method == 'phone.requestCall':
+                operations.append((method,params))
+                return {'id':'11','access_hash':'22','participant_id':'7'}
+            return await original(method,params)
+        transport.rpc = rpc
+        with pytest.raises(RecipientUnanswered): await transport.dial(answer_seconds=.001)
+        await transport.close()
+        assert native.stops == 1
+        assert [m for m,p in operations].count('phone.discardCall') == 1
+        assert not any(m=='phone.confirmCall' for m,p in operations)
+    asyncio.run(check())
+
+
+def test_unanswered_worker_reports_normal_end(monkeypatch):
+    from universal_userio import telegram_call_worker as worker
+    events=[]
+    async def unanswered(): raise RecipientUnanswered('recipient did not answer')
+    monkeypatch.setattr(worker,'_main',unanswered)
+    monkeypatch.setattr(worker,'emit',events.append)
+    worker.main()
+    assert events==[{'event':'ended','reason':'unanswered'}]
 
 
 def test_early_discard_is_not_mistaken_for_an_answer():

@@ -14,7 +14,7 @@ import struct
 import sys
 import uuid
 
-from .telegram_call_transport import TelegramCallTransport
+from .telegram_call_transport import TelegramCallTransport, RecipientUnanswered
 from .matrix_call_worker import server_voice_config
 
 
@@ -206,6 +206,8 @@ async def _main():
 def main():
     try:
         asyncio.run(_main())
+    except RecipientUnanswered:
+        emit({"event": "ended", "reason": "unanswered"})
     except Exception as error:
         emit({"event": "error", "reason": type(error).__name__})
         raise SystemExit(1) from None

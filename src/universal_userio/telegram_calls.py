@@ -207,6 +207,8 @@ class TelegramCalls:
                     transcript.write_text(json.dumps({k:'\n'.join(v) for k,v in transcripts.items()},ensure_ascii=False))
                     os.chmod(transcript,0o600)
                     self._emit(record,'Звонок завершён через Telegram',suffix='ended')
+            if record['status']=='unanswered':
+                self._emit(record,'Звонок через Telegram завершён без ответа.',suffix='ended')
             if poll_error: raise poll_error
         finally:
             for task in (consumer,updates):

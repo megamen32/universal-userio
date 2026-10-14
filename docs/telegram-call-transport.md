@@ -242,10 +242,18 @@ serialization7PASS; gateway routing4PASS. Real48k native proof is the separately
 accepted caller-first run above. Private evidence:
 `.tmp/telegram-call-runtime-install-20261014/`.
 
-Remaining deployment boundary: the existing Secretary relay's call capabilities
-endpoint returned HTTP404 after these installs. No new client/session/login or
-fallback is used. Wait for that existing owner seam to be installed, then perform
-one authorized real call and verify speech, recordings and transcripts.
+The existing Secretary relay seam is now installed (f84822d), with exact caller/
+recipient capabilities200/configuredtrue and five RPCs, using the same session,
+token and mounts. Account-scoped Secretary tools are installed (ac4224c), with
+allowlist checks before start/get/stop and read-only limited to get.
+
+One real UserIO MCP call attempt was accepted by Telegram, remained unanswered,
+then ended with completed discard and CLOSED admission. No media connection or
+archive was created. The initial TimeoutError result is retained privately;
+source now distinguishes an unanswered invitation from transport failure.
+Actual speech/recording acceptance is pending: the human requested no calls
+while sleeping. No retry or wake-up is scheduled; resume the remaining dialogue
+check only after the human returns. Never replay that accepted attempt.
 
 Settled owner relay API on30192, existing protected bearer:
 `POST /userio/telegram/calls/start` with admission_id/account_id/recipient_id/purpose;
