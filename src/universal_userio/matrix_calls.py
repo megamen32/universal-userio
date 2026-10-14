@@ -69,7 +69,7 @@ class MatrixCalls:
         return record
 
     def start(self, *, user_id, account_ref, room_id, target, purpose, request_id,
-              greeting='', max_seconds=120, confirm=False):
+              greeting='', max_seconds=120, confirm=False, agent_context=None):
         if confirm is not True: raise ValueError('explicit call confirmation required')
         if user_id != self.service._store.default_user_id:
             raise PermissionError('existing voice gateway is bound to its owner')
@@ -89,7 +89,8 @@ class MatrixCalls:
         display_account = next((a['id'] for a in self.service._store.accounts(user_id=user_id)
                                 if a['provider']=='matrix' and a['enabled'] and a['display_name']==target), account_ref)
         config = {'user_id': user_id, 'account_ref': account_ref, 'history_account_ref':display_account, 'room_id': room_id,
-                  'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds}
+                  'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
+                  **({'agent_context':dict(agent_context)} if agent_context else {})}
         call_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id+'\0'+request_id))
         fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
         # Same request after a restart returns its receipt; it never rings twice.

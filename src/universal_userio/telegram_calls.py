@@ -54,7 +54,8 @@ class TelegramCalls:
         return record
 
     def start(self, *, user_id, account_ref, target, purpose, request_id,
-              greeting='', max_seconds=120, confirm=False):
+              greeting='', max_seconds=120, confirm=False, agent_context=None):
+        agent_context = dict(agent_context or {})
         if confirm is not True: raise ValueError('explicit call confirmation required')
         if user_id != self.service._store.default_user_id:
             raise PermissionError('voice gateway is bound to its owner')
@@ -78,6 +79,8 @@ class TelegramCalls:
                 previous=self.get(call_id,user_id)
                 if (previous['account_ref'],previous['target'],previous['purpose'],previous['greeting'],previous['max_seconds']) != (account_ref,target,purpose,greeting,max_seconds):
                     raise ValueError('request ID already belongs to another call')
+                if previous.get('agent_context', {}) != agent_context:
+                    raise ValueError('request ID already belongs to another context')
                 return previous
             if self.active: raise RuntimeError('a Telegram call is already active')
             # A fresh read verifies the existing sender; it never creates a client.
@@ -85,6 +88,7 @@ class TelegramCalls:
             if provider.account_ref!=account_ref or provider.sender_id!=account_ref.split(':',1)[1]:
                 raise ValueError('relay caller identity changed')
             record={'call_id':call_id,'admission_id':call_id,'owner_user_id':user_id,
+                    'agent_context':agent_context,
                     'account_ref':account_ref,'target':target,'purpose':purpose,'greeting':greeting,
                     'max_seconds':max_seconds,'status':'accepted','answered':False,'started_at':time.time()}
             self._save(record)
@@ -125,6 +129,7 @@ class TelegramCalls:
                 'recipient_id':record['target'],'purpose':record['purpose']})
             reader,writer=await asyncio.open_unix_connection('/run/agentcall/control.sock',limit=65536)
             call={'admission_id':record['admission_id'],'user_id':record['target'],
+                  'agent_context':record.get('agent_context', {}),
                   'history_account_ref':record['account_ref'],'peer_label':'Собеседник',
                   'purpose':record['purpose'],'greeting':record['greeting'],'max_seconds':record['max_seconds']}
             async def send(frame):

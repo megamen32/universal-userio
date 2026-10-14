@@ -145,6 +145,8 @@ def test_long_incident_content_is_safe_bounded_and_identifies_action(setup, chan
     payload = dict(PAYLOAD, incident_id='x' * 128, title='Сервис\x00 ' + 'я' * 990, body='я' * 12000)
     noticeplace_calls.noticeplace_call(Mock(), 'owner', payload, channel=channel)
     call = ledger.starts[0]
+    assert call['agent_context']['incident_id'] == payload['incident_id']
+    assert call['agent_context']['event_type'] == 'noticeplace.call'
     assert 16 <= len(call['request_id']) <= 128
     assert len(call['purpose']) <= 500 and len(call['greeting']) <= 1000
     assert '\x00' not in call['greeting'] and 'Notice Place' in call['greeting']

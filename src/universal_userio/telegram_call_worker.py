@@ -167,7 +167,9 @@ async def run(request, input_stream):
     controller = voice.CallController(config, prepared, originate=originate)
     try:
         await controller.prepare(record.get("greeting") or record["purpose"],
-                                 context=record["purpose"], repeat=1)
+                                 context=record["purpose"], repeat=1,
+                                 agent_context=dict(record.get('agent_context') or {},
+                                     voice_transport='telegram', voice_target=str(record['user_id'])))
         if engine_task:
             await asyncio.wait((engine_task, watcher), timeout=max_seconds,
                                return_when=asyncio.FIRST_COMPLETED)
