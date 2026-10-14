@@ -12,7 +12,7 @@ def test_invalid_links(url):
 
 def test_quiet_contract():
     value=hello('peer','room','test-secret','service')['hello']
-    assert value['disablePublisher'] and value['sendAudio'] is False and value['sendVideo'] is False
+    assert value['disablePublisher'] is False and value['sendAudio'] is False and value['sendVideo'] is False
     assert value['participantMeta']['sendAudio'] is False and value['participantMeta']['sendVideo'] is False
     assert 'запись' in value['participantMeta']['name']
 

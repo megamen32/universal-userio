@@ -1,6 +1,7 @@
 """Receive-only Telemost signaling adapted from WhiteTransport's joiner.
 
-No publisher, local tracks, tunneling, cookies or automatic rejoin. The SFU may
+No local tracks, tunneling, cookies or automatic rejoin. A trackless publisher
+is negotiated because the current SFU requires it even for a muted attendee. The SFU may
 provide mixed audio; a track identifier is never asserted to be a person's name.
 """
 from __future__ import annotations
@@ -29,8 +30,8 @@ def hello(peer,room,credentials,service_name):
         'participantAttributes':{'name':name,'role':'SPEAKER','description':'Запись аудио и расшифровка'},
         'sendAudio':False,'sendVideo':False,'sendSharing':False,
         'participantId':peer,'roomId':room,'credentials':credentials,'serviceName':service_name,
-        'disablePublisher':True,'disableSubscriber':False,'disableSubscriberAudio':False,
-        'capabilitiesOffer':CAPABILITIES,'sdkInfo':{'implementation':'browser','version':'6.0.0','userAgent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36','hwConcurrency':2},
+        'disablePublisher':False,'disableSubscriber':False,'disableSubscriberAudio':False,
+        'capabilitiesOffer':CAPABILITIES,'sdkInfo':{'implementation':'browser','version':'6.2.2','userAgent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36','hwConcurrency':2},
         'sdkInitializationId':str(uuid.uuid4())}}
 
 
@@ -46,7 +47,7 @@ def safe_media_url(value):
 class Receiver:
     def __init__(self, record, folder, save, stop):
         self.record,self.folder,self.save,self.stop=record,Path(folder),save,stop
-        self.pc=None; self.tasks=[]; self.total_bytes=0; self.websocket=None
+        self.pc=None; self.publisher=None; self.tasks=[]; self.total_bytes=0; self.websocket=None
         self.started=time.monotonic(); self.pending=[]; self.remote=False
         self.seq=0; self.media_deadline=0; self.track_count=0
         self.record['protocol_events']=[]
@@ -85,6 +86,10 @@ class Receiver:
             ice=[RTCIceServer(urls=s['urls'],username=s.get('username'),credential=s.get('credential'))
                  for s in config.get('ice_servers',[])][:16]
             self.pc=RTCPeerConnection(RTCConfiguration(iceServers=ice))
+            self.publisher=RTCPeerConnection(RTCConfiguration(iceServers=ice))
+            self.publisher.addTransceiver('audio',direction='sendonly')
+            self.publisher.addTransceiver('video',direction='sendonly')
+            # No addTrack: these empty negotiation transceivers never capture mic/camera.
             @self.pc.on('track')
             def on_track(track):
                 if track.kind!='audio':return
@@ -134,10 +139,13 @@ class Receiver:
                         await ws.send_json({'uid':payload['uid'],'ack':{'status':{'code':'OK','description':''}}})
                     if 'serverHello' in payload:
                         self.record['server_hello_fields']=sorted(payload['serverHello'].keys());self.record['negotiated_capabilities']=payload['serverHello'].get('capabilitiesAnswer',{});self.save()
-                        await ws.send_json({'uid':str(uuid.uuid4()),'setSlots':{'slots':[],
-                            'audioSlotsCount':8,'key':1,'withSelfView':False,'shutdownAllVideo':True,'gridConfig':{}}})
                     if 'subscriberSdpOffer' in payload:
                         offer=payload['subscriberSdpOffer'];self.seq=offer['pcSeq']
+                        if self.publisher.localDescription is None:
+                            publisher_offer=await self.publisher.createOffer();await self.publisher.setLocalDescription(publisher_offer)
+                            assert all(sender.track is None for sender in self.publisher.getSenders())
+                            tracks=[{'mid':t.mid,'transceiverMid':t.mid,'kind':t.kind.upper(),'priority':0,'label':'','codecs':{},'groupId':1 if t.kind=='audio' else 2,'description':''} for t in self.publisher.getTransceivers()]
+                            await ws.send_json({'uid':str(uuid.uuid4()),'publisherSdpOffer':{'pcSeq':1,'sdp':self.publisher.localDescription.sdp,'tracks':tracks}})
                         await self.pc.setRemoteDescription(RTCSessionDescription(sdp=offer['sdp'],type='offer'))
                         self.remote=True
                         for candidate in self.pending:await self.pc.addIceCandidate(candidate)
@@ -147,11 +155,19 @@ class Receiver:
                         answer=await self.pc.createAnswer();await self.pc.setLocalDescription(answer)
                         await ws.send_json({'uid':str(uuid.uuid4()),'subscriberSdpAnswer':{
                             'sdp':self.pc.localDescription.sdp,'pcSeq':self.seq}})
+                    if 'publisherSdpAnswer' in payload:
+                        await self.publisher.setRemoteDescription(RTCSessionDescription(sdp=payload['publisherSdpAnswer']['sdp'],type='answer'))
+                        await ws.send_json({'uid':str(uuid.uuid4()),'updatePublisherTrackDescription':{'publisherTrackDescriptions':[]}})
+                        await ws.send_json({'uid':str(uuid.uuid4()),'sdkCodecsInfo':{'vp8':{'supported':'CODEC_FEATURE_SUPPORTED','hwDecode':'CODEC_FEATURE_NOT_SUPPORTED','hwEncode':'CODEC_FEATURE_NOT_SUPPORTED','isoString':'vp8'}}})
+                        await ws.send_json({'uid':str(uuid.uuid4()),'setSlots':{'slots':[{'width':0,'height':0} for _ in range(12)],'audioSlotsCount':0,'key':1,'shutdownAllVideo':False,'withSelfView':True,'selfViewVisibility':'ON_LOADING_THEN_SHOW','gridConfig':{}}})
                     if 'webrtcIceCandidate' in payload:
                         item=payload['webrtcIceCandidate']
-                        if item.get('target')!='SUBSCRIBER' or not item.get('candidate'):continue
+                        if not item.get('candidate'):continue
                         candidate=candidate_from_sdp(item['candidate'].removeprefix('candidate:'))
                         candidate.sdpMid=item.get('sdpMid');candidate.sdpMLineIndex=item.get('sdpMlineIndex')
+                        if item.get('target')=='PUBLISHER':
+                            if self.publisher.remoteDescription is not None:await self.publisher.addIceCandidate(candidate)
+                            continue
                         if self.remote:await self.pc.addIceCandidate(candidate)
                         else:self.pending.append(candidate)
                     if 'upsertDescription' in payload:
@@ -165,6 +181,7 @@ class Receiver:
                 await asyncio.gather(*self.maintenance,return_exceptions=True)
                 self.record['status']='finalizing';self.save()
         if self.pc:await self.pc.close()
+        if self.publisher:await self.publisher.close()
         for task in self.tasks:task.cancel()
         await asyncio.gather(*self.tasks,return_exceptions=True)
         self.record['status']='recorded' if any(t.get('bytes',0)>44 for t in self.record['tracks']) else 'no_audio'
@@ -209,3 +226,4 @@ class Receiver:
         for task in getattr(self,'maintenance',[]):task.cancel()
         await asyncio.gather(*getattr(self,'maintenance',[]),return_exceptions=True)
         if self.pc:await self.pc.close()
+        if self.publisher:await self.publisher.close()
