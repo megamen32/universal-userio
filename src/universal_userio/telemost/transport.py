@@ -60,10 +60,10 @@ class Receiver:
         url=meeting_url(self.record['url'])
         path='/conferences/'+quote(url,safe='')
         deadline=self.started+self.record['max_seconds']
-        timeout=aiohttp.ClientTimeout(total=15)
+        timeout=aiohttp.ClientTimeout(total=None,sock_connect=15)
         async with aiohttp.ClientSession(headers=headers,timeout=timeout) as session:
             async def request(suffix,method='GET',body=None):
-                async with session.request(method,API+path+suffix,json=body,allow_redirects=False) as response:
+                async with session.request(method,API+path+suffix,json=body,allow_redirects=False,timeout=aiohttp.ClientTimeout(total=15)) as response:
                     if response.status!=200:
                         raise RuntimeError('telemost_http_'+str(response.status))
                     raw=await response.content.read(1024*1024+1)
@@ -125,6 +125,7 @@ class Receiver:
                     if payload.get('uid') and 'ack' not in payload:
                         await ws.send_json({'uid':payload['uid'],'ack':{'status':{'code':'OK','description':''}}})
                     if 'serverHello' in payload:
+                        self.record['server_hello_fields']=sorted(payload['serverHello'].keys());self.save()
                         await ws.send_json({'uid':str(uuid.uuid4()),'setSlots':{'slots':[],
                             'audioSlotsCount':8,'key':1,'withSelfView':False,'shutdownAllVideo':True,'gridConfig':{}}})
                     if 'subscriberSdpOffer' in payload:
