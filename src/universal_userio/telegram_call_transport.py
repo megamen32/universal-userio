@@ -143,6 +143,11 @@ class TelegramCallTransport:
             return
         if self.call and str(update.get("id")) != str(self.call["id"]):
             return
+        # Waiting updates report delivery/ringing, never an answer or media.
+        # A provider page may contain64 of them while our bounded queue holds32;
+        # they must not crowd out the accepted/discarded/key-exchange updates.
+        if update.get("type") == "phoneCallWaiting":
+            return
         if update.get("type") == "phoneCallDiscarded" and self.call:
             self.discarded = True
             self.ended.set()

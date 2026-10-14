@@ -9,6 +9,7 @@ import asyncio
 from dataclasses import replace
 import json
 import os
+from pathlib import Path
 import signal
 import struct
 import sys
@@ -122,7 +123,8 @@ async def run(request, input_stream):
     max_seconds = int(record["max_seconds"])
     if not 1 <= max_seconds <= 600:
         raise ValueError("invalid call time budget")
-    sys.path.insert(0, "/usr/local/lib/agentcall")
+    sys.path.insert(0, '/usr/local/lib/agentcall')  # Installed Exmanager brain adapter.
+    sys.path.insert(0, str(Path(__file__).with_name('voice')))
     import agentcall_realtime_bridge as voice
     config = server_voice_config(voice.BackendConfig.from_environment())
     os.environ['AGENTCALL_TTS_PHONE_FALLBACK']='0'

@@ -11,6 +11,7 @@ from dataclasses import replace
 import gc
 import json
 import os
+from pathlib import Path
 import signal
 import sys
 import time
@@ -55,7 +56,8 @@ async def finish_rtc_audio(source, should_stop=None, *, interrupted=False):
 
 async def run(request):
     from livekit import rtc
-    sys.path.insert(0,'/usr/local/lib/agentcall')
+    sys.path.insert(0,'/usr/local/lib/agentcall')  # Installed Exmanager brain adapter.
+    sys.path.insert(0,str(Path(__file__).with_name('voice')))
     import agentcall_realtime_bridge as voice
     record, account, identity = request['call'],request['account'],request['identity']
     config = server_voice_config(voice.BackendConfig.from_environment())
@@ -103,7 +105,11 @@ async def run(request):
             task=asyncio.create_task(receive(track));media_tasks.add(task)
             task.add_done_callback(lambda t: terminate() if not t.cancelled() and t.exception() else None)
     @media.on('participant_disconnected')
-    def disconnected(participant): terminate()
+    def disconnected(participant):
+        # SFU churn during ringing is not a recipient hangup. Start observing
+        # the intended recipient only after the fresh answer was accepted.
+        if transport_ready.is_set() and participant.identity.startswith(target+':'):
+            terminate()
 
     class Writer:
         sample_rate=48000

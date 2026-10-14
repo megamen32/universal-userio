@@ -361,3 +361,17 @@ def test_native_crypto_signaling_bidirectional_pcm_and_cleanup():
             gc.collect()
             await asyncio.sleep(.1)
     asyncio.run(check())
+
+
+def test_ringing_updates_cannot_abort_a_call_before_answer():
+    """Fast unit expected1s/max10s: a64-update provider page must preserve ringing."""
+    async def check():
+        transport, native, operations, _ = setup()
+        for _ in range(64):
+            transport.update({'type':'phoneCallWaiting','id':'11','receive_date':1})
+        assert not transport.ended.is_set()
+        await transport.dial()
+        assert transport.connected.is_set()
+        assert [m for m,p in operations].count('phone.requestCall') == 1
+        await transport.close()
+    asyncio.run(check())
