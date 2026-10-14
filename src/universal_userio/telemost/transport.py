@@ -105,10 +105,15 @@ class Receiver:
             async with session.ws_connect(media_url,timeout=15,max_msg_size=1024*1024) as ws:
                 self.websocket=ws
                 await ws.send_json(hello(connection['peer_id'],connection['room_id'],connection['credentials'],config['service_name']))
+                handshake=asyncio.Event()
                 async def maintain():
+                    # The official SDK starts its ping timer after serverHello.
+                    # A heartbeat must never race the initial handshake.
+                    await handshake.wait()
                     while not self.stop.is_set() and time.monotonic()<deadline:
-                        await ws.send_json({'uid':str(uuid.uuid4()),'ping':{}})
                         await asyncio.sleep(5)
+                        if not ws.closed and not self.stop.is_set():
+                            await ws.send_json({'uid':str(uuid.uuid4()),'ping':{}})
                 async def states():
                     while not self.stop.is_set() and time.monotonic()<deadline:
                         await request('/request-states','POST',{'peers':[{'peer_id':connection['peer_id']}],
@@ -126,7 +131,15 @@ class Receiver:
                     self.maintenance=[t for t in self.maintenance if not t.done()]
                     if msg.type!=aiohttp.WSMsgType.TEXT:
                         if msg.type in {aiohttp.WSMsgType.CLOSE,aiohttp.WSMsgType.CLOSED,aiohttp.WSMsgType.ERROR}:
-                            self.record['provider_close_code']=ws.close_code or (msg.data if isinstance(msg.data,int) else None);self.save();break
+                            self.record['provider_close_code']=ws.close_code or (msg.data if isinstance(msg.data,int) else None)
+                            error=ws.exception()
+                            self.record['provider_terminal_frame']=msg.type.name
+                            if error is not None:
+                                self.record['provider_transport_error']=type(error).__name__
+                                # Do not serialize exceptions that can contain endpoints or credentials.
+                                if isinstance(error,aiohttp.WebSocketError):
+                                    self.record['provider_frame_error_code']=error.code
+                            self.save();break
                         continue
                     payload=json.loads(msg.data)
                     if len(self.record['protocol_events'])<32:
@@ -139,6 +152,7 @@ class Receiver:
                         await ws.send_json({'uid':payload['uid'],'ack':{'status':{'code':'OK','description':''}}})
                     if 'serverHello' in payload:
                         self.record['server_hello_fields']=sorted(payload['serverHello'].keys());self.record['negotiated_capabilities']=payload['serverHello'].get('capabilitiesAnswer',{});self.save()
+                        handshake.set()
                     if 'subscriberSdpOffer' in payload:
                         offer=payload['subscriberSdpOffer'];self.seq=offer['pcSeq']
                         if self.publisher.localDescription is None:
