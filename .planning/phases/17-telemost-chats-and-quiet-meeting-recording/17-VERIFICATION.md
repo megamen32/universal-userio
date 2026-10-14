@@ -123,3 +123,13 @@ instructions, unrelated business messages and unauthorized authors do not start
 recording. Different permission/new-user/multi-speaker/long-duration journeys
 remain unverified. Atomic shared restart/admission and full Yandex generic rich
 capabilities remain independent follow-ups, not closed by phase17.
+
+
+Final publication/cleanup: task-created Exmanager tree and its local/remote
+branch were removed only after exact ancestry in remote main; its private
+artifacts retained outside Git. Existing other trees and WIP preserved.
+Published27-page docs were installed with only static docs bytes changed;
+public /docs/HTTP200 exposes the new Secretary instructions. Exact API PID
+preserved, no restart/provider/model/join replay. Original GSD native check
+recognizes the complete planning state. Post-canary owned documentation
+publication does not claim the shared checkout or whole milestone clean.
