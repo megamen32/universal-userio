@@ -1,7 +1,7 @@
-"""Bounded read-only Xiva client, matching Telemost web213.7.0's wire codec.
+"""Bounded Xiva client, matching Telemost web213.7.0's wire codec.
 
-Credentials enter via stdin. This client never sends seen markers, subscriptions
-to individual messages, typing, or provider mutations. History is read-only.
+Credentials enter via stdin. History never sends seen markers or typing. Text
+delivery is a separate explicit operation after UserIO's durable send claim.
 """
 from __future__ import annotations
 import asyncio
@@ -72,8 +72,11 @@ def decode(raw):
     return kind, header, json.loads(raw[offset+12:])
 
 
-async def history(credentials, *, chat_id='', before=0, limit=20):
+async def history(credentials, *, chat_id='', before=0, limit=20,
+                  operation='history', text='', payload_id='', target_guid='', trace=None):
     import aiohttp
+    trace = {} if trace is None else trace
+    trace.update(stage='identity_read',message_submitted=False)
     uid = str(credentials['uid'])
     if not uid.isascii() or not uid.isdigit():
         raise ValueError('invalid Yandex account')
@@ -81,12 +84,19 @@ async def history(credentials, *, chat_id='', before=0, limit=20):
         raise ValueError('invalid history bounds')
     if len(chat_id) > 200:
         raise ValueError('invalid chat identity')
+    if operation not in {'history','resolve','send'}:
+        raise ValueError('unsupported Yandex operation')
+    if operation=='send' and (not text.strip() or len(text)>4096 or
+                             str(uuid.UUID(payload_id))!=payload_id):
+        raise ValueError('invalid Yandex message')
+    if operation=='resolve' and str(uuid.UUID(target_guid))!=target_guid:
+        raise ValueError('invalid Yandex recipient')
     cookie = '; '.join(k+'='+v for k,v in credentials['cookies'].items())
     if '\r' in cookie or '\n' in cookie or len(cookie) > 32000:
         raise ValueError('invalid session')
     query = urlencode({'service':'messenger-prod:version5*common+version5*main',
                        'session':uuid.uuid4().hex, 'client':'web_main', 'user':uid})
-    timeout = aiohttp.ClientTimeout(total=25, connect=5)
+    timeout = aiohttp.ClientTimeout(total=35, connect=5)
     async with aiohttp.ClientSession(timeout=timeout, headers={
         'Cookie':cookie, 'Origin':'https://telemost.yandex.ru'}) as http:
         async with http.ws_connect('wss://push.yandex.ru/v2/subscribe/websocket?'+query,
@@ -96,11 +106,11 @@ async def history(credentials, *, chat_id='', before=0, limit=20):
                 msg = await ws.receive(timeout=8)
                 if msg.type != aiohttp.WSMsgType.TEXT:
                     raise RuntimeError('Yandex subscription refused')
-                operation = json.loads(msg.data).get('operation')
-                if operation == 'subscribed':
+                event_operation = json.loads(msg.data).get('operation')
+                if event_operation == 'subscribed':
                     subscribed = True
                     break
-                if operation == 'xivaws-error':
+                if event_operation == 'xivaws-error':
                     raise RuntimeError('Yandex authentication required')
             if not subscribed:
                 raise RuntimeError('Yandex subscription unavailable')
@@ -125,6 +135,52 @@ async def history(credentials, *, chat_id='', before=0, limit=20):
             user = who.get('UserInfo', {})
             if str(user.get('Uid')) != uid or str(user.get('Guid')) != credentials['guid']:
                 raise PermissionError('Yandex session identity changed')
+            async def registry(method, params):
+                trace['stage']='registry_'+method
+                url='https://yandex.ru/messenger/api/registry/'
+                async with http.post(url+'csrf-token/',data=b'') as response:
+                    if response.status!=200:raise RuntimeError('Yandex authentication required')
+                    token=(await response.json())['token']
+                form=aiohttp.FormData()
+                form.add_field('request',json.dumps({'method':method,'params':params}),
+                               content_type='application/json')
+                async with http.post(url+'api/',data=form,headers={
+                    'X-CSRF-TOKEN':token,'X-Origin-Service-ID':'27','X-Uid':uid}) as response:
+                    if response.status!=200:raise RuntimeError('Yandex recipient unavailable')
+                    return (await response.json())['data']
+            if operation=='resolve':
+                people=(await registry('get_users_data',{'guids':[target_guid]})).get('users',[])
+                person=next((p for p in people if p.get('guid')==target_guid),None)
+                if not person:raise RuntimeError('Yandex recipient not found')
+                return {'person':person,'peer_id':'_'.join(sorted([credentials['guid'],target_guid]))}
+            if operation=='send':
+                parts=chat_id.split('_')
+                if len(parts)==2:
+                    if credentials['guid'] not in parts:
+                        raise PermissionError('private chat belongs to another sender')
+                    target=parts[0] if parts[1]==credentials['guid'] else parts[1]
+                    created=await registry('create_private_chat',{'guid':target,'wait_for_update':True})
+                    if created.get('chat',{}).get('chat_id')!=chat_id:
+                        raise PermissionError('Yandex private destination changed')
+                trace.update(stage='push',message_submitted=True)
+                ack=await request(2,'push',{'ClientMessage':{'Plain':{
+                    'ChatId':chat_id,'PayloadId':payload_id,'Text':{'MessageText':text}}},
+                    'Meta':{'Origin':27}})
+                timestamp=ack.get('MessageInfo',{}).get('TimestampMcs')
+                if ack.get('Status') not in (1,2) or type(timestamp) is not int or timestamp<=0:
+                    raise RuntimeError('Yandex send result unknown')
+                trace['stage']='delivery_readback'
+                page=await request(3,'history',{'ChatId':chat_id,
+                    'MaxTimestamp':timestamp+1,'Limit':1,'ChatDataFilter':{}})
+                for chat in page.get('Chats',[]):
+                    if chat['ChatId']!=chat_id:continue
+                    for entry in chat.get('Messages',[]):
+                        server=entry.get('ServerMessage',{});info=server.get('ServerMessageInfo',{})
+                        plain=server.get('ClientMessage',{}).get('Plain',{})
+                        if (info.get('Timestamp')==timestamp and info.get('From',{}).get('Guid')==credentials['guid']
+                            and plain.get('PayloadId')==payload_id and plain.get('Text',{}).get('MessageText')==text):
+                            return {'receipt':str(timestamp),'chat':chat}
+                raise RuntimeError('Yandex delivery readback unavailable')
             params = {'Limit':limit, 'ChatDataFilter':{}}
             if chat_id:
                 params['ChatId'] = chat_id
@@ -135,6 +191,7 @@ async def history(credentials, *, chat_id='', before=0, limit=20):
 
 
 def main():
+    trace={}
     try:
         raw = sys.stdin.buffer.read(65537)
         if len(raw) > 65536:
@@ -142,13 +199,15 @@ def main():
         request = json.loads(raw)
         result = asyncio.run(asyncio.wait_for(history(request['credentials'],
             chat_id=request.get('chat_id',''), before=request.get('before',0),
-            limit=request.get('limit',20)), 30))
+            limit=request.get('limit',20),operation=request.get('operation','history'),
+            text=request.get('text',''),payload_id=request.get('payload_id',''),
+            target_guid=request.get('target_guid',''),trace=trace), 40))
         output = json.dumps(result, ensure_ascii=False).encode()
         if len(output) > MAX_BYTES:
             raise ValueError('history too large')
         sys.stdout.buffer.write(output)
     except Exception as error:
-        print(json.dumps({'error':type(error).__name__}))
+        print(json.dumps({'error':type(error).__name__,**trace}))
         raise SystemExit(1)
 
 

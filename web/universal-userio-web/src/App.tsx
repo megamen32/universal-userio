@@ -60,7 +60,7 @@ const channelIcon = (source: string) => {
   if (provider === "whatsapp") return <Phone className="size-4" />
   return <MessageCircle className="size-4" />
 }
-const displayChannel = (source: string) => source === 'phone' ? 'Звонки' : providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
+const displayChannel = (source: string) => source === 'yandex' ? 'Яндекс · чаты' : source === 'phone' ? 'Звонки' : providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
 const chatKindLabel = (kind?: string) => (Object.entries({ group: "Группа", channel: "Канал", direct: "Личный чат", telegram_bot: "Бот", unknown: "Тип не определён" }).find(([key]) => key === kind)?.[1] || "Тип не определён")
 
 // A message is "mine" (right bubble) when it was authored by the sending
@@ -1112,7 +1112,7 @@ export function App() {
             </Fragment>
           })}
           {conversation.drafts.filter(item => !(item.status === "approved" && conversation.messages.some(message =>
-            message.message_id === item.outbox_receipt || (conversation.source === "sms" && message.outbox_receipt === item.outbox_receipt) || (conversation.source === "max" && message.message_id.endsWith(`-${item.outbox_receipt}`)) || (conversation.source === "vk" && !!item.outbox_receipt && message.direction === "outgoing" && message.message_id.startsWith(`${conversation.account_ref}|`) && message.message_id.endsWith(`:${item.outbox_receipt}`))))).map((item) => {
+            message.message_id === item.outbox_receipt || (conversation.source === "sms" && message.outbox_receipt === item.outbox_receipt) || (conversation.source === "max" && message.message_id.endsWith(`-${item.outbox_receipt}`)) || (["vk", "yandex"].includes(conversation.source) && !!item.outbox_receipt && message.direction === "outgoing" && message.message_id.startsWith(`${conversation.account_ref}|`) && message.message_id.endsWith(`:${item.outbox_receipt}`))))).map((item) => {
             const editing = editDraftId === item.id
             return <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-primary/90 px-4 py-3 text-sm text-primary-foreground shadow-sm md:max-w-[78%]">
               <p className="mb-2 text-[11px] opacity-75">{item.created_at ? <time dateTime={new Date(item.created_at * 1000).toISOString()}>Создано {new Date(item.created_at * 1000).toLocaleString("ru-RU")}</time> : "Дата создания не сохранена"}</p>

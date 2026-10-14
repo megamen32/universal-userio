@@ -37,7 +37,7 @@ def schema(
 
 CHANNEL_SCHEMA = {
     "type": "string",
-    "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"],
+    "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "yandex"],
 }
 IGNORED_CHATS_SCHEMA = {
     "type": "array",

@@ -3,7 +3,7 @@ import json
 import os
 import subprocess
 import re
-from ..contracts import InboxMessage
+from ..contracts import InboxMessage, DeliveryNotSubmittedError
 
 
 def connect(service, *, user_id, credentials, vault=None):
@@ -18,7 +18,7 @@ def connect(service, *, user_id, credentials, vault=None):
     try:
         service._store.register_account(account_id=account_id,provider='yandex',
             display_name='Яндекс · чаты · '+str(user.get('DisplayName') or 'Аккаунт'),
-            can_read=True,can_reply=False,credential_ref=reference,user_id=user_id)
+            can_read=True,can_reply=True,credential_ref=reference,user_id=user_id)
         service._store.bind_channel_route(user_id=user_id,source='yandex',route_id='manual')
     except BaseException:
         storage.delete(reference,user_id=user_id,provider='yandex')
@@ -26,21 +26,30 @@ def connect(service, *, user_id, credentials, vault=None):
     return account_id, record
 
 
-def read(account, *, chat_id='', before=0, limit=20):
+def read(account, *, chat_id='', before=0, limit=20, operation='history',
+         text='',payload_id='',target_guid=''):
     host = os.environ.get('USERIO_TELEMOST_SSH_HOST', '')
     if host not in {'192.168.2.5','192.168.2.75'}:
         raise RuntimeError('Yandex reader not configured')
     remote = '/home/roomhacker/.local/share/userio-telemost'
     command = ['runuser','-u','roomhacker','--','ssh','-o','BatchMode=yes',
-        '-o','ConnectTimeout=5','roomhacker@'+host,'timeout','35','prlimit',
+        '-o','ConnectTimeout=5','roomhacker@'+host,'timeout','45','prlimit',
         '--as=268435456','--cpu=15','--nofile=64','--',
         'env','PYTHONPATH='+remote+'/source',remote+'/venv/bin/python',
         '-m','universal_userio.yandex.client']
     result = subprocess.run(command, input=json.dumps({'credentials':account,
-        'chat_id':chat_id,'before':before,'limit':limit}).encode(),
-        capture_output=True, timeout=40)
+        'chat_id':chat_id,'before':before,'limit':limit,'operation':operation,
+        'text':text,'payload_id':payload_id,'target_guid':target_guid}).encode(),
+        capture_output=True, timeout=50)
     if result.returncode or len(result.stdout)>4*1024*1024:
-        raise RuntimeError('Yandex history unavailable')
+        try:details=json.loads(result.stdout)
+        except ValueError:details={}
+        stage=details.get('stage','unknown')
+        if stage not in {'identity_read','registry_get_users_data','registry_create_private_chat','push','delivery_readback'}:
+            stage='unknown'
+        if operation=='send' and details.get('message_submitted') is False:
+            raise DeliveryNotSubmittedError('Yandex send not submitted: '+stage)
+        raise RuntimeError('Yandex operation unavailable: '+stage)
     return json.loads(result.stdout)
 
 

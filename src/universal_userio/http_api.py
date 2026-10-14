@@ -609,11 +609,14 @@ def handler(
                     payload = self._json()
                     source = str(payload.get("source") or "").strip().lower()
                     sender = str(payload.get("sender") or "").strip()
-                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "max", "email", "gmail"} and not source.startswith("gmail:"):
+                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "max", "email", "gmail", "yandex"} and not source.startswith("gmail:"):
                         raise ValueError("unsupported conversation source")
                     if not sender:
                         raise ValueError("sender is required")
-                    if source=='vk':
+                    if source=='yandex':
+                        from .yandex.web import YandexWeb
+                        record=YandexWeb(service,user_id).create_conversation(str(payload.get('account_ref') or ''),sender)
+                    elif source=='vk':
                         from .vk_web import VKWeb
                         record=VKWeb(service,user_id).create_conversation(str(payload.get('account_ref') or ''),sender)
                     else:

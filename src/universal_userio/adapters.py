@@ -415,9 +415,6 @@ class StoredChannelAdapter:
 class YandexChannelAdapter(StoredChannelAdapter):
     channel = "yandex"
 
-    def send(self, **kwargs):
-        raise AdapterNotSupported("Yandex sending is not connected")
-
 
 class MailChannelAdapter(StoredChannelAdapter):
     channel = "mail"
