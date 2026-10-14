@@ -196,6 +196,10 @@ class HimalayaReader:
         self, cursor: str | None, *, limit: int = 100,
         known_message_ids: set[str] | frozenset[str] = frozenset(),
     ) -> tuple[list[GmailMessage], str | None]:
+        # IMAP envelopes may retain folding whitespace before a Message-ID.
+        # Accept cursors written before the same normalization was applied.
+        cursor = cursor.strip().strip("<>") if cursor else cursor
+        known_message_ids = frozenset(value.strip().strip("<>") for value in known_message_ids)
         pending: list[dict[str, Any]] = []
         found = cursor is None
         # Snapshot stable IMAP UIDs, then fetch only bounded headers. The shared
@@ -234,9 +238,9 @@ class HimalayaReader:
                 senders = envelope.get("from") or []
                 sender = str(senders[0]) if isinstance(senders, list) and senders else ""
                 by_uid[uid] = {"id": str(uid),
-                    "message-id": str(envelope.get("message_id") or "").strip("<>"),
+                    "message-id": str(envelope.get("message_id") or "").strip().strip("<>"),
                     "subject": envelope.get("subject") or "",
-                    "reply-to-message": str(envelope.get('in_reply_to') or '').strip('<>'),
+                    "reply-to-message": str(envelope.get('in_reply_to') or '').strip().strip('<>'),
                     "from": [{"email": parseaddr(sender)[1] or sender}]}
             # Missing UIDs were deleted since the snapshot; they do not shift
             # remaining IDs or manufacture a cursor for a missing message.

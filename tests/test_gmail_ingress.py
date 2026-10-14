@@ -72,6 +72,26 @@ def test_missing_cursor_recovers_from_recent_durable_message():
     assert [x.message_id for x in messages]==['m2','m3'] and cursor=='m3'
 
 
+def test_folded_message_id_and_legacy_cursor_do_not_reimport_mail():
+    """Fast unit, expected1/max10s: real Dovecot folded-header regression."""
+    reader = HimalayaReader('himalaya', 'airlock')
+    def run(*args):
+        if 'search' in args:
+            return {'uid_mode': True, 'ids': [{'id': 1}]}
+        return {'messages': [{'uid': 1, 'envelope': {
+            'message_id': ' <long-id@example.test>',
+            'in_reply_to': ' <parent@example.test>',
+            'from': ['sender@example.test'], 'subject': 'Code',
+        }}]}
+    reader._run = run
+    reader._read = lambda env: GmailMessage(env['message-id'], env['id'], 'sender@example.test', env['reply-to-message'])
+    messages, cursor = reader.poll(None)
+    assert messages[0].message_id == 'long-id@example.test'
+    assert messages[0].body == 'parent@example.test'
+    assert cursor == 'long-id@example.test'
+    assert reader.poll('<long-id@example.test')[0] == []
+
+
 def test_poll_uses_stable_native_uids_without_slow_sorted_full_list():
     reader=HimalayaReader('himalaya','yandex',snapshot_size=100)
     calls=native_uid_reader(reader,[1,2,3])
