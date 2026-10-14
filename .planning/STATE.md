@@ -376,3 +376,13 @@ Percentages unchanged: CONN-01 only1/5; milestone11/19 accepted and2/5phases clo
 
 ## Roadmap Evolution
 - Phase17 added by direct human mandate: WhiteTransport-backed Telemost chats and quiet meeting recording. Work is independent of pending Exmanager acceptance.
+
+## Current UserIO owning phase17 checkpoint — 14 October
+TM-01/TM-02 accepted via a NEW native quiet recorder, actual voice WAV/automatic
+Whisper and headed44 playback/reload/download. Phase17 is2/4 requirements50%, not
+a completed milestone. Historical five no_audio and first metadata UI assertion
+FAIL retained. Source0347601 fixes normal end classification, without rewriting
+old receipts. Current task: ALL personal/group Yandex chats of the mail-linked
+account, clarified directly by the user; ordinary sign-in/history/sync and narrow
+Secretary start permission remain open. See17-VERIFICATION and17-01-PLAN.
+Existing Exmanager/onboarding phases and their evidence remain unchanged.

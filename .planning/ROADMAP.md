@@ -135,11 +135,12 @@ OwnerUserIO7bb, independent of Exmanager15. Closure criteria in
 transcription, and exposes meeting chat through UserIO web/MCP for the Secretary.
 **Requirements:** TM-01, TM-02, TM-03, TM-04
 **Dependencies:** independent of pending onboarding and Exmanager acceptance.
-**Plans:** 1 plan; implementation in progress, 0/4 complete requirements (0%).
+**Plans:** 1 plan; implementation in progress, 2/4 complete requirements (50%).
 
 - [ ] [17-01-PLAN.md](phases/17-telemost-chats-and-quiet-meeting-recording/17-01-PLAN.md)
 
-Real browser audio and transcription are verified, but native automatic recording
-still fails before media negotiation. They do not close TM-01/TM-02. Meeting chat
-and Secretary start authorization remain open. See the
+TM-01/TM-02: NEW native automatic recording, real voice/Whisper and ordinary
+web playback/reload/download are accepted. TM-03 now explicitly covers ALL
+personal/group Yandex chats; account sign-in/history/sync remain open. TM-04
+Secretary start authorization/integration remains open. Historical failures retained. See the
 [verification checkpoint](phases/17-telemost-chats-and-quiet-meeting-recording/17-VERIFICATION.md).
