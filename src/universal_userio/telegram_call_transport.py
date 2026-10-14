@@ -163,7 +163,7 @@ class TelegramCallTransport:
         return self.module.AudioDescription(self.module.MediaSource.EXTERNAL,
                                             self.sample_rate, 1, "", False)
 
-    async def _next_update(self, deadline):
+    async def _next_update(self, deadline, *, waiting_for_answer=False):
         get = asyncio.create_task(self.updates.get())
         end = asyncio.create_task(self.ended.wait())
         try:
@@ -171,6 +171,8 @@ class TelegramCallTransport:
                 timeout=max(0, deadline - time.monotonic()),
                 return_when=asyncio.FIRST_COMPLETED)
             if self.ended.is_set():
+                if waiting_for_answer and self.discarded and self.failure is None:
+                    raise RecipientUnanswered("Telegram invitation ended without an answer")
                 raise self.failure or ConnectionError("Telegram call ended")
             if get not in done:
                 raise RecipientUnanswered("Telegram recipient did not answer")
@@ -204,13 +206,13 @@ class TelegramCallTransport:
         self.call = receipt
         deadline = time.monotonic() + answer_seconds
         while True:
-            update = await self._next_update(deadline)
+            update = await self._next_update(deadline, waiting_for_answer=True)
             if str(update.get("id")) != str(self.call["id"]):
                 continue
             if update.get("type") == "phoneCallDiscarded":
                 self.discarded = True
                 self.ended.set()
-                raise ConnectionError("Telegram recipient ended the call")
+                raise RecipientUnanswered("Telegram invitation ended without an answer")
             if update.get("type") == "signaling":
                 await self.engine.send_signaling_data(self.user_id, decode_bytes(update["data"]))
             elif update.get("type") == "phoneCallAccepted":
