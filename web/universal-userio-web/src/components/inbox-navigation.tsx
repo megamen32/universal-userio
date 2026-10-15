@@ -41,7 +41,7 @@ type NavigationProps = {
   provider: (source: string) => string; label: (source: string) => string; icon: (source: string) => ReactNode
   unread: Record<string, number>; onSelect: (channel: string, account: string) => void
   expanded: boolean; onExpand: () => void; mobileChat: boolean; onSettings: () => void
-  folders: FolderState; folderCounts: Record<string, number>; onFolder: (id: string) => void
+  folders: FolderState; onFolder: (id: string) => void
   onEditFolder: (folder?: InboxFolder) => void
 }
 
@@ -87,7 +87,7 @@ export function InboxNavigation(p: NavigationProps) {
       <div className="userio-folder-panel-inner">
         <header><h2>Папки</h2><Button variant="ghost" size="icon" onClick={p.onExpand} aria-label="Свернуть папки"><ChevronRight className="rotate-180" /></Button></header>
         <div className="userio-folder-rows">{entries.map(({ id, name, Icon }) => <div className="userio-folder-row" key={id}>
-          <button type="button" data-folder={id} aria-pressed={p.folders.active === id} onClick={() => p.onFolder(id)}><Icon className="size-4 shrink-0" /><span>{name}</span><small>{p.folderCounts[id] || 0}</small></button>
+          <button type="button" data-folder={id} aria-pressed={p.folders.active === id} onClick={() => p.onFolder(id)}><Icon className="size-4 shrink-0" /><span>{name}</span>{p.folders.folders.find(f => f.id === id) && <small>{p.folders.folders.find(f => f.id === id)!.conversations.length}</small>}</button>
           {!STANDARD.some(f => f.id === id) && <Button variant="ghost" size="icon" aria-label={`Изменить папку ${name}`} onClick={() => p.onEditFolder(p.folders.folders.find(f => f.id === id))}><Pencil className="size-3.5" /></Button>}
         </div>)}</div>
         <button type="button" className="userio-new-folder" onClick={() => p.onEditFolder()}><FolderPlus className="size-4" />Создать папку</button>
