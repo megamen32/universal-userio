@@ -68,8 +68,16 @@ def host_lease():
     args = lease_arguments(json.loads(sys.stdin.buffer.read(4097)))
     STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (STATE / 'lease.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        private_write(STATE / 'request.json', args)
+        deadline = time.monotonic() + .5
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('phone lease adapter is busy') from None
+                time.sleep(.05)
+        private_write(STATE / 'request.json', {'args': args, 'created_at': time.time()})
         (STATE / 'response.json').unlink(missing_ok=True)
         subprocess.run(['systemctl', 'start', UNIT], check=True, timeout=8)
         result = json.loads((STATE / 'response.json').read_text())
@@ -78,7 +86,14 @@ def host_lease():
 
 
 def native_lease():
-    args = lease_arguments(json.loads((STATE / 'request.json').read_text()))
+    # Consume before the guard. An old deployment script restarting this unit
+    # cannot replay the previous lease request, including an uncertain result.
+    claimed = STATE / 'claimed.json'
+    (STATE / 'request.json').replace(claimed)
+    request = json.loads(claimed.read_text())
+    if not 0 <= time.time() - request['created_at'] <= 10:
+        raise ValueError('expired phone lease request')
+    args = lease_arguments(request['args'])
     result = subprocess.run(['/usr/local/bin/s21-lease', *args], capture_output=True, text=True, timeout=6)
     private_write(STATE / 'response.json', dict(returncode=result.returncode,
                   stdout=result.stdout[:8192], stderr=result.stderr[:8192]))

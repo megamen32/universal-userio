@@ -102,7 +102,9 @@ def proc_environment(pid: int) -> dict[str, str]:
     for key in list(env):
         if key.startswith(('INVOCATION_', 'JOURNAL_', 'WATCHDOG_', 'NOTIFY_', 'SYSTEMD_')):
             del env[key]
-    env.update(PATH='/usr/local/bin:/usr/bin:/bin', PYTHONUNBUFFERED='1')
+    env.update(PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', PYTHONUNBUFFERED='1')
+    for key in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS'):
+        env.setdefault(key, '1')
     return env
 
 
@@ -161,6 +163,10 @@ def prepare():
             uid=1000, gid=1000, cwd='/opt/universal-userio', environment={
                 'HOME': '/home/roomhacker', 'USERIO_TELEMOST_ROOT': '/var/lib/universal-userio/telemost-worker',
                 'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'}))
+    for spec in processes:
+        spec['environment'].setdefault('PATH', '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')
+        for key in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS'):
+            spec['environment'].setdefault(key, '1')
     private_json(CONFIG / 'processes.json', {'ready_url': 'http://127.0.0.1:18093/v1/accounts', 'processes': processes})
     for path in ('/home/roomhacker/.config/himalaya', '/home/roomhacker/.ssh', '/root/.ssh',
                  '/home/roomhacker/.hermes/scripts/himalaya-gmail-password',
