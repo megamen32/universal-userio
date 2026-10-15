@@ -186,3 +186,20 @@ half the existing max context token budget with4,000tokens/message ceiling.
 Live acceptance uses an owned browser on44: measured98GiB available, reserve20GiB,
 2GiB high/hard,swap0,CPU2,tasks384,IO10,128MiB temporary profile, noGPU,
 expected120s/emergency1200s. Native runtime budgets stay unchanged.
+
+## Indexed search —15October2026
+
+Search retains the existing core384/512MiB,CPU1,tasks64,swap64MiB budget.
+A read-only backup of the59543-message production database built the maintained
+FTS5 trigram index in13.151s, peak59784KiB RSS; database grew107MiB→231MiB.
+Validation uses768MiB RAM/256MiB swap/CPU2/tasks128/IO10, expected40s/max400s.
+The private database-copy measurement requires512MiB disk including its WAL;
+ordinary fixture temp remains128MiB. Search exact pages inspect the index over
+all retained messages; typo scoring examines at most5000 indexed candidates,
+with32768 cached word distances and no model/GPU. Exact results publish before
+that second pass. UI uses the established512MiB/swap0/CPU1/tasks64 profile.
+Read-only Telegram contact sync streams at most10000 dialogs in100-item pages
+through the existing connected client at startup/hourly; no extra worker.
+Browser acceptance on44 uses an owned Agent Browser session, native2GiB RAM,
+CPU2,tasks384,swap0,IO10,128MiB profile,20GiB host reserve and1200s wall;
+fresh105GiB available was verified before admission. No foreign browser touched.

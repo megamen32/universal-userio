@@ -14,6 +14,7 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
+import { syncContactProfiles } from "./contact-index.mjs";
 import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
@@ -767,6 +768,7 @@ async function syncAccount(slot) {
           const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
           await refreshUnreadSnapshot(client, accountId).catch(error =>
             console.error(`unread snapshot startup: ${error.message || error}`));
+      await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
       // GramJS 2.26 has no runUntilDisconnected; the client keeps itself
@@ -777,6 +779,7 @@ async function syncAccount(slot) {
       for (let beat = 1; ; beat += 1) {
         await new Promise((resolve) => setTimeout(resolve, 60000));
         await client.getMe();
+        if (beat % 60 === 0) await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
             if (beat % 5 === 0) {
               await refreshUnreadSnapshot(client, accountId).catch(error =>
                 console.error(`unread snapshot periodic: ${error.message || error}`));

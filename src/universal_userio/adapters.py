@@ -138,6 +138,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     return InboxMessage(
         source, message_id, sender, body, received_at,
         sender_name=sender_name,
+        peer_profile={k: str(v)[:256] for k, v in payload.get("peer_profile", {}).items() if k in {"username", "first_name", "last_name", "phone"}} if isinstance(payload.get("peer_profile"), dict) else None,
         attachments=tuple(parsed_attachments),
         direction=direction,
         conversation_kind=conversation_kind,

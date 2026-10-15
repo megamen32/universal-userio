@@ -16,7 +16,7 @@ import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
 type AnalysisPolicy = { conversation_id: string; conversation_kind: string; allowed: boolean; action: string }
-type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string; analysis_policy?: AnalysisPolicy }
+type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string; match_type?: "exact" | "fuzzy"; match_field?: "contact" | "message"; analysis_policy?: AnalysisPolicy }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; conversation_kind?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
 type Message = { source: string; message_id: string; sender: string; sender_name?: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string; call_audio?: CallRecording }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string; created_at?: number; context_status?: "unknown" | "current" | "stale"; reply_to?: { source: string; message_id: string; body: string; received_at: number } | null }
@@ -237,6 +237,9 @@ export function App() {
   useEffect(()=>{setSelectedUpload(null)},[selectedChat])
   const [search, setSearch] = useState("")
   const [searchResults, setSearchResults] = useState<Chat[]>([])
+  const [searchError, setSearchError] = useState("")
+  const [searchMore, setSearchMore] = useState({ exact: false, fuzzy: false })
+  const searchGeneration = useRef(0)
   const [searching, setSearching] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -358,18 +361,45 @@ export function App() {
     const text = search.trim()
     if (!text || !userCapabilities.read) { setSearchResults([]); setSearching(false); return }
     const sourceFilter = account ? sourceForAccount(account) : activeChannel
+    const generation = ++searchGeneration.current
+    setSearchResults([])
+    setSearchError("")
+    setSearchMore({ exact: false, fuzzy: false })
+    setSearching(true)
     const timer = window.setTimeout(() => {
-      const params = new URLSearchParams({ q: text, limit: "100" })
+      const params = new URLSearchParams({ q: text, limit: "51" })
       if (sourceFilter) params.set("source", sourceFilter)
       if (account && ["telegram", "sms", "phone", "vk"].includes(account.provider)) params.set("account_ref", account.id)
-      setSearching(true)
-      void api<{ results: Chat[] }>(`/v1/search?${params.toString()}`)
-        .then((data) => setSearchResults(data.results))
-        .catch((error) => { setSearchResults([]); notify(`Поиск не удался: ${(error as Error).message}`) })
-        .finally(() => setSearching(false))
+      // Publish the first pass immediately; typo matching must not delay it.
+      void (async () => {
+        for (const kind of ["exact", "fuzzy"] as const) {
+          const data = await api<{ results: Chat[] }>(`/v1/search?${params.toString()}&match_type=${kind}`)
+          if (searchGeneration.current !== generation) return
+          setSearchResults(previous => kind === "exact" ? data.results.slice(0, 50) : [...previous, ...data.results.slice(0, 50)])
+          setSearchMore(previous => ({ ...previous, [kind]: data.results.length > 50 }))
+        }
+      })().catch((error) => { if (searchGeneration.current === generation) setSearchError(`Поиск не удался: ${(error as Error).message}`) })
+        .finally(() => { if (searchGeneration.current === generation) setSearching(false) })
     }, 220)
-    return () => window.clearTimeout(timer)
+    return () => { window.clearTimeout(timer); ++searchGeneration.current }
   }, [search, account, activeChannel, userCapabilities.read])
+
+  const loadMoreSearch = async (kind: "exact" | "fuzzy") => {
+    const generation = searchGeneration.current
+    const params = new URLSearchParams({ q: search.trim(), limit: "51", match_type: kind,
+      offset: String(searchResults.filter(chat => chat.match_type === kind).length) })
+    const sourceFilter = account ? sourceForAccount(account) : activeChannel
+    if (sourceFilter) params.set("source", sourceFilter)
+    if (account && ["telegram", "sms", "phone", "vk"].includes(account.provider)) params.set("account_ref", account.id)
+    setSearching(true)
+    try {
+      const data = await api<{ results: Chat[] }>(`/v1/search?${params.toString()}`)
+      if (searchGeneration.current !== generation) return
+      setSearchResults(previous => [...previous, ...data.results.slice(0, 50)])
+      setSearchMore(previous => ({ ...previous, [kind]: data.results.length > 50 }))
+    } catch (error) { if (searchGeneration.current === generation) setSearchError(`Поиск не удался: ${(error as Error).message}`) }
+    finally { if (searchGeneration.current === generation) setSearching(false) }
+  }
 
   const inboxPollingBusy = useRef(false)
   const loadConversation = useCallback(async (id: string) => {
@@ -983,7 +1013,7 @@ export function App() {
     .filter((chat) => platformVisibleInFeed(chat.source))
     .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) &&
       (["telegram", "sms", "phone", "vk"].includes(item.provider) ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
-    .sort((a, b) => (b.last_at ?? 0) - (a.last_at ?? 0))
+    .sort((a, b) => (search.trim() ? Number(b.match_field === "contact") - Number(a.match_field === "contact") : 0) || (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
   // Clearing on selectedChat guarantees we never leak text into the next reply.
   useEffect(() => { setDraft("") }, [selectedChat])
@@ -1050,23 +1080,29 @@ export function App() {
 
     {/* Chat list: default pane on mobile */}
     <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card transition-[width,flex-basis] duration-200 ease-out ${selectedChat ? "md:w-[340px] md:flex-none" : "md:flex-1"} ${mobilePane === "chats" || !selectedChat ? "flex" : "hidden"} md:flex`}>
-      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ДИАЛОГИ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={openNewChat} aria-label="Новое сообщение" title="Новое сообщение"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
+      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ДИАЛОГИ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={openNewChat} aria-label="Новое сообщение" title="Новое сообщение"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => { setSearch(event.target.value); setSearching(Boolean(event.target.value.trim())); setSearchResults([]); setSearchError("") }} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
       {/* Radix's table content wrapper otherwise expands to the longest preview. */}
       <ScrollArea className="min-h-0 min-w-0 flex-1 px-2 pb-3 [&_[data-slot=scroll-area-viewport]>div]:!block">
         <div key={viewKey}>
-        {visibleChats.map((chat, chatIndex) => {
+        {(!search.trim() || visibleChats.length > 0) && (search.trim() ? ["exact", "fuzzy"] as const : ["all"] as const).map(kind => {
+          const rows = kind === "all" ? visibleChats : visibleChats.filter(chat => chat.match_type === kind)
+          const content = <>{rows.map((chat, chatIndex) => {
           const unread = chat.unread_count > 0
           return <button key={chat.id} data-conversation-id={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
-          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.analysis_policy && <span title={`${chatKindLabel(chat.analysis_policy.conversation_kind)} · Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`} aria-label={`Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`}><Sparkles className={`size-3 ${chat.analysis_policy.allowed ? "text-[#2f80ed]" : "text-muted-foreground/50"}`} /></span>}{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">совпадение</span>}</span></span>
+          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.analysis_policy && <span title={`${chatKindLabel(chat.analysis_policy.conversation_kind)} · Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`} aria-label={`Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`}><Sparkles className={`size-3 ${chat.analysis_policy.allowed ? "text-[#2f80ed]" : "text-muted-foreground/50"}`} /></span>}{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">{chat.match_field === "contact" ? "контакт" : "текст"}</span>}</span></span>
         </button>
+        })}{kind !== "all" && searchMore[kind] && <Button variant="ghost" className="my-2 w-full" disabled={searching} onClick={() => void loadMoreSearch(kind)}>Показать ещё</Button>}</>
+          return kind === "all" ? <div key={kind}>{content}</div> : <details key={`${search.trim()}-${kind}`} open={kind === "exact" || !visibleChats.some(chat => chat.match_type === "exact")} className="mb-2" aria-label={kind === "exact" ? "Точные совпадения" : "Возможные совпадения"}>
+            <summary className="cursor-pointer rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">{kind === "exact" ? "Точные совпадения" : "Возможные совпадения · с опечатками"} <span className="text-muted-foreground">({rows.length}{searchMore[kind] ? "+" : ""})</span></summary>{content}
+          </details>
         })}
         </div>
         {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
-          {search.trim()
+          {searchError || (searching && search.trim() ? "Ищу…" : search.trim()
             ? <>Ничего не найдено по запросу <span className="font-medium text-foreground">«{search.trim()}»</span></>
             : selectedChannel !== "all"
               ? <>В канале {displayChannel(selectedChannel)} чатов нет</>
-              : "Ничего не найдено"}
+              : "Ничего не найдено")}
         </p>}
       </ScrollArea>
     </section>

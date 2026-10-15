@@ -64,3 +64,58 @@ def test_search_unread_aggregation_has_linear_sql_work(tmp_path):
     assert len(result) == 1 and result[0]["id"] == cid
     assert result[0]["unread_count"] == 1001
     assert steps <= 100
+
+
+def test_index_covers_old_messages_and_live_edits_deletion(tmp_path):
+    """Fast unit expected2s/max20s: history cutoff, stale edit/delete index."""
+    store=SQLiteUserIOStore(tmp_path/'index.sqlite3'); service=UserIOService(store,Generator(),Outbox())
+    cid,_=service.receive(InboxMessage('telegram','old','Person','уникальный договор',1),route_id='telegram')
+    for i in range(110):
+        service.receive(InboxMessage('sms',str(i),str(i),'recent ordinary message',i+2),route_id='sms')
+    assert search_conversations(store,'договор',scan_limit=100)[0]['id']==cid
+    with store._connection:
+        store._connection.execute("UPDATE messages SET body='другая фраза' WHERE message_id='old'")
+    assert not search_conversations(store,'договор',match_type='exact')
+    assert search_conversations(store,'другая фраза',match_type='exact')[0]['id']==cid
+    with store._connection:
+        store._connection.execute("UPDATE messages SET deleted_at=123 WHERE message_id='old'")
+    assert not search_conversations(store,'другая фраза',match_type='exact')
+
+
+def test_profile_exact_priority_typo_phone_and_tenant(tmp_path):
+    """Fast unit expected2s/max20s: real contact fields, typos and isolation."""
+    from dataclasses import replace
+    from universal_userio.adapters import inbox_message_from_envelope
+    store=SQLiteUserIOStore(tmp_path/'profiles.sqlite3');service=UserIOService(store,Generator(),Outbox())
+    profile={'username':'semerindima','first_name':'Дмитрий','last_name':'Семерин','phone':'79841303184'}
+    msg=inbox_message_from_envelope({'schema':'universal.inbox.message.v1','source':'telegram',
+        'message_id':'target','sender':'Дмитрий Семерин','body':'hello','peer_id':'381703703','peer_profile':profile},received_at=1)
+    cid,_=service.receive(msg,route_id='telegram')
+    service.receive(InboxMessage('sms','mention','other','@semerindima',999),route_id='sms')
+    for q in ['@semerindima','SEMERINDIMA','Дмитрий','Семерин','+7 984 130-31-84','79841303184']:
+        results=search_conversations(store,q,match_type='exact')
+        assert results[0]['id']==cid, q
+        assert results[0]['match_field']=='contact'
+    for q in ['@semeridima','@semerindmia','Семерни','Дмиртий']:
+        results=search_conversations(store,q,match_type='fuzzy')
+        assert cid in [r['id'] for r in results],q
+        assert all(r['match_type']=='fuzzy' for r in results)
+    other,_=store.create_user('other-user','sufficient-password')
+    assert not search_conversations(store,'semerindima',user_id=other.user_id)
+    service.receive(replace(msg, peer_profile={**profile,'username':'newhandle'}),route_id='telegram')
+    assert cid not in [r['id'] for r in search_conversations(store,'semerindima',match_type='exact')]
+    assert search_conversations(store,'newhandle',match_type='exact')[0]['id']==cid
+
+
+def test_exact_and_fuzzy_pages_are_independent(tmp_path):
+    """Fast unit expected2s/max20s: one group cannot hide the other or repeat pages."""
+    store=SQLiteUserIOStore(tmp_path/'pages.sqlite3');service=UserIOService(store,Generator(),Outbox())
+    for i in range(6):
+        service.receive(InboxMessage('sms',str(i),'exact-'+str(i),'архипелаг',i+1),route_id='sms')
+    fuzzy,_=service.receive(InboxMessage('sms','fuzzy','fuzzy','архипилаг',100),route_id='sms')
+    a=search_conversations(store,'архипелаг',match_type='exact',limit=3)
+    b=search_conversations(store,'архипелаг',match_type='exact',limit=3,offset=3)
+    assert len(a)==len(b)==3
+    assert not {r['id'] for r in a}&{r['id'] for r in b}
+    assert search_conversations(store,'архипелаг',match_type='fuzzy',limit=3)[0]['id']==fuzzy
+    assert not search_conversations(store,'архипелаг',match_type='exact',source='telegram')

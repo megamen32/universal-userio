@@ -85,6 +85,8 @@ class SQLiteUserIOStore:
         self._connection = sqlite3.connect(path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        from .search import normalize
+        self._connection.create_function("userio_search_text", 1, normalize, deterministic=True)
         with self._lock, self._connection:
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._auth_schema()
@@ -137,6 +139,8 @@ class SQLiteUserIOStore:
                 PRIMARY KEY(user_id,event_seq))""")
             self._connection.execute("CREATE INDEX IF NOT EXISTS workspace_batches_leader_idx ON workspace_batches(user_id,leader_seq,event_seq)")
             self.maintain_conversation_summaries()
+            from .search import initialize_search
+            initialize_search(self)
 
     @property
     def default_user_id(self) -> str:
@@ -1736,6 +1740,9 @@ class SQLiteUserIOStore:
                         SET eligible=?,reconciled=0 WHERE user_id=? AND source=?
                           AND message_id=? AND conversation_id=? AND reconciled=1""",
                         (int(eligible), user_id, message.source, message.message_id, conversation_id))
+            if message.peer_profile:
+                from .search import save_profile
+                save_profile(self, user_id, conversation_id, message.peer_profile)
             if getattr(message, "sender_name", ""):
                 self._connection.execute(
                     """

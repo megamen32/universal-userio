@@ -15,3 +15,9 @@ test('exact ID probe, never limited history absence, confirms deletion', () => {
   assert.deepEqual(confirmedDeletedIds([10,11], [{id:10,date:123}]), []);
   assert.deepEqual(confirmedDeletedIds([10,11], [undefined,undefined]), []);
 });
+
+test('interlocutor profile comes from chat, including outgoing messages', () => {
+  const result = mirrorMetadata({ out: true, chat: { username: 'semerindima', firstName: 'Дмитрий', lastName: 'Семерин', phone: '79841303184' }, sender: { username: 'self' } });
+  assert.deepEqual(result.peer_profile, { username: 'semerindima', first_name: 'Дмитрий', last_name: 'Семерин', phone: '79841303184' });
+  assert.equal(mirrorMetadata({chat: {min: true, username:'partial'}}).peer_profile, undefined);
+});

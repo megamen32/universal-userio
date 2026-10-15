@@ -48,6 +48,7 @@ class InboxMessage:
     outbox_receipt: str = ""
     provider_reply_to: str = ""
     provider_thread_id: str = ""
+    peer_profile: dict[str, str] | None = None
 
     @property
     def conversation_key(self) -> str:

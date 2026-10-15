@@ -35,7 +35,14 @@ def test_switching_telegram_accounts_filters_chats_and_search(tmp_path):
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     headers = {"Authorization": "Bearer test-token"}
+    store.register_account(account_id="telegram:111", provider="telegram", display_name="main", can_read=True, can_reply=True, credential_ref="telegram-qr:test")
     try:
+        with urlopen(Request(base + "/v1/contact-profiles", method="POST", headers={**headers,"Content-Type":"application/json"}, data=json.dumps({"account_id":"telegram:111","profiles":[{"peer_id":"900","username":"semerindima","first_name":"Дмитрий","last_name":"Семерин","phone":"79841303184"}]}).encode())) as response:
+            assert json.loads(response.read())["updated"] == 1
+        with urlopen(Request(base + "/v1/search?q=semerindima&match_type=exact&account_ref=telegram%3A111", headers=headers)) as response:
+            assert json.loads(response.read())["results"][0]["id"] == nikita
+        with urlopen(Request(base + "/v1/search?q=semerindima&match_type=exact&account_ref=telegram%3A222", headers=headers)) as response:
+            assert json.loads(response.read())["results"] == []
         for ref, expected in (("telegram%3A111", nikita), ("telegram%3A222", secretary)):
             with urlopen(Request(
                 base + f"/v1/conversations?source=telegram&exact_source=1&account_ref={ref}",

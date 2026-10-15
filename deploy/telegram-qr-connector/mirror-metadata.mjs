@@ -2,6 +2,13 @@
 export function mirrorMetadata(message, dialog) {
   const direction = message.out ? "outgoing" : "incoming";
   const result = { direction };
+  // GramJS resolves message.chat from the provider entity map; never use the
+  // outgoing author (self) as the interlocutor profile.
+  const peer = message.chat;
+  if (peer && !peer.min) result.peer_profile = {
+    username: String(peer.username || ""), first_name: String(peer.firstName || ""),
+    last_name: String(peer.lastName || ""), phone: String(peer.phone || ""),
+  };
   const date = Number(message.date);
   if (Number.isFinite(date) && date > 0) result.received_at = date;
   if (dialog) {

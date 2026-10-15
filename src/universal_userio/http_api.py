@@ -832,6 +832,32 @@ def handler(
                     service._store.set_user_capability("send", enabled, user_id=user_id)
                     self._reply(200, {"send_enabled": enabled})
                     return
+                if path == "/v1/contact-profiles":
+                    if not principal.service_account and not (token and hmac.compare_digest(
+                            self.headers.get("Authorization", ""), f"Bearer {token}")):
+                        self._reply(403, {"error": "registered ingress required"}); return
+                    payload = self._json()
+                    account_id = str(payload.get("account_id") or "").strip()
+                    target_user = service._store.ingress_user(source="telegram", account_id=account_id)
+                    if principal.service_account and target_user != user_id:
+                        self._reply(403, {"error": "account belongs to another user"}); return
+                    profiles = payload.get("profiles")
+                    if not isinstance(profiles, list) or len(profiles) > 100:
+                        raise ValueError("invalid contact profiles")
+                    for profile in profiles:
+                        if not isinstance(profile, dict) or not str(profile.get("peer_id", "")).lstrip("-").isdigit():
+                            raise ValueError("invalid contact peer")
+                    from .search import save_profile
+                    updated = 0
+                    with service._store._lock, service._store._connection:
+                        for profile in profiles:
+                            rows = service._store._connection.execute(
+                                "SELECT id FROM conversations WHERE user_id=? AND source='telegram' AND account_ref=? AND peer_id=?",
+                                (target_user, account_id, str(profile["peer_id"]))).fetchall()
+                            for row in rows:
+                                save_profile(service._store, target_user, row["id"], profile)
+                                updated += 1
+                    self._reply(202, {"updated": updated}); return
                 if path == "/v1/telegram/unread-snapshot":
                     # Only authenticated Telegram ingress, never a dashboard read.
                     if not principal.service_account and not (token and hmac.compare_digest(
@@ -1605,9 +1631,16 @@ def handler(
                     limit = max(1, min(int(query.get("limit", ["100"])[0]), 500))
                 except ValueError:
                     limit = 100
+                match_type = query.get("match_type", ["all"])[0]
+                if match_type not in {"all", "exact", "fuzzy"}:
+                    self._reply(400, {"error": "invalid match_type"}); return
+                try:
+                    offset = max(0, int(query.get("offset", ["0"])[0]))
+                except ValueError:
+                    self._reply(400, {"error": "invalid offset"}); return
                 results = search_conversations(
                     service._store, text, source=source, account_ref=account_ref,
-                    limit=limit, user_id=user_id,
+                    limit=limit, user_id=user_id, match_type=match_type, offset=offset,
                 )
                 for entry in results:
                     entry["analysis_policy"] = service._store.evaluate_workspace_chat(
