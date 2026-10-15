@@ -1669,8 +1669,19 @@ def handler(
                 account_ref = query.get("account_ref", [""])[0].strip() or None
                 if account_ref and len(account_ref) > 128:
                     self._reply(400, {"error": "invalid account_ref"}); return
+                conversation_ids = None
+                folder_query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
+                if 'conversation_ids' in folder_query:
+                    raw_ids = folder_query['conversation_ids']
+                    conversation_ids = list(dict.fromkeys(raw_ids[0].split(',')))
+                    if len(raw_ids) != 1 or not 1 <= len(conversation_ids) <= 100 or any(
+                        not item or len(item) > 128 or not all(c.isalnum() or c in '_:-' for c in item)
+                        for item in conversation_ids
+                    ):
+                        self._reply(400, {"error": "invalid conversation_ids"}); return
                 conversations = service._store.conversations(
                     source=source, exact_source=exact_source, account_ref=account_ref, user_id=user_id,
+                    conversation_ids=conversation_ids,
                 )
                 # If the latest message in a conversation is an attachment
                 # placeholder ([image], [document] …) replace it with the most

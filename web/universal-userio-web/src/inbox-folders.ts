@@ -14,7 +14,7 @@ export function readInboxFolders(raw: string | null): InboxFolder[] {
       if (typeof row.name !== 'string' || !row.name.trim() || row.name.length > 60 || !Array.isArray(row.conversations) || !row.conversations.every(id => typeof id === 'string')) return false
       used.add(row.id)
       return true
-    }).slice(0, 64).map(row => ({ ...row, conversations: [...new Set(row.conversations)].slice(0, 5000) }))
+    }).slice(0, 64).map(row => ({ ...row, conversations: [...new Set(row.conversations)].slice(0, 100) }))
   } catch { return [] }
 }
 

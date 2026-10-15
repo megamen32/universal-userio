@@ -21,6 +21,7 @@ export function useInboxFolders() {
     catch { setError('Не удалось сохранить папку. Проверьте, разрешено ли сайту хранить данные.'); return false }
   }
   const save = (folder: InboxFolder) => {
+    if (folder.conversations.length > 100) { setError('В одну папку можно добавить до 100 переписок.'); return false }
     if (folders.length >= 64 && !folders.some(row => row.id === folder.id)) { setError('Можно создать до 64 папок.'); return false }
     const next = folders.some(row => row.id === folder.id) ? folders.map(row => row.id === folder.id ? folder : row) : [...folders, folder]
     if (!change(next)) return false
@@ -59,7 +60,7 @@ export function InboxNavigation(p: NavigationProps) {
         {p.platforms.map(platform => {
           const accounts = p.accounts.filter(a => p.provider(a.provider) === platform)
           const title = p.label(platform)
-          const short = ({ telegram: 'TG', whatsapp: 'WA', gmail: 'Почта', yandex: 'Яндекс', chatgpt: 'GPT', matrix: 'Matrix', phone: 'Звонки' } as Record<string, string>)[platform] || title
+          const short = ({ telegram: 'TG', whatsapp: 'WA', gmail: 'Почта', yandex: 'Яндекс', chatgpt: 'GPT', matrix: 'Matrix', phone: 'Звонки', telemost: 'Встречи' } as Record<string, string>)[platform] || title
           return <Popover.Root key={platform} open={openPlatform === platform} onOpenChange={value => setOpenPlatform(value ? platform : null)}>
             <Popover.Trigger asChild><button type="button" className="userio-service" data-platform={platform} aria-label={`${title}: выбрать аккаунт`} aria-pressed={activePlatform === platform} title={title}>
               {p.icon(platform)}<span>{short}</span>{(p.unread[platform] || 0) > 0 && <span className="userio-channel-dot" aria-label="Есть непрочитанные" />}
@@ -105,16 +106,22 @@ export function InboxFolderTabs({ state, onSelect, onEdit }: { state: FolderStat
   </div>
 }
 
-export function InboxFolderEditor({ open, onOpenChange, folder, state, loadChats }: { open: boolean; onOpenChange: (open: boolean) => void; folder?: InboxFolder; state: FolderState; loadChats: () => Promise<FolderChoice[]> }) {
+export function InboxFolderEditor({ open, onOpenChange, folder, state, loadChats }: { open: boolean; onOpenChange: (open: boolean) => void; folder?: InboxFolder; state: FolderState; loadChats: (query: string, selected: string[]) => Promise<FolderChoice[]> }) {
   const [name, setName] = useState(''), [selected, setSelected] = useState<string[]>([]), [choices, setChoices] = useState<FolderChoice[]>([])
   const [filter, setFilter] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('')
   useEffect(() => {
     if (!open) return
+    setName(folder?.name || ''); setSelected(folder?.conversations || []); setFilter(''); setError('')
+  }, [open, folder])
+  useEffect(() => {
+    if (!open) return
     let cancelled = false
-    setName(folder?.name || ''); setSelected(folder?.conversations || []); setFilter(''); setBusy(true); setError('')
-    void loadChats().then(items => { if (!cancelled) setChoices(items) }).catch(() => { if (!cancelled) setError('Не удалось загрузить переписки. Закройте папку и попробуйте ещё раз.') }).finally(() => { if (!cancelled) setBusy(false) })
-    return () => { cancelled = true }
-  }, [open, folder, loadChats])
+    setBusy(true); setError('')
+    const timer = window.setTimeout(() => {
+      void loadChats(filter.trim(), folder?.conversations || []).then(items => { if (!cancelled) setChoices(items) }).catch(() => { if (!cancelled) setError('Не удалось загрузить переписки. Попробуйте ещё раз.') }).finally(() => { if (!cancelled) setBusy(false) })
+    }, filter.trim() ? 250 : 0)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [open, folder, filter, loadChats])
   const save = () => {
     if (!name.trim()) { setError('Введите название папки.'); return }
     if (state.save({ id: folder?.id || crypto.randomUUID(), name: name.trim(), conversations: selected })) onOpenChange(false)
@@ -124,8 +131,8 @@ export function InboxFolderEditor({ open, onOpenChange, folder, state, loadChats
     <form onSubmit={e => { e.preventDefault(); save() }} className="flex min-h-0 flex-1 flex-col gap-4">
       <label className="space-y-2 text-sm"><span>Название</span><Input aria-label="Название папки" value={name} maxLength={60} onChange={e => setName(e.target.value)} placeholder="Например, Клиенты" autoFocus /></label>
       <label className="relative"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input className="pl-9" aria-label="Найти переписку для папки" placeholder="Найти переписку" value={filter} onChange={e => setFilter(e.target.value)} /></label>
-      <p className="text-xs text-muted-foreground" role="status">{busy ? 'Загружаю переписки…' : `Выбрано: ${selected.length}`}</p>
-      <div className="userio-folder-choices">{!busy && choices.filter(c => `${c.name} ${c.source}`.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).map(c => <label key={c.id}><input type="checkbox" value={c.id} checked={selected.includes(c.id)} onChange={e => setSelected(ids => e.target.checked ? [...ids, c.id] : ids.filter(id => id !== c.id))} /><span><span className="block [overflow-wrap:anywhere]">{c.name}</span><span className="text-xs text-muted-foreground">{c.source}</span></span></label>)}{!busy && !choices.length && <p className="py-3 text-sm text-muted-foreground">Переписок пока нет. Можно сохранить пустую папку.</p>}</div>
+      <p className="text-xs text-muted-foreground" role="status">{busy ? 'Загружаю переписки…' : `Выбрано: ${selected.length} из 100`}</p>
+      <div className="userio-folder-choices">{!busy && choices.filter(c => `${c.name} ${c.source}`.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).map(c => <label key={c.id}><input type="checkbox" value={c.id} checked={selected.includes(c.id)} disabled={!selected.includes(c.id) && selected.length >= 100} onChange={e => setSelected(ids => e.target.checked ? [...ids, c.id] : ids.filter(id => id !== c.id))} /><span><span className="block [overflow-wrap:anywhere]">{c.name}</span><span className="text-xs text-muted-foreground">{c.source}</span></span></label>)}{!busy && !choices.length && <p className="py-3 text-sm text-muted-foreground">Переписок пока нет. Можно сохранить пустую папку.</p>}</div>
       {(error || state.error) && <p className="text-sm text-destructive" role="alert">{error || state.error}</p>}
       <footer>{folder && <Button type="button" variant="ghost" className="mr-auto text-destructive" onClick={() => { if (state.remove(folder.id)) onOpenChange(false) }}><Trash2 />Удалить папку</Button>}<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Отмена</Button><Button type="submit" disabled={busy}><CirclePlus />Сохранить</Button></footer>
     </form>

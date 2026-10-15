@@ -136,7 +136,7 @@
 .userio-row-in { animation: userio-row-in 0.24s ease-out both; }
 .userio-rail { width: 64px; flex-shrink: 0; flex-direction: column; align-items: stretch; gap: 5px; padding: 12px 7px 8px; border-right: 1px solid var(--border); background: var(--card); z-index: 30; }
 .userio-logo { display: grid; place-items: center; width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 12px; background: linear-gradient(135deg,#62e7ef,#4354f8); color: white; font-weight: 600; font-size: 21px; }
-.userio-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.userio-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
 .userio-service { position: relative; width: 100%; min-height: 43px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border-radius: 11px; padding: 8px 3px; color: var(--muted-foreground); font-size: 10px; cursor: pointer; transition: background .18s, color .18s; }
 .userio-service svg { width: 20px; height: 20px; flex-shrink: 0; }
 .userio-service:hover { background: var(--muted); color: var(--foreground); }
@@ -185,3 +185,7 @@
   .userio-folder-panel { transition: none; }
   .userio-account-picker { animation: none; }
 }
+
+.userio-rail-scroll::-webkit-scrollbar { display: none; }
+.userio-service>span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+@media(min-width:768px) and (max-width:1023px) { .userio-folder-panel { position: absolute; left: 64px; top: 0; bottom: 0; z-index: 30; box-shadow: 10px 0 30px #0004; } }

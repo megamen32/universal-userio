@@ -4482,7 +4482,12 @@ class SQLiteUserIOStore:
         self, *, source: str | None = None, exact_source: bool = False,
         limit: int = 100, user_id: str | None = None,
         account_ref: str | None = None,
+        conversation_ids: list[str] | None = None,
     ) -> list[dict[str, object]]:
+        if conversation_ids is not None and not conversation_ids:
+            return []
+        if conversation_ids is not None and len(conversation_ids) > 100:
+            raise ValueError('at most 100 conversation IDs')
         if source and exact_source:
             source_sql, values = " AND c.source=?", [source]
         else:
@@ -4492,6 +4497,9 @@ class SQLiteUserIOStore:
             # connected identity. Scope the sidebar selection by account.
             source_sql += " AND c.account_ref=?"
             values.append(account_ref)
+        if conversation_ids is not None:
+            source_sql += ' AND c.id IN (' + ','.join('?' for _ in conversation_ids) + ')'
+            values.extend(conversation_ids)
         # Sort strictly by the latest message timestamp so the UI's "fresh on top"
         # rule never drifts because of bookkeeping fields like updated_at.
         # `preview` is the latest body; if that happens to be an attachment

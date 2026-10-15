@@ -251,9 +251,15 @@ export function App() {
   const inboxFolders = useInboxFolders()
   const [folderEditorOpen, setFolderEditorOpen] = useState(false)
   const [editingFolder, setEditingFolder] = useState<InboxFolder | undefined>()
-  const loadFolderChats = useCallback(async () => {
-    const data = await api<{conversations: Chat[]}>("/v1/conversations")
-    return data.conversations.map(chat => ({ id: chat.id, name: titleOf(chat), source: displayChannel(chat.source) }))
+  const loadFolderChats = useCallback(async (query: string, selected: string[]) => {
+    const rows = query.length >= 2
+      ? (await api<{results: Chat[]}>(`/v1/search?${new URLSearchParams({q:query, match_type:"exact", limit:"50"})}`)).results
+      : (await api<{conversations: Chat[]}>("/v1/conversations")).conversations
+    if (!query && selected.length) {
+      const saved = await api<{conversations: Chat[]}>(`/v1/conversations?${new URLSearchParams({conversation_ids:selected.join(",")})}`)
+      rows.unshift(...saved.conversations)
+    }
+    return [...new Map(rows.map(chat => [chat.id, chat])).values()].map(chat => ({ id: chat.id, name: titleOf(chat), source: displayChannel(chat.source) }))
   }, [])
   const editFolder = (folder?: InboxFolder) => { setEditingFolder(folder); setFolderEditorOpen(true) }
   const selectFolder = (id: string) => { inboxFolders.select(id); setSelectedAccount("all"); setSelectedChannel("all"); setMobilePane("chats"); if (window.innerWidth < 768) setSidebarOpen(false) }
@@ -358,7 +364,10 @@ export function App() {
   const canVkRich = !!conversation && conversation.source === "vk" && /^vk:\d+$/.test(conversation.account_ref || "") && canReply
   const canAttach = !!conversation && supportsFileUpload(conversation.source, conversation.account_ref || '') && canReply
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
-  const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
+  const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort((a, b) => {
+    const order = ["telegram", "whatsapp", "gmail", "max", "vk", "matrix", "sms", "phone", "telemost", "yandex", "chatgpt"]
+    return (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)) || a.localeCompare(b)
+  }), [accounts, chats])
 
   const refreshChats = useCallback(async () => {
     const request = chatsRequest.current.begin()
@@ -367,12 +376,17 @@ export function App() {
     if (sourceFilter) params.set("source", sourceFilter)
     if (account) params.set("exact_source", "1")
     if (account && ["telegram", "sms", "phone", "vk"].includes(account.provider)) params.set("account_ref", account.id)
+    const customFolder = inboxFolders.folders.find(folder => folder.id === inboxFolders.active)
+    if (customFolder) {
+      if (!customFolder.conversations.length) { setChats([]); return }
+      params.set("conversation_ids", customFolder.conversations.join(","))
+    }
     const suffix = params.size ? `?${params.toString()}` : ""
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     if (!chatsRequest.current.isCurrent(request)) return
     setChats(data.conversations)
     setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : "")
-  }, [account, activeChannel])
+  }, [account, activeChannel, inboxFolders.active, inboxFolders.folders])
 
   useEffect(() => {
     const text = search.trim()
