@@ -28,6 +28,9 @@ services:
       - /var/lib/hermes-userio-dispatcher:/var/lib/hermes-userio-dispatcher
       - /var/lib/agentcall/recordings:/var/lib/agentcall/recordings
       - /run/agentcall:/run/agentcall
+      - /usr/local/lib/agentcall:/usr/local/lib/agentcall:ro
+      - /run/asterisk:/run/asterisk:ro
+      - /etc/asterisk/userio-peers:/etc/asterisk/userio-peers
     healthcheck:
       test: [CMD, python, -m, universal_userio.container_runtime, --health]
       interval: 15s

@@ -35,6 +35,7 @@ WORKERS = {
     'userio-hermes-dispatcher.service': ('secretary', ['python', '/opt/userio-migration-deps/userio_hermes_dispatcher.py']),
     'userio-telegram-ingress.service': ('telegram', ['node', '/opt/userio-telegram-qr/server.mjs']),
     'userio-whatsapp-qr.service': ('whatsapp', ['node', '/opt/userio-whatsapp-qr/server.mjs']),
+    'userio-sip-provision.service': ('sip-settings', ['python', '-m', 'universal_userio.sip_connections']),
 }
 
 
@@ -103,6 +104,9 @@ def prepare():
     processes, units, mounts = [], [], set()
     for unit, (name, argv) in WORKERS.items():
         values = dict(r.split('=', 1) for r in output(['systemctl', 'show', unit, '-pMainPID', '-pUser', '-pActiveState', '-pWorkingDirectory']).splitlines())
+        if unit == 'userio-sip-provision.service' and Path('/etc/asterisk/userio-peers').is_dir():
+            processes.append(dict(name=name, command=argv, environment={'HOME': '/root'}, cwd='/opt/universal-userio', uid=0, gid=0))
+            continue
         if values['ActiveState'] != 'active' or not int(values['MainPID']):
             continue
         pid = int(values['MainPID'])
@@ -165,7 +169,8 @@ def build_context(destination: Path):
     from runtime_release import build_manifest
     manifest = build_manifest(ROOT)
     identity = {key: manifest[key] for key in ('schema_version', 'commit', 'manifest_sha256')}
-    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as source, tarfile.open(destination, 'w') as target:
+    mode = 'w:gz' if destination.suffix == '.gz' else 'w'
+    with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as source, tarfile.open(destination, mode) as target:
         for member in source:
             if member.name.startswith(('src/', 'deploy/', 'scripts/')) or member.name in ('pyproject.toml', 'Dockerfile', '.dockerignore'):
                 target.addfile(member, source.extractfile(member) if member.isfile() else None)
@@ -231,6 +236,9 @@ def cutover():
         proxy.write_text(text.replace(old, new))
         command(['nginx', '-t'])
         command(['systemctl', 'reload', 'nginx'])
+        marker = Path('/opt/universal-userio/.userio-containerized')
+        marker.write_text('UserIO backend/frontend are managed by Docker Compose.\n')
+        marker.chmod(0o644)
         private_json(CONFIG / 'cutover.json', {'started_at': time.time(), 'status': 'containers_running',
                                              'rollback': 'sudo python3 scripts/container_release.py rollback'})
         print(json.dumps({'containers_running': True, 'old_units_stopped': len(baseline['units'])}))
@@ -242,6 +250,7 @@ def cutover():
 def rollback():
     baseline = json.loads((CONFIG / 'baseline.json').read_text())
     compose('down')
+    Path('/opt/universal-userio/.userio-containerized').unlink(missing_ok=True)
     proxy = BACKUP / 'nginx.conf'
     if proxy.exists():
         shutil.copy2(proxy, '/etc/nginx/sites-available/msg.bezrabotnyi.com')

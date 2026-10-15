@@ -29,6 +29,11 @@ COPY deploy/matrix-provider-bridge/bridge.py /opt/userio-matrix-bridge/bridge.py
 COPY deploy/containers/external /opt/userio-migration-deps
 COPY deploy/containers/release.json /opt/universal-userio/.userio-release.json
 COPY deploy/universal-userio-gmail-password /usr/local/bin/universal-userio-gmail-password
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
+    && chmod 755 /usr/sbin/policy-rc.d \
+    && apt-get update && apt-get install -y --no-install-recommends asterisk \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/local/bin/python3 /usr/bin/python3
 RUN pip install --no-deps --no-cache-dir . \
     && mkdir -p /home/roomhacker/.cargo/bin \
     && ln -s /opt/userio-migration-deps/himalaya /home/roomhacker/.cargo/bin/himalaya \

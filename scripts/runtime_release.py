@@ -779,6 +779,9 @@ def main(argv: list[str] | None = None) -> int:
 
     arguments = parser.parse_args(argv)
     try:
+        marker = Path('/opt/universal-userio/.userio-containerized')
+        if arguments.command in {'install', 'activate', 'restore'} and marker.exists():
+            raise ReleaseError('UserIO runs in containers; use scripts/container_release.py instead of legacy host activation')
         if arguments.command == "manifest":
             result = build_manifest(arguments.source, arguments.remote_ref)
             _write_json(arguments.output, result)

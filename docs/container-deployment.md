@@ -53,7 +53,7 @@ SQLite-базы, `.env`, домашние профили и сессии в ко
 
 ```bash
 sudo /opt/universal-userio/.venv/bin/python scripts/container_release.py prepare
-python3 scripts/container_release.py context --output /var/tmp/userio-context.tar
+python3 scripts/container_release.py context --output /var/tmp/userio-context.tar.gz
 # Сборка backend/frontend из этого контекста выполняется с конечными лимитами.
 sudo /opt/universal-userio/.venv/bin/python scripts/container_release.py cutover
 docker compose -f compose.yaml -f /etc/userio-containers/compose.host.json ps
@@ -81,7 +81,7 @@ sudo /opt/universal-userio/.venv/bin/python scripts/container_release.py rollbac
 |---|---|---|---|---|---|
 | Backend | 2/4ГиБ | 4 | 512 | 256МиБ | tmp128МиБ, run16МиБ, логи30МиБ |
 | Frontend | 64/128МиБ | 0,5 | 32 | 0 | tmp17МиБ, логи10МиБ |
-| Сборка образа | 2ГиБ максимум | 2 | 256 | 0 | образы/контекст до6ГиБ |
+| Сборка образа | 1ГиБ максимум | 2 | 256 | 0 | образы/контекст до6ГиБ |
 | Профильные тесты | 512/768МиБ | 1 | 128 | 0 | tmp256МиБ |
 
 Контейнеры находятся под существующим внешним `user-1000.slice`. Перед тяжёлой

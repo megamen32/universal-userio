@@ -94,17 +94,18 @@ class Supervisor:
     def close(self) -> None:
         # Ingress/dispatchers stop first; the core writer remains until last.
         children = list(self.children.items())
-        ordered = [p for n, p in children if n != 'core'] + [p for n, p in children if n == 'core']
-        for child in ordered:
-            if child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
-        deadline = time.monotonic() + 25
-        for child in ordered:
-            try:
-                child.wait(timeout=max(.1, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait(timeout=3)
+        groups = ([p for n, p in children if n != 'core'], [p for n, p in children if n == 'core'])
+        for group, grace in zip(groups, (25, 5)):
+            for child in group:
+                if child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+            deadline = time.monotonic() + grace
+            for child in group:
+                try:
+                    child.wait(timeout=max(.1, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait(timeout=3)
         self.save()
 
     def run(self) -> None:

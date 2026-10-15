@@ -74,6 +74,7 @@ def test_adapter_library_imports_without_site_packages_or_daemons():
     r = subprocess.run([sys.executable, '-S', '-c',
         'import sys;sys.path.insert(0,' + repr(source) + ');'
         'from userio_adapter_sdk import Omnichannel,AdapterCapabilities;'
+        'from universal_userio import SQLiteUserIOStore,UserIOService;'
         'assert Omnichannel() is not None;print("library-ready")'],
         capture_output=True, text=True, timeout=5)
     assert r.returncode == 0, r.stderr
