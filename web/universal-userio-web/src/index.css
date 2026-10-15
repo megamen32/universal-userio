@@ -190,3 +190,8 @@
 .userio-rail-scroll::-webkit-scrollbar { display: none; }
 .userio-service>span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 @media(min-width:768px) and (max-width:1023px) { .userio-folder-panel { position: absolute; left: 64px; top: 0; bottom: 0; z-index: 30; box-shadow: 10px 0 30px #0004; } }
+
+@media(max-width:639px) {
+  [data-slot="chat-header"] label:has(input[aria-label="Разбирать секретарём"])>span { display: none; }
+  [data-slot="chat-header"] label:has(input[aria-label="Разбирать секретарём"]) { padding-inline: 4px; }
+}
