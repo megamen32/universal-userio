@@ -172,7 +172,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
-| 261015-p4h | UserIO в3контейнерах; подключения, receipts и веб-вложения сохранены | 2026-10-15 | 03f8ba9 | Live browser44/API/OAuth/native reads PASS; WhatsApp QR needed before migration | [summary](./quick/261015-p4h-consolidate-userio-backend-and-frontend-/261015-p4h-SUMMARY.md) |
+| 261015-p4h | 3контейнера и новый compact inbox; папки и multi-TG на сайте | 2026-10-15 | c081aa9 | Real browser44 desktop/320/390px,folders reload/edit/delete,exact downloads,17identities PASS; per-browser folders; old WA QR | [summary](./quick/261015-p4h-consolidate-userio-backend-and-frontend-/261015-p4h-SUMMARY.md) |
 | 261015-kz6 | Веб-вложения и загрузка файла/картинки MAX | 2026-10-15 | 7cbb286 | Real headed44 private upload/reload/exact download; existing3PDF PASS | [summary](./quick/261015-kz6-web-attachments-and-private-max-upload/261015-kz6-SUMMARY.md) |
 | 261015-ig1 | TDD: убрать старые белые карточки отправки из чата; повторный поиск | 2026-10-15 | 15b6f9b | 3 RED → 9 GREEN; 6 live browser journeys PASS | [summary](./quick/261015-ig1-fix-phantom-sent-draft-bubble-with-tdd/261015-ig1-SUMMARY.md) |
 | 261015-hvf | Индекс контактов/всей истории, точные и неточные группы, честная загрузка | 2026-10-15 | ff167fa | Live browser PASS | [summary](./quick/261015-hvf-indexed-exact-and-fuzzy-contact-message-/261015-hvf-SUMMARY.md) |

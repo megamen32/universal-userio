@@ -203,3 +203,13 @@ through the existing connected client at startup/hourly; no extra worker.
 Browser acceptance on44 uses an owned Agent Browser session, native2GiB RAM,
 CPU2,tasks384,swap0,IO10,128MiB profile,20GiB host reserve and1200s wall;
 fresh105GiB available was verified before admission. No foreign browser touched.
+
+## Новый inbox UI —15October2026
+Source-only сборка на44:768MiB soft/hard,swap0,CPU2,tasks128,одна сборка,
+IOWeight10,temp256MiB,artifact1GiB,expected30s/emergency300s. Свежая
+MemAvailable105GiB,65GiBdiskfree;сохраняется20GiBрезерв.Делегирование не
+добавляется. Fast folder6cases server100:256MiB soft/hard,swap0,CPU1,tasks32,
+IO10,expected1s/max10s;actual0.229s. Headedmanagedbrowser44:1/2GiB,swap0,
+CPU2,tasks384,IO10,ownstorage128MiB,expected90s/max900s;одна собственная
+сессия. Frontend-only immutable static packaging использует прежние256MiB/
+CPU1/tasks64/max120s,471KiB-scale context;productioncaps не изменяются.

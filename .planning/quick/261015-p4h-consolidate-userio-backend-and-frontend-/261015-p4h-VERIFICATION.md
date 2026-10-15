@@ -66,3 +66,43 @@ WhatsApp имел0B creds.json и QR refs attempts ended ещё до перен�
 владельца. Новых реальных звонков проверка не включала. Остальные принятые
 проверки и старые результаты сохранены. Чужие Telegram/messenger/Graphify/phase17
 WIP не входили в сборку или commits; весь checkout не объявляется чистым.
+
+## Дополнение: выложен настоящий новый сайт
+Текущее поручение заменило in-chat prototype настоящим UI на публичном URL.
+Frontend source c081aa9/image e059cf68;API/store fc72254/image22f77252
+поверх прежнего b81app;voice image/start16:35:30Z неизменны. Все3healthy,
+publicHTTPS200;после backend restart own cookie сохраняет вход. NativeMCP17
+account identities точно совпали с исходными id/provider.
+
+Fast unit6PASS0.283s(expected1/max10s),256MiB/CPU1/tasks32/swap0.
+Focused integration4PASS4.87s(expected4/max40s),768MiB/CPU1/tasks128/swap0:
+созданы103локальные fixture-чата,старые IDs отсутствуют в latest100,но
+conversation_ids возвращает только выбранные,проверены другая учётная запись,
+source intersection,auth и invalid/missing IDs. Первая попытка этого нового
+теста не назначила fixture route другому пользователю;после корректного
+fixture bind PASS. Производственный отказ не скрывался под этим падением.
+
+UI tsc -b и Vite PASS после каждой значимой правки;финальный Vite1.10s,
+полныйwallне измерен,max300s,44source768MiB/CPU2/tasks128/swap0. Backend и
+frontend immutable delta packaging1.466s;последний frontend0.754s,256MiB/
+CPU1/tasks64/max120s,без RUN,из опубликованных owned inputs. Nightly не запускался.
+
+Headed managed44:2TGchoices,selectedaccount remembered,вторая учётка30rows
+ровноиз её API scope. Стандартныеpersonal47rows,все соответствуют metadata;
+unread rows имеют unreadbadge. Сохранена папка с MAXprivate+почтой,2строго
+выбранные строки→reload→rename→browser restart→редактор2checked→delete.
+После удаленияprivatechatGET200. Existing txt123B и PNG179B скачаны с прежними
+SHA25633a4be10… иdf14b3e5…. Никаких новых sends/calls/provider writes.
+
+Final desktop1280x900,mobile390x844/320x740. Picker insideviewport;редактор
+100choices/2checked,footerbuttonsinside,no horizontal scroll. Обнаруженные
+mobile defects исправлены: светлый/горизонтальный scrollbar и исчезавший
+заголовок чата(titleWidth0→90px). Final screenshot просмотрен,header/document
+overflowfalse,composerinput иfilepicker доступны; advancedsettings открываются.
+
+Private artifacts new-inbox-*-final.png иsource/build/test logs в прежнем
+.tmp root.11Chrome процессов имели cgroup конечного собственного browserunit
+1/2GiB,CPU2,tasks384,swap0,max900s/storage128MiB. Собственный logout/login401
+подтверждён,finish закрывает только свою сессию. Папки per-browser с явным
+описанием в редакторе;до64папок×100IDs. Внешний WhatsApp QR остаётся прежней
+границей подключения,миграция не создавала отсутствующую авторизацию.
