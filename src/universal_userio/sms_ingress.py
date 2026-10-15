@@ -6,6 +6,9 @@ import os
 import signal
 import threading
 import json
+import logging
+
+log = logging.getLogger("userio.sms_ingress")
 
 from .channels.sms_gateway import AndroidSmsGatewayClient
 from .gmail_ingress import UserIOIngressClient
@@ -55,15 +58,30 @@ def main(argv: list[str] | None = None) -> int:
     gateway = AndroidSmsGatewayClient(os.environ["USERIO_SMS_GATEWAY_URL"], os.environ["USERIO_SMS_GATEWAY_TOKEN"])
     sink = UserIOIngressClient(os.environ.get("USERIO_INGRESS_URL", "http://127.0.0.1:18093"), os.environ["USERIO_API_TOKEN"])
     interval = float(os.environ.get("USERIO_SMS_POLL_INTERVAL_SECONDS", "5"))
+    logging.basicConfig(level=os.environ.get("USERIO_LOG_LEVEL", "INFO"))
     stop = threading.Event()
     if not args.once:
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, lambda *_: stop.set())
+    failures = 0
     while not stop.is_set():
-        poll_once(sink, gateway)
-        if args.once:
-            break
-        stop.wait(interval)
+        try:
+            delivered = poll_once(sink, gateway)
+            failures = 0
+            if delivered:
+                log.info("SMS ingress delivered %d message(s)", delivered)
+            if args.once:
+                break
+            stop.wait(interval)
+        except Exception as error:
+            if args.once:
+                raise
+            failures += 1
+            delay = min(60.0, max(interval, 2 ** min(failures, 6)))
+            # Provider failures must not exhaust systemd's restart allowance.
+            # Keep the existing cursor; partial pages are deduplicated on retry.
+            log.warning("SMS poll failed (%s); retrying in %.1fs", type(error).__name__, delay)
+            stop.wait(delay)
     return 0
 
 
