@@ -765,10 +765,10 @@ async function syncAccount(slot) {
         ingestProviderState(slot, client, accountId, update).catch(error =>
           console.error(`sync ${slot} state error:`, error.message || error));
       }, new Raw({}));
+      await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
           const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
           await refreshUnreadSnapshot(client, accountId).catch(error =>
             console.error(`unread snapshot startup: ${error.message || error}`));
-      await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
       // GramJS 2.26 has no runUntilDisconnected; the client keeps itself
