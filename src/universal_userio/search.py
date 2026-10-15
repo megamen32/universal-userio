@@ -27,6 +27,18 @@ def _execute_schema(db: Any, script: str) -> None:
 
 def initialize_search(store: Any) -> None:
     db = store._connection
+    db.execute("SAVEPOINT userio_search_init")
+    try:
+        _initialize_search(store)
+    except BaseException:
+        db.execute("ROLLBACK TO userio_search_init")
+        db.execute("RELEASE userio_search_init")
+        raise
+    db.execute("RELEASE userio_search_init")
+
+
+def _initialize_search(store: Any) -> None:
+    db = store._connection
     db.create_function('userio_search_text', 1, normalize, deterministic=True)
     db.execute('''CREATE TABLE IF NOT EXISTS search_profiles (
         user_id TEXT NOT NULL,conversation_id TEXT NOT NULL,username TEXT NOT NULL DEFAULT '',

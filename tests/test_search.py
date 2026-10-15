@@ -119,3 +119,33 @@ def test_exact_and_fuzzy_pages_are_independent(tmp_path):
     assert not {r['id'] for r in a}&{r['id'] for r in b}
     assert search_conversations(store,'архипелаг',match_type='fuzzy',limit=3)[0]['id']==fuzzy
     assert not search_conversations(store,'архипелаг',match_type='exact',source='telegram')
+
+
+def test_interrupted_initial_index_rolls_back_and_retries(tmp_path):
+    """Fast unit expected2s/max20s: interrupted migration must never leave an empty index marked ready."""
+    import pytest
+    from universal_userio.search import initialize_search
+    store=SQLiteUserIOStore(tmp_path/'atomic.sqlite3');service=UserIOService(store,Generator(),Outbox())
+    service.receive(InboxMessage('sms','old','person','архипелаг',1),route_id='sms')
+    db=store._connection
+    with db:
+        for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'search_%'").fetchall():
+            db.execute('DROP TRIGGER '+name)
+        db.execute('DROP TABLE search_fts');db.execute('DROP TABLE search_documents');db.execute('DROP TABLE search_profiles')
+    class Interrupted:
+        def create_function(self,*args,**kwargs):return db.create_function(*args,**kwargs)
+        def execute(self,sql,*args):
+            if sql.startswith('INSERT INTO search_documents(user_id,conversation_id,kind,message_rowid,text)'):
+                raise RuntimeError('simulated interruption')
+            return db.execute(sql,*args)
+    store._connection=Interrupted()
+    try:
+        with pytest.raises(RuntimeError,match='simulated interruption'):initialize_search(store)
+    finally:store._connection=db
+    assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='search_documents'").fetchone()
+    initialize_search(store)
+    assert search_conversations(store,'архипелаг',match_type='exact')
+    store.close()
+    reopened=SQLiteUserIOStore(tmp_path/'atomic.sqlite3')
+    assert search_conversations(reopened,'архипелаг',match_type='exact')
+    reopened.close()
