@@ -62,3 +62,7 @@ test('empty and over-limit uploads fail before reading bytes; exact 2 MiB succee
   assert.equal(uploadValidationError(2 * 1024 * 1024), '')
   assert.match(uploadValidationError(2 * 1024 * 1024 + 1), /2 МБ/)
 })
+
+test('MAX membership events are not downloadable file cards', () => {
+  assert.deepEqual(messageAttachments([{ kind: 'control', filename: 'attachment-0' }]), [])
+})
