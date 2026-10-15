@@ -30,6 +30,7 @@ import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type B
 import { beginContextSettingsLoad, completeContextSettingsLoad, confirmContextSettingsSave, contextSettingsPayload, contextSettingsValidationError, createContextSettingsSession, failContextSettingsLoad } from "./context-settings"
 import { LatestRequest } from "./latest-request"
 import { SecretaryRequests } from "./secretary-requests"
+import { attachmentMediaPath, isImageAttachment, messageAttachments, supportsFileUpload, uploadValidationError } from './message-attachments'
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } })
@@ -180,21 +181,22 @@ const mediaLabel = (body: string) => {
   return match ? MEDIA_LABELS[match[1].toLowerCase()] || body.trim() : ""
 }
 
-const MessageBody = ({ message, onAttachmentClick }: { message: Message; onAttachmentClick: (m: Message) => void }) => {
-  if (message.attachment_url) return <img src={message.attachment_url} alt="attachment" loading="lazy" className="max-h-80 rounded-xl bg-muted" />
-  const attachment = message.attachments?.find(item => !!item && typeof item === "object") as {kind?: string; src?: string; filename?: string} | undefined
-  if (attachment?.kind === "sticker") return <div className="space-y-1">
-    {attachment.src && <img src={attachment.src} alt="Стикер MAX" loading="lazy" referrerPolicy="no-referrer" className="max-h-40 max-w-40 object-contain" />}
-    <span className="block text-xs opacity-70">Стикер</span>
-    {message.body.trim() && <p className="whitespace-pre-wrap">{message.body}</p>}
+const MessageBody = ({ message, conversationId, onAttachmentClick }: { message: Message; conversationId?: string; onAttachmentClick: (m: Message, index?: number, download?: boolean) => void }) => {
+  const attachments = messageAttachments(message.attachments)
+  if (attachments.length) return <div className="space-y-2">
+    {message.body.trim() && !MEDIA_PLACEHOLDER.test(message.body.trim()) && message.body !== '[Вложение VK]' && <p className="whitespace-pre-wrap">{message.body}</p>}
+    {attachments.map(attachment => {
+      const available = message.source === 'max' || attachment.index === 0
+      const unavailable = 'Это вложение пока нельзя скачать'
+      return <div key={attachment.index} data-attachment-index={attachment.index} className="max-w-sm rounded-xl border border-current/15 p-2.5">
+      {attachment.kind === 'sticker' && attachment.src
+        ? <img src={attachment.src} alt="Стикер" loading="lazy" referrerPolicy="no-referrer" className="mb-2 max-h-40 max-w-40 object-contain" />
+        : available && isImageAttachment(attachment) && conversationId && <button type="button" className="mb-2 block" aria-label={`Открыть фото: ${attachment.filename}`} onClick={() => onAttachmentClick(message, attachment.index)}><img src={attachmentMediaPath(conversationId, message.message_id, attachment.index, true)} alt={attachment.filename} loading="lazy" className="max-h-64 rounded-lg object-contain" /></button>}
+      <div className="flex min-w-0 items-center gap-2"><Paperclip className="size-4 shrink-0" /><button type="button" className="min-w-0 break-words text-left font-medium underline-offset-2 enabled:hover:underline" disabled={!available} title={available ? "Открыть вложение" : unavailable} onClick={() => onAttachmentClick(message, attachment.index)}>{attachment.filename}</button></div>
+      <div className="mt-1 flex items-center justify-between gap-4 text-xs"><span className="opacity-75">{attachment.size !== undefined ? humanSize(attachment.size) : 'Размер уточняется при открытии'}</span><button type="button" className="underline disabled:opacity-60" disabled={!available} title={available ? "Скачать" : unavailable} aria-label={`Скачать ${attachment.filename}`} onClick={() => onAttachmentClick(message, attachment.index, true)}>Скачать</button></div>
+    </div>})}
   </div>
-  if (message.source === 'vk' && attachment) return <div className="space-y-2">
-    {message.body.trim() && message.body!=="[Вложение VK]" && <p className="whitespace-pre-wrap">{message.body}</p>}
-    <button type="button" title="Открыть вложение VK" onClick={()=>onAttachmentClick(message)} className="text-left underline">📎 {attachment.filename || "Вложение VK"}</button>
-  </div>
-  if (!message.body.trim() && attachment) return <button type="button" onClick={() => onAttachmentClick(message)} className="text-left underline">
-    📎 {MEDIA_LABELS[attachment.kind || ""] || attachment.filename || "Вложение"}
-  </button>
+  if (message.attachment_url) return <div className="space-y-2"><img src={message.attachment_url} alt="Фото" loading="lazy" className="max-h-80 rounded-xl bg-muted" />{message.body.trim() && !MEDIA_PLACEHOLDER.test(message.body.trim()) && <p className="whitespace-pre-wrap">{message.body}</p>}</div>
   const placeholder = message.body.trim().match(MEDIA_PLACEHOLDER)
   if (placeholder) {
     const kind = placeholder[1].toLowerCase()
@@ -232,10 +234,11 @@ export function App() {
   const [selectedChannel, setSelectedChannel] = useState<string>("all")
   const [selectedChat, setSelectedChat] = useState<string>("")
   const [draft, setDraft] = useState("")
-  const [selectedUpload,setSelectedUpload] = useState<{upload_id:string;filename:string}|null>(null)
+  const [selectedUpload,setSelectedUpload] = useState<{upload_id:string;filename:string;size:number;previewUrl?:string}|null>(null)
   const [uploadBusy,setUploadBusy] = useState(false)
   const filePicker=useRef<HTMLInputElement>(null)
   useEffect(()=>{setSelectedUpload(null)},[selectedChat])
+  useEffect(() => () => { if (selectedUpload?.previewUrl) URL.revokeObjectURL(selectedUpload.previewUrl) }, [selectedUpload])
   const [search, setSearch] = useState("")
   const [searchResults, setSearchResults] = useState<Chat[]>([])
   const [searchError, setSearchError] = useState("")
@@ -341,6 +344,7 @@ export function App() {
   const canReply = sendEnabled && (!conversationAccount || conversationAccount.capabilities.includes("reply"))
   const canDownload = userCapabilities.download
   const canVkRich = !!conversation && conversation.source === "vk" && /^vk:\d+$/.test(conversation.account_ref || "") && canReply
+  const canAttach = !!conversation && supportsFileUpload(conversation.source, conversation.account_ref || '') && canReply
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort(), [accounts, chats])
 
@@ -651,15 +655,18 @@ export function App() {
     setNewChatOpen(true)
   }
 
-  const openAttachment = async (message: Message) => {
+  const openAttachment = async (message: Message, index = 0, download = false) => {
     if (!conversation) return
     if (!canDownload) { notify("Скачивание отключено в настройках пользователя"); return }
-    setAttachmentPreview({ message, meta: null, loading: true })
+    if (!download) setAttachmentPreview({ message, meta: null, loading: true })
     try {
       const data = await api<{ kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number }>(
-        `/v1/conversations/${conversation.id}/media/${encodeURIComponent(message.message_id)}`,
+        attachmentMediaPath(conversation.id, message.message_id, index),
       )
-      setAttachmentPreview({ message, meta: data, loading: false })
+      if (download) {
+        if (data.available && data.download_url) await downloadAttachment(data.download_url, data.filename || 'Вложение', data.content_type || 'application/octet-stream')
+        else notify(data.reason || 'Вложение недоступно для скачивания.')
+      } else setAttachmentPreview({ message, meta: data, loading: false })
     } catch (error) {
       notify(`Не удалось открыть вложение: ${(error as Error).message}`)
       setAttachmentPreview(null)
@@ -688,17 +695,24 @@ export function App() {
   }
 
   const selectFile = async (file?:File) => {
-    if (!file || !conversation || conversation.source!=="vk") return
+    if (!file || !conversation || !canAttach || uploadBusy || sendBusy) return
     const cid=conversation.id
-    if (!file.size || file.size>2*1024*1024) {notify("Файл должен быть не больше 2 МБ");return}
+    const validationError = uploadValidationError(file.size)
+    if (validationError) {notify(validationError);if(filePicker.current)filePicker.current.value='';return}
     setUploadBusy(true)
     try {
       const data=new Uint8Array(await file.arrayBuffer())
       const sha=[...new Uint8Array(await crypto.subtle.digest('SHA-256',data))].map(x=>x.toString(16).padStart(2,'0')).join('')
       let raw='';for(let i=0;i<data.length;i+=8192)raw+=String.fromCharCode(...data.subarray(i,i+8192))
       const uploaded=await api<{upload_id:string;filename:string}>(`/v1/conversations/${cid}/uploads`,{method:'POST',body:JSON.stringify({filename:file.name,mime_type:file.type||'application/octet-stream',sha256:sha,data_base64:btoa(raw),request_id:crypto.randomUUID()})})
-      if(activeConversation.current===cid)setSelectedUpload(uploaded)
-    } catch(error){notify(`Не удалось добавить файл: ${(error as Error).message}`)}
+      if(activeConversation.current===cid)setSelectedUpload({...uploaded,size:file.size,...(file.type.startsWith('image/') ? {previewUrl:URL.createObjectURL(file)} : {})})
+    } catch(error){
+      const reason = (error as Error).message
+      notify(/upload_expired|upload_staging_limit/.test(reason)
+        ? 'Не удалось добавить файл. Уберите старое вложение или попробуйте позже.'
+        : /upload_exceeds/.test(reason) ? 'Файл слишком большой. Можно прикрепить до 2 МБ.'
+        : 'Не удалось добавить файл. Проверьте подключение и попробуйте снова.')
+    }
     finally{setUploadBusy(false);if(filePicker.current)filePicker.current.value=''}
   }
   const sendManual = async () => {
@@ -710,9 +724,11 @@ export function App() {
     setSendBusy(true)
     try {
       await api(`/v1/conversations/${id}/send`, { method: "POST", body: JSON.stringify({ body: text, request_id: sendIntent.current.id, upload_id:selectedUpload?.upload_id }) })
-      setDraft(current => current.trim() === text ? "" : current)
+      if (activeConversation.current === id) {
+        setDraft(current => current.trim() === text ? "" : current)
+        setSelectedUpload(null)
+      }
       sendIntent.current = null
-      setSelectedUpload(null)
       notify("Отправлено")
       // Delivery already succeeded. A later view refresh failure must never
       // turn it into a send failure or invite another copy of the message.
@@ -1173,8 +1189,8 @@ export function App() {
             return <Fragment key={`${message.source}:${message.message_id}`}>
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
               {system
-                ? <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
-                : <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{author && <p data-message-author={message.message_id} className={`mb-1 text-xs font-semibold ${outgoing ? "text-white/90" : "text-blue-700 dark:text-blue-300"}`}>{author}</p>}{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} onAttachmentClick={openAttachment} />}{(conversation.source === "max" || canVkRich) && outgoing && canReply && (canVkRich || canEditMaxText(message.attachments)) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : conversation.source === "vk" && outgoing ? " · Отправлено в VK" : ""}</p></div>}
+                ? <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} conversationId={conversation.id} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
+                : <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit max-w-[88%] overflow-hidden rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{author && <p data-message-author={message.message_id} className={`mb-1 text-xs font-semibold ${outgoing ? "text-white/90" : "text-blue-700 dark:text-blue-300"}`}>{author}</p>}{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} conversationId={conversation.id} onAttachmentClick={openAttachment} />}{(conversation.source === "max" || canVkRich) && outgoing && canReply && (canVkRich || canEditMaxText(message.attachments)) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : conversation.source === "vk" && outgoing ? " · Отправлено в VK" : ""}</p></div>}
               {message.call_audio && <CallAudio recording={message.call_audio} />}
             </Fragment>
           })}
@@ -1191,7 +1207,22 @@ export function App() {
           })}
           <div ref={bottomRef} />
         </div></ScrollArea>
-        <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]">{selectedUpload && <div className="mb-2 flex items-center gap-2 text-xs" data-selected-upload={selectedUpload.upload_id}><Paperclip className="size-3.5" />{selectedUpload.filename}<button title="Убрать вложение" onClick={()=>setSelectedUpload(null)} disabled={sendBusy}>×</button></div>}<div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5">{canVkRich && <><input ref={filePicker} type="file" className="hidden" aria-label="Вложение VK" onChange={event=>void selectFile(event.target.files?.[0])} /><Button variant="ghost" size="icon" title="Добавить фото или файл" disabled={!canReply||sendBusy||uploadBusy} onClick={()=>filePicker.current?.click()}><Paperclip className="size-4" /></Button></>}<Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply || sendBusy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void sendManual() } }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} /><Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button><Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply || sendBusy || uploadBusy || (!draft.trim() && !selectedUpload)} onClick={() => void sendManual()} size="icon" title="Отправить сообщение"><Send /></Button></div><p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? "Ваш текст отправляется сразу. Предложения ИИ — после вашего подтверждения." : "Только чтение."}</p></div></footer>
+        <footer className="bg-transparent px-3 pb-3 pt-2 md:px-6 md:pb-5"><div className="mx-auto max-w-[920px]">
+          {selectedUpload && <div className="mb-2 flex items-center gap-3 rounded-xl border bg-card p-3 text-sm" data-selected-upload={selectedUpload.upload_id}>
+            {selectedUpload.previewUrl ? <img src={selectedUpload.previewUrl} alt="Выбранное фото" className="size-14 rounded-lg object-cover" /> : <Paperclip className="size-5 shrink-0" />}
+            <div className="min-w-0 flex-1"><p className="break-words font-medium">{selectedUpload.filename}</p><p className="text-xs text-muted-foreground">{humanSize(selectedUpload.size)}</p></div>
+            <Button variant="ghost" size="icon" title="Убрать вложение" aria-label="Убрать вложение" onClick={() => setSelectedUpload(null)} disabled={sendBusy || uploadBusy}><X /></Button>
+          </div>}
+          {uploadBusy && <p role="status" className="mb-2 px-2 text-xs text-muted-foreground">Загружаю вложение…</p>}
+          <div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5">
+            <input ref={filePicker} type="file" className="hidden" aria-label="Выбрать файл или картинку" onChange={event => void selectFile(event.target.files?.[0])} />
+            <Button variant="ghost" size="icon" aria-label="Прикрепить файл или картинку" title={canAttach ? "Прикрепить файл или картинку до 2 МБ" : "Для этого аккаунта отправка вложений недоступна"} disabled={!canAttach || sendBusy || uploadBusy} onClick={() => filePicker.current?.click()}><Paperclip className="size-4" /></Button>
+            <Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply || sendBusy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void sendManual() } }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} />
+            <Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button>
+            <Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply || sendBusy || uploadBusy || (!draft.trim() && !selectedUpload)} onClick={() => void sendManual()} size="icon" title="Отправить сообщение"><Send /></Button>
+          </div>
+          <p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? `Ваш текст отправляется сразу. Предложения ИИ — после вашего подтверждения. ${canAttach ? "Файлы и картинки — до 2 МБ." : "Вложения для этого аккаунта пока недоступны."}` : "Только чтение."}</p>
+        </div></footer>
       </> : <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Открываю диалог…</div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}
       {byokOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setByokOpen(false)}><div className="w-full max-w-md rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
@@ -1210,7 +1241,7 @@ export function App() {
         </div></div>}
       {runsOpen && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">Прогон/Кошелёк · затраты ИИ</h2>{aiTotals && <span className="text-xs text-muted-foreground">{aiTotals.calls} прогонов · ${aiTotals.costUsd.toFixed(4)} / {aiTotals.costRub.toFixed(2)}₽{aiTotals.fxRate ? ` · курс ${aiTotals.fxRate}` : ""}</span>}<Button className="ml-auto" variant="outline" size="sm" onClick={() => setRunsOpen(false)}><X /> Закрыть</Button></header><div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6"><div className="mx-auto max-w-4xl"><div ref={runsHost} /><div ref={runDetailsHost} /></div></div></div>}
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Закрыть</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Письмо" /></div>}
-      {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">Сообщение {attachmentPreview.message.message_id}{attachmentPreview.meta?.size ? ` · ${humanSize(attachmentPreview.meta.size)}` : ""}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : attachmentPreview.meta.content_type === "application/pdf" ? <iframe title="PDF preview" src={attachmentPreview.meta.download_url} className="h-72 w-full rounded-lg border bg-white" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.content_type || "Файл"} · {humanSize(attachmentPreview.meta.size ?? 0)} — превью недоступно, скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
+      {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">{attachmentPreview.meta?.size !== undefined ? humanSize(attachmentPreview.meta.size) : "Вложение"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">Файл · {humanSize(attachmentPreview.meta.size ?? 0)}. Скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
     </section>
     {contextOpen && <ContextSettingsDialog settings={contextSession.draft} loading={contextSession.status === "loading"} ready={contextSession.status === "ready"} loadError={contextSession.loadError} saving={contextSaving} onChange={(draft) => setContextSession((current) => ({ ...current, draft }))} onClose={closeContextSettings} onRetry={requestContextSettings} onSave={() => void saveContextSettings()} />}
     {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новое сообщение</h2><p className="mt-1 text-xs text-muted-foreground">Канал: {displayChannel(newChatSource)}. Ваш текст отправляется сразу кнопкой отправки.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder={newChatSource === "sms" || newChatSource === "phone" ? "+79XXXXXXXXX" : "Получатель или идентификатор"} autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}

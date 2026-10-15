@@ -1,8 +1,22 @@
 """Original MAX media bytes for an owned conversation; reuse the native client."""
 from .contracts import ChannelFile
 from .messenger_max_media import fetch_native_url
+import mimetypes
 
-def download(service, user_id, conversation, record, *, max_bytes=2*1024*1024):
+
+def metadata(attachment):
+    """Public display fields only; signed provider references stay private."""
+    kind=str(attachment.get('kind') or attachment.get('_type') or '').lower()
+    filename=str(attachment.get('filename') or attachment.get('name') or attachment.get('fileName') or
+                 ('max-photo.jpg' if kind=='photo' else 'max-sticker.png' if kind=='sticker' else 'Вложение MAX'))
+    content_type=str(attachment.get('content_type') or attachment.get('mimeType') or '')
+    if not content_type or content_type=='application/octet-stream':
+        content_type=mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+    return {'kind':kind,'filename':filename,'content_type':content_type,'size':attachment.get('size')}
+
+def download(service, user_id, conversation, record, *, max_bytes=2*1024*1024, attachment_index=0):
+    if type(attachment_index) is not int or not 0<=attachment_index<100:
+        raise ValueError('Некорректный номер вложения')
     peer=str(conversation.get("peer_id") or "")
     account=str(conversation.get("account_ref") or "")
     mid=str(record.get("message_id") or "")
@@ -17,9 +31,11 @@ def download(service, user_id, conversation, record, *, max_bytes=2*1024*1024):
     attachments=row.get("attaches") or []
     if not attachments:
         raise ValueError("MAX message has no native attachment")
-    attachment=attachments[0]
+    if attachment_index>=len(attachments):
+        raise ValueError('Вложение не найдено')
+    attachment=attachments[attachment_index]
     kind=attachment.get("_type")
-    filename=str(attachment.get("name") or attachment.get("fileName") or "MAX attachment")
+    filename=metadata(attachment)['filename']
     if kind=="PHOTO":
         url=attachment.get("baseUrl")
         filename="max-photo.jpg"
@@ -35,4 +51,4 @@ def download(service, user_id, conversation, record, *, max_bytes=2*1024*1024):
     else:
         raise ValueError("MAX native attachment type unavailable")
     data,mime=fetch_native_url(url,maximum=max_bytes)
-    return ChannelFile(filename,mime or "application/octet-stream",data)
+    return ChannelFile(filename,mime or metadata(attachment)['content_type'],data)

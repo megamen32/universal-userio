@@ -155,7 +155,11 @@ def handler(
             self.wfile.write(body)
 
         def _reply_raw(self, status: int, body: bytes, *, content_type: str, filename: str) -> None:
-            disposition = 'attachment; filename="' + filename.replace('"', "") + '"'
+            # HTTP headers use latin-1. RFC5987 preserves Cyrillic names and
+            # quoting also prevents provider-controlled header injection.
+            safe_name = filename.replace('\\', '_').replace('/', '_')
+            fallback = ''.join(c if 32 <= ord(c) < 127 and c not in {'"', '\\'} else '_' for c in safe_name)
+            disposition = 'attachment; filename="' + fallback + '"; filename*=UTF-8\'\'' + quote(safe_name, safe='')
             self.send_response(status)
             self.send_header("Content-Type", content_type or "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
@@ -1801,6 +1805,12 @@ def handler(
             if not conversation_id or conversation_id == self.path:
                 self._reply(404, {"error": "not found"})
                 return
+            attachment_index = 0
+            if '/media/' in conversation_id:
+                raw_index = query.get('attachment_index', ['0'])
+                if len(raw_index) != 1 or not re.fullmatch(r'[0-9]{1,2}', raw_index[0]):
+                    self._reply(400, {'error': 'Некорректный номер вложения'}); return
+                attachment_index = int(raw_index[0])
             # /v1/conversations/{id}/media/{message_id} -> describe one
             # message's media: its placeholder kind, source channel, and the
             # bare minimum the chat bubble needs to render a clickable
@@ -1831,10 +1841,16 @@ def handler(
                     return
                 if source_hint=='max':
                     from .matrix_max_media import download as max_binary
-                    try:file=max_binary(service,user_id,conv,message)
+                    attachments=service._store.attachments_for_message(
+                        source='max',message_id=message_id,user_id=user_id)
+                    if attachment_index>=len(attachments):
+                        self._reply(404,{'error':'Вложение не найдено'});return
+                    try:file=max_binary(service,user_id,conv,message,attachment_index=attachment_index)
                     except (ValueError,RuntimeError,OSError):
-                        self._reply(503,{'error':'MAX media is temporarily unavailable or exceeds 2 MiB'});return
+                        self._reply(503,{'error':'Не удалось скачать вложение MAX. Допустимый размер — до 2 МБ. Попробуйте позже.'});return
                     self._reply_raw(200,file.data,content_type=file.content_type,filename=file.filename);return
+                if attachment_index:
+                    self._reply(400, {'error': 'Выбор нескольких вложений пока недоступен для этого сервиса'});return
                 if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:'):
                     from .vk_web import VKWeb
                     try:file=VKWeb(service,user_id).download(real_id,message_id)
@@ -1916,6 +1932,22 @@ def handler(
                         for a in attachments
                     ],
                 }
+                if source_hint=='max' and attachments:
+                    from .matrix_max_media import metadata as max_metadata
+                    if attachment_index >= len(attachments):
+                        self._reply(404, {'error': 'Вложение не найдено'});return
+                    base=f'/v1/conversations/{quote(real_id,safe="")}/media/{quote(message_id,safe="")}/raw'
+                    for idx,a in enumerate(attachments):
+                        public=max_metadata(a)
+                        supported=public['kind'] in {'photo','sticker','audio','file','video'}
+                        payload['attachments'][idx].update(public,available=supported,
+                            download_url=f'{base}?attachment_index={idx}' if supported else None)
+                    selected=payload['attachments'][attachment_index]
+                    payload.update({k:selected[k] for k in ('kind','filename','content_type','size','available','download_url')})
+                    payload['reason']='' if selected['available'] else 'Это вложение пока нельзя скачать'
+                    self._reply(200,payload);return
+                if attachment_index:
+                    self._reply(400, {'error': 'Выбор нескольких вложений пока недоступен для этого сервиса'});return
                 if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:') and attachments:
                     from .vk_web import VKWeb
                     VKWeb(service,user_id).conversation(real_id,write=False)
