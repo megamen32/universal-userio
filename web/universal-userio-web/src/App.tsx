@@ -1054,9 +1054,9 @@ export function App() {
       {aiPaused && <p className="mt-1 text-xs text-muted-foreground" role="status">Автоматический ИИ на паузе</p>}
       {aiPauseError && <p className="mt-1 text-xs text-destructive" role="alert">{aiPauseError}</p>}
     </div>
-    <ScrollArea className="min-h-0 flex-1 px-2">
+    <ScrollArea className="min-h-0 min-w-0 flex-1 px-2 [&_[data-slot=scroll-area-viewport]>div]:!block">
       <Button className="mb-2 h-11 w-full justify-start rounded-xl" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><span className="grid size-7 place-items-center rounded-lg bg-[#2f80ed]/10 text-[#2f80ed]"><Inbox className="size-4" /></span><span className="ml-2 text-left"><span className="block text-sm font-medium">Все аккаунты</span><span className="block text-[10px] text-muted-foreground">единая лента и поиск</span></span></Button>
-      <Button className="mb-3 h-10 w-full justify-start rounded-xl border border-dashed" variant="outline" onClick={() => window.location.assign("/accounts")}><Plus className="mr-2 size-4" /> Аккаунты · подключить и настроить</Button>
+      <Button className="mb-3 h-auto min-h-10 w-full justify-start whitespace-normal rounded-xl border border-dashed py-2 text-left" variant="outline" onClick={() => window.location.assign("/accounts")}><Plus className="mr-2 size-4" /><span>Подключить аккаунт</span></Button>
       {platforms.map((platform) => {
         const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === platform)
         const platformUnread = unreadByPlatform[platform] || 0
@@ -1066,11 +1066,11 @@ export function App() {
             const visible = !hiddenAccounts.includes(item.id)
             const health = accountActivity(item)
             return <div key={item.id} className="group mb-1 flex items-center gap-1">
-              <Button data-account-id={item.id} className="min-w-0 flex-1 justify-start rounded-lg px-2" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}>
+              <Button data-account-id={item.id} className="h-auto min-h-11 min-w-0 flex-1 justify-start whitespace-normal rounded-lg px-2 py-1.5" variant={selectedAccount === item.id ? "secondary" : "ghost"} onClick={() => { if (visible) { setSelectedAccount(item.id); setSelectedChannel("all"); setDrawerOpen(false) } }}>
                 <Avatar className="size-7"><AvatarFallback className="text-[10px]">{initials(item.display_name)}</AvatarFallback></Avatar>
-                <span className="ml-2 min-w-0 flex-1 text-left"><span className="block truncate text-sm">{item.display_name}</span><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className={`inline-block size-1.5 rounded-full ${HEALTH_CLASS[health]}`} />{HEALTH_TITLE[health]}</span></span>
+                <span className="ml-2 min-w-0 flex-1 text-left"><span className="block text-sm leading-snug [overflow-wrap:anywhere]">{item.display_name}</span><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><span className={`inline-block size-1.5 shrink-0 rounded-full ${HEALTH_CLASS[health]}`} />{HEALTH_TITLE[health]}</span></span>
               </Button>
-              <input className="size-3.5 opacity-50 group-hover:opacity-100" aria-label={`Показать ${item.display_name}`} title="Показывать в общей ленте" type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} />
+              <input className="size-3.5 shrink-0 opacity-50 group-hover:opacity-100" aria-label={`Показать ${item.display_name}`} title="Показывать в общей ленте" type="checkbox" checked={visible} onChange={(event) => toggleAccount(item.id, event.target.checked)} />
             </div>
           })}
 
