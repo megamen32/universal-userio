@@ -240,6 +240,8 @@ def prepare_voice():
     override['services']['voice'] = {'volumes': [f'{p}:{p}:ro' for p in sorted(mounts) if Path(p).exists()]}
     private_json(CONFIG / 'compose.host.json', override)
     baseline['voice_units'] = units
+    baseline['inactive_enabled'] = {'userio-sip-provision.service':
+        output(['systemctl', 'show', 'userio-sip-provision.service', '-pUnitFileState', '--value'])}
     baseline['voice_enabled'] = {u: output(['systemctl', 'show', u, '-pUnitFileState', '--value']) for u in units}
     # The former Windows Qwen forwarder is not a UserIO dependency anymore:
     # active voice configs use local30802, and current source has no18018 URL.
@@ -399,7 +401,7 @@ def rollback():
         if (CONFIG / 'accepted.json').exists():
             command(ssh_args('systemctl --user enable userio-telemost.service'))
     if (CONFIG / 'accepted.json').exists():
-        for key in ('enabled', 'voice_enabled', 'retired_enabled'):
+        for key in ('enabled', 'voice_enabled', 'retired_enabled', 'inactive_enabled'):
             units = [u for u, value in baseline.get(key, {}).items() if value == 'enabled']
             if units: command(['systemctl', 'enable', *units])
     private_json(CONFIG / 'cutover.json', {'status': 'rolled_back', 'at': time.time()})
@@ -410,7 +412,8 @@ def finalize():
     if json.loads((CONFIG / 'cutover.json').read_text())['status'] != 'containers_running':
         raise RuntimeError('only an accepted active migration can be finalized')
     compose('ps')
-    units = [*baseline['units'], *baseline['voice_units'], *baseline['retired_units']]
+    units = [*baseline['units'], *baseline['voice_units'], *baseline['retired_units'],
+             *baseline.get('inactive_enabled', {})]
     for unit in units:
         if unit == 'agentcall-gatewayd.service':
             continue  # Retained only as the native one-shot phone lease adapter.
