@@ -1,5 +1,9 @@
 # Deployment
 
+Текущая установка `msg.bezrabotnyi.com` работает в трёх контейнерах: frontend, backend и voice.
+См. [Compose, данные и откат](../docs/container-deployment.md). Инструкции native/systemd ниже
+относятся к установке без контейнеров.
+
 1. Install this checkout at `/opt/universal-userio`. The core service uses its
    own Python 3.12 environment at `/opt/universal-userio/.venv`, with the
    `fast-agent` extra (Fast Agent 0.10.43). Keep existing enabled channel extras
