@@ -172,6 +172,7 @@ added to same owning task; no broad unpause or historical action replay.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
+| 261015-ig1 | TDD: убрать старые белые карточки отправки из чата; повторный поиск | 2026-10-15 | 15b6f9b | 3 RED → 9 GREEN; 6 live browser journeys PASS | [summary](./quick/261015-ig1-fix-phantom-sent-draft-bubble-with-tdd/261015-ig1-SUMMARY.md) |
 | 261015-hvf | Индекс контактов/всей истории, точные и неточные группы, честная загрузка | 2026-10-15 | ff167fa | Live browser PASS | [summary](./quick/261015-hvf-indexed-exact-and-fuzzy-contact-message-/261015-hvf-SUMMARY.md) |
 |261015-087|Five-minute unread-only batches, per-chat token grants, persistent global AI pause/resume|2026-10-15|fcf63da/c09f37e|Live HTTP batch + actual preflight + headed44 persisted controls/MCP refusals PASS|[proof](./quick/261015-087-batch-userio-incoming-analysis-after-5-m/SUMMARY.md)|
 |261012-ogc|Personal VK ordinary authorization, server reading, maintained import and native direct-kind|2026-10-12|2c71175|Real fresh maskedwebform + native/persisted session/read/reload PASS; read-only|[proof](./quick/261012-ogc-connect-consented-vk-messenger-test-acco/SUMMARY.md)|
