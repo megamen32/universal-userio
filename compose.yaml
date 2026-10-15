@@ -1,0 +1,66 @@
+name: userio
+services:
+  backend:
+    image: ${USERIO_BACKEND_IMAGE:-universal-userio-backend:local}
+    build:
+      context: .
+      target: backend
+    container_name: userio-backend
+    init: true
+    network_mode: host
+    cgroup_parent: user-1000.slice
+    restart: unless-stopped
+    stop_grace_period: 40s
+    mem_reservation: 2g
+    mem_limit: 4g
+    memswap_limit: 4352m
+    cpus: 4
+    pids_limit: 512
+    blkio_config:
+      weight: 50
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /run/userio:size=16m,mode=755
+    volumes:
+      - /etc/userio-containers:/etc/userio-containers:ro
+      - /var/lib/universal-userio:/var/lib/universal-userio
+      - /var/lib/userio-matrix-bridge:/var/lib/userio-matrix-bridge
+      - /var/lib/hermes-userio-dispatcher:/var/lib/hermes-userio-dispatcher
+      - /var/lib/agentcall/recordings:/var/lib/agentcall/recordings
+      - /run/agentcall:/run/agentcall
+    healthcheck:
+      test: [CMD, python, -m, universal_userio.container_runtime, --health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  frontend:
+    image: ${USERIO_FRONTEND_IMAGE:-universal-userio-frontend:local}
+    build:
+      context: .
+      target: frontend
+    container_name: userio-frontend
+    network_mode: host
+    cgroup_parent: user-1000.slice
+    restart: unless-stopped
+    mem_reservation: 64m
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.5
+    pids_limit: 32
+    depends_on:
+      backend: {condition: service_healthy}
+    tmpfs:
+      - /var/cache/nginx:size=16m
+      - /var/run:size=1m
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O - http://127.0.0.1:18094/healthz | grep -q ready"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}

@@ -1,0 +1,11 @@
+{
+  "ready_url": "http://127.0.0.1:18093/v1/accounts",
+  "processes": [
+    {
+      "name": "core",
+      "command": ["/usr/local/bin/python", "-m", "universal_userio.runtime"],
+      "cwd": "/opt/universal-userio",
+      "environment": {"HOME": "/root", "USERIO_DB_PATH": "/var/lib/universal-userio/userio.sqlite3", "USERIO_HOST": "127.0.0.1", "USERIO_PORT": "18093"}
+    }
+  ]
+}

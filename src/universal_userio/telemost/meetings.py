@@ -23,6 +23,9 @@ class Meetings:
         self.service=service;self.root=Path(root);self.lock=threading.Lock();self.active=set()
 
     def _command(self):
+        if os.environ.get('USERIO_TELEMOST_LOCAL')=='1':
+            import sys
+            return [sys.executable,'-m','universal_userio.telemost.client']
         host=os.environ.get('USERIO_TELEMOST_SSH_HOST','')
         if host not in {'192.168.2.5','192.168.2.75'}:raise RuntimeError('Telemost recorder not configured')
         return ['runuser','-u','roomhacker','--','ssh','-o','BatchMode=yes','-o','ConnectTimeout=5',

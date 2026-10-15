@@ -1,0 +1,10 @@
+.git
+.env*
+.tmp
+.agents
+graphify-out
+node_modules
+**/node_modules
+**/__pycache__
+**/*.session*
+**/*.sqlite3*

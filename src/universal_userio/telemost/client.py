@@ -1,6 +1,7 @@
 """Local SSH-side client; one private Unix request supplied through stdin."""
 import http.client
 import json
+import os
 from pathlib import Path
 import socket
 import sys
@@ -9,7 +10,8 @@ from urllib.parse import quote
 class UnixConnection(http.client.HTTPConnection):
     def connect(self):
         self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(20)
-        self.sock.connect(str(Path.home()/'.local/state/userio-telemost/worker.sock'))
+        root=Path(os.environ.get('USERIO_TELEMOST_ROOT',str(Path.home()/'.local/state/userio-telemost')))
+        self.sock.connect(str(root/'worker.sock'))
 
 
 def main():
