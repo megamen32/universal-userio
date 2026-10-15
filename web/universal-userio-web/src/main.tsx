@@ -8,7 +8,7 @@ import { startDraftBrowserNotifications } from "./draft-browser-notifications"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider>
+    <ThemeProvider defaultTheme="dark">
       <App />
     </ThemeProvider>
   </StrictMode>

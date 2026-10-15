@@ -84,19 +84,19 @@
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
+    --background: #0d1520;
     --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
+    --card: #111d2b;
     --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
+    --popover: #162332;
     --popover-foreground: oklch(0.985 0 0);
     --primary: oklch(0.922 0 0);
     --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
+    --secondary: #20344d;
     --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
+    --muted: #192839;
     --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
+    --accent: #20344d;
     --accent-foreground: oklch(0.985 0 0);
     --destructive: oklch(0.704 0.191 22.216);
     --border: oklch(1 0 0 / 10%);
@@ -134,6 +134,54 @@
   to { opacity: 1; transform: none; }
 }
 .userio-row-in { animation: userio-row-in 0.24s ease-out both; }
+.userio-rail { width: 64px; flex-shrink: 0; flex-direction: column; align-items: stretch; gap: 5px; padding: 12px 7px 8px; border-right: 1px solid var(--border); background: var(--card); z-index: 30; }
+.userio-logo { display: grid; place-items: center; width: 36px; height: 36px; margin: 0 auto 10px; border-radius: 12px; background: linear-gradient(135deg,#62e7ef,#4354f8); color: white; font-weight: 600; font-size: 21px; }
+.userio-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.userio-service { position: relative; width: 100%; min-height: 43px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border-radius: 11px; padding: 8px 3px; color: var(--muted-foreground); font-size: 10px; cursor: pointer; transition: background .18s, color .18s; }
+.userio-service svg { width: 20px; height: 20px; flex-shrink: 0; }
+.userio-service:hover { background: var(--muted); color: var(--foreground); }
+.userio-service[aria-pressed=true] { background: color-mix(in srgb, #2f80ed 18%, var(--card)); color: #5da3ff; }
+.userio-channel-dot { position: absolute; right: 5px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: #5da3ff; }
+.userio-account-mark { position: absolute; right: 1px; bottom: 3px; border-radius: 4px; background: var(--secondary); color: var(--foreground); padding: 0 3px; font-size: 9px; }
+.userio-account-picker { z-index: 60; width: min(300px, var(--radix-popover-content-available-width)); max-height: min(520px, var(--radix-popover-content-available-height)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; padding: 8px; background: var(--popover); box-shadow: 0 20px 50px #0005; animation: userio-picker-in .2s ease-out; }
+.userio-account-picker header { display: flex; align-items: center; justify-content: space-between; padding: 2px 5px 8px; font-size: 14px; font-weight: 500; }
+.userio-account-options { min-height: 0; overflow-y: auto; }
+.userio-account-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 8px; border-radius: 10px; text-align: left; font-size: 13px; cursor: pointer; }
+.userio-account-option:hover { background: var(--accent); }
+.userio-account-option[aria-pressed=true] { background: color-mix(in srgb, #2f80ed 16%, var(--popover)); }
+.userio-account-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; font-size: 11px; background: var(--secondary); color: var(--foreground); }
+.userio-account-avatar svg { width: 17px; height: 17px; }
+.userio-connect { display: flex; align-items: center; gap: 9px; padding: 13px 9px 7px; border-top: 1px solid var(--border); margin-top: 6px; font-size: 13px; }
+.userio-folder-panel { flex-shrink: 0; width: 0; min-height: 0; overflow: hidden; background: var(--card); transition: width .26s ease; }
+.userio-folder-panel.is-open { width: 220px; border-right: 1px solid var(--border); }
+.userio-folder-panel-inner { display: flex; flex-direction: column; height: 100%; width: 220px; min-height: 0; padding: 13px 8px; }
+.userio-folder-panel header { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 14px; font-size: 14px; font-weight: 500; }
+.userio-folder-rows { overflow-y: auto; min-height: 0; }
+.userio-folder-row { display: flex; align-items: center; gap: 2px; margin-bottom: 3px; }
+.userio-folder-row>button:first-child { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; padding: 10px 9px; border-radius: 10px; font-size: 13px; text-align: left; cursor: pointer; }
+.userio-folder-row>button:first-child>span { flex: 1; overflow-wrap: anywhere; }
+.userio-folder-row>button:hover { background: var(--muted); }
+.userio-folder-row>button[aria-pressed=true] { background: color-mix(in srgb, #2f80ed 18%, var(--card)); }
+.userio-folder-row small { font-size: 11px; color: var(--muted-foreground); }
+.userio-new-folder { display: flex; align-items: center; gap: 9px; padding: 14px 9px; font-size: 13px; color: var(--muted-foreground); cursor: pointer; }
+.userio-folder-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.userio-folder-tabs>button { display: flex; align-items: center; gap: 5px; padding: 6px 9px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.userio-folder-tabs>button:hover { background: var(--muted); }
+.userio-folder-tabs>button[aria-pressed=true] { background: color-mix(in srgb, #2f80ed 18%, var(--card)); color: var(--foreground); }
+.userio-folder-dialog { position: fixed; z-index: 60; top: 50%; left: 50%; transform: translate(-50%,-50%); display: flex; flex-direction: column; gap: 20px; width: min(480px,calc(100vw - 24px)); max-height: calc(100dvh - 32px); padding: 24px; border-radius: 20px; border: 1px solid var(--border); background: var(--card); color: var(--foreground); box-shadow: 0 24px 80px #0005; }
+.userio-folder-dialog>header { display: flex; align-items: flex-start; gap: 8px; }
+.userio-folder-dialog>header>div { flex: 1; min-width: 0; }
+.userio-folder-dialog h2 { font-weight: 600; font-size: 17px; }
+.userio-folder-dialog header p { color: var(--muted-foreground); font-size: 12px; margin-top: 6px; }
+.userio-folder-choices { overflow-y: auto; min-height: 60px; max-height: 35dvh; }
+.userio-folder-choices>label { display: flex; align-items: center; gap: 12px; padding: 10px 4px; font-size: 13px; cursor: pointer; }
+.userio-folder-choices input { flex-shrink: 0; accent-color: #2f80ed; width: 16px; height: 16px; }
+.userio-folder-choices>label>span { min-width: 0; }
+.userio-folder-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; }
+@keyframes userio-picker-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@media(max-width:767px) { .userio-rail { width: 56px; padding: 10px 4px 6px; } .userio-folder-panel { position: absolute; left: 56px; top: 0; bottom: 0; z-index: 30; box-shadow: 10px 0 30px #0004; } .userio-folder-panel.is-open { width: min(240px,calc(100vw - 68px)); } .userio-folder-panel-inner { width: min(240px,calc(100vw - 68px)); } .userio-folder-dialog { padding: 18px; } }
 @media (prefers-reduced-motion: reduce) {
   .userio-row-in { animation: none; }
+  .userio-folder-panel { transition: none; }
+  .userio-account-picker { animation: none; }
 }

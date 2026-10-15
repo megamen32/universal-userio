@@ -2,7 +2,7 @@ import { conversationDrafts } from "./conversation-drafts"
 import { messageAuthor } from './message-author'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Popover } from "radix-ui"
-import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, Menu, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Paperclip, Phone, Plus, Send, SlidersHorizontal, Sparkles, Video, X } from "lucide-react"
+import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Paperclip, Phone, Plus, Send, SlidersHorizontal, Sparkles, Video, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -13,6 +13,8 @@ import { canEditMaxText, providerPeerLabel } from "./max-message"
 import { startInboxPolling } from "./inbox-poll"
 import { mergePhoneHistory } from "./phone-history"
 import { CallAudio, type CallRecording } from './call-audio'
+import { InboxNavigation, InboxFolderTabs, InboxFolderEditor, useInboxFolders } from "@/components/inbox-navigation"
+import { inInboxFolder, type InboxFolder } from "./inbox-folders"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
@@ -245,7 +247,16 @@ export function App() {
   const [searchMore, setSearchMore] = useState({ exact: false, fuzzy: false })
   const searchGeneration = useRef(0)
   const [searching, setSearching] = useState(false)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const inboxFolders = useInboxFolders()
+  const [folderEditorOpen, setFolderEditorOpen] = useState(false)
+  const [editingFolder, setEditingFolder] = useState<InboxFolder | undefined>()
+  const loadFolderChats = useCallback(async () => {
+    const data = await api<{conversations: Chat[]}>("/v1/conversations")
+    return data.conversations.map(chat => ({ id: chat.id, name: titleOf(chat), source: displayChannel(chat.source) }))
+  }, [])
+  const editFolder = (folder?: InboxFolder) => { setEditingFolder(folder); setFolderEditorOpen(true) }
+  const selectFolder = (id: string) => { inboxFolders.select(id); setSelectedAccount("all"); setSelectedChannel("all"); setMobilePane("chats"); if (window.innerWidth < 768) setSidebarOpen(false) }
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<"chats" | "chat">("chats")
   const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
@@ -329,14 +340,15 @@ export function App() {
       if (event.defaultPrevented) return
       if (event.key !== "Escape") return
       if (drawerOpen) { setDrawerOpen(false); return }
-      if (byokOpen || contextOpen || newChatOpen || runsOpen || expandedHtml || attachmentPreview) return
+      if (folderEditorOpen || byokOpen || contextOpen || newChatOpen || runsOpen || expandedHtml || attachmentPreview) return
       const target = event.target as HTMLElement | null
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return
+      if (sidebarOpen) { setSidebarOpen(false); return }
       if (selectedChat) { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [attachmentPreview, byokOpen, contextOpen, drawerOpen, expandedHtml, newChatOpen, runsOpen, selectedChat])
+  }, [attachmentPreview, byokOpen, contextOpen, drawerOpen, expandedHtml, folderEditorOpen, newChatOpen, runsOpen, selectedChat, sidebarOpen])
 
   const account = accounts.find((item) => item.id === selectedAccount)
   const conversationAccount = conversation && (accounts.find(item => item.id === conversation.account_ref) || accounts.find((item) => item.id === (item.provider === "gmail" && conversation.source.startsWith("gmail:") ? conversation.source.replace(/^gmail:/, "gmail-") : conversation.source)))
@@ -1024,12 +1036,13 @@ export function App() {
   const unifiedFeed = selectedAccount === "all" && selectedChannel === "all"
   const platformVisibleInFeed = (source: string) => !unifiedFeed || !hiddenPlatforms.includes(providerForSource(source))
   // Remount the list (with staggered row animation) whenever the view changes.
-  const viewKey = `${selectedAccount}|${selectedChannel}|${hiddenPlatforms.join(",")}|${hiddenAccounts.join(",")}|${search.trim() ? "search" : "list"}`
+  const viewKey = `${inboxFolders.active}|${selectedAccount}|${selectedChannel}|${hiddenPlatforms.join(",")}|${hiddenAccounts.join(",")}|${search.trim() ? "search" : "list"}`
 
   const visibleChats = (search.trim() ? searchResults : chats)
     .filter((chat) => platformVisibleInFeed(chat.source))
     .filter((chat) => !accounts.some((item) => hiddenAccounts.includes(item.id) &&
       (["telegram", "sms", "phone", "vk"].includes(item.provider) ? chat.account_ref === item.id : chat.source === sourceForAccount(item))))
+    .filter(chat => inInboxFolder(chat, inboxFolders.active, inboxFolders.folders))
     .sort((a, b) => (search.trim() ? Number(b.match_field === "contact") - Number(a.match_field === "contact") : 0) || (b.last_at ?? 0) - (a.last_at ?? 0))
   // A draft only belongs to the chat whose messages it was composed for.
   // Clearing on selectedChat guarantees we never leak text into the next reply.
@@ -1043,8 +1056,10 @@ export function App() {
     return map
   }, [chats])
 
+  const folderCounts = Object.fromEntries(["all", "unread", "personal", ...inboxFolders.folders.map(f => f.id)].map(id => [id, chats.filter(chat => inInboxFolder(chat, id, inboxFolders.folders)).length]))
+  const folderTitle = ({ all: "Все сообщения", unread: "Непрочитанные", personal: "Личные" } as Record<string, string>)[inboxFolders.active] || inboxFolders.folders.find(f => f.id === inboxFolders.active)?.name || "Все сообщения"
   const sidebar = <>
-    <header className="flex items-center gap-3 px-4 pb-3 pt-4"><div className="grid size-9 place-items-center rounded-xl bg-[#2f80ed] text-white"><Inbox className="size-5" /></div><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">UNIVERSAL USERIO</p><h1 className="truncate text-base font-semibold">Все сообщения</h1></div><Button className="ml-auto md:hidden" variant="ghost" size="icon" onClick={() => setDrawerOpen(false)} title="Закрыть"><X /></Button></header>
+    <header className="flex items-center gap-3 px-4 pb-3 pt-4"><div className="grid size-9 place-items-center rounded-xl bg-[#2f80ed] text-white"><Inbox className="size-5" /></div><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">UNIVERSAL USERIO</p><h1 className="truncate text-base font-semibold">Все сообщения</h1></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setDrawerOpen(false)} title="Закрыть"><X /></Button></header>
     <div className="px-3 pb-3">
       <Button className="w-full justify-start" variant={aiPaused ? "secondary" : "outline"}
         disabled={aiPaused === null || aiPauseBusy} onClick={() => void toggleAiPause()}
@@ -1090,14 +1105,17 @@ export function App() {
     </div>
   </>
 
-  return <main className="flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
-    {/* Desktop sidebar / mobile drawer */}
-    <aside className={`min-h-0 w-[280px] shrink-0 flex-col overflow-hidden border-r bg-card ${sidebarOpen ? "md:flex" : "md:hidden"} ${drawerOpen ? "absolute inset-y-0 left-0 z-40 flex shadow-2xl" : "hidden"}`}>{sidebar}</aside>
-    {drawerOpen && <button aria-label="Close menu" className="absolute inset-0 z-30 bg-black/50 md:hidden" onClick={() => setDrawerOpen(false)} />}
+  return <main className="userio-inbox relative flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
+    <InboxNavigation accounts={accounts} platforms={platforms} selectedAccount={selectedAccount} selectedChannel={selectedChannel} provider={providerForSource} label={displayChannel} icon={channelIcon} unread={unreadByPlatform}
+      onSelect={(channel, accountId) => { setSelectedChannel(channel); setSelectedAccount(accountId); inboxFolders.select("all"); setMobilePane("chats") }}
+      expanded={sidebarOpen} onExpand={() => setSidebarOpen(open => !open)} mobileChat={mobilePane === "chat" && !!selectedChat} onSettings={() => setDrawerOpen(true)}
+      folders={inboxFolders} folderCounts={folderCounts} onFolder={selectFolder} onEditFolder={editFolder} />
+    {drawerOpen && <><button aria-label="Закрыть настройки" className="absolute inset-0 z-40 bg-black/50" onClick={() => setDrawerOpen(false)} /><aside aria-label="Настройки User.io" className="absolute inset-y-0 left-0 z-50 flex w-[320px] max-w-[calc(100%-20px)] min-h-0 flex-col overflow-hidden border-r bg-card shadow-2xl">{sidebar}</aside></>}
+    <InboxFolderEditor open={folderEditorOpen} onOpenChange={setFolderEditorOpen} folder={editingFolder} state={inboxFolders} loadChats={loadFolderChats} />
 
     {/* Chat list: default pane on mobile */}
     <section className={`min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-r bg-card transition-[width,flex-basis] duration-200 ease-out ${selectedChat ? "md:w-[340px] md:flex-none" : "md:flex-1"} ${mobilePane === "chats" || !selectedChat ? "flex" : "hidden"} md:flex`}>
-      <header className="space-y-3 p-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" className="md:hidden" onClick={() => setDrawerOpen(true)} title="Аккаунты"><Menu /></Button><Button variant="ghost" size="icon" className="hidden md:inline-flex" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Скрыть платформы" : "Показать платформы"}>{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">ДИАЛОГИ</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : "Все аккаунты"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={openNewChat} aria-label="Новое сообщение" title="Новое сообщение"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => { if (event.target.value === search) return; setSearch(event.target.value); setSearching(Boolean(event.target.value.trim())); setSearchResults([]); setSearchError("") }} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div></header>
+      <header className="space-y-3 px-3 pb-2 pt-4"><div className="flex items-start gap-2"><Button variant="ghost" size="icon" onClick={() => setSidebarOpen((open) => !open)} title={sidebarOpen ? "Свернуть папки" : "Показать папки"} aria-label="Показать папки">{sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}</Button><div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">USER.IO</p><p className="truncate text-sm font-medium">{account ? account.display_name : activeChannel ? `Все ${displayChannel(activeChannel)}` : folderTitle}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={openNewChat} aria-label="Новое сообщение" title="Новое сообщение"><Plus /></Button></div><div className="relative"><Input value={search} onChange={(event) => { if (event.target.value === search) return; setSearch(event.target.value); setSearching(Boolean(event.target.value.trim())); setSearchResults([]); setSearchError("") }} onKeyDown={(event) => { if (event.key === "Escape") { setSearch(""); event.currentTarget.blur() } if (event.key === "Enter") event.preventDefault() }} placeholder={selectedAccount === "all" && selectedChannel === "all" ? "Поиск по всем сообщениям" : "Поиск в выбранном аккаунте"} />{searching && <span className="absolute right-9 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">ищу…</span>}{search && <button aria-label="Очистить поиск" className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground" onClick={() => setSearch("")}><X className="size-4" /></button>}</div><InboxFolderTabs state={inboxFolders} onSelect={selectFolder} onEdit={editFolder} /></header>
       {/* Radix's table content wrapper otherwise expands to the longest preview. */}
       <ScrollArea className="min-h-0 min-w-0 flex-1 px-2 pb-3 [&_[data-slot=scroll-area-viewport]>div]:!block">
         <div key={viewKey}>
@@ -1117,7 +1135,7 @@ export function App() {
         {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
           {searchError || (searching && search.trim() ? "Ищу…" : search.trim()
             ? <>Ничего не найдено по запросу <span className="font-medium text-foreground">«{search.trim()}»</span></>
-            : selectedChannel !== "all"
+            : inboxFolders.active !== "all" ? "В этой папке пока нет сообщений" : selectedChannel !== "all"
               ? <>В канале {displayChannel(selectedChannel)} чатов нет</>
               : "Ничего не найдено")}
         </p>}
