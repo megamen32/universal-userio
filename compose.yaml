@@ -1,10 +1,11 @@
 name: userio
 services:
   backend:
-    image: ${USERIO_BACKEND_IMAGE:-universal-userio-backend:local}
+    image: ${USERIO_APP_IMAGE:-universal-userio-app:local}
     build:
       context: .
-      target: backend
+      target: voice
+    command: [python, -m, universal_userio.container_runtime]
     container_name: userio-backend
     init: true
     network_mode: host
@@ -41,7 +42,7 @@ services:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
   voice:
-    image: ${USERIO_VOICE_IMAGE:-universal-userio-voice:local}
+    image: ${USERIO_APP_IMAGE:-universal-userio-app:local}
     build:
       context: .
       target: voice
