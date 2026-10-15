@@ -64,7 +64,10 @@ const channelIcon = (source: string) => {
   if (provider === "whatsapp") return <Phone className="size-4" />
   return <MessageCircle className="size-4" />
 }
-const displayChannel = (source: string) => source === 'yandex' ? 'Яндекс · чаты' : source === 'phone' ? 'Звонки' : providerForSource(source) === "gmail" ? "Email" : source[0].toUpperCase() + source.slice(1)
+const displayChannel = (source: string) => {
+  const provider = providerForSource(source)
+  return ({ telegram: "Telegram", whatsapp: "WhatsApp", gmail: "Почта", max: "MAX", vk: "VK", matrix: "Matrix", sms: "СМС", phone: "Звонки", telemost: "Встречи", yandex: "Яндекс", chatgpt: "ChatGPT" } as Record<string, string>)[provider] || provider[0]?.toUpperCase() + provider.slice(1)
+}
 const chatKindLabel = (kind?: string) => (Object.entries({ group: "Группа", channel: "Канал", direct: "Личный чат", telegram_bot: "Бот", unknown: "Тип не определён" }).find(([key]) => key === kind)?.[1] || "Тип не определён")
 
 // A message is "mine" (right bubble) when it was authored by the sending

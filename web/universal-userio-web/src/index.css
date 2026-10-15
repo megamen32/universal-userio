@@ -84,6 +84,7 @@
 }
 
 .dark {
+    color-scheme: dark;
     --background: #0d1520;
     --foreground: oklch(0.985 0 0);
     --card: #111d2b;
@@ -173,10 +174,10 @@
 .userio-folder-dialog>header>div { flex: 1; min-width: 0; }
 .userio-folder-dialog h2 { font-weight: 600; font-size: 17px; }
 .userio-folder-dialog header p { color: var(--muted-foreground); font-size: 12px; margin-top: 6px; }
-.userio-folder-choices { overflow-y: auto; min-height: 60px; max-height: 35dvh; }
+.userio-folder-choices { overflow-y: auto; overflow-x: hidden; min-height: 60px; max-height: 35dvh; }
 .userio-folder-choices>label { display: flex; align-items: center; gap: 12px; padding: 10px 4px; font-size: 13px; cursor: pointer; }
 .userio-folder-choices input { flex-shrink: 0; accent-color: #2f80ed; width: 16px; height: 16px; }
-.userio-folder-choices>label>span { min-width: 0; }
+.userio-folder-choices>label>span { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .userio-folder-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; }
 @keyframes userio-picker-in { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
 @media(max-width:767px) { .userio-rail { width: 56px; padding: 10px 4px 6px; } .userio-folder-panel { position: absolute; left: 56px; top: 0; bottom: 0; z-index: 30; box-shadow: 10px 0 30px #0004; } .userio-folder-panel.is-open { width: min(240px,calc(100vw - 68px)); } .userio-folder-panel-inner { width: min(240px,calc(100vw - 68px)); } .userio-folder-dialog { padding: 18px; } }
