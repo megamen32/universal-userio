@@ -69,6 +69,7 @@ services:
       - /usr/local/lib/agentcall:/usr/local/lib/agentcall:ro
       - /usr/local/lib/agentcall/fast-agent-home:/usr/local/lib/agentcall/fast-agent-home
       - /root/.cache/torch:/root/.cache/torch
+      - /run/asterisk:/run/asterisk:ro
     healthcheck:
       test: [CMD, python, -m, universal_userio.container_runtime, --config, /etc/userio-containers/voice.json, --health]
       interval: 15s

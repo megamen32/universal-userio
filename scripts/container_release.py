@@ -45,6 +45,26 @@ VOICE = {
     'agentcall-tts-local.service': ('tts', ['/opt/tts/bin/python', '/usr/local/lib/agentcall/tts_local.py']),
     'agentcall-tts-shim.service': ('tts-fallback', ['python', '/usr/local/lib/agentcall/tts_shim.py']),
 }
+PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-container-platform.conf')
+
+
+def install_platform_helper():
+    if PLATFORM_DROPIN.exists():
+        raise RuntimeError('platform helper already installed; reconcile before cutover')
+    payload = subprocess.check_output(['git', '-C', ROOT, 'show',
+        'HEAD:src/universal_userio/container_platform.py'])
+    helper = Path('/usr/local/lib/userio-container-platform.py')
+    if helper.exists():
+        raise RuntimeError('unexpected existing platform helper')
+    helper.write_bytes(payload); helper.chmod(0o755)
+    PLATFORM_DROPIN.parent.mkdir(exist_ok=True)
+    PLATFORM_DROPIN.write_text('[Unit]\nDescription=UserIO phone lease adapter (one request, no daemon)\n'
+        'ConditionPathExists=/opt/universal-userio/.userio-containerized\n'
+        '[Service]\nType=oneshot\nExecStart=\n'
+        'ExecStart=/usr/bin/python3 /usr/local/lib/userio-container-platform.py native-lease\n'
+        'Restart=no\nTimeoutStartSec=10\nMemoryHigh=128M\nMemoryMax=128M\n'
+        'MemorySwapMax=0\nCPUQuota=100%\nTasksMax=32\n')
+    command(['systemctl', 'daemon-reload'])
 
 
 def command(argv, **kwargs):
@@ -177,6 +197,8 @@ def prepare_voice():
         if not pid:
             raise RuntimeError('required installed voice process is not running: ' + unit)
         env = proc_environment(pid)
+        if name == 'gateway':
+            env['AGENTCALL_FAST_AGENT_PYTHON'] = '/opt/voice-legacy-sdk/bin/python'
         status = Path(f'/proc/{pid}/status').read_text()
         spec = dict(name=name, command=argv, environment=env, cwd='/opt/universal-userio',
             uid=int(status.split('Uid:')[1].split()[0]), gid=int(status.split('Gid:')[1].split()[0]),
@@ -205,6 +227,10 @@ def prepare_voice():
                     yield Path(value)
             pending.extend(paths(data))
     config['processes'] = [p for p in config['processes'] if p['name'] != 'telemost']
+    gateway_env = next(p['environment'] for p in processes if p['name'] == 'gateway')
+    processes.append(dict(name='transcriptions', command=['python', '-m',
+        'universal_userio.container_platform', 'transcriptions'], environment=gateway_env,
+        cwd='/opt/universal-userio', uid=0, gid=0))
     private_json(CONFIG / 'processes.json', config)
     private_json(CONFIG / 'voice.json', dict(primary='tts', ready_url='http://127.0.0.1:30802/health',
         health_urls=['http://127.0.0.1:30802/health', 'http://192.168.2.100:19092/v1/calls/health'],
@@ -322,6 +348,10 @@ def cutover():
                      Path('/var/lib/hermes-userio-dispatcher/pending-requests.sqlite3')):
             if path.exists():
                 backup_sqlite(path)
+        install_platform_helper()
+        marker = Path('/opt/universal-userio/.userio-containerized')
+        marker.write_text('UserIO backend/frontend/voice are managed by Docker Compose.\n')
+        marker.chmod(0o644)
         compose('up', '-d', '--no-build', '--wait', '--wait-timeout', '120')
         text = proxy.read_text()
         old = '    location / {\n        proxy_pass http://127.0.0.1:18093;'
@@ -346,6 +376,10 @@ def rollback():
     baseline = json.loads((CONFIG / 'baseline.json').read_text())
     compose('down')
     Path('/opt/universal-userio/.userio-containerized').unlink(missing_ok=True)
+    if PLATFORM_DROPIN.exists():
+        PLATFORM_DROPIN.unlink()
+        Path('/usr/local/lib/userio-container-platform.py').unlink(missing_ok=True)
+        command(['systemctl', 'daemon-reload'])
     proxy = BACKUP / 'nginx.conf'
     if proxy.exists():
         shutil.copy2(proxy, '/etc/nginx/sites-available/msg.bezrabotnyi.com')
@@ -376,7 +410,16 @@ def finalize():
     if json.loads((CONFIG / 'cutover.json').read_text())['status'] != 'containers_running':
         raise RuntimeError('only an accepted active migration can be finalized')
     compose('ps')
-    command(['systemctl', 'disable', *baseline['units'], *baseline['voice_units'], *baseline['retired_units']])
+    units = [*baseline['units'], *baseline['voice_units'], *baseline['retired_units']]
+    for unit in units:
+        if unit == 'agentcall-gatewayd.service':
+            continue  # Retained only as the native one-shot phone lease adapter.
+        directory = Path('/etc/systemd/system') / (unit + '.d')
+        directory.mkdir(exist_ok=True)
+        (directory / 'userio-containerized.conf').write_text(
+            '[Unit]\nConditionPathExists=!/opt/universal-userio/.userio-containerized\n')
+    command(['systemctl', 'daemon-reload'])
+    command(['systemctl', 'disable', *units])
     if baseline['rtc_active']:
         command(ssh_args('systemctl --user disable userio-telemost.service'))
     private_json(CONFIG / 'accepted.json', {'at': time.time(), 'containers': ['backend', 'frontend', 'voice']})

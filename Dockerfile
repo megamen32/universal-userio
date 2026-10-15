@@ -43,6 +43,7 @@ CMD ["python", "-m", "universal_userio.container_runtime"]
 FROM backend AS voice
 RUN apt-get update && apt-get install -y --no-install-recommends espeak ffmpeg sudo \
     && apt-get clean \
+    && groupadd -g 163 asterisk \
     && groupadd -g 994 notification-center && useradd -u 995 -g 994 -M notification-center \
     && python -m venv /opt/voice-legacy-sdk \
     && python -m venv --system-site-packages /opt/tts \
@@ -55,6 +56,9 @@ RUN /opt/voice-legacy-sdk/bin/pip install --no-cache-dir -r /tmp/userio-voice-re
     && mkdir -p /home/roomhacker/.local/bin /home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin \
     && ln -s /usr/local/bin/fast-agent /home/roomhacker/.local/bin/fast-agent \
     && ln -s /opt/voice-legacy-sdk/bin/python /home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/python
+RUN printf '#!/bin/sh\nexec python -m universal_userio.container_platform lease "$@"\n' > /usr/local/bin/s21-lease \
+    && printf '#!/bin/sh\nexec python -m universal_userio.container_platform submit "$@"\n' > /usr/local/bin/systemctl \
+    && chmod 755 /usr/local/bin/s21-lease /usr/local/bin/systemctl
 CMD ["python", "-m", "universal_userio.container_runtime", "--config", "/etc/userio-containers/voice.json"]
 
 FROM nginx:stable-alpine AS frontend
