@@ -13,8 +13,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 40s
     mem_reservation: 2g
-    mem_limit: 4g
-    memswap_limit: 4352m
+    mem_limit: 3g
+    memswap_limit: 3328m
     cpus: 4
     pids_limit: 512
     blkio_config:
@@ -53,8 +53,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 40s
     mem_reservation: 2g
-    mem_limit: 6g
-    memswap_limit: 6400m
+    mem_limit: 5g
+    memswap_limit: 5376m
     cpus: 4
     pids_limit: 512
     blkio_config:
