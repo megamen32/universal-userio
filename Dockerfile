@@ -29,17 +29,33 @@ COPY deploy/matrix-provider-bridge/bridge.py /opt/userio-matrix-bridge/bridge.py
 COPY deploy/containers/external /opt/userio-migration-deps
 COPY deploy/containers/release.json /opt/universal-userio/.userio-release.json
 COPY deploy/universal-userio-gmail-password /usr/local/bin/universal-userio-gmail-password
-RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
-    && chmod 755 /usr/sbin/policy-rc.d \
-    && apt-get update && apt-get install -y --no-install-recommends asterisk \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/local/bin/python3 /usr/bin/python3
+RUN printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/userio-migration-deps/asterisk-libs exec /opt/userio-migration-deps/asterisk "$@"\n' > /usr/sbin/asterisk \
+    && chmod 755 /usr/sbin/asterisk /opt/userio-migration-deps/asterisk \
+    && ln -sf /usr/local/bin/python3 /usr/bin/python3 \
+    && ln -s /usr/local /opt/universal-userio/.venv
 RUN pip install --no-deps --no-cache-dir . \
     && mkdir -p /home/roomhacker/.cargo/bin \
     && ln -s /opt/userio-migration-deps/himalaya /home/roomhacker/.cargo/bin/himalaya \
     && chmod 755 /usr/local/bin/universal-userio-gmail-password
 STOPSIGNAL SIGTERM
 CMD ["python", "-m", "universal_userio.container_runtime"]
+
+FROM backend AS voice
+RUN apt-get update && apt-get install -y --no-install-recommends espeak ffmpeg sudo \
+    && apt-get clean \
+    && groupadd -g 994 notification-center && useradd -u 995 -g 994 -M notification-center \
+    && python -m venv /opt/voice-legacy-sdk \
+    && python -m venv --system-site-packages /opt/tts \
+    && python -m venv --system-site-packages /opt/universal-userio/telegram-call-runtime
+COPY deploy/containers/requirements-voice.txt /tmp/userio-voice-requirements.txt
+RUN /opt/voice-legacy-sdk/bin/pip install --no-cache-dir -r /tmp/userio-voice-requirements.txt \
+    && /opt/tts/bin/pip install --no-cache-dir numpy==2.2.6 omegaconf==2.3.1 \
+    && /opt/tts/bin/pip install --no-cache-dir torch==2.14.0+cpu --index-url https://download.pytorch.org/whl/cpu \
+    && /opt/universal-userio/telegram-call-runtime/bin/pip install --no-cache-dir ntgcalls==3.0.3 \
+    && mkdir -p /home/roomhacker/.local/bin /home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin \
+    && ln -s /usr/local/bin/fast-agent /home/roomhacker/.local/bin/fast-agent \
+    && ln -s /opt/voice-legacy-sdk/bin/python /home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/python
+CMD ["python", "-m", "universal_userio.container_runtime", "--config", "/etc/userio-containers/voice.json"]
 
 FROM nginx:stable-alpine AS frontend
 RUN sed -i 's/worker_processes  auto;/worker_processes  1;/' /etc/nginx/nginx.conf

@@ -37,8 +37,8 @@ def load_config(path: Path) -> dict:
     if not isinstance(workers, list) or not workers:
         raise ValueError('backend process configuration is empty')
     names = [p.get('name') for p in workers]
-    if len(set(names)) != len(names) or 'core' not in names:
-        raise ValueError('unique process names and one core are required')
+    if len(set(names)) != len(names) or data.get('primary', 'core') not in names:
+        raise ValueError('unique process names and a primary process are required')
     for worker in workers:
         command = worker.get('command')
         if not isinstance(command, list) or not command or not all(isinstance(v, str) and v for v in command):
@@ -55,6 +55,7 @@ class Supervisor:
         self.attempts = collections.defaultdict(collections.deque)
         self.stopping = False
         self.started = time.time()
+        self.primary = config.get('primary', 'core')
 
     def start(self, spec: dict) -> None:
         name = spec['name']
@@ -94,7 +95,7 @@ class Supervisor:
     def close(self) -> None:
         # Ingress/dispatchers stop first; the core writer remains until last.
         children = list(self.children.items())
-        groups = ([p for n, p in children if n != 'core'], [p for n, p in children if n == 'core'])
+        groups = ([p for n, p in children if n != self.primary], [p for n, p in children if n == self.primary])
         for group, grace in zip(groups, (25, 5)):
             for child in group:
                 if child.poll() is None:
@@ -111,17 +112,17 @@ class Supervisor:
     def run(self) -> None:
         signal.signal(signal.SIGTERM, self.stop)
         signal.signal(signal.SIGINT, self.stop)
-        core = next(p for p in self.config['processes'] if p['name'] == 'core')
+        core = next(p for p in self.config['processes'] if p['name'] == self.primary)
         self.start(core)
         deadline = time.monotonic() + 60
         try:
             while not self.stopping and not ready(self.config['ready_url']):
-                if self.children['core'].poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError('core did not become ready')
+                if self.children[self.primary].poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError('primary process did not become ready')
                 time.sleep(.25)
             if not self.stopping:
                 for spec in self.config['processes']:
-                    if spec['name'] != 'core':
+                    if spec['name'] != self.primary:
                         self.start(spec)
             while not self.stopping:
                 for spec in self.config['processes']:
@@ -137,7 +138,7 @@ class Supervisor:
             self.close()
 
 
-def health() -> int:
+def health(config: dict | None = None) -> int:
     try:
         state = json.loads(STATUS.read_text())
         if state['stopping'] or len(state['processes']) != state['expected']:
@@ -146,7 +147,12 @@ def health() -> int:
             if not worker['running']:
                 return 1
             os.kill(worker['pid'], 0)
-        return 0 if ready('http://127.0.0.1:18093/v1/accounts') else 1
+        config = config or {'ready_url': 'http://127.0.0.1:18093/v1/accounts'}
+        import stat
+        for path in config.get('health_sockets', []):
+            if not stat.S_ISSOCK(Path(path).stat().st_mode):
+                return 1
+        return 0 if all(ready(url) for url in config.get('health_urls', [config['ready_url']])) else 1
     except (OSError, ValueError, KeyError):
         return 1
 
@@ -157,7 +163,7 @@ def main() -> int:
     parser.add_argument('--health', action='store_true')
     args = parser.parse_args()
     if args.health:
-        return health()
+        return health(load_config(args.config))
     Supervisor(load_config(args.config)).run()
     return 0
 

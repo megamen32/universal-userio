@@ -39,6 +39,22 @@ def test_health_rejects_missing_worker_even_when_core_is_ready(tmp_path, monkeyp
     assert runtime.health() == 1
 
 
+def test_voice_role_uses_its_own_primary_and_readiness(tmp_path, monkeypatch):
+    config = {'primary': 'tts', 'ready_url': 'http://speech/health',
+              'processes': [{'name': 'tts', 'command': ['true']}]}
+    path = tmp_path / 'voice.json'; path.write_text(json.dumps(config))
+    assert runtime.load_config(path)['primary'] == 'tts'
+    status = tmp_path / 'status.json'; monkeypatch.setattr(runtime, 'STATUS', status)
+    status.write_text(json.dumps({'expected': 1, 'stopping': False,
+                                 'processes': [{'pid': os.getpid(), 'running': True}]}))
+    urls = []
+    monkeypatch.setattr(runtime, 'ready', lambda url: urls.append(url) or True)
+    assert runtime.health(config) == 0
+    assert urls == ['http://speech/health']
+    config['health_sockets'] = [str(tmp_path / 'absent.sock')]
+    assert runtime.health(config) == 1
+
+
 def test_supervisor_keeps_worker_environment_and_stops_owned_group(tmp_path):
     marker = tmp_path / 'marker'
     script = ('import os,pathlib,signal,time;'

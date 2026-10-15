@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare and switch the existing UserIO installation to two containers.
+"""Prepare and switch the existing UserIO installation to three containers.
 
 Secrets stay in a root-only runtime configuration, outside Git and build input.
 The original units and deployment files remain available for rollback.
@@ -36,6 +36,14 @@ WORKERS = {
     'userio-telegram-ingress.service': ('telegram', ['node', '/opt/userio-telegram-qr/server.mjs']),
     'userio-whatsapp-qr.service': ('whatsapp', ['node', '/opt/userio-whatsapp-qr/server.mjs']),
     'userio-sip-provision.service': ('sip-settings', ['python', '-m', 'universal_userio.sip_connections']),
+}
+VOICE = {
+    'agentcall-gatewayd.service': ('gateway', ['python', '/usr/local/lib/agentcall/agentcall_realtime_bridge.py',
+        '--host', '127.0.0.1', '--port', '9092', '--event-socket', '/run/agentcall/gatewayd.sock',
+        '--control-socket', '/run/agentcall/control.sock']),
+    'agentcall-secretary-api.service': ('voice-api', ['python', '/usr/local/lib/agentcall/agentcall_secretary_api.py']),
+    'agentcall-tts-local.service': ('tts', ['/opt/tts/bin/python', '/usr/local/lib/agentcall/tts_local.py']),
+    'agentcall-tts-shim.service': ('tts-fallback', ['python', '/usr/local/lib/agentcall/tts_shim.py']),
 }
 
 
@@ -154,6 +162,81 @@ def prepare():
     print(json.dumps({'prepared': True, 'processes': [p['name'] for p in processes], 'connections_preserved': True}))
 
 
+def prepare_voice():
+    """Extend an existing sealed preparation; never replace its baseline."""
+    baseline = json.loads((CONFIG / 'baseline.json').read_text())
+    if 'voice_units' in baseline:
+        raise RuntimeError('voice preparation already exists; reuse it')
+    config = json.loads((CONFIG / 'processes.json').read_text())
+    processes = [p for p in config['processes'] if p['name'] == 'telemost']
+    mounts = {'/opt/noticeplace', '/opt/exmanager-voice/b57ae06', '/run/noticeplace-mesh',
+              '/home/roomhacker/.ssh', '/root/.ssh'}
+    units = []
+    for unit, (name, argv) in VOICE.items():
+        pid = int(output(['systemctl', 'show', unit, '-pMainPID', '--value']))
+        if not pid:
+            raise RuntimeError('required installed voice process is not running: ' + unit)
+        env = proc_environment(pid)
+        status = Path(f'/proc/{pid}/status').read_text()
+        spec = dict(name=name, command=argv, environment=env, cwd='/opt/universal-userio',
+            uid=int(status.split('Uid:')[1].split()[0]), gid=int(status.split('Gid:')[1].split()[0]),
+            groups=list(map(int, status.split('Groups:')[1].splitlines()[0].split())))
+        processes.append(spec); units.append(unit)
+        mounts.update(v for k, v in env.items() if v.startswith('/') and Path(v).is_file()
+                      and any(part in k for part in ('FILE', 'CONFIG', 'IDENTITIES', 'MAP')))
+    # Protected SDK settings reference separate protected key files. Preserve
+    # those paths without serializing their values into images or Git.
+    pending = [Path('/etc/agentcall-secretary-voice.json')]
+    seen = set()
+    while pending:
+        path = pending.pop()
+        if not path.is_file() or str(path) in seen:
+            continue
+        seen.add(str(path))
+        mounts.add(str(path))
+        if path.suffix == '.json':
+            data = json.loads(path.read_text())
+            def paths(value):
+                if isinstance(value, dict):
+                    for v in value.values(): yield from paths(v)
+                elif isinstance(value, list):
+                    for v in value: yield from paths(v)
+                elif isinstance(value, str) and value.startswith('/'):
+                    yield Path(value)
+            pending.extend(paths(data))
+    config['processes'] = [p for p in config['processes'] if p['name'] != 'telemost']
+    private_json(CONFIG / 'processes.json', config)
+    private_json(CONFIG / 'voice.json', dict(primary='tts', ready_url='http://127.0.0.1:30802/health',
+        health_urls=['http://127.0.0.1:30802/health', 'http://192.168.2.100:19092/v1/calls/health'],
+        health_sockets=['/run/agentcall/gatewayd.sock', '/run/agentcall/control.sock',
+                        '/var/lib/universal-userio/telemost-worker/worker.sock'], processes=processes))
+    override = json.loads((CONFIG / 'compose.host.json').read_text())
+    override['services']['voice'] = {'volumes': [f'{p}:{p}:ro' for p in sorted(mounts) if Path(p).exists()]}
+    private_json(CONFIG / 'compose.host.json', override)
+    baseline['voice_units'] = units
+    baseline['voice_enabled'] = {u: output(['systemctl', 'show', u, '-pUnitFileState', '--value']) for u in units}
+    # The former Windows Qwen forwarder is not a UserIO dependency anymore:
+    # active voice configs use local30802, and current source has no18018 URL.
+    baseline['retired_units'] = ['agentcall-tts-tunnel.service']
+    baseline['retired_enabled'] = {u: output(['systemctl', 'show', u, '-pUnitFileState', '--value'])
+                                  for u in baseline['retired_units']}
+    private_json(CONFIG / 'baseline.json', baseline)
+    print(json.dumps({'roles': ['backend', 'frontend', 'voice'], 'voice_processes': [p['name'] for p in processes]}))
+
+
+def assert_idle():
+    if output(['asterisk', '-rx', 'core show channels concise']).strip():
+        raise RuntimeError('active telephone call prevents cutover')
+    for path in Path('/proc').iterdir():
+        if not path.name.isdigit(): continue
+        try: argv = (path / 'cmdline').read_bytes().split(b'\0')
+        except (OSError, PermissionError): continue
+        if any(v in {b'universal_userio.matrix_call_worker', b'universal_userio.telegram_call_worker'} for v in argv):
+            raise RuntimeError('active RTC call prevents cutover')
+    remote_check = "python3 -c \"import pathlib,json; assert not any(json.loads(p.read_text())['status'] in {'accepted','waiting','recording','finalizing'} for p in pathlib.Path('" + TELEMOST_ROOT + "').glob('*/meeting.json')), 'active meeting prevents cutover'\""
+    command(ssh_args(remote_check))
+
+
 def build_context(destination: Path):
     revision = output(['git', '-C', ROOT, 'rev-parse', 'HEAD'])
     if revision != output(['git', '-C', ROOT, 'rev-parse', 'origin/main']):
@@ -177,6 +260,14 @@ def build_context(destination: Path):
         additions = {'deploy/containers/external/userio_hermes_dispatcher.py': payload,
                      'deploy/containers/external/himalaya': Path('/home/roomhacker/.cargo/bin/himalaya').read_bytes(),
                      'deploy/containers/release.json': json.dumps(identity).encode()}
+        # Preserve only the installed host PBX CLI, not another PBX daemon.
+        additions['deploy/containers/external/asterisk'] = Path('/usr/sbin/asterisk').read_bytes()
+        for row in output(['ldd', '/usr/sbin/asterisk']).splitlines():
+            parts = row.split()
+            if len(parts) > 2 and parts[1] == '=>' and parts[2].startswith('/'):
+                path = Path(parts[2])
+                if path.name.split('.so')[0] not in {'libc', 'libm', 'libpthread', 'librt', 'libdl'}:
+                    additions['deploy/containers/external/asterisk-libs/' + path.name] = path.read_bytes()
         for name, data in additions.items():
             info = tarfile.TarInfo(name); info.size = len(data); info.mode = 0o755 if name.endswith('/himalaya') else 0o644
             target.addfile(info, io.BytesIO(data))
@@ -200,6 +291,9 @@ def backup_sqlite(path: Path):
 
 def cutover():
     baseline = json.loads((CONFIG / 'baseline.json').read_text())
+    if not baseline.get('voice_units'):
+        raise RuntimeError('prepare all three roles before cutover')
+    assert_idle()
     if (CONFIG / 'cutover.json').exists():
         raise RuntimeError('cutover was already attempted; inspect receipt before any further action')
     # Record ownership before the first service stop. Retrying this function
@@ -209,6 +303,7 @@ def cutover():
     proxy = Path('/etc/nginx/sites-available/msg.bezrabotnyi.com')
     shutil.copy2(proxy, BACKUP / 'nginx.conf')
     try:
+        command(['systemctl', 'stop', *baseline['voice_units'], *baseline['retired_units']])
         command(['systemctl', 'stop', *[u for u in baseline['units'] if u != 'universal-userio.service']])
         command(['systemctl', 'stop', 'universal-userio.service'])
         if baseline['rtc_active']:
@@ -237,7 +332,7 @@ def cutover():
         command(['nginx', '-t'])
         command(['systemctl', 'reload', 'nginx'])
         marker = Path('/opt/universal-userio/.userio-containerized')
-        marker.write_text('UserIO backend/frontend are managed by Docker Compose.\n')
+        marker.write_text('UserIO backend/frontend/voice are managed by Docker Compose.\n')
         marker.chmod(0o644)
         private_json(CONFIG / 'cutover.json', {'started_at': time.time(), 'status': 'containers_running',
                                              'rollback': 'sudo python3 scripts/container_release.py rollback'})
@@ -259,18 +354,37 @@ def rollback():
     # newly accepted messages/receipts; these backups are forensic recovery only.
     command(['systemctl', 'start', 'universal-userio.service'])
     command(['systemctl', 'start', *[u for u in baseline['units'] if u != 'universal-userio.service']])
+    if baseline.get('voice_units'):
+        command(['systemctl', 'start', *baseline['voice_units'], *baseline.get('retired_units', [])])
     if baseline['rtc_active']:
         target = Path('/var/lib/universal-userio/telemost-worker')
         if target.exists():
             data = subprocess.check_output(['tar', '--exclude=worker.sock', '-cf', '-', '-C', str(target), '.'])
             command(ssh_args('tar -xf - -C ' + TELEMOST_ROOT), input=data)
         command(ssh_args('systemctl --user start userio-telemost.service'))
+        if (CONFIG / 'accepted.json').exists():
+            command(ssh_args('systemctl --user enable userio-telemost.service'))
+    if (CONFIG / 'accepted.json').exists():
+        for key in ('enabled', 'voice_enabled', 'retired_enabled'):
+            units = [u for u, value in baseline.get(key, {}).items() if value == 'enabled']
+            if units: command(['systemctl', 'enable', *units])
     private_json(CONFIG / 'cutover.json', {'status': 'rolled_back', 'at': time.time()})
+
+
+def finalize():
+    baseline = json.loads((CONFIG / 'baseline.json').read_text())
+    if json.loads((CONFIG / 'cutover.json').read_text())['status'] != 'containers_running':
+        raise RuntimeError('only an accepted active migration can be finalized')
+    compose('ps')
+    command(['systemctl', 'disable', *baseline['units'], *baseline['voice_units'], *baseline['retired_units']])
+    if baseline['rtc_active']:
+        command(ssh_args('systemctl --user disable userio-telemost.service'))
+    private_json(CONFIG / 'accepted.json', {'at': time.time(), 'containers': ['backend', 'frontend', 'voice']})
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('prepare', 'context', 'cutover', 'rollback'))
+    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize'))
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.action == 'context':

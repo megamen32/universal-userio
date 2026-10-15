@@ -40,6 +40,44 @@ services:
     logging:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
+  voice:
+    image: ${USERIO_VOICE_IMAGE:-universal-userio-voice:local}
+    build:
+      context: .
+      target: voice
+    container_name: userio-voice
+    init: true
+    network_mode: host
+    cgroup_parent: user-1000.slice
+    restart: unless-stopped
+    stop_grace_period: 40s
+    mem_reservation: 2g
+    mem_limit: 6g
+    memswap_limit: 6400m
+    cpus: 4
+    pids_limit: 512
+    blkio_config:
+      weight: 50
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /run/userio:size=16m,mode=755
+    volumes:
+      - /etc/userio-containers:/etc/userio-containers:ro
+      - /var/lib/universal-userio:/var/lib/universal-userio
+      - /var/lib/agentcall/recordings:/var/lib/agentcall/recordings
+      - /run/agentcall:/run/agentcall
+      - /usr/local/lib/agentcall:/usr/local/lib/agentcall:ro
+      - /usr/local/lib/agentcall/fast-agent-home:/usr/local/lib/agentcall/fast-agent-home
+      - /root/.cache/torch:/root/.cache/torch
+    healthcheck:
+      test: [CMD, python, -m, universal_userio.container_runtime, --config, /etc/userio-containers/voice.json, --health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
   frontend:
     image: ${USERIO_FRONTEND_IMAGE:-universal-userio-frontend:local}
     build:
