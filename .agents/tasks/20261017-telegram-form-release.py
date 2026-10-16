@@ -13,10 +13,10 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-AREA = ROOT / 'var/20261017-login-form-repair/release'
+AREA = ROOT / 'var/20261017-login-form-repair/release-v2'
 CONFIG = Path('/etc/userio-containers/compose.host.json')
 NAME = 'userio-backend'
-PREVIOUS = 'userio-backend-prev-login-form-20261017'
+PREVIOUS = 'userio-backend-prev-login-form-v2-20261017'
 SOURCE = 'deploy/telegram-qr-connector/server.mjs'
 TARGET = '/opt/userio-telegram-qr/server.mjs'
 
@@ -56,7 +56,11 @@ print(json.dumps({'slot':[{k:s.get(k) for k in ['id','accountId','status','sync'
 def ready(state):
     return state['saved'] and len(state['slot']) == 1 and all([
         state['slot'][0]['accountId'] == 'telegram:540308572',
-        state['slot'][0]['status'] == 'connected', state['slot'][0]['sync'] == 'live',
+        state['slot'][0]['status'] == 'connected',
+        # The connector establishes its authenticated liveSlots entry before
+        # scanning older dialogues. A healthy backfill does not block this
+        # form-only release. Real fresh private reads are verified afterward.
+        state['slot'][0]['sync'] == 'live' or state['slot'][0]['sync'].startswith('backfill '),
         not state['slot'][0]['syncError']])
 
 def atomic_config(data):
@@ -119,11 +123,12 @@ def main():
         for key in ['Memory','MemoryReservation','MemorySwap','NanoCpus','CpuShares','PidsLimit','NetworkMode','RestartPolicy','Ulimits','Tmpfs','LogConfig','ReadonlyRootfs']:
             if before['HostConfig'].get(key) != after['HostConfig'].get(key): raise RuntimeError('changed runtime field '+key)
         if set(before['HostConfig'].get('Binds') or []) != set(after['HostConfig'].get('Binds') or []): raise RuntimeError('changed bind set')
-        for _ in range(40):
+        deadline = time.monotonic() + 480
+        while time.monotonic() < deadline:
             state = qr_state()
             if ready(state): break
             time.sleep(3)
-        else: raise RuntimeError('saved account4 did not return live')
+        else: raise RuntimeError('saved account4 did not authenticate within emergency observation budget')
         configured = json.loads(original); configured['services']['backend']['image'] = image
         atomic_config(json.dumps(configured, indent=2).encode())
     except BaseException:

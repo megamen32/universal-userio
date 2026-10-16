@@ -35,3 +35,13 @@ Git object server.mjs; один build1GiB/CPU2/PIDs128/networknone, expected30/m
 никакого нового Telegram login/passwordPOST. После рестарта account540 остаётся
 на account4 и настоящие fresh bounded personal-chat probes успешны.
 До этих проверок source GREEN не называется исправленным live UI.
+
+Первая установка e2ec951 честно откатилась: installer требовал завершить
+весь первоначальный100-chat backfill за120с, хотя счётчик рос65/100,
+ошибок не было и обе private Telegram reads уже были fresh=true.
+Production временно вернулся к принятому92 без отката БД/session.
+Исправлен только installer: authenticated connected+saved account с живым
+backfill принимается как готовый транспорт (liveSlots создаётся ДО scan),
+наблюдение за auth имеет конечный emergency budget480с; отдельные real fresh
+reads обязательны после установки. Повторная активация имеет отдельный
+release-v2 intent, а не повтор failed intent. Новый login не создаётся.
