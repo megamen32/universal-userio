@@ -685,3 +685,22 @@ def test_qwen3_queries_carry_the_instruction_and_other_models_do_not():
         assert instruction_query(model, raw) == raw
     # The chunked document text is never prefixed.
     assert chunk_text("Документ про бюджеты") == ["Документ про бюджеты"]
+
+
+def test_effective_owner_settings_are_visible_without_keys(tmp_path, monkeypatch):
+    from universal_userio.semantic_index import public_settings
+    service, store = _service(tmp_path)
+    for key,value in {'QDRANT_URL':'https://vectors.local','QDRANT_COLLECTION':'own_collection',
+                      'QDRANT_TOKEN':'private-test-qdrant','EMBEDDING_URL':'https://embed.local/v1',
+                      'EMBEDDING_MODEL':'qwen3-embedding:4b','EMBEDDING_TOKEN':'private-test-embed'}.items():
+        monkeypatch.setenv('USERIO_SEARCH_'+key,value)
+    store.set_user_search_settings({'enabled': True})
+    shown=public_settings(store)
+    assert shown['qdrant_url']=='https://vectors.local'
+    assert shown['embedding_model']=='qwen3-embedding:4b'
+    assert shown['has_qdrant_key'] and shown['has_embedding_key']
+    assert 'private-test' not in json.dumps(shown)
+    second=store.register_user('other-search-owner','other-search-password')
+    store.set_user_search_settings({'enabled':True},user_id=second.user_id)
+    assert not resolve_settings(store,user_id=second.user_id).configured()
+    assert not public_settings(store,user_id=second.user_id)['has_qdrant_key']

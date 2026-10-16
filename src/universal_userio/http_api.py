@@ -37,6 +37,7 @@ from .personal_tokens import PersonalTokens
 from .token_permissions import read_only_http_allowed, meeting_recorder_http_allowed
 from .search import PUBLIC_WEB_URL, run_search_index, search_conversations, search_coverage, search_messages
 from .service import DeliveryUnavailableError, UserIOService
+from .semantic_index import public_settings as public_search_settings
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
@@ -1686,10 +1687,10 @@ def handler(
                     self._reply(403, {"error": "read_capability_disabled"}); return
                 if path == "/v1/search/settings":
                     if self.command == "POST":
-                        self._reply(200, service._store.set_user_search_settings(
-                            self._json(), user_id=user_id))
+                        service._store.set_user_search_settings(self._json(), user_id=user_id)
+                        self._reply(200, public_search_settings(service._store, user_id=user_id))
                         return
-                    self._reply(200, service._store.user_search_settings_public(user_id=user_id))
+                    self._reply(200, public_search_settings(service._store, user_id=user_id))
                     return
                 if self.command == "POST":
                     if service._store.owner().user_id != user_id:

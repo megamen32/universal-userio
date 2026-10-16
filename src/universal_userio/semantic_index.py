@@ -77,6 +77,10 @@ def resolve_settings(store: Any, *, user_id: str | None = None,
     provision the endpoint once and owners only enable and scope it.
     """
     environment = dict(os.environ if environment is None else environment)
+    # Deployment credentials belong to the configured owner. Another user must
+    # opt in with their own service settings, including on the direct search path.
+    if store._user(user_id) != store.owner().user_id:
+        environment = {}
     saved = store.user_search_settings(user_id=user_id) or {}
 
     def pick(key: str, env_key: str) -> str:
@@ -101,6 +105,15 @@ def resolve_settings(store: Any, *, user_id: str | None = None,
         dimensions=dimensions if dimensions > 0 else POINT_HASH,
     )
     return settings if settings.configured() else replace(settings, enabled=False)
+
+
+def public_settings(store: Any, *, user_id: str | None = None) -> dict[str, Any]:
+    """Show the effective connection (including inherited defaults), never keys."""
+    saved = store.user_search_settings_public(user_id=user_id)
+    effective = resolve_settings(store, user_id=user_id)
+    if effective.configured():
+        return {**saved, **effective.public()}
+    return saved
 
 
 # Qwen3-Embedding is an instruction-tuned retriever: the official model card
