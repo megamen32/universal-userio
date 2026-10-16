@@ -13,6 +13,7 @@ explain what matters and prepare replies you can review.
 - **Your text, sent immediately.** AI replies need approval; MAX messages stay editable.
 - **Your phone, connected.** Android SMS APK, separate native/root and call setup.
 - **Your AI, informed.** MCP, API, context, cached summaries and secretary processing.
+- **Find the source.** [Text and optional semantic history search](docs/history-search.md) with message links and your own Qdrant.
 
 ## Start in minutes
 

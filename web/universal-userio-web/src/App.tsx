@@ -327,6 +327,8 @@ export function App() {
   const chatsRequest = useRef(new LatestRequest())
   const conversationRequest = useRef(new LatestRequest())
   const activeConversation = useRef("")
+  const deepLinkFetch = useRef("")
+  const [deepLinkHash, setDeepLinkHash] = useState(window.location.hash)
   const secretaryRequest = useRef(new SecretaryRequests())
   const notify = (message: string) => {
     setToast(message)
@@ -461,10 +463,27 @@ export function App() {
     if (activeConversation.current !== id) return
     const request = conversationRequest.current.begin()
     const result = await api<Conversation>(`/v1/conversations/${encodeURIComponent(id)}`)
+    const target = parseDeepLink(window.location.hash)
+    if (target?.conversationId === result.id && target.messageId
+        && !result.messages.some(message => message.message_id === target.messageId)) {
+      // The latest page omits old sources. Re-read the exact source on refresh
+      // as well, so edits/deletions/permission changes cannot retain stale text.
+      try {
+        const source = await api<{ result?: { structuredContent?: { message?: Message & { conversation_id: string } } } }>("/mcp", {
+          method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: "deep-link-refresh", method: "tools/call",
+            params: { name: "userio.channels.read", arguments: { message_id: target.messageId } } }),
+        })
+        const message = source.result?.structuredContent?.message
+        if (message?.conversation_id === result.id && message.message_id === target.messageId)
+          result.messages = [...result.messages, message].sort((a, b) => a.received_at - b.received_at)
+      } catch { /* Keep the current latest page when the source is unavailable. */ }
+    }
     if (conversationRequest.current.isCurrent(request) && activeConversation.current === id) {
-      setConversation(previous => previous?.id === result.id && result.source === 'phone' && (phoneHistoryWindow.current === result.id || previous.messages.length > result.messages.length)
+      setConversation(previous => {
+        return previous?.id === result.id && result.source === 'phone' && (phoneHistoryWindow.current === result.id || previous.messages.length > result.messages.length)
         ? { ...result, messages: mergePhoneHistory(previous.messages, result.messages), phone_history: previous.phone_history }
-        : result)
+        : result
+      })
       // A historical call link resolves to its person's retained canonical
       // dialogue. Keep the selected view and subsequent requests on that ID.
       if (result.id !== id) setSelectedChat(result.id)
@@ -500,6 +519,8 @@ export function App() {
       return
     }
     if (conversation?.source === 'phone' && phoneHistoryWindow.current === conversation.id && !phoneFollowLatest.current) return
+    const source = parseDeepLink(window.location.hash)
+    if (source?.conversationId === conversation?.id && source?.messageId) return
     bottomRef.current?.scrollIntoView({ block: "end" })
   }, [conversation?.id, conversation?.messages.length, conversation?.drafts.length])
 
@@ -659,38 +680,41 @@ export function App() {
 
   const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
   const semanticSearch = useSemanticSearch()
-  // A search hit is a plain hash route: open the chat and scroll to the exact
-  // source message, loading it first when it is outside the visible window.
+  // Hash changes include a second search hit in the same conversation. Wait
+  // for that conversation's real data before loading a source outside its page.
   useEffect(() => {
-    const apply = () => {
-      const target = parseDeepLink(window.location.hash)
-      if (!target) return
-      if (selectedChat !== target.conversationId) openChat(target.conversationId)
-      if (!target.messageId) return
-      const scroll = () => [...document.querySelectorAll<HTMLElement>("[data-read-message]")]
-        .find(element => element.dataset.readMessage === target.messageId)
-      if (scroll()) { scroll()?.scrollIntoView({ behavior: "smooth", block: "center" }); return }
-      if (activeConversation.current !== target.conversationId) return
-      void (async () => {
-        try {
-          const result = await api<{ result?: { structuredContent?: { message?: Message & { conversation_id: string } } } }>("/mcp", {
-            method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: "deep-link", method: "tools/call",
-              params: { name: "userio.channels.read", arguments: { message_id: target.messageId } } }),
-          })
-          const message = result.result?.structuredContent?.message
-          if (!message || message.conversation_id !== target.conversationId || message.message_id !== target.messageId) return
-          setConversation(current => current?.id === message.conversation_id ? { ...current,
-            messages: current.messages.some(entry => entry.message_id === message.message_id) ? current.messages
-              : [...current.messages, message].sort((a, b) => a.received_at - b.received_at) } : current)
-          await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
-          scroll()?.scrollIntoView({ behavior: "smooth", block: "center" })
-        } catch { /* a removed or unreadable source still opens its chat */ }
-      })()
-    }
-    apply()
-    window.addEventListener("hashchange", apply)
-    return () => window.removeEventListener("hashchange", apply)
-  }, [selectedChat, conversation?.id])
+    const changed = () => { deepLinkFetch.current = ""; setDeepLinkHash(window.location.hash) }
+    window.addEventListener("hashchange", changed)
+    return () => window.removeEventListener("hashchange", changed)
+  }, [])
+  useEffect(() => {
+    const target = parseDeepLink(deepLinkHash)
+    if (target && userCapabilities.read) openChat(target.conversationId)
+  }, [deepLinkHash, userCapabilities.read])
+  useEffect(() => {
+    const target = parseDeepLink(deepLinkHash)
+    if (!target?.messageId || selectedChat !== target.conversationId || conversation?.id !== target.conversationId) return
+    const locate = () => [...document.querySelectorAll<HTMLElement>("[data-read-message]")]
+      .find(element => element.dataset.readMessage === target.messageId)
+    if (locate()) { locate()?.scrollIntoView({ block: "center" }); return }
+    const key = `${target.conversationId}:${target.messageId}`
+    if (deepLinkFetch.current === key) return
+    deepLinkFetch.current = key
+    void (async () => {
+      try {
+        const result = await api<{ result?: { structuredContent?: { message?: Message & { conversation_id: string } } } }>("/mcp", {
+          method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: "deep-link", method: "tools/call",
+            params: { name: "userio.channels.read", arguments: { message_id: target.messageId } } }),
+        })
+        const message = result.result?.structuredContent?.message
+        if (!message || message.conversation_id !== target.conversationId || message.message_id !== target.messageId
+            || window.location.hash !== deepLinkHash || activeConversation.current !== target.conversationId) return
+        setConversation(current => current?.id === message.conversation_id ? { ...current,
+          messages: current.messages.some(entry => entry.message_id === message.message_id) ? current.messages
+            : [...current.messages, message].sort((a, b) => a.received_at - b.received_at) } : current)
+      } catch { /* A removed or unreadable source still opens its chat. */ }
+    })()
+  }, [deepLinkHash, selectedChat, conversation?.id, conversation?.messages])
   const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
 
   const jumpToDraftSource = async (item: Draft) => {

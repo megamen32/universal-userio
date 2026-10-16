@@ -670,3 +670,18 @@ def test_embeddings_base_url_is_normalised_once():
     for base in ("http://192.168.2.75:11440/v1", "http://192.168.2.75:11440",
                  "https://api.example.com/v1/embeddings"):
         assert embeddings_endpoint(embeddings_endpoint(base)) == embeddings_endpoint(base)
+
+
+def test_qwen3_queries_carry_the_instruction_and_other_models_do_not():
+    """Qwen3-Embedding is instruction tuned; documents stay raw, queries do not."""
+    from universal_userio.semantic_index import instruction_query
+    for model in ("qwen3-embedding:4b", "Qwen3-Embedding-4B", "qwen3-embedding"):
+        prepared = instruction_query(model, "Сравнение ежемесячных отчётов и контроль бюджетов")
+        assert prepared.startswith("Instruct: ")
+        assert prepared.endswith("Query: Сравнение ежемесячных отчётов и контроль бюджетов")
+        assert instruction_query(model, prepared) == prepared  # never doubled
+    for model in ("text-embedding-3-large", "qwen2-embedding", "", "bge-m3"):
+        raw = "  Сравнение ежемесячных отчётов\n и контроль бюджетов  "
+        assert instruction_query(model, raw) == raw
+    # The chunked document text is never prefixed.
+    assert chunk_text("Документ про бюджеты") == ["Документ про бюджеты"]

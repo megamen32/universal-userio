@@ -81,3 +81,5 @@
 ## Дополнительные справочники
 
 - [Telegram ingress worker (`userio-telegram-ingress.service`)](../deploy/telegram-qr-connector/README.md)
+
+[Поиск всей истории: текст, смысл и исходные сообщения](history-search.md).

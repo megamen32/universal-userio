@@ -103,6 +103,23 @@ def resolve_settings(store: Any, *, user_id: str | None = None,
     return settings if settings.configured() else replace(settings, enabled=False)
 
 
+# Qwen3-Embedding is an instruction-tuned retriever: the official model card
+# requires the query to carry a task instruction while documents stay raw.
+# Every other model keeps the query exactly as the caller wrote it.
+QUERY_INSTRUCTION = "Given a query, retrieve relevant messages from a conversation history."
+QUERY_INSTRUCTION_MODELS = ("qwen3-embedding",)
+
+
+def instruction_query(model: str, query: str) -> str:
+    """The query string this model expects, without touching the documents."""
+    text = str(query or "")
+    if not text.strip() or not any(marker in str(model or "").lower() for marker in QUERY_INSTRUCTION_MODELS):
+        return text
+    if text.lower().startswith("instruct:"):
+        return text
+    return f"Instruct: {QUERY_INSTRUCTION}\nQuery: {text}"
+
+
 def chunk_text(body: str, size: int = CHUNK_CHARS) -> list[str]:
     """Split on whitespace where possible; a long unbroken block is hard-cut."""
     text = " ".join(str(body or "").split())
@@ -500,7 +517,7 @@ def search(store: Any, settings: SemanticSettings, query: str, *, user_id: str |
     again from the live message row by the caller before anything is emitted.
     """
     uid = store._user(user_id)
-    vector = embed(settings, [query])[0]
+    vector = embed(settings, [instruction_query(settings.embedding_model, query)])[0]
     must: list[dict[str, Any]] = [{"key": "user_id", "match": {"value": uid}}]
     if conversation_ids:
         must.append({"key": "conversation_id", "match": {"any": list(conversation_ids)}})
