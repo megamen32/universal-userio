@@ -27,7 +27,7 @@ def main():
     if head!=cmd(['git','-C',ROOT,'rev-parse','origin/main']):raise RuntimeError('publish first')
     live=api('GET','/containers/'+NAME+'/json')
     if live['Config']['Image']!='universal-userio-frontend:search-20261016':raise RuntimeError('frontend changed')
-    context=AREA/'context';context.mkdir()
+    context=AREA/'context';context.mkdir(exist_ok=True)
     def blob(path):return subprocess.check_output(['git','-C',str(ROOT),'show',head+':'+path])
     base='src/universal_userio/static';html=blob(base+'/index.html')
     paths=['/index.html']+re.findall(r'(?:src|href)="(/assets/[^\"]+)"',html.decode())
@@ -53,7 +53,7 @@ def main():
             except OSError:pass
             time.sleep(.5)
         else:raise RuntimeError('frontend health failed')
-        configured=json.loads(CONFIG.read_bytes());configured['services']['frontend']['image']=image
+        configured=json.loads(CONFIG.read_bytes());configured['services'].setdefault('frontend',{})['image']=image
         p=CONFIG.with_name('.frontend-history.json');p.write_text(json.dumps(configured,indent=2));p.chmod(0o600);p.replace(CONFIG)
     except BaseException:
         try:api('DELETE','/containers/'+NAME+'?force=true')
