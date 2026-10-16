@@ -139,3 +139,11 @@ readonly conversation_ids filter,схема БД и прежние env/volumes �
 Для backend/frontend сохранены предыдущие локальные теги
 `universal-userio-app:before-folders-20261015` и
 `universal-userio-frontend:before-inbox-20261015`.
+
+## Поиск истории —17.10.2026
+
+Поиск обслуживает backend92f8ffc, сайт — отдельный frontend8e76b94; наличие
+нового static в backend не обновляет nginx frontend. Оба слоя берут только
+опубликованные Git objects и сохраняют runtime-конфигурацию. Voice не менялся.
+Точные helpers и откатные контейнеры — в журнале задачи поиска; настройки
+Qdrant/embeddings и секреты остаются в действующем защищённом хранилище.

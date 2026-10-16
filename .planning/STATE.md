@@ -418,3 +418,12 @@ proved remote-main ancestry; preserved foreign WIP is not called clean.
 Current milestone15/23requirements65%rounded;3/6phases50%. Other pending phases
 and shared restart/admission, public enrollment/rich Yandex follow-ups remain
 open. See17-VERIFICATION; no accepted model, send or meeting replay.
+
+
+##17Oct bounded history-search task accepted
+Original quick261017-0oq finish accepted on installed backend92f8ffc and
+frontend8e76b94.31history checks, actual settings save/reload, semantic search
+and exact old-source/same-chat/reload/polling proof PASS. Work2949/2949 ready;
+global9944/59147 still automatic background progress, not claimed complete.
+Evidence .agents/tasks/20261016-userio-history-rag.md and quick SUMMARY/VERIFICATION.
+Existing phases/milestone/foreign WIP are not reset or marked complete.

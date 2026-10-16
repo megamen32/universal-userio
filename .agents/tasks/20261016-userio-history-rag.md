@@ -105,3 +105,43 @@ fixed safe effective view and made direct per-user resolution match worker's
 no-owner-secret-inheritance rule.29history checks13.50s PASS, new settings live
 save/reload acceptance pending final install. Existing full-suite29unrelated
 baseline failures from personal-send task are not newly rerun or called GREEN.
+
+## Итог17Oct — UserIO принят
+Source/runtime: backend92f8ffc, separate frontend8e76b94; both published main
+and exact source bytes installed by thin image over preserved same config.
+No new LLM/tool families. Native provider sessions/UNKNOWN drafts untouched.
+31focused history checks14.99s PASS; final UI build6.69s/peak328264KiB PASS.
+Full unrelated suite not rerun/claimed green. Source-level permission/delete/
+edit/body-hash/resume/outage checks plus real HTTP save/index POST exercised.
+
+Real consumer found report by plain paraphrase in UserIO, first semantic hit,
+followed source1985764: full exact original including budget condition visible.
+Header/sidebar absence had closed that old chat; fixed by retaining explicit
+hash-route selection across recent-list refresh. Same-chat source1985823 and
+full page reload +6second normal polling retain exact source. Secret-safe native
+settings save/reload shows effective URLs/model, empty key fields with presence
+flags, both services available/dimensions verified, work100% vs archive partial.
+Private screenshots/count proof .tmp/20261017-history-ui/acceptance.json.
+
+Initial save returned404: POST branch incorrectly placed inside do_GET. Real
+HTTP regression reproduced404, moved writes into authenticated do_POST and
+retained read-only/index-owner/capability checks. Misleading empty-state with
+semantic hits fixed; email previews use existing Gmail accessible text before
+clipping, without changing stored bodies/vectors/hash. Raw peer IDs replaced by
+conversation name in user-facing results. Two independent simulated readers
+(review only, not human research) found readiness ambiguity; explicit service
+availability/archive progress/work ready labels fixed; repeat setup reader PASS.
+
+Resource probe: own derived collection217776KiB on disk at9944/59147 messages
+(16.81%),17305chunks,0errors. Whole backend414.7MiB, frontend2.656MiB; these are
+absolute service working sets, not attributed per-feature increments. All10work
+chats2949/2949 current messages ready/2992chunks. Full corpus estimate633.57MiB
+raw vectors plus metadata/HNSW/WAL; not a RAM claim or finished global corpus.
+
+Parent Manager final4cd2d6b8 on its installed8a7fc0cf/sourcee8c40bf now succeeds
+60.177s:4actual searches +2exact originals, short correct answer/quote/link.
+It previously read only top1/latest page although gold was rank7; root fixed
+existing tool description/instruction, not UserIO data or a second model loop.
+Current UserIO milestone/phases remain independent; this bounded search task PASS.
+Foreign connector/messenger/mirror/graphify/phase17 and previous build artifact
+remain preserved; checkout is not called globally clean.

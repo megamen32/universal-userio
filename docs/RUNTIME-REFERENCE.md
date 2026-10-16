@@ -538,3 +538,10 @@ start/end event. Unverified old targets remain archived rather than guessed.
 
 See [reading](guide/reading.md), [drafts](guide/drafts.md),
 [phone/calls](guide/calls.md), and [all documents](README.md).
+
+## Retained-history search
+
+One existing channels.list search mode and HTTP/web share the same current-user
+text/vector core, source revalidation and optional Qdrant/embedding settings.
+One supervised bounded search-index process prioritizes opted-in work sources
+then resumes the personal archive. [Contract and setup](history-search.md).
