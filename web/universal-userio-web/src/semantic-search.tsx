@@ -175,6 +175,11 @@ export function SemanticSearchPanel({ session }: { session: ReturnType<typeof us
           <input className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm" value={form.embedding_model}
             onChange={(event) => setForm({ ...form, embedding_model: event.target.value })} />
         </label>
+        <label className="block text-xs text-muted-foreground">Размерность вектора
+          <input className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm" type="number" min={16} max={8192}
+            value={form.dimensions} onChange={(event) => setForm({ ...form, dimensions: Number(event.target.value) || 2048 })} />
+          <span className="mt-1 block">Должна совпадать с моделью: 2048 для Qwen3 Embedding 4B, 1536 для многих других.</span>
+        </label>
         <label className="block text-xs text-muted-foreground">Ключ embeddings {form.has_embedding_key && <span className="text-[#2f80ed]">(сохранён)</span>}
           <input type="password" className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm" value={embeddingKey}
             autoComplete="off" onChange={(event) => setEmbeddingKey(event.target.value)} />
@@ -186,7 +191,8 @@ export function SemanticSearchPanel({ session }: { session: ReturnType<typeof us
         {state === "ready" && <span className="text-xs text-[#2f80ed]">Индекс готов</span>}
         {state === "indexing" && <span className="text-xs text-muted-foreground">Индексация идёт</span>}
         {state === "unconfigured" && <span className="text-xs text-muted-foreground">Укажите Qdrant и embeddings</span>}
-        {state === "degraded" && <span className="text-xs text-amber-600">Векторный поиск недоступен, работает текстовый</span>}
+        {state === "degraded" && <span className="text-xs text-amber-600">Векторный поиск недоступен ({status?.semantic?.reason || "проверьте настройки"}), работает текстовый</span>}
+        {status?.semantic?.reason === "collection_missing" && <span className="text-xs text-amber-600">Коллекция не создана: создайте {status.semantic.collection} или выдайте ключу право create</span>}
         {state === "off" && <span className="text-xs text-muted-foreground">Смысловой поиск выключен</span>}
       </div>
       {status?.semantic?.enabled && <p className="text-xs text-muted-foreground">

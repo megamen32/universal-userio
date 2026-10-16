@@ -46,6 +46,14 @@ def _seconds(value: str, default: int, *, maximum: int) -> float:
 
 
 class IndexWorker:
+    """One bounded worker for every owner who explicitly opted in.
+
+    Without ``--user-id`` it round-robins over the users that have their own
+    semantic settings, each with its own endpoint, checkpoint and derived
+    state. Nothing is inherited from the service owner, and no worker is created
+    per user: the same process simply serves the next enabled account in turn.
+    """
+
     def __init__(self, store: SQLiteUserIOStore, *, user_id: str | None = None,
                  sleep_seconds: float = DEFAULT_SLEEP_SECONDS,
                  messages: int = DEFAULT_MESSAGES,
@@ -55,38 +63,53 @@ class IndexWorker:
         self.sleep_seconds, self.messages = sleep_seconds, messages
         self.budget_seconds = budget_seconds
         self.stopping = False
+        self._cursor = 0
 
     def stop(self, *_args: object) -> None:
         self.stopping = True
 
-    def enabled(self) -> bool:
-        from . import semantic_index
-        settings = semantic_index.resolve_settings(self.store, user_id=self.user_id)
-        return settings.enabled and settings.configured()
+    def opted_in_users(self) -> list[str]:
+        """Users whose own settings enable semantic search, in a stable order."""
+        if self.user_id:
+            return [self.user_id]
+        rows = self.store._connection.execute(
+            "SELECT user_id FROM user_search_settings WHERE enabled=1 ORDER BY user_id").fetchall()
+        return [str(row["user_id"]) for row in rows]
 
-    def run_once(self) -> dict[str, Any]:
-        """One slice. Returns the honest status even when it did nothing."""
+    def next_user(self) -> str | None:
+        users = self.opted_in_users()
+        if not users:
+            return None
+        self._cursor = (self._cursor + 1) % len(users)
+        return users[self._cursor]
+
+    def run_once(self, user_id: str | None = None) -> dict[str, Any]:
+        """One slice for one owner. Returns the honest status even when idle."""
+        target = user_id or self.next_user()
+        if target is None:
+            return {"indexed": 0, "chunks": 0, "failed": 0, "ran": False,
+                    "reason": "no_opt_in", "complete": False}
         result = run_search_index(
             _ServiceShim(self.store), {"messages": self.messages,
                                        "budget_seconds": self.budget_seconds},
-            user_id=self.user_id)
-        coverage = search_coverage(self.store, user_id=self.user_id)
-        return {"indexed": result.get("step", {}).get("indexed", 0),
+            user_id=target)
+        coverage = search_coverage(self.store, user_id=target)
+        return {"user_id": target, "ran": bool(result.get("ran")),
+                "indexed": result.get("step", {}).get("indexed", 0),
                 "chunks": result.get("step", {}).get("chunks", 0),
                 "failed": result.get("step", {}).get("failed", 0),
+                "reason": result.get("reason", ""),
                 "complete": result.get("complete", False),
-                "coverage_ratio": coverage["text_only"] and 0.0 or coverage["semantic"].get(
-                    "coverage_ratio", 0.0),
+                "coverage_ratio": coverage["semantic"].get("coverage_ratio", 0.0),
                 "semantic_available": coverage["semantic"].get("available", False)}
 
     def loop(self) -> None:
-        log.info("search index worker started (opt-in is off until an owner enables it)")
+        log.info("search index worker started (nothing is indexed until an owner opts in)")
         while not self.stopping:
             try:
-                if self.enabled():
-                    summary = self.run_once()
-                    if summary["indexed"] or summary["failed"]:
-                        log.info("search index slice: %s", json.dumps(summary))
+                summary = self.run_once()
+                if summary["indexed"] or summary["failed"] or summary["reason"]:
+                    log.info("search index slice: %s", json.dumps(summary))
             except Exception as error:  # noqa: BLE001 - the worker must stay up
                 log.warning("search index slice failed: %s", type(error).__name__)
             for _ in range(int(self.sleep_seconds)):

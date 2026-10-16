@@ -136,7 +136,8 @@ def _ssl_context(ca_path: str) -> ssl.SSLContext | None:
 
 
 def qdrant_request(settings: SemanticSettings, method: str, path: str,
-                   body: Any = None, *, timeout: int = 30) -> dict[str, Any]:
+                   body: Any = None, *, timeout: int = 30) -> Any:
+    """One Qdrant call. Returns ``(status, payload)`` so a 404 stays visible."""
     url = settings.qdrant_url.rstrip("/") + path
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
     headers = {"Content-Type": "application/json"}
@@ -148,13 +149,15 @@ def qdrant_request(settings: SemanticSettings, method: str, path: str,
         with urllib.request.urlopen(request, timeout=timeout, context=context) as response:  # noqa: S310
             raw = response.read(8_000_001)
     except urllib.error.HTTPError as error:
-        error.read()
+        detail = error.read()
+        if error.code == 404:
+            return 404, json.loads(detail or b"{}")
         raise SemanticUnavailable(f"qdrant http {error.code}") from None
     except (OSError, urllib.error.URLError) as error:
         raise SemanticUnavailable("qdrant unreachable") from error
     if len(raw) > 8_000_000:
         raise SemanticUnavailable("qdrant response exceeds limit")
-    return json.loads(raw or b"{}")
+    return 200, json.loads(raw or b"{}")
 
 
 def embed(settings: SemanticSettings, texts: Sequence[str], *, timeout: int = 60) -> list[list[float]]:
@@ -488,9 +491,10 @@ def search(store: Any, settings: SemanticSettings, query: str, *, user_id: str |
     must: list[dict[str, Any]] = [{"key": "user_id", "match": {"value": uid}}]
     if conversation_ids:
         must.append({"key": "conversation_id", "match": {"any": list(conversation_ids)}})
-    result = qdrant_request(settings, "POST", f"/collections/{settings.qdrant_collection}/points/search",
-                            {"vector": vector, "limit": max(1, min(int(limit), 200)),
-                             "with_payload": True, "filter": {"must": must}}, timeout=45)
+    _, result = qdrant_request(settings, "POST",
+                               f"/collections/{settings.qdrant_collection}/points/search",
+                               {"vector": vector, "limit": max(1, min(int(limit), 200)),
+                                "with_payload": True, "filter": {"must": must}}, timeout=45)
     hits: dict[int, dict[str, Any]] = {}
     for item in result.get("result") or []:
         payload = item.get("payload") or {}
@@ -507,14 +511,103 @@ def search(store: Any, settings: SemanticSettings, query: str, *, user_id: str |
     return sorted(hits.values(), key=lambda hit: -hit["score"])
 
 
+def ensure_collection(settings: SemanticSettings) -> dict[str, Any]:
+    """Make the owner's own configured collection usable, within a finite budget.
+
+    A collection-scoped token may create nothing: when it cannot, the caller
+    receives an actionable message instead of a silent index that never fills.
+    An existing collection whose contract differs is reported, never modified or
+    removed.
+    """
+    collection = f"/collections/{settings.qdrant_collection}"
+    try:
+        status, existing = qdrant_request(settings, "GET", collection, timeout=15)
+    except SemanticUnavailable as error:
+        raise SemanticUnavailable(f"{error.reason}; check the collection URL and key") from None
+    if status == 404:
+        try:
+            created, _ = qdrant_request(settings, "PUT", collection, {
+                "vectors": {"size": settings.dimensions, "distance": "Cosine", "on_disk": True},
+                "hnsw_config": {"on_disk": True}, "on_disk_payload": True}, timeout=30)
+        except SemanticUnavailable as error:
+            raise SemanticUnavailable(
+                f"collection {settings.qdrant_collection} does not exist and this key cannot "
+                f"create it ({error.reason}); create that exact collection or grant create on it"
+            ) from None
+        if created not in (200, 201):
+            raise SemanticUnavailable(
+                f"collection {settings.qdrant_collection} was refused ({created}); "
+                "create that exact collection or grant create on it")
+        status, existing = qdrant_request(settings, "GET", collection, timeout=15)
+        if status != 200:
+            raise SemanticUnavailable("collection was created but is not readable")
+    if status != 200:
+        raise SemanticUnavailable(f"collection {settings.qdrant_collection} is not readable")
+    info = existing.get("result") or {}
+    vectors = (info.get("config") or {}).get("params", {}).get("vectors") or {}
+    if int(vectors.get("size") or 0) != settings.dimensions:
+        raise SemanticUnavailable(
+            f"collection {settings.qdrant_collection} has {vectors.get('size')} dimensions but the "
+            f"configured embedding model produces {settings.dimensions}; point the settings at a "
+            "matching collection instead of changing this one")
+    for field in ("user_id", "conversation_id"):
+        qdrant_request(settings, "PUT", f"{collection}/index?wait=true",
+                       {"field_name": field, "field_schema": "keyword"}, timeout=30)
+    return {"collection": settings.qdrant_collection, "dimensions": settings.dimensions,
+            "points": int(info.get("points_count") or 0)}
+
+
+def config_fingerprint(settings: SemanticSettings) -> str:
+    """Identity of the index configuration, without any secret.
+
+    Changing the endpoint, collection or model invalidates the derived index;
+    enabling it, adding a key or editing the priority list does not.
+    """
+    material = "\\0".join([settings.qdrant_url, settings.qdrant_collection,
+                           settings.embedding_url, settings.embedding_model,
+                           str(settings.dimensions)])
+    return hashlib.sha256(material.encode()).hexdigest()[:32]
+
+
+def reset_own_derived_state(store: Any, uid: str) -> dict[str, int]:
+    """Drop only this owner's derived index bookkeeping.
+
+    The retained messages, the source history and any collection itself are left
+    untouched: only the rows that claim what this owner has indexed are removed,
+    so a configuration switch starts honestly instead of reporting a stale
+    "complete" index that lives in a different collection.
+    """
+    db = store._connection
+    removed = db.execute("DELETE FROM search_vector_state WHERE user_id=?", (uid,)).rowcount
+    db.execute("DELETE FROM search_vector_queue WHERE message_rowid IN"
+               " (SELECT rowid FROM messages WHERE user_id=?)", (uid,))
+    db.execute("DELETE FROM search_vector_meta WHERE name LIKE ?", (f"%:{uid}",))
+    db.commit()
+    return {"removed": max(0, int(removed))}
+
+
+def ensure_fingerprint(store: Any, uid: str, settings: SemanticSettings) -> dict[str, Any]:
+    """Keep the owner's derived state in step with the current index configuration."""
+    current = config_fingerprint(settings)
+    stored = meta(store, f"fingerprint:{uid}", "")
+    if stored == current:
+        return {"changed": False}
+    reset = reset_own_derived_state(store, uid) if stored else {"removed": 0}
+    set_meta(store, f"fingerprint:{uid}", current)
+    return {"changed": True, **reset}
+
+
 def probe(settings: SemanticSettings) -> dict[str, Any]:
     """Cheap liveness for the owner status surface. Never raises."""
     if not settings.enabled or not settings.configured():
         return {"available": False, "reason": "not_configured"}
     try:
-        result = qdrant_request(settings, "GET", f"/collections/{settings.qdrant_collection}", timeout=10)
+        status, result = qdrant_request(settings, "GET",
+                                        f"/collections/{settings.qdrant_collection}", timeout=10)
     except SemanticUnavailable as error:
         return {"available": False, "reason": error.reason}
+    if status == 404:
+        return {"available": False, "reason": "collection_missing"}
     info = result.get("result") or {}
     vectors = (info.get("config") or {}).get("params", {}).get("vectors") or {}
     if int(vectors.get("size") or 0) != settings.dimensions:

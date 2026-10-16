@@ -204,20 +204,21 @@ def _wire(monkeypatch, service, fake, **settings_overrides):
 
 
 def _fake_qdrant(fake: _FakeVectorService, method: str, path: str, body, dimensions: int = 16):
+    """Stand-in for the Qdrant REST API, including the status tuple."""
     if "/points/search" in path:
-        return {"result": fake.search(body["vector"], body["limit"], body.get("filter"))}
+        return 200, {"result": fake.search(body["vector"], body["limit"], body.get("filter"))}
     if "/points/delete" in path:
         fake.delete(body["points"])
-        return {"status": "ok"}
+        return 200, {"status": "ok"}
     if method == "PUT" and "/points" in path:
         fake.upsert(body["points"])
-        return {"status": "completed"}
+        return 200, {"status": "completed"}
     if path.rstrip("/").endswith("/points") and method == "PUT":
-        return {"result": True}
+        return 200, {"result": True}
     if "/collections/" in path and not body:
-        return {"result": {"config": {"params": {"vectors": {"size": dimensions}}},
-                          "points_count": fake.count()}}
-    return {"result": True}
+        return 200, {"result": {"config": {"params": {"vectors": {"size": dimensions}}},
+                                "points_count": fake.count()}}
+    return 200, {"result": True}
 
 
 def test_semantic_search_returns_real_message_hits(tmp_path, monkeypatch):
@@ -489,3 +490,169 @@ def test_canonical_author_matches_the_messenger_projection(tmp_path):
                              direction="incoming", sender="Dmitry Karpunichev tealband",
                              routing={"author_id": "999", "author_name": "Dmitry K"})
     assert routed["id"] == "999" and routed["name"] == "Dmitry K"
+
+
+def test_group_message_author_comes_from_provider_routing(tmp_path):
+    """A group chat stores the group title in the sender column; routing holds the author."""
+    import json as json_module
+    service, store = _service(tmp_path)
+    store.register_account(account_id="telegram:540308572", provider="telegram",
+                           display_name="Личный Telegram", can_read=True, can_reply=True,
+                           credential_ref="telegram-qr:account-1")
+    message = InboxMessage("telegram", "-1001234567890:m-77", "Рабочая группа",
+                           "Дмитрий, вот выжимка по ограничениям", 12.0,
+                           peer_id="-1001234567890", conversation_kind="group")
+    conversation, _ = service.receive(message, route_id="telegram", account_ref="telegram:540308572")
+    store._connection.execute(
+        "INSERT INTO message_attachments(user_id,source,message_id,idx,kind,content_type,filename,provider_ref)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (store.default_user_id, "telegram", "telegram:540308572|-1001234567890:m-77", 0,
+         "telegram_routing", "application/json", "routing.json",
+         json_module.dumps({"author_id": "287262367", "author_name": "Дмитрий Карпуничев",
+                            "reply_to_message_id": "1985700", "is_reply_to_account": True})))
+    store._connection.execute(
+        "UPDATE messages SET provider_thread_id='1985700', provider_reply_to='1985700'"
+        " WHERE message_id=?", ("telegram:540308572|-1001234567890:m-77",))
+    store._connection.commit()
+    row = store._connection.execute(
+        "SELECT conversation_id FROM messages WHERE message_id=?",
+        ("telegram:540308572|-1001234567890:m-77",)).fetchone()
+    assert str(row["conversation_id"]) == conversation
+    hits = search_messages(store, "выжимка по ограничениям", conversation_ids=[conversation], limit=5)
+    assert len(hits["results"]) == 1
+    hit = hits["results"][0]
+    assert hit["sender"] == "Рабочая группа"
+    assert hit["author"]["id"] == "287262367"
+    assert hit["author"]["name"] == "Дмитрий Карпуничев"
+    assert hit["author"]["role"] == "interlocutor"
+    assert hit["thread_id"] == "1985700"
+    assert hit["reply_to_provider_message_id"] == "1985700"
+
+
+def test_second_owner_indexes_own_history_without_inheriting_the_owner(tmp_path, monkeypatch):
+    """Every user who opts in gets their own index; nothing crosses users."""
+    store = SQLiteUserIOStore(tmp_path / "multi.sqlite3")
+    second_principal = store.register_user("second-owner", "second-owner-test-password")
+    second_user = second_principal.user_id
+    store.register_account(account_id="telegram:900000001", provider="telegram",
+                           display_name="Второй аккаунт", can_read=True, can_reply=True,
+                           credential_ref="telegram-qr:account-9", user_id=second_user)
+    second = UserIOService(store, Generator(), object())
+    message = InboxMessage("telegram", "peer-2:m-1", "Коллега", "во втором аккаунте про годовые планы",
+                           5.0, peer_id="peer-2")
+    store.bind_channel_route(user_id=second_user, source="telegram", route_id="telegram")
+    second.receive(message, route_id="telegram", account_ref="telegram:900000001",
+                   user_id=second_user)
+    owner = UserIOService(store, Generator(), object())
+    owner.receive(InboxMessage("telegram", "peer-1:m-1", "Менеджер", "у владельца про годовые планы",
+                               6.0, peer_id="peer-1"),
+                  route_id="telegram", account_ref="telegram:540308572")
+    store.set_user_search_settings({
+        "enabled": True, "qdrant_url": "https://qdrant.local", "qdrant_collection": "second_collection",
+        "embedding_url": "https://embed.local", "embedding_model": "qwen3-embedding:4b",
+        "dimensions": 16}, user_id=second_user)
+    fake = _FakeVectorService()
+    _wire(monkeypatch, second, fake)
+    store.set_user_search_settings({
+        "enabled": True, "qdrant_url": "https://qdrant.local", "qdrant_collection": "second_collection",
+        "embedding_url": "https://embed.local", "embedding_model": "qwen3-embedding:4b",
+        "dimensions": 16})
+    from universal_userio.search_index import IndexWorker
+    worker = IndexWorker(store, sleep_seconds=1, messages=10)
+    assert sorted(worker.opted_in_users()) == sorted(["user_owner", second_user])
+    seen: list[str] = []
+    for _ in range(2):
+        summary = worker.run_once()
+        seen.append(summary["user_id"])
+    assert sorted(seen) == sorted(["user_owner", second_user])
+    assert store.user_search_settings_public(user_id=second_user)["qdrant_collection"] == "second_collection"
+    # Each owner only ever indexed their own messages.
+    rows = store._connection.execute(
+        "SELECT user_id, COUNT(*) FROM search_vector_state GROUP BY user_id").fetchall()
+    assert {str(row["user_id"]) for row in rows} <= {"user_owner", second_user}
+    assert semantic_index_status(store, second_user)["indexed_messages"] == 1
+    assert semantic_index_status(store, second_user)["live_messages"] == 1
+    assert semantic_index_status(store, second_user)["live_messages"] == 1
+
+
+def semantic_index_status(store, user_id):
+    from universal_userio.semantic_index import status
+    return status(store, user_id=user_id)
+
+
+def test_switching_the_index_configuration_resets_only_own_derived_state(tmp_path, monkeypatch):
+    service, store = _service(tmp_path)
+    _receive(service, "Менеджер", "проценты по годовому плану выросли")
+    fake = _FakeVectorService()
+    _wire(monkeypatch, service, fake)
+    from universal_userio.search import run_search_index
+    first = run_search_index(service, {"messages": 10}, user_id=None)
+    assert first["ran"] is True and first["indexed_messages"] == 1
+    store.set_user_search_settings({"qdrant_collection": "userio_history_v2"})
+    second = run_search_index(service, {"messages": 10}, user_id=None)
+    assert second["switched"]["changed"] is True
+    assert second["indexed_messages"] == 1
+    assert second["coverage_ratio"] == 1.0
+    # A key change alone is not a configuration change.
+    store.set_user_search_settings({"qdrant_token": "another-key"})
+    third = run_search_index(service, {"messages": 10}, user_id=None)
+    assert third["switched"]["changed"] is False
+    # The source history itself is never touched by a switch.
+    assert store._connection.execute("SELECT COUNT(*) FROM messages").fetchone()[0] >= 1
+
+
+def test_missing_collection_is_created_and_wrong_dimensions_are_reported(tmp_path, monkeypatch):
+    from universal_userio import semantic_index as si
+    settings = SemanticSettings(enabled=True, qdrant_url="https://qdrant.local",
+                                qdrant_collection="fresh_collection", embedding_url="https://embed.local",
+                                embedding_model="m", dimensions=16)
+    created: list[str] = []
+
+    def fake_request(settings, method, path, body=None, timeout=30):
+        if path.endswith("/index"):
+            return 200, {"result": True}
+        if method == "GET":
+            if path.rstrip("/") not in created:
+                return 404, {}
+            return 200, {"result": {"config": {"params": {"vectors": {"size": 16}}},
+                                 "points_count": 0}}
+        if method == "PUT":
+            created.append(path)
+            return 200, {"result": True}
+        return 200, {"result": True}
+
+    monkeypatch.setattr(si, "qdrant_request", fake_request)
+    assert si.ensure_collection(settings)["collection"] == "fresh_collection"
+    assert any(path == "/collections/fresh_collection" for path in created)
+    # A collection with a different contract is reported, never rewritten.
+    def wrong(settings, method, path, body=None, timeout=30):
+        if path.endswith("/index"):
+            return 200, {"result": True}
+        return 200, {"result": {"config": {"params": {"vectors": {"size": 1536}}}, "points_count": 0}}
+    monkeypatch.setattr(si, "qdrant_request", wrong)
+    try:
+        si.ensure_collection(settings)
+    except SemanticUnavailable as error:
+        assert "1536" in error.reason and "matching collection" in error.reason
+    else:
+        raise AssertionError("a wrong-dimension collection must be reported, not changed")
+
+
+def test_a_key_without_create_rights_gets_an_actionable_reason(tmp_path, monkeypatch):
+    from universal_userio import semantic_index as si
+    settings = SemanticSettings(enabled=True, qdrant_url="https://qdrant.local",
+                                qdrant_collection="absent_collection", embedding_url="https://embed.local",
+                                embedding_model="m", dimensions=16)
+
+    def refuse_create(settings, method, path, body=None, timeout=30):
+        if method == "GET":
+            return 404, {}
+        return 403, {}
+
+    monkeypatch.setattr(si, "qdrant_request", refuse_create)
+    try:
+        si.ensure_collection(settings)
+    except SemanticUnavailable as error:
+        assert "grant create" in error.reason and "absent_collection" in error.reason
+    else:
+        raise AssertionError("a refused collection creation must be actionable")

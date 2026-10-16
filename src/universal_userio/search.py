@@ -160,7 +160,7 @@ def provider_link(row: Mapping[str, Any]) -> str:
 
 MESSAGE_SELECT = '''SELECT d.id AS document_id,c.id AS conversation_id,d.message_rowid,
       m.message_id,m.body,m.received_at,c.source,c.sender,c.account_ref,c.peer_id,
-      c.conversation_kind,m.direction,'' AS sender_name,
+      c.conversation_kind,m.direction,m.provider_thread_id,m.provider_reply_to,'' AS sender_name,
       COALESCE(p.username,'') AS peer_username,
       COALESCE(n.name,'') AS display_name
     FROM search_documents d JOIN conversations c ON c.id=d.conversation_id AND c.user_id=d.user_id
@@ -182,7 +182,8 @@ def _provider_id(account_ref: str, message_id: str) -> str:
     return ""
 
 
-def _hit(row: Mapping[str, Any], *, kind: str, score: float, base_url: str = '') -> dict[str, Any]:
+def _hit(store: Any, uid: str, row: Mapping[str, Any], *, kind: str, score: float,
+         base_url: str = '') -> dict[str, Any]:
     """One search result: provenance, who wrote it, and a working link.
 
     ``sender`` is the chat counterpart, which is *not* the author of an outgoing
@@ -190,7 +191,7 @@ def _hit(row: Mapping[str, Any], *, kind: str, score: float, base_url: str = '')
     a source-backed answer can never put the owner's own words in someone else's
     mouth.
     """
-    from .source_projection import canonical_author, canonical_source
+    from .source_projection import canonical_author, canonical_source, routing_for
 
     body = str(row['body'] or '')
     conversation_id = str(row['conversation_id'])
@@ -199,16 +200,22 @@ def _hit(row: Mapping[str, Any], *, kind: str, score: float, base_url: str = '')
     source = str(row['source'])
     channel = source.partition(':')[0] if source.partition(':')[0] in _CHANNELS else source
     direction = str(row['direction'] or 'incoming')
+    # The same provider metadata the messenger API reads: a group or a reply
+    # carries its real author only there, never in the chat title.
+    routing = routing_for(store.attachments_for_message(source=source, message_id=message_id,
+                                                        user_id=uid))
     author = canonical_author(
         channel=channel, account_ref=account_ref,
         conversation_kind=str(row['conversation_kind'] or ''), peer_id=str(row['peer_id'] or ''),
         direction=direction, sender=str(row['sender']),
-        sender_name=str(row['sender_name'] or ''))
+        sender_name=str(row['sender_name'] or ''), routing=routing)
     coordinates = canonical_source(
         account_ref=account_ref, conversation_id=conversation_id, peer_id=str(row['peer_id'] or ''),
         conversation_kind=str(row['conversation_kind'] or ''), channel=channel,
         message_id=message_id, provider_message_id=_provider_id(account_ref, message_id),
-        direction=direction)
+        direction=direction, routing=routing,
+        thread_id=str(row['provider_thread_id'] or ''),
+        reply_to=str(row['provider_reply_to'] or ''))
     return {
         'conversation_id': conversation_id, 'message_id': message_id,
         'source': source, 'channel': channel, 'account_ref': account_ref,
@@ -393,7 +400,7 @@ def search_messages(store: Any, query: str, *, source: str | None = None, accoun
                 semantic = {'available': False, 'reason': error.reason}
     order = {'exact': 0, 'semantic': 1, 'fuzzy': 2}
     selected.sort(key=lambda item: (order.get(item[1], 3), -item[2]))
-    results = [_hit(row, kind=kind, score=score, base_url=base_url)
+    results = [_hit(store, uid, row, kind=kind, score=score, base_url=base_url)
                for row, kind, score in selected[:limit]]
     return {'results': results, 'coverage': coverage, 'mode_used': _mode_used(semantic, mode, selected),
             'semantic': semantic}
@@ -471,6 +478,15 @@ def run_search_index(service: Any, payload: Mapping[str, Any] | None = None, *,
     if not settings.enabled or not settings.configured():
         return {**semantic_index.status(store, user_id=uid), "ran": False,
                 "reason": "not_configured", "text_only": True}
+    # A changed endpoint, collection or model invalidates only this owner's
+    # derived bookkeeping, so a switched configuration starts honestly instead of
+    # reporting an index that lives somewhere else.
+    switched = semantic_index.ensure_fingerprint(store, uid, settings)
+    try:
+        semantic_index.ensure_collection(settings)
+    except semantic_index.SemanticUnavailable as error:
+        return {**semantic_index.status(store, user_id=uid), "ran": False,
+                "reason": error.reason, "text_only": True, "switched": switched}
     try:
         limit = max(1, min(int(payload.get("messages", 200)), semantic_index.MAX_CHUNK_ROWS))
     except (TypeError, ValueError):
@@ -486,7 +502,7 @@ def run_search_index(service: Any, payload: Mapping[str, Any] | None = None, *,
     scoped = semantic_index.status(store, user_id=uid, conversation_ids=priority) if priority else {}
     return {**semantic_index.status(store, user_id=uid),
             "ran": True, "reason": "", "drained": drained, "step": step,
-            "priority": scoped, "budget_seconds": budget}
+            "priority": scoped, "switched": switched, "budget_seconds": budget}
 
 
 def search_coverage(store: Any, *, user_id: str | None = None,
