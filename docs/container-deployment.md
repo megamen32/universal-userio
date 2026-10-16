@@ -73,6 +73,16 @@ sudo docker compose -f compose.yaml -f /etc/userio-containers/compose.host.json 
 `prepare`, `prepare_voice`, `cutover`, `finalize` — этапы уже выполненного переноса;
 повторно запускать cutover нельзя.
 
+Фактическое состояние на 16.10.2026: живой `userio-backend` создан через
+`docker run` и **не** несёт compose-меток, поэтому `docker compose up` для него
+падает с конфликтом имени контейнера. Точечное обновление backend выполняется
+тонким образом поверх принятого и пересозданием контейнера с той же
+конфигурацией (bind-набор, память, host-сеть, ulimit, log-opt) и автоматическим
+возвратом предыдущего контейнера при любой неудаче; рабочие примеры:
+`.agents/tasks/20261016-meeting-release.py` (сборка) и
+`.agents/tasks/20261016-personal-send-activate.py` (активация). Compose-конфиг
+обновляется в том же атомарном шаге, иначе он расходится с живым образом.
+
 Откат текущего переноса:
 
 ```bash
