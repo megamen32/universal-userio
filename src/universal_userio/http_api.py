@@ -35,7 +35,7 @@ from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_messa
 from .oauth import OAuthError, OAuthProvider
 from .personal_tokens import PersonalTokens
 from .token_permissions import read_only_http_allowed, meeting_recorder_http_allowed
-from .search import search_conversations
+from .search import PUBLIC_WEB_URL, run_search_index, search_conversations, search_coverage, search_messages
 from .service import DeliveryUnavailableError, UserIOService
 
 
@@ -1642,15 +1642,61 @@ def handler(
                     offset = max(0, int(query.get("offset", ["0"])[0]))
                 except ValueError:
                     self._reply(400, {"error": "invalid offset"}); return
+                # Server-side allow-list: an agent scopes itself to the exact chats
+                # it owns instead of receiving the whole owner inbox.
+                raw_ids = [value for value in query.get("conversation_ids", [""])[0].split(",") if value]
+                if len(raw_ids) > 100 or any(
+                        not item or len(item) > 128 or not all(part.isalnum() or part in "_:-." for part in item)
+                        for item in raw_ids):
+                    self._reply(400, {"error": "invalid conversation_ids"}); return
+                scope = query.get("scope", ["conversation"])[0]
+                if scope not in {"conversation", "message"}:
+                    self._reply(400, {"error": "invalid scope"}); return
+                mode = query.get("mode", ["hybrid" if scope == "message" else "text"])[0]
+                if mode not in {"text", "semantic", "hybrid"}:
+                    self._reply(400, {"error": "invalid mode"}); return
+                if scope == "message":
+                    found = search_messages(
+                        service._store, text, source=source, account_ref=account_ref,
+                        limit=min(limit, 200), user_id=user_id, match_type=match_type, offset=offset,
+                        conversation_ids=raw_ids, mode=mode, base_url=PUBLIC_WEB_URL,
+                    )
+                    for entry in found["results"]:
+                        entry["analysis_policy"] = service._store.evaluate_workspace_chat(
+                            conversation_id=str(entry["conversation_id"]), user_id=user_id,
+                        )
+                    self._reply(200, {"results": found["results"], "scope": "message",
+                                      "coverage": found["coverage"], "semantic": found["semantic"],
+                                      "mode_used": found["mode_used"]})
+                    return
                 results = search_conversations(
                     service._store, text, source=source, account_ref=account_ref,
                     limit=limit, user_id=user_id, match_type=match_type, offset=offset,
                 )
+                allowed = set(raw_ids)
+                results = [row for row in results if not allowed or str(row["id"]) in allowed]
                 for entry in results:
                     entry["analysis_policy"] = service._store.evaluate_workspace_chat(
                         conversation_id=str(entry["id"]), user_id=user_id,
                     )
-                self._reply(200, {"results": results})
+                self._reply(200, {"results": results, "scope": "conversation"})
+                return
+            if path in {"/v1/search/index", "/v1/search/settings"}:
+                if not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "read_capability_disabled"}); return
+                if path == "/v1/search/settings":
+                    if self.command == "POST":
+                        self._reply(200, service._store.set_user_search_settings(
+                            self._json(), user_id=user_id))
+                        return
+                    self._reply(200, service._store.user_search_settings_public(user_id=user_id))
+                    return
+                if self.command == "POST":
+                    if service._store.owner().user_id != user_id:
+                        self._reply(403, {"error": "owner_only"}); return
+                    self._reply(200, run_search_index(service, self._json(), user_id=user_id))
+                    return
+                self._reply(200, search_coverage(service._store, user_id=user_id))
                 return
             if path == "/v1/drafts/pending":
                 if not service._store.capability_enabled("read", user_id=user_id):

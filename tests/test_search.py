@@ -72,7 +72,9 @@ def test_index_covers_old_messages_and_live_edits_deletion(tmp_path):
     cid,_=service.receive(InboxMessage('telegram','old','Person','уникальный договор',1),route_id='telegram')
     for i in range(110):
         service.receive(InboxMessage('sms',str(i),str(i),'recent ordinary message',i+2),route_id='sms')
-    assert search_conversations(store,'договор',scan_limit=100)[0]['id']==cid
+    # No hidden scan ceiling: the old hit is found regardless of how many newer
+    # messages were indexed after it.
+    assert search_conversations(store,'договор')[0]['id']==cid
     with store._connection:
         store._connection.execute("UPDATE messages SET body='другая фраза' WHERE message_id='old'")
     assert not search_conversations(store,'договор',match_type='exact')

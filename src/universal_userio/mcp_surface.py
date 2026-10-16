@@ -34,10 +34,17 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 
 TOOL_SPECS = (
-    ToolSpec("userio.channels.list", "List this user's chats across connected channels.", _schema({
+    ToolSpec("userio.channels.list", "List this user's chats across connected channels, or search their retained history when a search query is given.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+        "search": {"type": "string", "minLength": 2, "maxLength": 256},
+        "scope": {"type": "string", "enum": ["conversation", "message"]},
+        "mode": {"type": "string", "enum": ["text", "semantic", "hybrid"]},
+        "match_type": {"type": "string", "enum": ["all", "exact", "fuzzy"]},
+        "offset": {"type": "integer", "minimum": 0},
+        "conversation_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100},
+        "account_ref": {"type": "string", "maxLength": 128},
     })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
@@ -364,6 +371,13 @@ class UserIOMcpSurface:
                 return {"ok": False, "error": f"{required_capability}_capability_disabled"}
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
+                query = str(arguments.get("search") or "").strip()
+                if query:
+                    from .search_surface import search_response
+                    return search_response(
+                        self._store, query, arguments, user_id=user_id,
+                        source=self._optional(arguments, "channel"), ignored=ignored_chats,
+                    )
                 adapter = channels.adapter(self._optional(arguments, "channel"))
                 chats = adapter.list(limit=int(arguments.get("limit", 100)))
                 return {"ok": True, "chats": [

@@ -12,6 +12,7 @@ import re
 import time
 
 from .contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequiredError
+from .source_projection import canonical_author, canonical_source
 
 SCHEMA = 'userio.messenger.v1'
 OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
@@ -45,6 +46,8 @@ class Messenger:
     def _provider(self, account_ref):
         provider = getattr(self.service, 'messenger_providers', {}).get(account_ref)
         account=self._account(account_ref)
+        if (provider is None and account['provider']=='telegram' and account['enabled']
+                and str(account['credential_ref']).startswith('telegram-qr:')):
         if account['provider']=='max' and account['enabled'] and str(account['credential_ref']).startswith('connector:'):
             from .messenger_max import PersonalMaxMessengerProvider
             provider=PersonalMaxMessengerProvider(self.service,account_ref,self.user)
@@ -141,25 +144,24 @@ class Messenger:
                          {'message_id':mid, 'attachment_index':idx,
                           'attachment_id':str(a.get('attachment_id') or '')})
         outgoing = msg['direction'] == 'outgoing'
-        author = {'id':str(routing.get('author_id') or
-                          (account_ref.split(':',1)[-1] if outgoing and conv['source']=='telegram' else
-                           peer if conv['source']=='telegram' and conv['conversation_kind']=='direct' else msg['sender'])),
-                  'name':str(routing.get('author_name') or msg.get('sender_name') or ''),
-                  'username':str(routing.get('author_username') or ''),
-                  'role':'owner' if outgoing else 'interlocutor'}
-        author['first_name']=str(routing.get('author_first_name') or '')
-        author['last_name']=str(routing.get('author_last_name') or '')
         channel = self._account(account_ref)['provider']
-        if channel=='gmail':
-            author['id'] = self._provider(account_ref).sender_id if outgoing else msg['sender']
-        source = {'account_ref':account_ref, 'conversation_id':conv['id'], 'peer_id':peer,
-                  'conversation_kind':conv['conversation_kind'],
-                  'message_id':mid, 'provider_message_id':provider_id,
-                  'thread_id':str(msg.get('provider_thread_id') or routing.get('reply_to_top_id') or routing.get('thread_id') or ''),
-                  'reply_to_provider_message_id':str(msg.get('provider_reply_to') or routing.get('reply_to_message_id') or routing.get('reply_to_msg_id') or ''),
-                  'channel':channel, 'direction':msg['direction'],
-                  'invocation':{'mention':routing.get('is_exact_account_mention') is True,
-                                'reply':routing.get('is_reply_to_account') is True}}
+        # One canonical rule for who wrote a message: the stored sender is the
+        # chat counterpart, never the author of an outgoing message.
+        author = canonical_author(
+            channel=channel, account_ref=account_ref,
+            conversation_kind=str(conv['conversation_kind']), peer_id=peer,
+            direction=str(msg['direction']), sender=str(msg['sender']),
+            sender_name=str(msg.get('sender_name') or ''), routing=routing,
+            gmail_sender_id=(self._provider(account_ref).sender_id
+                             if outgoing and channel == 'gmail' else ''),
+        )
+        source = canonical_source(
+            account_ref=account_ref, conversation_id=conv['id'], peer_id=peer,
+            conversation_kind=str(conv['conversation_kind']), channel=channel,
+            message_id=mid, provider_message_id=provider_id,
+            direction=str(msg['direction']), routing=routing,
+            thread_id=str(msg.get('provider_thread_id') or ''),
+            reply_to=str(msg.get('provider_reply_to') or ''))
         return {'source':source, 'author':author, 'text':str(msg['body']),
                 'at':msg['received_at'], 'edited_at':msg.get('edited_at', 0), 'media':media}
 

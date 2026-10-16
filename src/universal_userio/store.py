@@ -141,6 +141,12 @@ class SQLiteUserIOStore:
             self.maintain_conversation_summaries()
             from .search import initialize_search
             initialize_search(self)
+            # Derived semantic state is always created empty; it is only filled
+            # after the owner opts in, so an unconfigured deployment costs
+            # three empty tables and no vectors.
+            from .semantic_index import attach_triggers, initialize as initialize_semantic_index
+            initialize_semantic_index(self)
+            attach_triggers(self)
 
     @property
     def default_user_id(self) -> str:
@@ -454,6 +460,19 @@ class SQLiteUserIOStore:
                 endpoint TEXT NOT NULL,
                 model TEXT NOT NULL,
                 token TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS user_search_settings (
+                user_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                qdrant_url TEXT NOT NULL DEFAULT '',
+                qdrant_collection TEXT NOT NULL DEFAULT '',
+                qdrant_token TEXT NOT NULL DEFAULT '',
+                embedding_url TEXT NOT NULL DEFAULT '',
+                embedding_model TEXT NOT NULL DEFAULT '',
+                embedding_token TEXT NOT NULL DEFAULT '',
+                dimensions INTEGER NOT NULL DEFAULT 2048,
+                priority_conversations TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS user_preferences (
@@ -3270,6 +3289,112 @@ class SQLiteUserIOStore:
 
     def send_enabled(self, *, user_id: str | None = None) -> bool:
         return self.capability_enabled("send", user_id=user_id)
+
+    def user_search_settings(self, *, user_id: str | None = None) -> dict[str, str] | None:
+        """This user's opt-in semantic search settings, or None when untouched.
+
+        Secrets are returned only to the server-side search path; every caller
+        facing surface uses :meth:`user_search_settings_public`.
+        """
+        row = self._connection.execute(
+            "SELECT enabled,qdrant_url,qdrant_collection,qdrant_token,embedding_url,"
+            "embedding_model,embedding_token,dimensions,priority_conversations"
+            " FROM user_search_settings WHERE user_id=?",
+            (self._user(user_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        return {key: ("" if row[key] is None else str(row[key])) for key in row.keys()}
+
+    def user_search_settings_public(self, *, user_id: str | None = None) -> dict[str, object]:
+        """Owner-facing settings: presence of a key, never the key itself."""
+        row = self._connection.execute(
+            "SELECT enabled,qdrant_url,qdrant_collection,qdrant_token,embedding_url,embedding_model,"
+            "embedding_token,dimensions,priority_conversations FROM user_search_settings"
+            " WHERE user_id=?",
+            (self._user(user_id),),
+        ).fetchone()
+        if row is None:
+            return {"enabled": False, "qdrant_url": "", "qdrant_collection": "", "embedding_url": "",
+                    "embedding_model": "", "dimensions": 0, "priority_conversations": [],
+                    "has_qdrant_key": False, "has_embedding_key": False}
+        return {
+            "enabled": str(row["enabled"]) in {"1", "true", "True"},
+            "qdrant_url": str(row["qdrant_url"] or ""),
+            "qdrant_collection": str(row["qdrant_collection"] or ""),
+            "embedding_url": str(row["embedding_url"] or ""),
+            "embedding_model": str(row["embedding_model"] or ""),
+            "dimensions": int(row["dimensions"] or 0),
+            "priority_conversations": [value for value in
+                                        str(row["priority_conversations"] or "").split(",") if value],
+            "has_qdrant_key": bool(row["qdrant_token"]),
+            "has_embedding_key": bool(row["embedding_token"]),
+        }
+
+    def set_user_search_settings(self, values: dict[str, Any], *,
+                                 user_id: str | None = None) -> dict[str, object]:
+        """Save opt-in settings. Blank values inherit the deployment defaults."""
+        current = self.user_search_settings(user_id=user_id) or {}
+        enabled = values.get("enabled")
+        enabled = current.get("enabled", "") if enabled is None else str(enabled).strip()
+        if enabled.strip().lower() not in {"1", "0", "true", "false", "yes", "no", "on", "off", ""}:
+            raise ValueError("enabled must be a boolean")
+        url = str(values.get("qdrant_url", current.get("qdrant_url", ""))).strip()
+        collection = str(values.get("qdrant_collection", current.get("qdrant_collection", ""))).strip()
+        embedding_url = str(values.get("embedding_url", current.get("embedding_url", ""))).strip()
+        embedding_model = str(values.get("embedding_model", current.get("embedding_model", ""))).strip()
+        for value, label in ((url, "Qdrant URL"), (embedding_url, "embeddings URL")):
+            if value and not value.startswith(("http://", "https://")):
+                raise ValueError(f"{label} must be an http(s) URL")
+        if len(collection) > 128 or not all(item.isalnum() or item in "_-" for item in collection):
+            raise ValueError("collection must be a short Qdrant collection name")
+        if len(embedding_model) > 128:
+            raise ValueError("embedding model name is too long")
+        try:
+            dimensions = int(values.get("dimensions", current.get("dimensions") or 2048))
+        except (TypeError, ValueError):
+            raise ValueError("dimensions must be an integer") from None
+        if not 16 <= dimensions <= 8192:
+            raise ValueError("dimensions must be between 16 and 8192")
+        qdrant_token = values.get("qdrant_token")
+        qdrant_token = current.get("qdrant_token", "") if qdrant_token is None else str(qdrant_token).strip()
+        embedding_token = values.get("embedding_token")
+        embedding_token = (current.get("embedding_token", "") if embedding_token is None
+                           else str(embedding_token).strip())
+        for token in (qdrant_token, embedding_token):
+            if len(token) > 4096:
+                raise ValueError("token is too long")
+        priority = values.get("priority_conversations")
+        if priority is None:
+            priority = [item for item in str(current.get("priority_conversations", "")).split(",") if item]
+        if isinstance(priority, str):
+            priority = [item for item in priority.split(",") if item]
+        if not isinstance(priority, (list, tuple)) or len(priority) > 100:
+            raise ValueError("priority_conversations must be a list of at most 100 ids")
+        clean: list[str] = []
+        for item in priority:
+            value = str(item).strip()
+            if not value:
+                continue
+            if len(value) > 128 or not all(part.isalnum() or part in "_:-." for part in value):
+                raise ValueError("invalid priority conversation id")
+            if value not in clean:
+                clean.append(value)
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO user_search_settings(user_id,enabled,qdrant_url,qdrant_collection,"
+                "qdrant_token,embedding_url,embedding_model,embedding_token,dimensions,"
+                "priority_conversations,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (self._user(user_id), "1" if enabled.strip().lower() in {"1", "true", "yes", "on"} else "0",
+                 url, collection, qdrant_token, embedding_url, embedding_model, embedding_token,
+                 dimensions, ",".join(clean), time.time()))
+        return self.user_search_settings_public(user_id=user_id)
+
+    def clear_user_search_settings(self, *, user_id: str | None = None) -> bool:
+        with self._lock, self._connection:
+            return self._connection.execute(
+                "DELETE FROM user_search_settings WHERE user_id=?", (self._user(user_id),)
+            ).rowcount == 1
 
     def ai_settings(self, *, user_id: str | None = None) -> dict[str, str] | None:
         """Return the user's own AI endpoint/model/token, or None for server default."""

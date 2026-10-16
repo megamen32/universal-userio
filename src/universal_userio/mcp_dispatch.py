@@ -62,6 +62,13 @@ class UserIOToolDispatcher:
                 }
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
+                query = str(arguments.get("search") or "").strip()
+                if query:
+                    from .search_surface import search_response
+                    return search_response(
+                        self._store, query, arguments, user_id=user_id,
+                        source=self._optional(arguments, "channel"), ignored=ignored_chats,
+                    )
                 adapter = channels.adapter(self._optional(arguments, "channel"))
                 chats = adapter.list(limit=int(arguments.get("limit", 100)))
                 return {

@@ -49,12 +49,21 @@ IGNORED_CHATS_SCHEMA = {
 TOOL_SPECS = (
     ToolSpec(
         "userio.channels.list",
-        "List this user's chats across connected channels.",
+        "List this user's chats across connected channels, or search their retained history when a search query is given.",
         schema(
             {
                 "channel": CHANNEL_SCHEMA,
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "ignored_chats": IGNORED_CHATS_SCHEMA,
+                "search": {"type": "string", "minLength": 2, "maxLength": 256},
+                "scope": {"type": "string", "enum": ["conversation", "message"]},
+                "mode": {"type": "string", "enum": ["text", "semantic", "hybrid"]},
+                "match_type": {"type": "string", "enum": ["all", "exact", "fuzzy"]},
+                "offset": {"type": "integer", "minimum": 0},
+                "conversation_ids": {
+                    "type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100,
+                },
+                "account_ref": {"type": "string", "maxLength": 128},
             }
         ),
     ),

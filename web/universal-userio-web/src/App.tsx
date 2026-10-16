@@ -1,8 +1,10 @@
 import { conversationDrafts } from "./conversation-drafts"
 import { messageAuthor } from './message-author'
+import { hitAuthorLabel, hitChannelLabel, parseDeepLink, SemanticSearchPanel, useSemanticSearch } from "./semantic-search"
+import type { SemanticMessageHit, SemanticStatus } from "./semantic-search"
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Popover } from "radix-ui"
-import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Paperclip, Phone, Plus, Send, SlidersHorizontal, Sparkles, Video, X } from "lucide-react"
+import { ArrowLeft, ChartLine, Check, Expand, Image as ImageIcon, Inbox, LogOut, Mail, MessageCircle, MessagesSquare, PanelLeftClose, PanelLeftOpen, Paperclip, Phone, Plus, Search as SearchIcon, Send, SlidersHorizontal, Sparkles, Video, X } from "lucide-react"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -253,6 +255,9 @@ export function App() {
   const [searchResults, setSearchResults] = useState<Chat[]>([])
   const [searchError, setSearchError] = useState("")
   const [searchMore, setSearchMore] = useState({ exact: false, fuzzy: false })
+  const [messageHits, setMessageHits] = useState<SemanticMessageHit[]>([])
+  const [messageCoverage, setMessageCoverage] = useState<SemanticStatus["semantic"] | null>(null)
+  const [messageMode, setMessageMode] = useState<string>("")
   const searchGeneration = useRef(0)
   const [searching, setSearching] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -300,6 +305,7 @@ export function App() {
   const [byokForm, setByokForm] = useState({ endpoint: "", model: "", token: "" })
   const [byokMine, setByokMine] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [contextSession, setContextSession] = useState(createContextSettingsSession)
   const [contextSaving, setContextSaving] = useState(false)
   const contextLoadRequest = useRef(0)
@@ -417,6 +423,16 @@ export function App() {
           setSearchResults(previous => kind === "exact" ? data.results.slice(0, 50) : [...previous, ...data.results.slice(0, 50)])
           setSearchMore(previous => ({ ...previous, [kind]: data.results.length > 50 }))
         }
+        // Message-level answers: one hit per message, with provenance and a
+        // working deep link, from the same core the agents use.
+        try {
+          const hits = await api<{ results: SemanticMessageHit[]; coverage: { text?: { messages?: number } }; semantic?: SemanticStatus["semantic"]; mode_used: string }>(
+            `/v1/search?${params.toString()}&scope=message&mode=hybrid&limit=50`)
+          if (searchGeneration.current !== generation) return
+          setMessageHits(hits.results)
+          setMessageCoverage(hits.semantic)
+          setMessageMode(hits.mode_used)
+        } catch { setMessageHits([]) }
       })().catch((error) => { if (searchGeneration.current === generation) setSearchError(`Поиск не удался: ${(error as Error).message}`) })
         .finally(() => { if (searchGeneration.current === generation) setSearching(false) })
     }, 220)
@@ -642,6 +658,39 @@ export function App() {
   }
 
   const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
+  const semanticSearch = useSemanticSearch()
+  // A search hit is a plain hash route: open the chat and scroll to the exact
+  // source message, loading it first when it is outside the visible window.
+  useEffect(() => {
+    const apply = () => {
+      const target = parseDeepLink(window.location.hash)
+      if (!target) return
+      if (selectedChat !== target.conversationId) openChat(target.conversationId)
+      if (!target.messageId) return
+      const scroll = () => [...document.querySelectorAll<HTMLElement>("[data-read-message]")]
+        .find(element => element.dataset.readMessage === target.messageId)
+      if (scroll()) { scroll()?.scrollIntoView({ behavior: "smooth", block: "center" }); return }
+      if (activeConversation.current !== target.conversationId) return
+      void (async () => {
+        try {
+          const result = await api<{ result?: { structuredContent?: { message?: Message & { conversation_id: string } } } }>("/mcp", {
+            method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: "deep-link", method: "tools/call",
+              params: { name: "userio.channels.read", arguments: { message_id: target.messageId } } }),
+          })
+          const message = result.result?.structuredContent?.message
+          if (!message || message.conversation_id !== target.conversationId || message.message_id !== target.messageId) return
+          setConversation(current => current?.id === message.conversation_id ? { ...current,
+            messages: current.messages.some(entry => entry.message_id === message.message_id) ? current.messages
+              : [...current.messages, message].sort((a, b) => a.received_at - b.received_at) } : current)
+          await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+          scroll()?.scrollIntoView({ behavior: "smooth", block: "center" })
+        } catch { /* a removed or unreadable source still opens its chat */ }
+      })()
+    }
+    apply()
+    window.addEventListener("hashchange", apply)
+    return () => window.removeEventListener("hashchange", apply)
+  }, [selectedChat, conversation?.id])
   const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
 
   const jumpToDraftSource = async (item: Draft) => {
@@ -1117,6 +1166,7 @@ export function App() {
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон / кошелёк</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={openContextSettings}><SlidersHorizontal className="size-4" /> Контекст ИИ</Button>
+      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => setSearchOpen(true)}><SearchIcon className="size-4" /> Смысловой поиск</Button>
       <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Настройки чтения</summary><label className="flex cursor-pointer items-center justify-between gap-2 py-2"><span>Режим скрытности</span><input aria-label="Режим скрытности" type="checkbox" checked={!autoRead} onChange={event => void setStealth(event.target.checked)} /></label><p className="pb-2">В режиме скрытности просмотр не отмечает сообщения прочитанными. Без него открытый диалог отмечается прочитанным в UserIO и, для Telegram, у собеседника.</p></details><details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
       <nav aria-label="О сервисе и исходный код" className="grid grid-cols-2 gap-1 border-t pt-1">
         <a href="/welcome" className="rounded-md px-3 py-2 text-sm font-medium hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring">О сервисе</a>
@@ -1153,6 +1203,21 @@ export function App() {
           </details>
         })}
         </div>
+        {!!messageHits.length && <div className="mb-3 mt-1 px-1" aria-label="Найденные сообщения">
+          <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span>Сообщения: {messageHits.length}</span>
+            {messageMode && <span className="rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">{messageMode === "hybrid" ? "текст + смысл" : messageMode === "semantic" ? "по смыслу" : "по тексту"}</span>}
+            {messageCoverage?.coverage_ratio != null && messageCoverage.enabled && <span>индекс {Math.round(messageCoverage.coverage_ratio * 100)}%</span>}
+          </div>
+          {messageHits.map((hit) => <a key={`${hit.conversation_id}:${hit.message_id}`} href={hit.deep_link}
+            className="mb-1 block rounded-lg border border-transparent p-2 hover:border-[#2f80ed]/20 hover:bg-[#2f80ed]/8">
+            <span className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+              <span className="truncate">{hitAuthorLabel(hit)} · {displayChannel(hit.channel)}{hit.peer_id ? ` · ${hit.peer_id}` : ""}</span>
+              <span className="shrink-0">{hitChannelLabel(hit)}{hit.received_at ? ` · ${listTime(hit.received_at)}` : ""}</span>
+            </span>
+            <span className="mt-0.5 block truncate text-xs">{hit.snippet}</span>
+          </a>)}
+        </div>}
         {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
           {searchError || (searching && search.trim() ? "Ищу…" : search.trim()
             ? <>Ничего не найдено по запросу <span className="font-medium text-foreground">«{search.trim()}»</span></>
@@ -1285,6 +1350,7 @@ export function App() {
       {expandedHtml && <div className="fixed inset-0 z-50 flex flex-col bg-background"><header className="flex items-center gap-3 border-b px-5 py-3"><h2 className="truncate font-semibold">{expandedHtml.title}</h2><Button className="ml-auto" variant="outline" size="sm" onClick={() => setExpandedHtml(null)}><X /> Закрыть</Button></header><iframe className="min-h-0 flex-1 border-0 bg-white" sandbox="" srcDoc={expandedHtml.body} title="Письмо" /></div>}
       {attachmentPreview && <div role="dialog" aria-label="Вложение" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setAttachmentPreview(null)}><div className="w-full max-w-md rounded-2xl bg-background p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}><header className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-muted">{attachmentPreview.message.body.trim().match(MEDIA_PLACEHOLDER)?.[1]?.toLowerCase().match(/video|видео/) ? <Video className="size-5" /> : <ImageIcon className="size-5" />}</div><div className="min-w-0"><h3 className="truncate font-semibold">{attachmentPreview.meta?.filename || mediaLabel(attachmentPreview.message.body) || "Вложение"}</h3><p className="truncate text-xs text-muted-foreground">{attachmentPreview.meta?.size !== undefined ? humanSize(attachmentPreview.meta.size) : "Вложение"}</p></div><Button className="ml-auto" variant="ghost" size="icon" onClick={() => setAttachmentPreview(null)} title="Закрыть"><X /></Button></header><div className="mt-4 space-y-3 text-sm">{attachmentPreview.loading && <p className="text-muted-foreground">Запрашиваю файл у провайдера…</p>}{!attachmentPreview.loading && attachmentPreview.meta?.available === false && (<p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">{attachmentPreview.meta.reason || "Вложение недоступно для скачивания."}</p>)}{!attachmentPreview.loading && attachmentPreview.meta?.available && (attachmentPreview.meta.content_type?.startsWith("image/") ? <img src={attachmentPreview.meta.download_url} alt={attachmentPreview.meta.filename || "preview"} className="max-h-72 w-full rounded-lg bg-muted object-contain" /> : <p className="rounded-lg bg-muted px-3 py-2 text-muted-foreground">Файл · {humanSize(attachmentPreview.meta.size ?? 0)}. Скачайте, чтобы открыть.</p>)}</div><div className="mt-5 flex items-center justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setAttachmentPreview(null)}>Закрыть</Button>{attachmentPreview.meta?.available && attachmentPreview.meta?.download_url && <Button size="sm" onClick={() => void downloadAttachment(attachmentPreview.meta!.download_url!, attachmentPreview.meta!.filename || "attachment", attachmentPreview.meta!.content_type ?? "application/octet-stream")}><ImageIcon /> Скачать</Button>}</div></div></div>}
     </section>
+    {searchOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setSearchOpen(false)}><div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><header className="mb-3 flex items-center justify-between gap-2"><h2 className="font-semibold">Смысловой поиск по истории</h2><Button variant="ghost" size="icon" onClick={() => setSearchOpen(false)} title="Закрыть"><X /></Button></header><p className="mb-3 text-xs text-muted-foreground">Поиск работает по тексту всегда. Смысловой поиск включается отдельно, индекс хранится в вашей коллекции Qdrant и пополняется в фоне.</p><SemanticSearchPanel session={semanticSearch} /><div className="mt-4 flex justify-end"><Button variant="outline" size="sm" onClick={() => setSearchOpen(false)}>Закрыть</Button></div></div></div>}
     {contextOpen && <ContextSettingsDialog settings={contextSession.draft} loading={contextSession.status === "loading"} ready={contextSession.status === "ready"} loadError={contextSession.loadError} saving={contextSaving} onChange={(draft) => setContextSession((current) => ({ ...current, draft }))} onClose={closeContextSettings} onRetry={requestContextSettings} onSave={() => void saveContextSettings()} />}
     {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новое сообщение</h2><p className="mt-1 text-xs text-muted-foreground">Канал: {displayChannel(newChatSource)}. Ваш текст отправляется сразу кнопкой отправки.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder={newChatSource === "sms" || newChatSource === "phone" ? "+79XXXXXXXXX" : "Получатель или идентификатор"} autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
   </main>
