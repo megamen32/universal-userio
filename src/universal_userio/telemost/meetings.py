@@ -245,6 +245,28 @@ class Meetings:
         return self.root/record['id']/track['filename']
 
 
+    def resume(self):
+        """Re-attach watchers to meetings a restart left unfinished.
+
+        The recorder is a separate process, so audio survives a backend
+        restart. Without this the pending transcript would be abandoned and
+        the owner would never see it.
+        """
+        if not self.root.exists():return
+        for path in sorted(self.root.glob('*/meeting.json')):
+            try:record=json.loads(path.read_text())
+            except Exception:continue
+            identity=str(record.get('id') or '')
+            try:identity=str(uuid.UUID(identity))
+            except Exception:continue
+            if record.get('status') not in {'accepted','waiting','recording','finalizing'}:continue
+            with self.lock:
+                if identity in self.active:continue
+                self.active.add(identity)
+            try:threading.Thread(target=self._watch,args=(identity,record['owner']),
+                                 daemon=True,name='telemost-resume').start()
+            except Exception:pass
+
 def meetings_for(service):
     if not hasattr(service,'_telemost_meetings'):service._telemost_meetings=Meetings(service)
     return service._telemost_meetings

@@ -270,6 +270,12 @@ def main() -> None:
     from .account_connections import UserAccountPoller
     connected_poller = UserAccountPoller(service)
     connected_poller.start()
+    # A backend restart must not abandon a recording the worker is still making.
+    try:
+        from .telemost.meetings import meetings_for
+        meetings_for(service).resume()
+    except Exception:
+        pass
     try:
         server.serve_forever()
     finally:

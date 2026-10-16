@@ -82,3 +82,22 @@ def test_pending_endpoint_is_owner_scoped_and_frame_aligned(tmp_path):
     # Header plus whole frames only; an odd tail byte is dropped.
     assert worker.root==tmp_path
     assert (path/'track-1.wav').stat().st_size-44==16000*2
+
+
+def test_resume_reattaches_unfinished_meeting(tmp_path,monkeypatch):
+    """A backend restart must not abandon an in-flight recording."""
+    import json
+    from universal_userio.telemost.meetings import Meetings
+    record={'id':'00000000-0000-0000-0000-0000000000fb','owner':'test-user','status':'recording','tracks':[]}
+    (tmp_path/record['id']).mkdir(parents=True)
+    (tmp_path/record['id']/'meeting.json').write_text(json.dumps(record))
+    finished={'id':'00000000-0000-0000-0000-0000000000fa','owner':'test-user','status':'recorded','tracks':[]}
+    (tmp_path/finished['id']).mkdir(parents=True)
+    (tmp_path/finished['id']/'meeting.json').write_text(json.dumps(finished))
+    meetings=Meetings(None,tmp_path);watched=[]
+    monkeypatch.setattr(meetings,'_watch',lambda identity,owner:watched.append((identity,owner)))
+    meetings.resume()
+    # Only the unfinished meeting is re-attached, exactly once.
+    assert watched==[(record['id'],'test-user')]
+    meetings.resume()
+    assert len(watched)==1
