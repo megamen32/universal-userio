@@ -704,3 +704,44 @@ def test_effective_owner_settings_are_visible_without_keys(tmp_path, monkeypatch
     store.set_user_search_settings({'enabled':True},user_id=second.user_id)
     assert not resolve_settings(store,user_id=second.user_id).configured()
     assert not public_settings(store,user_id=second.user_id)['has_qdrant_key']
+
+
+def test_search_settings_and_index_have_real_authenticated_post_routes(tmp_path):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+    from universal_userio.http_api import handler
+    service,store=_service(tmp_path)
+    other,other_token=store.create_user('search-http-other','correct horse battery staple')
+    server=ThreadingHTTPServer(('127.0.0.1',0),handler(service,token='owner-test-token'))
+    thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    def post(path,token,payload):
+        req=Request(f'http://127.0.0.1:{server.server_port}'+path,data=json.dumps(payload).encode(),
+                    headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'},method='POST')
+        try:
+            with urlopen(req,timeout=5)as r:return r.status,json.load(r)
+        except HTTPError as e:return e.code,json.load(e)
+    try:
+        assert post('/v1/search/settings','',{})[0]==401
+        code,saved=post('/v1/search/settings','owner-test-token',{'enabled':False,'embedding_model':'test-owner-model'})
+        assert code==200 and saved['embedding_model']=='test-owner-model'
+        assert not saved['enabled']
+        assert post('/v1/search/index',other_token,{})[0]==403
+        code,result=post('/v1/search/index','owner-test-token',{})
+        assert code==200 and result['ran'] is False
+        store.set_user_capability('read',False,user_id=other.user_id)
+        assert post('/v1/search/settings',other_token,{'enabled':True})[0]==403
+    finally:
+        server.shutdown();server.server_close();thread.join(timeout=5)
+
+
+def test_email_search_snippet_uses_visible_text_before_clipping(tmp_path):
+    service,store=_service(tmp_path)
+    store.register_account(account_id='gmail-test',provider='gmail',display_name='Почта',can_read=True,can_reply=False,credential_ref='gmail-test')
+    body='<html><head><style>'+('.hidden { display:none; }'*80)+'</style></head><body><p>Стоимость пилота согласована</p></body></html>'
+    service.receive(InboxMessage('gmail','mail-preview','Коллега',body,10.0,peer_id='colleague@example.test'),route_id='gmail',account_ref='gmail-test')
+    hits=search_messages(store,'Стоимость пилота',limit=5)['results']
+    assert len(hits)==1
+    assert hits[0]['snippet']=='Стоимость пилота согласована'
+    assert '<style>' not in hits[0]['snippet']

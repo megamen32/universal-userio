@@ -216,6 +216,12 @@ def _hit(store: Any, uid: str, row: Mapping[str, Any], *, kind: str, score: floa
         direction=direction, routing=routing,
         thread_id=str(row['provider_thread_id'] or ''),
         reply_to=str(row['provider_reply_to'] or ''))
+    snippet = body
+    if channel == 'gmail' and re.search(r'<(?:!doctype|html|head|body|div|p|table|span)(?:\s|>)', body, re.I):
+        from .channels.gmail import html_to_accessible_text
+        # Render the retained email's visible text before clipping, so a long
+        # HTML header cannot turn a source preview into markup or stylesheet.
+        snippet = html_to_accessible_text(body[:128000]) or 'HTML-письмо — откройте исходник'
     return {
         'conversation_id': conversation_id, 'message_id': message_id,
         'source': source, 'channel': channel, 'account_ref': account_ref,
@@ -225,7 +231,7 @@ def _hit(store: Any, uid: str, row: Mapping[str, Any], *, kind: str, score: floa
         'provider_message_id': coordinates['provider_message_id'],
         'thread_id': coordinates['thread_id'],
         'reply_to_provider_message_id': coordinates['reply_to_provider_message_id'],
-        'snippet': body[:300], 'match_type': kind, 'score': round(float(score), 6),
+        'snippet': snippet[:300], 'match_type': kind, 'score': round(float(score), 6),
         'deep_link': deep_link(conversation_id, message_id, base_url),
         'provider_link': provider_link(row),
     }

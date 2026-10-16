@@ -87,3 +87,21 @@ Source tests budget768MiB RAM/swap256MiB/CPU2/tasks128/temp256MiB; build512MiB
 RAM/swap256MiB/CPU2/tasks128. One at a time. Fresh host available33GiB, reserve20GiB.
 Expected tests20/max200s; build15/max150s. Browser44 same managed AgentBrowser
 route adopted15Oct:1/2GiB RAM,swap0,CPU2,tasks384,temp128MiB,IO10,wall600s.
+
+Current original GSD quick: .planning/quick/261017-0oq-finish-unified-userio-history-search-own/261017-0oq-PLAN.md.
+28history checks12.41s PASS; bounded UI build7.04s/peak310104KiB PASS.
+Published7e87827 installed backend31.879s/same config/4exact files; first frontend
+attempt rolled back automatically because override had no frontend key. Fixed
+setdefault, installed separate frontend3cc0e8c with exact Docker HostConfig.
+Do not infer frontend from backend static files: live site uses separate nginx.
+Managed headed44 original source188214466:1964912 (2004newer) renders201rows and
+exact source at top130px; same-chat1974941 also at130px. Original auto_read=true
+was temporarily false for these reads then restored; no outgoing sends.
+Natural Manager final14a9fb12 SUCCESS38.884s,2search+2originalread: short correct
+answer with budget parameters/source quote and exact link. Parent retains private
+receipts. Plain report and IKIGAI semantic targets rank1 each (no supplied prefix).
+Settings UI exposed blank saved fields despite effective deployment defaults;
+fixed safe effective view and made direct per-user resolution match worker's
+no-owner-secret-inheritance rule.29history checks13.50s PASS, new settings live
+save/reload acceptance pending final install. Existing full-suite29unrelated
+baseline failures from personal-send task are not newly rerun or called GREEN.

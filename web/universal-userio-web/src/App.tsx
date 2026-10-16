@@ -1236,13 +1236,13 @@ export function App() {
           {messageHits.map((hit) => <a key={`${hit.conversation_id}:${hit.message_id}`} href={hit.deep_link}
             className="mb-1 block rounded-lg border border-transparent p-2 hover:border-[#2f80ed]/20 hover:bg-[#2f80ed]/8">
             <span className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-              <span className="truncate">{hitAuthorLabel(hit)} · {displayChannel(hit.channel)}{hit.peer_id ? ` · ${hit.peer_id}` : ""}</span>
+              <span className="truncate">{hitAuthorLabel(hit)} · {displayChannel(hit.channel)}{(hit.display_name || hit.sender) ? ` · ${hit.display_name || hit.sender}` : ""}</span>
               <span className="shrink-0">{hitChannelLabel(hit)}{hit.received_at ? ` · ${listTime(hit.received_at)}` : ""}</span>
             </span>
-            <span className="mt-0.5 block truncate text-xs">{hit.snippet}</span>
+            <span className="mt-0.5 block truncate text-xs">{previewText(hit.snippet)}</span>
           </a>)}
         </div>}
-        {!visibleChats.length && <p className="p-5 text-center text-sm text-muted-foreground">
+        {!visibleChats.length && !messageHits.length && <p className="p-5 text-center text-sm text-muted-foreground">
           {searchError || (searching && search.trim() ? "Ищу…" : search.trim()
             ? <>Ничего не найдено по запросу <span className="font-medium text-foreground">«{search.trim()}»</span></>
             : inboxFolders.active !== "all" ? "В этой папке пока нет сообщений" : selectedChannel !== "all"

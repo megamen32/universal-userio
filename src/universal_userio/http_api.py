@@ -724,6 +724,17 @@ def handler(
                         "has_key": settings is not None,
                     })
                     return
+                if path in {"/v1/search/settings", "/v1/search/index"}:
+                    if not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "read_capability_disabled"}); return
+                    if path == "/v1/search/settings":
+                        service._store.set_user_search_settings(self._json(), user_id=user_id)
+                        self._reply(200, public_search_settings(service._store, user_id=user_id))
+                    elif service._store.owner().user_id != user_id:
+                        self._reply(403, {"error": "owner_only"})
+                    else:
+                        self._reply(200, run_search_index(service, self._json(), user_id=user_id))
+                    return
                 if path == "/v1/preferences/context":
                     payload = self._json()
                     settings = service._store.set_context_settings(
@@ -1686,16 +1697,7 @@ def handler(
                 if not service._store.capability_enabled("read", user_id=user_id):
                     self._reply(403, {"error": "read_capability_disabled"}); return
                 if path == "/v1/search/settings":
-                    if self.command == "POST":
-                        service._store.set_user_search_settings(self._json(), user_id=user_id)
-                        self._reply(200, public_search_settings(service._store, user_id=user_id))
-                        return
                     self._reply(200, public_search_settings(service._store, user_id=user_id))
-                    return
-                if self.command == "POST":
-                    if service._store.owner().user_id != user_id:
-                        self._reply(403, {"error": "owner_only"}); return
-                    self._reply(200, run_search_index(service, self._json(), user_id=user_id))
                     return
                 self._reply(200, search_coverage(service._store, user_id=user_id))
                 return

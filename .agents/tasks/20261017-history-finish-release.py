@@ -13,7 +13,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-AREA = ROOT / '.tmp/20261017-history-settings'
+AREA = ROOT / '.tmp/20261017-history-final'
 NAME = 'userio-backend'
 CONFIG = Path('/etc/userio-containers/compose.host.json')
 
@@ -35,7 +35,7 @@ def main():
     head=cmd(['git','-C',ROOT,'rev-parse','HEAD'])
     if head != cmd(['git','-C',ROOT,'rev-parse','origin/main']): raise RuntimeError('publish main first')
     live=inspect(NAME)
-    if live['Config']['Image'] != 'universal-userio-history:7e8782715890': raise RuntimeError('accepted runtime changed')
+    if live['Config']['Image'] != 'universal-userio-history:9f105628bbfd': raise RuntimeError('accepted runtime changed')
     available=int(next(l.split()[1] for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemAvailable:')))*1024
     if available < 21*1024**3: raise RuntimeError('insufficient reserve')
     # Reuse reviewed same-config recreation and active-call/meeting guard.
@@ -43,7 +43,7 @@ def main():
     for label,file in [('activate','20261016-personal-send-activate.py'),('release','20261016-personal-send-release.py')]:
         spec=importlib.util.spec_from_file_location(label,ROOT/'.agents/tasks'/file)
         mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);modules[label]=mod
-    paths=['src/universal_userio/semantic_index.py','src/universal_userio/static/index.html','src/universal_userio/http_api.py']
+    paths=['src/universal_userio/semantic_index.py','src/universal_userio/static/index.html','src/universal_userio/http_api.py','src/universal_userio/search.py']
     html=blob(head,paths[1]).decode()
     paths += ['src/universal_userio/static'+p for p in re.findall(r'(?:src|href)="(/assets/[^\"]+)"',html)]
     context=AREA/'context';context.mkdir()
@@ -61,7 +61,7 @@ def main():
          '--cpu-period=100000','--cpu-quota=200000','--ulimit','nproc=128:128','-t',image,context],
         timeout=120,env={**os.environ,'DOCKER_BUILDKIT':'0'})
     modules['release'].idle()
-    previous='userio-backend-prev-settings-20261017'
+    previous='userio-backend-prev-final-20261017'
     original=CONFIG.read_bytes()
     save('intent',dict(head=head,old_image=live['Config']['Image'],image=image,paths=paths,expected=expected,available=available))
     argv=modules['activate'].run_argv(live,image)

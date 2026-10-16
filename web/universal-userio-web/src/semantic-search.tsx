@@ -72,13 +72,14 @@ const percent = (value?: number) => `${Math.round((value ?? 0) * 100)}%`
 const scopeLine = (status: SemanticStatus | null) => {
   const scope = status?.scope
   if (!scope || !scope.conversation_ids?.length) return null
-  return `Рабочие чаты: ${scope.indexed_messages ?? 0} из ${scope.live_messages ?? 0} сообщений (${percent(scope.coverage_ratio)})`
+  return `Рабочие чаты: ${scope.indexed_messages ?? 0} из ${scope.live_messages ?? 0} сообщений (${percent(scope.coverage_ratio)})${scope.complete ? " — готовы" : " — индексируются"}`
 }
 
 export function useSemanticSearch() {
   const [settings, setSettings] = useState<SemanticSettings | null>(null)
   const [status, setStatus] = useState<SemanticStatus | null>(null)
   const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
@@ -99,6 +100,7 @@ export function useSemanticSearch() {
 
   const save = useCallback(async (values: Partial<SemanticSettings> & { qdrant_token?: string; embedding_token?: string }) => {
     setSaving(true)
+    setSaved(false)
     try {
       const response = await fetch("/v1/search/settings", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
@@ -107,6 +109,7 @@ export function useSemanticSearch() {
       if (!response.ok) throw new Error(payload?.error || "Не удалось сохранить настройки")
       setSettings(payload)
       await refresh()
+      setSaved(true)
       return payload
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -123,11 +126,11 @@ export function useSemanticSearch() {
     return status?.semantic?.reason === "not_configured" ? "unconfigured" : "degraded"
   })()
 
-  return { settings, status, state, saving, error, save, refresh }
+  return { settings, status, state, saving, saved, error, save, refresh }
 }
 
 export function SemanticSearchPanel({ session }: { session: ReturnType<typeof useSemanticSearch> }) {
-  const { settings, status, state, saving, error, save } = session
+  const { settings, status, state, saving, saved, error, save } = session
   const [qdrantKey, setQdrantKey] = useState("")
   const [embeddingKey, setEmbeddingKey] = useState("")
   const [form, setForm] = useState<SemanticSettings | null>(settings)
@@ -187,17 +190,19 @@ export function SemanticSearchPanel({ session }: { session: ReturnType<typeof us
       </>}
       <div className="flex items-center gap-2">
         <button type="button" className="rounded-lg border px-3 py-1.5 text-sm disabled:opacity-50"
-          disabled={saving} onClick={() => { void submit() }}>{saving ? "Сохраняю…" : "Сохранить"}</button>
-        {state === "ready" && <span className="text-xs text-[#2f80ed]">Индекс готов</span>}
-        {state === "indexing" && <span className="text-xs text-muted-foreground">Индексация идёт</span>}
+          disabled={saving} onClick={() => { void submit().catch(() => { /* save already displays the error */ }) }}>{saving ? "Сохраняю…" : "Сохранить"}</button>
+        {state === "ready" && <span className="text-xs text-[#2f80ed]">Весь архив готов</span>}
+        {state === "indexing" && <span className="text-xs text-muted-foreground">Весь архив индексируется</span>}
         {state === "unconfigured" && <span className="text-xs text-muted-foreground">Укажите Qdrant и embeddings</span>}
         {state === "degraded" && <span className="text-xs text-amber-600">Векторный поиск недоступен ({status?.semantic?.reason || "проверьте настройки"}), работает текстовый</span>}
         {status?.semantic?.reason === "collection_missing" && <span className="text-xs text-amber-600">Коллекция не создана: создайте {status.semantic.collection} или выдайте ключу право create</span>}
         {state === "off" && <span className="text-xs text-muted-foreground">Смысловой поиск выключен</span>}
       </div>
+      {saved && form === settings && <p className="text-xs text-[#2f80ed]">Настройки сохранены</p>}
+      {status?.semantic?.available && <p className="text-xs text-[#2f80ed]">Qdrant и embeddings доступны; размерность проверена.</p>}
       {status?.semantic?.enabled && <p className="text-xs text-muted-foreground">
         Проиндексировано {status.semantic.indexed_messages ?? 0} из {status.semantic.live_messages ?? 0}
-        сообщений ({status.semantic.indexed_chunks ?? 0} чанков{status.semantic.pending ? `, в очереди ${status.semantic.pending}` : ""})
+        {" "}сообщений ({status.semantic.indexed_chunks ?? 0} чанков{status.semantic.pending ? `, в очереди ${status.semantic.pending}` : ""})
         {status.semantic.errors ? `, ошибок ${status.semantic.errors}` : ""}
         {status.semantic.partial ? `, частично ${status.semantic.partial}` : ""}
       </p>}
