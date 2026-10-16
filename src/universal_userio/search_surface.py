@@ -61,7 +61,8 @@ def normalize_search_arguments(arguments: Mapping[str, Any]) -> dict[str, Any]:
 def search_response(store: Any, query: str, arguments: Mapping[str, Any], *, user_id: str | None,
                     source: str | None = None, ignored: Sequence[str] = ()) -> dict[str, Any]:
     """Run the shared core and return the agent-facing envelope."""
-    from .search import search_conversations, search_coverage, search_messages
+    from .search import search_conversations, search_coverage_payload, search_messages
+    from .semantic_index import resolve_settings
 
     options = normalize_search_arguments(arguments)
     text = str(query or "").strip()
@@ -86,8 +87,15 @@ def search_response(store: Any, query: str, arguments: Mapping[str, Any], *, use
     blocked = set(ignored)
     results = [row for row in rows
                if row["id"] not in blocked and (not allowed or str(row["id"]) in allowed)]
-    coverage = search_coverage(store, user_id=user_id)
+    settings = resolve_settings(store, user_id=user_id)
+    availability = {"available": bool(settings.enabled and settings.configured()),
+                    "enabled": settings.enabled,
+                    "model": settings.embedding_model if settings.enabled else "",
+                    "collection": settings.qdrant_collection if settings.enabled else "",
+                    "dimensions": settings.dimensions if settings.enabled else 0}
+    coverage = search_coverage_payload(store, user_id=user_id,
+                                       conversation_ids=options["conversation_ids"])
     return {"ok": True, "scope": "conversation", "results": results,
-            "coverage": coverage.get("text", {}), "semantic": coverage.get("semantic", {}),
+            "coverage": coverage, "semantic": availability,
             "mode_used": "text", "offset": options["offset"], "limit": options["limit"],
             "next_offset": options["offset"] + len(results)}

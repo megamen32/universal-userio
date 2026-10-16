@@ -160,12 +160,25 @@ def qdrant_request(settings: SemanticSettings, method: str, path: str,
     return 200, json.loads(raw or b"{}")
 
 
+def embeddings_endpoint(base_url: str) -> str:
+    """Normalise an OpenAI-compatible base URL to its embeddings path.
+
+    Owners configure what their endpoint documents: the bare origin, the
+    standard ``/v1`` base, or the full embeddings path. All three must work, and
+    none may produce a doubled ``/v1/v1``.
+    """
+    base = str(base_url or "").strip().rstrip("/")
+    if base.endswith("/embeddings"):
+        return base
+    if base.endswith("/v1"):
+        return base + "/embeddings"
+    return base + "/v1/embeddings"
+
+
 def embed(settings: SemanticSettings, texts: Sequence[str], *, timeout: int = 60) -> list[list[float]]:
     if not texts:
         return []
-    url = settings.embedding_url.rstrip("/")
-    if not url.endswith("/embeddings"):
-        url = url + "/v1/embeddings"
+    url = embeddings_endpoint(settings.embedding_url)
     payload = {"model": settings.embedding_model, "input": list(texts)}
     request = urllib.request.Request(
         url, data=json.dumps(payload, ensure_ascii=False).encode(), method="POST",

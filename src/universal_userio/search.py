@@ -353,7 +353,9 @@ def search_messages(store: Any, query: str, *, source: str | None = None, accoun
     uid = store._user(user_id)
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
-    coverage = text_coverage(store, user_id=uid)
+    # Every answer carries its own completeness, so a caller can never read a
+    # 59k-message text count as a finished semantic index.
+    coverage = search_coverage_payload(store, user_id=uid, conversation_ids=conversation_ids)
     if not tokens or len(text) < 2:
         return {'results': [], 'coverage': coverage, 'mode_used': 'none', 'semantic': {'available': False}}
 
@@ -459,6 +461,26 @@ def _mode_used(semantic: Mapping[str, Any], requested: str,
 
 PUBLIC_WEB_URL = "https://msg.bezrabotnyi.com"
 INDEX_STEP_BUDGET_SECONDS = 240
+
+
+def search_coverage_payload(store: Any, *, user_id: str,
+                           conversation_ids: Sequence[str] = ()) -> dict[str, Any]:
+    """Coverage the caller receives with every answer.
+
+    Text coverage is the retained history that exact search can reach. Semantic
+    coverage is the derived ledger: what is really indexed, what is still owed
+    and what failed, both globally and for the conversations actually requested.
+    It is plain SQL, so an answer never pays for an extra probe.
+    """
+    from . import semantic_index
+
+    payload: dict[str, Any] = {'text': text_coverage(store, user_id=user_id)}
+    if semantic_index.resolve_settings(store, user_id=user_id).configured():
+        payload['semantic'] = semantic_index.status(store, user_id=user_id)
+        scope = [str(value).strip() for value in conversation_ids if str(value).strip()][:100]
+        if scope:
+            payload['scope'] = semantic_index.status(store, user_id=user_id, conversation_ids=scope)
+    return payload
 
 
 def run_search_index(service: Any, payload: Mapping[str, Any] | None = None, *,

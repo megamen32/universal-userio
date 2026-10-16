@@ -656,3 +656,17 @@ def test_a_key_without_create_rights_gets_an_actionable_reason(tmp_path, monkeyp
         assert "grant create" in error.reason and "absent_collection" in error.reason
     else:
         raise AssertionError("a refused collection creation must be actionable")
+
+
+def test_embeddings_base_url_is_normalised_once():
+    """Owners configure an origin, the standard /v1 base, or the full path."""
+    from universal_userio.semantic_index import embeddings_endpoint
+    assert embeddings_endpoint("http://192.168.2.75:11440/v1") == "http://192.168.2.75:11440/v1/embeddings"
+    assert embeddings_endpoint("http://192.168.2.75:11440") == "http://192.168.2.75:11440/v1/embeddings"
+    assert embeddings_endpoint("https://api.example.com/v1/embeddings") == "https://api.example.com/v1/embeddings"
+    assert embeddings_endpoint("https://api.example.com/v1/") == "https://api.example.com/v1/embeddings"
+    assert embeddings_endpoint("https://api.example.com/openai/v1") == "https://api.example.com/openai/v1/embeddings"
+    assert "/v1/v1/" not in embeddings_endpoint("http://192.168.2.75:11440/v1")
+    for base in ("http://192.168.2.75:11440/v1", "http://192.168.2.75:11440",
+                 "https://api.example.com/v1/embeddings"):
+        assert embeddings_endpoint(embeddings_endpoint(base)) == embeddings_endpoint(base)
