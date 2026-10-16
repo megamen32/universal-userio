@@ -95,8 +95,32 @@ async def main():
         track=next(t for t in record['tracks'] if t['index']==index)
         if record['status'] not in {'recorded','failed','no_audio'}:raise web.HTTPConflict()
         return web.FileResponse(worker.root/record['id']/track['filename'])
+    async def pending(request):
+        """Tail of a still growing track: raw PCM after a byte offset, no WAV header.
+
+        A live transcript must not wait for the meeting to end. The recorder
+        appends mono s16 16 kHz frames to the same file, so bytes already read
+        are simply never sent again. Owner scope is identical to /audio.
+        """
+        record=worker.get(request.match_info['identity'],request.query.get('owner',''))
+        index=int(request.match_info['index'])
+        track=next((t for t in record['tracks'] if t['index']==index),None)
+        if track is None or record['status'] not in {'accepted','waiting','recording','finalizing','recorded','failed'}:
+            raise web.HTTPConflict()
+        offset=int(request.query.get('offset','0'))
+        if offset<0:raise web.HTTPBadRequest()
+        path=worker.root/record['id']/track['filename']
+        # Header is rewritten only on close, so a live file is header + raw PCM.
+        size=path.stat().st_size if path.exists() else 44
+        start=44+offset
+        if start>=size:return web.Response(body=b'',content_type='application/octet-stream')
+        with path.open('rb') as stream:
+            stream.seek(start);payload=stream.read(size-start)
+        # Only whole frames; a half frame would shift every later offset.
+        return web.Response(body=payload[:len(payload)-(len(payload)%2)],content_type='application/octet-stream')
     app=web.Application(client_max_size=8192);app.router.add_post('/execute',execute)
     app.router.add_get('/audio/{identity}/{index}',audio)
+    app.router.add_get('/pending/{identity}/{index}',pending)
     runner=web.AppRunner(app,access_log=None);await runner.setup()
     site=web.UnixSite(runner,str(socket_path));await site.start();os.chmod(socket_path,0o600)
     try:await asyncio.Event().wait()

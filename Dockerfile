@@ -65,3 +65,6 @@ FROM nginx:stable-alpine AS frontend
 RUN sed -i 's/worker_processes  auto;/worker_processes  1;/' /etc/nginx/nginx.conf
 COPY src/universal_userio/static /usr/share/nginx/html
 COPY deploy/containers/frontend.conf /etc/nginx/conf.d/default.conf
+# A build run under a private umask leaves 0700 directories; nginx runs as
+# uid 101 and would 404 every asset. Serve the tree, never execute it.
+RUN chmod -R a=rX /usr/share/nginx/html

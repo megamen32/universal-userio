@@ -170,6 +170,11 @@ const sameDay = (a: number, b: number) => {
   return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate()
 }
 
+// Meeting transcripts are ordinary conversation content, not a status pill:
+// they carry the actual spoken text and must read like any other message.
+const TRANSCRIPT_BODY = /^Расшифровка встречи[^\n]*\n/
+const isMeetingTranscript = (message: { body?: string }) => TRANSCRIPT_BODY.test(message.body || "")
+
 // Deterministic avatar colors so contacts are distinguishable at a glance.
 const AVATAR_COLORS = ["bg-rose-500/80", "bg-orange-500/80", "bg-amber-600/80", "bg-lime-600/80", "bg-emerald-600/80", "bg-teal-500/80", "bg-sky-600/80", "bg-indigo-500/80", "bg-fuchsia-500/80"]
 const avatarColor = (key: string) => AVATAR_COLORS[[...key].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) % 997, 7) % AVATAR_COLORS.length]
@@ -1216,13 +1221,16 @@ export function App() {
           {conversation.messages.map((message, index) => {
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
             const system = message.direction === "system"
+            const transcript = system && isMeetingTranscript(message)
             const outgoing = messageIsOutgoing(conversation, message, accounts)
             const author = messageAuthor(message, conversation.conversation_kind)
             const previous = conversation.messages[index - 1]
             const showDay = !previous || !sameDay(previous.received_at, message.received_at)
             return <Fragment key={`${message.source}:${message.message_id}`}>
               {showDay && <div className="my-2 text-center"><span className="rounded-full bg-muted px-3 py-1 text-[11px] font-medium text-muted-foreground">{dayLabel(message.received_at)}</span></div>}
-              {system
+              {transcript
+                ? <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="flex w-fit min-w-0 max-w-[88%] flex-col gap-1 rounded-[18px] rounded-bl-[6px] border border-black/5 bg-white px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] dark:border-white/5 dark:bg-[#182533]"><div className="flex items-center gap-2 border-b border-black/5 pb-1 text-[11px] font-semibold text-blue-700 dark:border-white/10 dark:text-blue-300"><Video className="size-3.5 shrink-0" /> Расшифровка Телемоста</div><div className="whitespace-pre-wrap leading-relaxed text-slate-900 dark:text-slate-100">{message.body}</div><p className="px-1 text-[11px] text-muted-foreground">{timeHM(message.received_at)}</p></div>
+                : system
                 ? <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} conversationId={conversation.id} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
                 : <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit min-w-0 max-w-[88%] overflow-hidden [overflow-wrap:anywhere] rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{author && <p data-message-author={message.message_id} className={`mb-1 text-xs font-semibold ${outgoing ? "text-white/90" : "text-blue-700 dark:text-blue-300"}`}>{author}</p>}{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} conversationId={conversation.id} onAttachmentClick={openAttachment} />}{(conversation.source === "max" || canVkRich) && outgoing && canReply && (canVkRich || canEditMaxText(message.attachments)) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : conversation.source === "vk" && outgoing ? " · Отправлено в VK" : ""}</p></div>}
               {message.call_audio && <CallAudio recording={message.call_audio} />}

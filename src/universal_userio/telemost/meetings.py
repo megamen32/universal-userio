@@ -16,11 +16,22 @@ from ..contracts import InboxMessage
 ROOT=Path('/var/lib/universal-userio/telemost')
 REMOTE='/home/roomhacker/.local/share/userio-telemost'
 TERMINAL={'recorded','no_audio','failed','cancelled','expired','unknown'}
+BYTES_PER_SECOND=16000*2
+LIVE_POLL_SECONDS=15
+LIVE_MIN_SECONDS=45
+LIVE_CHUNK_SECONDS=120
+ARCHIVE_CHUNK_SECONDS=120
 
 
 class Meetings:
     def __init__(self,service,root=ROOT):
-        self.service=service;self.root=Path(root);self.lock=threading.Lock();self.active=set()
+        self.service=service;self.root=Path(root);self.lock=threading.Lock();self.active=set();self.transcribing=threading.Lock()
+
+    def _wav(self,pcm):
+        data=io.BytesIO()
+        with wave.open(data,'wb') as chunk:
+            chunk.setnchannels(1);chunk.setsampwidth(2);chunk.setframerate(16000);chunk.writeframes(pcm)
+        return data.getvalue()
 
     def _command(self):
         if os.environ.get('USERIO_TELEMOST_LOCAL')=='1':
@@ -113,11 +124,12 @@ class Meetings:
                 if record['status']!=last:
                     last=record['status']
                     self._emit(record,{'waiting':'Ожидаю допуска организатора встречи.',
-                        'recording':'Запись встречи начата. Микрофон и камера выключены.',
+                        'recording':'Запись встречи начата. Микрофон и камера выключены. Расшифровка появится в чате по ходу разговора.',
                         'failed':'Не удалось подключиться к Телемосту. Автоматический повтор не выполняется.'}.get(last,'Состояние встречи: '+last),'status-'+last)
                 self._save(record)
                 if last in TERMINAL:break
-                time.sleep(3)
+                if last=='recording':self._transcribe_live(record)
+                time.sleep(LIVE_POLL_SECONDS)
             else:raise TimeoutError('meeting status deadline')
             if record['status'] in {'recorded','failed'}:
                 self._archive(record)
@@ -127,6 +139,53 @@ class Meetings:
         finally:
             self._save(record)
             with self.lock:self.active.discard(identity)
+
+    def _pending(self,record,track,offset):
+        """Raw PCM already written by the recorder but not yet transcribed."""
+        result=subprocess.run(self._command(),input=json.dumps({'op':'pending','id':record['id'],
+            'owner':record['owner'],'index':track['index'],'offset':offset}).encode(),
+            capture_output=True,timeout=60)
+        if result.returncode:raise RuntimeError('Telemost worker unavailable')
+        return result.stdout
+
+    def _transcribe_live(self,record):
+        """Transcribe the meeting while it runs, so the chat is never silent.
+
+        Audio already consumed is never re-sent: each track carries its own
+        byte cursor, and a fragment is emitted at most once.
+        """
+        from ..messenger_max_media import transcribe
+        for track in record.get('tracks',[]):
+            # No audio written yet: the pending tail is empty, nothing to send.
+            cursor=int(track.get('pending_offset',0))
+            try:pcm=self._pending(record,track,cursor)
+            except Exception:continue
+            # Wait for a usable amount of speech instead of emitting fragments
+            # too short to diarize.
+            if len(pcm)<LIVE_MIN_SECONDS*BYTES_PER_SECOND:continue
+            limit=LIVE_CHUNK_SECONDS*BYTES_PER_SECOND
+            if len(pcm)>limit:pcm=pcm[:limit-(limit%2)]
+            with self.transcribing:
+                try:
+                    recognized=transcribe(self._wav(pcm),'audio/wav',diarize=True)
+                    diarization=recognized['diarization']
+                    offset=cursor/BYTES_PER_SECOND
+                    chunk={'offset':offset,'text':recognized['transcript'],'diarization':diarization,
+                           'speaker_scope':f"track-{track['index']}/chunk-{offset:g}",'live':True}
+                    track.setdefault('transcripts',[]).append(chunk)
+                    track['pending_offset']=cursor+len(pcm)
+                    track['live_transcription_status']='ready'
+                    self._save(record)
+                    body=('Расшифровка встречи, дорожка '+str(track['index'])+', с '+f"{offset:g}"
+                          +' с. Метки говорящих действуют только внутри этого фрагмента.\n'
+                          +(diarization.get('speaker_text') or recognized['transcript']))
+                    self._emit(record,body,'live-'+str(track['index'])+'-'+str(int(offset)))
+                    self._save(record)
+                except Exception as error:
+                    track['live_transcription_error']=type(error).__name__
+                    # The cursor must not advance past audio that failed to
+                    # transcribe; a later poll retries the same bytes.
+                    self._save(record)
 
     def _archive(self,record):
         from ..messenger_max_media import transcribe
@@ -142,12 +201,15 @@ class Meetings:
             with temp.open('rb') as stream:
                 while data:=stream.read(65536):digest.update(data)
             if digest.hexdigest()!=track['sha256']:raise ValueError('recording SHA mismatch')
-            os.replace(temp,path);track['archived']=True;track['transcripts']=[]
+            os.replace(temp,path);track['archived']=True;track.setdefault('transcripts',[])
             try:
                 with wave.open(str(path),'rb') as audio:
                     if (audio.getnchannels(),audio.getsampwidth(),audio.getframerate())!=(1,2,16000):raise ValueError('invalid recording format')
-                    offset=0
-                    while pcm:=audio.readframes(16000*120):
+                    # Live fragments already shown in the chat are not re-sent;
+                    # the archive continues from the same byte cursor.
+                    cursor=int(track.get('pending_offset',0))
+                    offset=cursor/BYTES_PER_SECOND
+                    while pcm:=audio.readframes(16000*ARCHIVE_CHUNK_SECONDS):
                         data=io.BytesIO()
                         with wave.open(data,'wb') as chunk:
                             chunk.setnchannels(1);chunk.setsampwidth(2);chunk.setframerate(16000);chunk.writeframes(pcm)
@@ -159,6 +221,8 @@ class Meetings:
                                'diarization':diarization,
                                'speaker_scope':f"track-{track['index']}/chunk-{offset:g}"}
                         track['transcripts'].append(chunk)
+                        cursor+=len(pcm)
+                        track['pending_offset']=cursor
                         self._save(record)
                         # Same owned conversation, deterministic message ID;
                         # ordinary history now contains the actual transcript.
@@ -167,12 +231,12 @@ class Meetings:
                               "только внутри этого фрагмента.\n"
                               +(diarization.get('speaker_text') or recognized['transcript']))
                         self._emit(record,body,f"transcript-{track['index']}-{int(offset)}")
-                        offset+=len(pcm)/32000
+                        offset+=len(pcm)/BYTES_PER_SECOND
                 track['transcription_status']='ready'
             except Exception as error:track.update(transcription_status='failed',transcription_error=type(error).__name__)
             self._save(record)
         voice_tracks=[t for t in record['tracks'] if t.get('bytes',0)>44]
-        self._emit(record,'Запись встречи завершена. '+('Расшифровка готова.' if voice_tracks and all(t.get('transcription_status')=='ready' for t in voice_tracks) else 'Расшифровка пока недоступна.')+'\nОткрыть аудио: /telemost?id='+record['id'],'completed')
+        self._emit(record,'Запись встречи завершена. '+('Расшифровка с метками говорящих — в этом чате выше.' if voice_tracks and all(t.get('transcription_status')=='ready' for t in voice_tracks) else 'Расшифровка пока недоступна.')+'\nОткрыть аудио: /telemost?id='+record['id'],'completed')
         self._save(record)
 
     def audio(self,identity,owner,index):
