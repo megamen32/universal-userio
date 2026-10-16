@@ -6,7 +6,7 @@ Does not restart backend/voice. The previous frontend is retained for rollback.
 import hashlib,http.client,json,os,re,socket,subprocess,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
-AREA=ROOT/'.tmp/20261017-history-frontend-final'
+AREA=ROOT/'.tmp/20261017-history-frontend-links'
 NAME='userio-frontend'
 CONFIG=Path('/etc/userio-containers/compose.host.json')
 class Docker(http.client.HTTPConnection):
@@ -26,7 +26,7 @@ def main():
     head=cmd(['git','-C',ROOT,'rev-parse','HEAD'])
     if head!=cmd(['git','-C',ROOT,'rev-parse','origin/main']):raise RuntimeError('publish first')
     live=api('GET','/containers/'+NAME+'/json')
-    if live['Config']['Image']!='universal-userio-frontend:history-3cc0e8c160ee':raise RuntimeError('frontend changed')
+    if live['Config']['Image']!='universal-userio-frontend:history-92f8ffc8c7cf':raise RuntimeError('frontend changed')
     context=AREA/'context';context.mkdir(exist_ok=True)
     def blob(path):return subprocess.check_output(['git','-C',str(ROOT),'show',head+':'+path])
     base='src/universal_userio/static';html=blob(base+'/index.html')
@@ -38,7 +38,7 @@ def main():
     (context/'Dockerfile').write_text(''.join(lines))
     image='universal-userio-frontend:history-'+head[:12]
     cmd(['docker','build','--network=none','--pull=false','--memory=1g','--memory-swap=1g','--cpu-period=100000','--cpu-quota=200000','-t',image,context])
-    previous=NAME+'-prev-final-20261017'
+    previous=NAME+'-prev-links-20261017'
     api('POST','/containers/'+NAME+'/stop?t=10');api('POST','/containers/'+NAME+'/rename?name='+previous)
     try:
         body={**live['Config'],'Image':image,'HostConfig':live['HostConfig']}

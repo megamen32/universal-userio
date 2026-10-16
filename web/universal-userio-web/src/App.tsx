@@ -401,7 +401,10 @@ export function App() {
     const data = await api<{ conversations: Chat[] }>(`/v1/conversations${suffix}`)
     if (!chatsRequest.current.isCurrent(request)) return
     setChats(data.conversations)
-    setSelectedChat((current) => current && data.conversations.some((item) => item.id === current) ? current : "")
+    // A source may belong to an old chat outside this recent-list page.
+    // Its conversation API, not presence in the sidebar, determines access.
+    setSelectedChat((current) => current && (data.conversations.some((item) => item.id === current)
+      || parseDeepLink(window.location.hash)?.conversationId === current) ? current : "")
   }, [account, activeChannel, inboxFolders.active, inboxFolders.folders])
 
   useEffect(() => {
