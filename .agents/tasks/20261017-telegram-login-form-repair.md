@@ -45,3 +45,31 @@ backfill принимается как готовый транспорт (liveSl
 наблюдение за auth имеет конечный emergency budget480с; отдельные real fresh
 reads обязательны после установки. Повторная активация имеет отдельный
 release-v2 intent, а не повтор failed intent. Новый login не создаётся.
+
+Доставлено: e2ec951 source form/test; dc5e625 исправляет только installer
+readiness. Оба в origin/main. Живой backend
+`universal-userio-login-form:dc5e625bbeae`, container4f298ff8e778,
+published server SHA409498aea9c30d85e4dc7e3ace4966c0064f9d48d643487b9ef9d5170b43ea7c.
+Вторая активация56.469с, все прежние конфигурации/22binds/лимиты совпали.
+Rollback: userio-backend-prev-login-form-v2-20261017, образ92f8ffc8c7cf.
+
+Реальная HTTP приёмка: страница из работающего backend вернула200;
+её настоящий inline submit handler выполнил3HTTPPOST с dummy полями
+в ограниченный loopback receiver (VM harness, не headed browser).
+До установки3/3 поля терялись, после3/3 совпали, content-type=urlencoded.
+Provider passwordPOST/new login=0. Private0600: http-before.json,
+http-after-v2.json, release-v2/{intent,prepared,receipt}.json в
+var/20261017-login-form-repair. Первый failed install сохранён отдельно
+release/failure.json; неизвестные provider действия не повторялись.
+
+После окончательного рестарта actual native private probes Григория/Олега
+и Forenergo MAX fresh=true; read acknowledged=false. Exact Telegram540
+enabled/read+reply, credential_ref=telegram-qr:account-4. MAX дополнительно
+прошёл тот же refresh limit40, который использует work collect:40сообщений,
+ошибок нет. Причина предыдущего единичного catchup MAX refusal не установлена;
+bounded safe logs не дали exception/provider класса, она не выдумывается.
+Никакого второго catchup job worker не запускал.
+
+Frontend5723e9266501/history-8e76b945dfdd работает с21:41:19UTC,
+voice027f81f60562/telemost-live с13:03:56UTC; оба не перезапускались.
+Короткая пользовательская документация: docs/telegram-sign-in.md.
