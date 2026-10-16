@@ -500,6 +500,27 @@ while retaining ownership of their provider sessions. UserIO acknowledges and
 deduplicates the canonical message before the provider cursor advances.
 `route_id` is policy metadata inside UserIO; it no longer maps to NoticePlace.
 
+### Personal Telegram delivery: refused vs uncertain
+
+The telegram-qr connector is the only process that holds a Telegram session, so
+an approved personal reply becomes `POST /send` with the exact `account_id` and
+the `slot` the store pins for that account (`telegram-qr:<slot>`). The connector
+never falls back to another account.
+
+Its answer decides the state of the draft claim:
+
+| Connector answer | Meaning | UserIO state |
+|---|---|---|
+| `4xx` + `submitted:false` (`account_relogin_required`, `account_not_connected`, `chat_not_known`) | refused before any provider call; delivery is impossible | claim released back to `proposed`, owner gets an actionable message, exact retry allowed |
+| `5xx` / `408` / `429` / socket error (`submitted:"unknown"`) | may arrive with the message already on the wire | claim kept in `sending`, never replayed, further approval refused |
+
+An empty or missing `slot` still routes by `account_id` alone. A live GramJS
+`isUserAuthorized()` collapses every provider error to `false`, so the connector
+asks `updates.getState` directly (`deploy/telegram-qr-connector/session-auth.mjs`)
+and marks a revoked session `relogin-required` with a 15 minute backoff instead
+of reconnecting every 30 seconds. A revoked session needs a fresh owner login;
+no code path can restore it, and no send can pass through it meanwhile.
+
 ## Current web behaviours
 
 Human-authored text uses `POST /v1/conversations/<id>/send` and sends after the

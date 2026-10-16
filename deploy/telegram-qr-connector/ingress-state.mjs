@@ -15,7 +15,7 @@ export function publicIngressState(slots, syncs, liveSlots) {
       promptSeq: item.promptSeq || 0,
       sync: sync.running ? (sync.status || "on") : "",
       syncChats: sync.chats || 0,
-      syncError: sync.status === "retrying" ? (sync.lastError || "") : "",
+      syncError: sync.status === "retrying" || sync.status === "relogin-required" ? (sync.lastError || "") : "",
       lastSyncAt: Number(sync.lastSyncAt || 0),
     };
   });

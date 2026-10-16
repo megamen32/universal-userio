@@ -22,7 +22,10 @@ class LiveTelegramOutbox:
         self._adapter = adapter
         self._runner = runner or SyncChannelRunner()
 
-    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "") -> str:
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "",
+                   account_ref: str = "", slot: str = "") -> str:
+        # This outbox owns exactly one pinned account, so the connector slot the
+        # store records for it has no separate identity to honour here.
         peer: int | str = int(chat) if chat.lstrip("-").isdigit() else chat
         message = self._runner.run(lambda: self._adapter.send_message(peer, body))
         return f"telegram:{getattr(message, 'id', 'sent')}:{draft_id}"

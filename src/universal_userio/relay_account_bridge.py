@@ -137,10 +137,11 @@ class RelayAccountBridge:
                 "next_cursor": page["next_cursor"]}
 
     def prepare_reply(self, *, chat: str, chat_id: str, account_ref: str,
-                      body: str, draft_id: str, user_id: str, conversation_id: str):
+                      body: str, draft_id: str, user_id: str, conversation_id: str,
+                      slot: str = ""):
         if not self.source_bound_pair(account_ref, chat_id):
             return partial(self.fallback.send_reply, chat=chat, chat_id=chat_id,
-                           account_ref=account_ref, body=body, draft_id=draft_id)
+                           account_ref=account_ref, slot=slot, body=body, draft_id=draft_id)
         if user_id != self.store.default_user_id:
             raise PermissionError("relay scope belongs to the service owner")
         origin = self.store.draft_reply_origin(draft_id, user_id=user_id)

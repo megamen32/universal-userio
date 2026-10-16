@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from . import chatgpt_sessions
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
-from .contracts import ChannelFile, InboxMessage, ReplyDraft
+from .contracts import ChannelFile, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
 
 if TYPE_CHECKING:
     from .service import UserIOService
@@ -240,6 +240,48 @@ class ByokBridgeGenerator:
         return _THINK_BLOCK.sub("", str(data.get("text", ""))).strip()
 
 
+class TelegramConnectorRefused(DeliveryNotSubmittedError):
+    """The connector answered an approved send before any provider call.
+
+    Nothing reached Telegram, so the durable claim can be released without any
+    risk of a duplicate message. ``connector_code`` is the machine-readable
+    reason the owner has to act on.
+    """
+
+    def __init__(self, message: str, *, connector_code: str = "", http_status: int = 0) -> None:
+        self.connector_code, self.http_status = connector_code, http_status
+        super().__init__(message)
+
+
+# HTTP answers the telegram-qr connector produces before it touches Telegram:
+# it refuses a request outright, so delivery is proven impossible. Anything
+# else (5xx, 408, 429, socket errors) may arrive with the message already on
+# the wire and must stay an uncertain outcome.
+_CONNECTOR_REFUSED_HTTP = frozenset({400, 401, 403, 404, 405, 409, 410, 415, 422})
+
+
+def _connector_code(detail: str) -> str:
+    try:
+        return str(json.loads(detail or "{}").get("code") or "")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _connector_refusal_message(status: int, detail: str) -> str:
+    """Owner-facing text for a refusal that happened before provider IO."""
+    code = _connector_code(detail)
+    if code == "account_relogin_required":
+        return ("Telegram отозвал вход этого аккаунта. Переподключите его в UserIO — "
+                "сообщение не отправлено, черновик можно отправить снова.")
+    if code == "account_not_connected":
+        return ("Аккаунт Telegram сейчас не подключён. Сообщение не отправлено, "
+                "черновик можно отправить снова после подключения.")
+    if code == "chat_not_known":
+        return ("Аккаунт Telegram не видит этот чат. Сообщение не отправлено, "
+                "черновик можно отправить снова.")
+    return f"Telegram не принял сообщение до отправки (HTTP {status}). Черновик можно отправить снова."
+
+
 class TelegramQrHttpOutbox:
     """Deliver approved Telegram drafts through the telegram-qr connector.
 
@@ -251,10 +293,11 @@ class TelegramQrHttpOutbox:
     def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen, timeout: int = 20) -> None:
         self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
 
-    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "") -> str:
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "", slot: str = "") -> str:
         if not chat or not body:
             raise ValueError("Telegram delivery requires chat and body")
-        payload = json.dumps({"chat": chat, "chat_id": chat_id, "account_id": account_ref, "body": body}).encode()
+        payload = json.dumps({"chat": chat, "chat_id": chat_id, "account_id": account_ref,
+                              "slot": slot, "body": body}).encode()
         request = urllib.request.Request(  # noqa: S310
             f"{self._base_url}/send", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
@@ -264,6 +307,11 @@ class TelegramQrHttpOutbox:
                 data = json.loads(response.read().decode() or "{}")
         except urllib.error.HTTPError as error:
             detail = error.read().decode()[:200]
+            if error.code in _CONNECTOR_REFUSED_HTTP:
+                raise TelegramConnectorRefused(
+                    _connector_refusal_message(error.code, detail), connector_code=_connector_code(detail),
+                    http_status=error.code,
+                ) from error
             raise RuntimeError(f"telegram-qr delivery failed: HTTP {error.code} {detail}") from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error

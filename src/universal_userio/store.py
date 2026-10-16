@@ -3668,6 +3668,28 @@ class SQLiteUserIOStore:
         assert row is not None
         return self._workspace_triage_record(row)
 
+    def release_workspace_triage_send(
+        self, *, event_seq: int, request_id: str, draft_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, object]:
+        """Give a claimed triage send back after a pre-submission refusal.
+
+        Only a claim that is still in flight and still names this exact draft
+        may be released, so a concurrent real send is never unmarked.
+        """
+        user = self._user(user_id)
+        request_id = self._triage_request_id(request_id)
+        with self._lock, self._connection:
+            changed = self._connection.execute(
+                """UPDATE workspace_triage SET send_state='none',updated_at=?
+                   WHERE user_id=? AND event_seq=? AND request_id=?
+                     AND selected_draft_id=? AND send_state='sending'""",
+                (time.time(), user, event_seq, request_id, draft_id),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("triage send claim changed during release")
+        return self.workspace_triage(event_seq=event_seq, request_id=request_id, user_id=user)
+
     def complete_workspace_triage_send(
         self, *, event_seq: int, request_id: str, draft_id: str, receipt: str,
         user_id: str | None = None,

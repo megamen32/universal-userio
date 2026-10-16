@@ -19,6 +19,7 @@ import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirr
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
 import { readDialogFolders } from './dialog-folders.mjs';
+import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
 
@@ -737,11 +738,24 @@ async function syncAccount(slot) {
   const file = `${sessionsDir}/${slot}.session`;
   while (true) {
     let client;
+    let authTerminal = false;
     try {
       client = newSyncClient(readFileSync(file, "utf8"));
       setSync(slot, { status: "connecting" });
       await client.connect();
-      if (!(await client.isUserAuthorized())) throw new Error("session is not authorized");
+      // A revoked auth key and a slow network both make the GramJS boolean
+      // false. Classify the real provider answer so the owner gets a relogin
+      // instruction instead of an endless "not connected" retry loop.
+      const auth = await probeAuthorization(client, Api);
+      if (!auth.authorized) {
+        setSync(slot, { status: auth.terminal ? "relogin-required" : "connecting",
+          lastError: `auth ${auth.code}`, authCode: auth.code });
+        const failure = new Error(`session is not authorized (${auth.provider_code || auth.code})`);
+        failure.authTerminal = auth.terminal;
+        failure.authCode = auth.code;
+        authTerminal = auth.terminal;
+        throw failure;
+      }
       const me = await client.getMe();
       const accountId = `telegram:${me.id}`;
       const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
@@ -788,13 +802,19 @@ async function syncAccount(slot) {
         setSync(slot, { status: "live", lastError: "", lastSyncAt: Date.now() });
       }
     } catch (error) {
-      setSync(slot, { status: "retrying", lastError: String((error && error.message) || error) });
+      setSync(slot, { status: authTerminal ? "relogin-required" : "retrying",
+        lastError: String((error && error.message) || error),
+        authCode: (error && error.authCode) || "" });
       console.error(`sync ${slot} error:`, (error && error.message) || error);
+      if (authTerminal) console.error(`sync ${slot}: saved session needs a fresh login; no send can use it`);
     } finally {
       liveSlots.delete(slot);
       if (client) await client.disconnect().catch(() => {});
     }
-    await new Promise((resolve) => setTimeout(resolve, syncRetrySeconds * 1000));
+    // A revoked session never heals by reconnecting: only a new login can
+    // replace it, so wait long instead of repeating the same refusal.
+    await new Promise((resolve) => setTimeout(resolve, authRetryDelaySeconds(
+      syncRetrySeconds, { terminal: authTerminal }) * 1000));
   }
 }
 
@@ -908,7 +928,7 @@ function esc(v){return String(v==null?"":v).replace(/[&<>"]/g,function(c){return
 function card(s){
   var a = function(p){ return prefix + p; };
   var html = '<div class=card id="card-'+s.id+'"><b>'+esc(s.name||'Подключение Telegram')+(s.mode==="phone"&&s.phone?" ("+esc(s.phone)+")":"")+'</b><p>'+esc(statusNames[s.status]||'Проверяем подключение')+'</p>';
-  if (s.sync) html += '<p>'+esc(s.sync==='retrying'?'Синхронизация восстанавливается':'Синхронизация сообщений включена')+(s.syncChats?' · '+s.syncChats+' диалогов':'')+'</p>';
+  if (s.sync) html += '<p>'+esc(s.sync==='relogin-required'?'Telegram отозвал вход этого аккаунта — войдите заново, отправка с него невозможна':s.sync==='retrying'?'Синхронизация восстанавливается':'Синхронизация сообщений включена')+(s.syncChats?' · '+s.syncChats+' диалогов':'')+'</p>';
   if (s.qr) html += '<img class=qr src="'+s.qr+'" alt="QR-код входа в Telegram"><p>Telegram \\u2192 Настройки → Устройства → Подключить устройство</p>';
   if (s.status === "code-required") html += '<form class=stack method=post action="'+a('/code?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Введите код входа'+(s.codeViaApp?" (пришёл в Telegram)":" (SMS)")+'</p><input name=code inputmode=numeric autocomplete=one-time-code autofocus><button type=submit>Подтвердить код</button></form>';
   if (s.status === "password-required") html += '<form class=stack method=post action="'+a('/password?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Облачный пароль'+(s.passwordHint?" (подсказка: "+esc(s.passwordHint)+")":"")+'</p><input type=password name=password autocomplete=off><button type=submit>Подтвердить</button></form>';
@@ -1090,14 +1110,17 @@ http.createServer(async (req, res) => {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id) and body are required" }));
         }
-        // When an account is requested, send strictly from it (404 if that
-        // account is offline or does not know the chat) — never fall back to
-        // another slot, so the sender identity always matches the dashboard.
-        const candidates = [...liveSlots].filter(([slot]) =>
-          !wantAccount && !wantSlot ? true : wantSlot ? slot === wantSlot : false);
-        const chosen = wantAccount
-          ? [...liveSlots].find(([, item]) => item.accountId === wantAccount)
-          : null;
+        // When an account (and the slot the store pins for it) is requested,
+        // send strictly from it — never fall back to another slot, so the
+        // sender identity always matches the dashboard.
+        const candidates = wantAccount || wantSlot ? [] : [...liveSlots];
+        let chosen = null;
+        if (wantSlot) {
+          const live = liveSlots.get(wantSlot);
+          if (live && (!wantAccount || live.accountId === wantAccount)) chosen = [wantSlot, live];
+        } else if (wantAccount) {
+          chosen = [...liveSlots].find(([, item]) => item.accountId === wantAccount) || null;
+        }
         const trySend = async (slot, item) => {
           const peers = item.labelPeers;
           const peer = (chat && peers.labelPeers.get(chat)) || (chatId && peers.idPeers.get(chatId)) || null;
@@ -1111,21 +1134,37 @@ http.createServer(async (req, res) => {
         if (chosen) {
           if (await trySend(chosen[0], chosen[1])) return;
           res.writeHead(404, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ error: `account ${wantAccount} does not know chat "${chat || chatId}"` }));
+          return res.end(JSON.stringify({ error: `account ${wantAccount} does not know chat "${chat || chatId}"`,
+            code: "chat_not_known", submitted: false }));
         }
         if (wantSlot || wantAccount) {
+          // Name the real reason so the caller can tell the owner what to do:
+          // a revoked saved session needs a fresh login, an offline one is
+          // worth retrying. Both answers happen before any provider call, so
+          // nothing was submitted either way.
+          const pinned = wantSlot ? wantSlot
+            : [...slots.entries()].find(([, item]) => String(item.accountId || "") === wantAccount);
+          const sync = pinned ? syncs.get(pinned) : null;
+          const relogin = Boolean(sync && (sync.status === "relogin-required" || sync.authCode));
           res.writeHead(404, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ error: `account ${wantAccount || wantSlot} is not connected` }));
+          return res.end(JSON.stringify({
+            error: `account ${wantAccount || wantSlot} is not connected`, submitted: false,
+            code: relogin ? "account_relogin_required" : "account_not_connected",
+          }));
         }
         for (const [slot, item] of candidates) {
           if (await trySend(slot, item)) return;
         }
         res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: `no connected account knows chat "${chat || chatId}"` }));
+        res.end(JSON.stringify({ error: `no connected account knows chat "${chat || chatId}"`,
+          code: "chat_not_known", submitted: false }));
       } catch (error) {
         console.error("send error:", (error && error.message) || error);
         res.writeHead(502, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: (error && error.message) || "send failed" }));
+        // An exception can arrive with a message already on the wire, so the
+        // caller must keep its durable claim instead of assuming non-delivery.
+        res.end(JSON.stringify({ error: (error && error.message) || "send failed",
+          code: "send_outcome_unknown", submitted: "unknown" }));
       }
     });
     return;

@@ -724,7 +724,17 @@ class UserIOService:
         except Exception:
             self._store.release_draft_send(draft_id, user_id=resolved_user)
             raise
-        receipt = send()
+        try:
+            receipt = send()
+        except DeliveryNotSubmittedError:
+            # Refused before provider IO: the triage claim and the draft claim
+            # are both released, so an exact retry is possible and nothing is
+            # left stuck in an ambiguous sending state.
+            self._store.release_draft_send(draft_id, user_id=resolved_user)
+            self._store.release_workspace_triage_send(
+                event_seq=event_seq, request_id=request_id, draft_id=draft_id,
+                user_id=resolved_user)
+            raise
         approved = self._store.approve(draft_id, receipt, user_id=resolved_user)
         self._store.complete_workspace_triage_send(
             event_seq=event_seq, request_id=request_id, draft_id=draft_id,
@@ -1465,15 +1475,26 @@ class UserIOService:
         elif conversation["source"] == "telegram" and self.telegram_outbox is not None:
             messages = list(conversation["messages"])
             chat_id = str(conversation.get("peer_id") or "")
+            account_ref = str(conversation.get("account_ref") or "")
+            # The store pins each personal Telegram account to its own
+            # connector slot. Send it along so the connector routes by exact
+            # identity and can name the real reason for an offline account.
+            slot = ""
+            if account_ref:
+                account = next((item for item in self._store.accounts(user_id=user_id)
+                                if str(item["id"]) == account_ref), None)
+                ref = str((account or {}).get("credential_ref") or "")
+                if ref.startswith("telegram-qr:"):
+                    slot = ref.partition(":")[2]
             prepare = getattr(self.telegram_outbox, "prepare_reply", None)
             if callable(prepare):
                 return prepare(chat=str(conversation["sender"]), chat_id=chat_id,
                     body=draft.body, draft_id=draft.id, user_id=user_id,
-                    conversation_id=draft.conversation_id,
-                    account_ref=str(conversation.get("account_ref") or ""))
+                    conversation_id=draft.conversation_id, slot=slot,
+                    account_ref=account_ref)
             send = partial(self.telegram_outbox.send_reply,
                 chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
-                account_ref=str(conversation.get("account_ref") or ""),
+                account_ref=account_ref, slot=slot,
             )
         elif conversation["source"] == "whatsapp" and self.whatsapp_outbox is not None:
             account_ref=str(conversation.get('account_ref') or '')
