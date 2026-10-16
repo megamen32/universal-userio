@@ -36,3 +36,38 @@ def test_native_audio_metadata_and_transcript_preserve_source(monkeypatch):
     result=read_attachment(Client(),peer='12',message_id='34',attachment={'_type':'AUDIO','audioId':56})
     assert result['transcript']=='actual recognized speech'
     assert calls==[{'chat_id':'12','message_id':'34','attachment':{'_type':'AUDIO','audioId':56}}]
+
+
+def test_meeting_asr_requests_diarization_and_preserves_source_segments(monkeypatch):
+    """Fast unit expected1/max10s: exact existing form flag and ASR result."""
+    import json
+    from universal_userio import messenger_max_media as m
+    requests=[]
+    segments=[{'start':1.2,'end':2.4,'speaker':'SPEAKER_00','text':'Первый вопрос.'},
+              {'start':3.0,'end':4.0,'speaker':'SPEAKER_01','text':'Второй ответ.'}]
+    payload={'text':'Первый вопрос. Второй ответ.','speaker_text':'SPEAKER_00: Первый вопрос.\nSPEAKER_01: Второй ответ.',
+             'segments':segments,'speaker_turns':segments,'diarization_model':'actual-diarizer'}
+    class Opener:
+        def open(self,request,timeout):
+            requests.append(request)
+            return Response(json.dumps(payload).encode())
+    monkeypatch.setenv('USERIO_STT_API_KEY','local-test-placeholder')
+    monkeypatch.setattr(m.urllib.request,'build_opener',lambda *args:Opener())
+    diarized=m.transcribe(b'actual fixture','audio/wav',diarize=True)
+    plain=m.transcribe(b'actual fixture','audio/wav')
+    assert b'name="diarize"' in requests[0].data and b'\r\ntrue\r\n' in requests[0].data
+    assert b'verbose_json' in requests[0].data
+    assert diarized['diarization']['segments']==segments
+    assert diarized['diarization']['speaker_text']==payload['speaker_text']
+    assert diarized['transcript']==payload['text']
+    assert b'name="diarize"' not in requests[1].data and 'diarization' not in plain
+
+
+def test_requested_diarization_never_silently_becomes_plain_text(monkeypatch):
+    from universal_userio import messenger_max_media as m
+    class Opener:
+        def open(self,*args,**kwargs):return Response(b'{"text":"No speaker evidence"}')
+    monkeypatch.setenv('USERIO_STT_API_KEY','local-test-placeholder')
+    monkeypatch.setattr(m.urllib.request,'build_opener',lambda *args:Opener())
+    with pytest.raises(ValueError,match='diarization unavailable'):
+        m.transcribe(b'fixture','audio/wav',diarize=True)

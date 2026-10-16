@@ -151,8 +151,22 @@ class Meetings:
                         data=io.BytesIO()
                         with wave.open(data,'wb') as chunk:
                             chunk.setnchannels(1);chunk.setsampwidth(2);chunk.setframerate(16000);chunk.writeframes(pcm)
-                        text=transcribe(data.getvalue(),'audio/wav')['transcript']
-                        track['transcripts'].append({'offset':offset,'text':text})
+                        recognized=transcribe(data.getvalue(),'audio/wav',diarize=True)
+                        diarization=recognized['diarization']
+                        # Speaker labels are local to each ASR request. Never
+                        # silently equate SPEAKER_00 across different chunks.
+                        chunk={'offset':offset,'text':recognized['transcript'],
+                               'diarization':diarization,
+                               'speaker_scope':f"track-{track['index']}/chunk-{offset:g}"}
+                        track['transcripts'].append(chunk)
+                        self._save(record)
+                        # Same owned conversation, deterministic message ID;
+                        # ordinary history now contains the actual transcript.
+                        body=(f"Расшифровка встречи, дорожка {track['index']}, "
+                              f"фрагмент с {offset:g} с. Метки говорящих действуют "
+                              "только внутри этого фрагмента.\n"
+                              +(diarization.get('speaker_text') or recognized['transcript']))
+                        self._emit(record,body,f"transcript-{track['index']}-{int(offset)}")
                         offset+=len(pcm)/32000
                 track['transcription_status']='ready'
             except Exception as error:track.update(transcription_status='failed',transcription_error=type(error).__name__)

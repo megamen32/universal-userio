@@ -46,7 +46,7 @@ def image_content(data, kind):
             'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'mimeType':'image/png','partial':False}
 
 
-def transcribe(data, mime):
+def transcribe(data, mime, *, diarize=False):
     # Same protected key loader as deploy/telegram-qr-connector/transcription.mjs.
     key=next((os.environ.get(k,'').strip() for k in ('USERIO_STT_API_KEY','USERIO_WHISPER_API_KEY','GREPMESH_STT_API_KEY')
               if os.environ.get(k,'').strip()),'')
@@ -56,21 +56,30 @@ def transcribe(data, mime):
         if result.returncode==0:key=result.stdout.strip()
     if not key:raise ValueError('existing transcription credential unavailable')
     model=os.environ.get('USERIO_STT_MODEL') or os.environ.get('USERIO_WHISPER_MODEL') or 'whisper-1'
+    response_format='verbose_json' if diarize else 'json'
     boundary='userio-'+uuid.uuid4().hex
     prefix=(f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
-            f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\njson\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\n{response_format}\r\n'
             f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.m4a"\r\n'
             f'Content-Type: {mime or "audio/mp4"}\r\n\r\n').encode()
+    if diarize:
+        prefix=(f'--{boundary}\r\nContent-Disposition: form-data; name="diarize"\r\n\r\ntrue\r\n').encode()+prefix
     url=os.environ.get('USERIO_STT_URL') or os.environ.get('USERIO_WHISPER_URL') or 'http://192.168.2.75:7653/v1/audio/transcriptions'
     req=urllib.request.Request(url,data=prefix+data+f'\r\n--{boundary}--\r\n'.encode(),
          headers={'Authorization':'Bearer '+key,'Content-Type':'multipart/form-data; boundary='+boundary})
     with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(req,timeout=45) as response:
         raw=response.read(131073)
     if len(raw)>131072:raise ValueError('transcription response exceeds limit')
-    text=json.loads(raw).get('text')
+    payload=json.loads(raw)
+    text=payload.get('text')
     if not isinstance(text,str):raise ValueError('actual transcription unavailable')
-    return {'kind':'voice','status':'ready','transcript':text[:32000],'partial':len(text)>32000,
+    result={'kind':'voice','status':'ready','transcript':text[:32000],'partial':len(text)>32000,
             'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'mimeType':mime}
+    if diarize:
+        result['diarization']={k:payload[k] for k in ('speaker_text','diarization_model','segments','speaker_turns') if k in payload}
+        if 'segments' not in result['diarization']:
+            raise ValueError('requested diarization unavailable; audio retained')
+    return result
 
 
 def read_attachment(client, *, peer, message_id, attachment):
