@@ -957,7 +957,7 @@ document.addEventListener("submit", function(e){
   var f = e.target;
   if (f.dataset.async !== "1") return;
   e.preventDefault();
-  fetch(f.getAttribute("action"), {method:"POST", body:new FormData(f)}).catch(function(){}).then(poll);
+  fetch(f.getAttribute("action"), {method:"POST", body:new URLSearchParams(new FormData(f))}).catch(function(){}).then(poll);
 });
 poll();
 </script>`;
