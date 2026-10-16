@@ -61,5 +61,37 @@ mounts, frontend/voice containers сверяются без изменений. 
 а не заявление о полном совпадении runtime со всем текущим Git tree.
 Новые зависимости/секреты/провайдеры не устанавливаются.
 
-Пока ещё не установлено. X-manager запись и private receipts:
+Исходник24cd36a3e0f75f33b73690c13e3b20a4c2ee402d опубликован в main и установлен:
+image248d722dcf58eb0e27d44b53cea02b7c66ec0f8337aee1de8493cf78cef9d18b.
+Backend healthy; текущая наблюдаемая нагрузка405.5MiB/44tasks при3GiB hard.
+Изменились ровно2Python source hashes; все прочие installedsource неизменны.
+Frontend/voice container IDs сохранены, limits равны прежним, bindmounts
+сверены с канонической Compose-конфигурацией. Проверка releasecontroller
+сначала отказала на порядке списка Binds после успешного запуска: исправлено
+сравнение sorted; независимый readback прошёл БЕЗ повторной установки.
+Это ошибка verifier, а не отсутствие установленной правки.
+
+Полная существующая36мин запись проходит установленный _archive:
+18последовательных реальных120с ASR запросов с diarize. Перед началом сохранён
+original meeting.json (before-diarization-20261016.json), PCM/SHA не меняется.
+Remoteaudio seam читает существующий проверенный WAV; join/stop/LLM/send нет.
+Используется настоящий UserIOService.receive/SQLiteUserIOStore, не ручной SQL.
+Первый текст уже прочитан через штатный native Secretary userio_read как
+чатом, так и точным message_id. Полная приёмка PASS:18/18частей,604segments,18scopes,335.69с, WAV2159.699с
+с исходнымSHA. Independent owner MCP conversation_get:22messages,18transcripts,
+18uniqueIDs, во всех18speakertext. Actual installed Secretary userio_read
+потом прочитал каждый из18точных message_id за6.118с; каждый body совпал с
+installed archive без обрезки, правильные conversation/source/direction.
+No join/LLM/outbound replay. Private receipts: .tmp/20261016-meeting-diarization/.
+X-manager native readback: var/20261016-meeting-secretary/installed-meeting-history-readback.json.
+
+GSD acceptance gate применён к внутренней service-интеграции: focusgroup не
+добавляет независимого сценария; final installedsource был заморожен перед
+архивной ASR и обычным readback. Прямое правило владельца разрешает scoped
+publication при чужом WIP, поэтому wholecheckout clean не заявляется и чужие
+файлы не блокируют принятую собственную вертикаль. Source tests20PASS;
+реальный affectedconsumer18/18PASS. Последующие изменения только taskdocs/scripts,
+без изменения установленного productcode или перезапуска runtime.
+
+X-manager запись и private receipts:
 /home/roomhacker/agents-projects/exmanager/var/20261016-meeting-secretary/.

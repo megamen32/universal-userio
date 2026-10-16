@@ -53,7 +53,8 @@ def main():
         if before.get(key)!=hashlib.sha256(baseline).hexdigest():raise RuntimeError('owned runtime source differs from reviewed parent')
         data=subprocess.check_output(['git','-C',str(ROOT),'show','HEAD:'+path]);target=context/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
     save('before',{'head':head,'backendId':backend['Id'],'baseImage':backend['Image'],
-         'frontendId':frontend['Id'],'voiceId':voice['Id'],'sourceHashes':before,'available':available})
+         'frontendId':frontend['Id'],'voiceId':voice['Id'],'sourceHashes':before,'available':available,
+         'hostConfig':{k:backend['HostConfig'][k] for k in ('Memory','MemoryReservation','MemorySwap','NanoCpus','PidsLimit','Binds','Tmpfs')}})
     command(['docker','tag',backend['Image'],'userio-meeting-parent:20261016'])
     dockerfile='FROM userio-meeting-parent:20261016\n'+''.join('COPY '+p+' /opt/universal-userio/'+p+'\n'for p in OWNED)+f'LABEL org.opencontainers.image.revision="{head}"\n'
     (context/'Dockerfile').write_text(dockerfile)
@@ -82,7 +83,8 @@ def main():
     assert hashes==expected,'unowned installed source changed'
     assert inspect('userio-frontend')['Id']==frontend['Id'] and inspect('userio-voice')['Id']==voice['Id']
     for k in ('Memory','MemoryReservation','MemorySwap','NanoCpus','PidsLimit','Binds','Tmpfs'):
-        assert after['HostConfig'][k]==backend['HostConfig'][k],k
+        old,new=backend['HostConfig'][k],after['HostConfig'][k]
+        assert (sorted(new)==sorted(old) if k=='Binds' else new==old),k
     save('installed',{'head':head,'image':after['Image'],'backendId':after['Id'],'sameFrontend':True,'sameVoice':True,
          'sameLimitsMounts':True,'sourceDiffOnlyOwned':True,'health':after['State'].get('Health',{}).get('Status')})
     print(json.dumps({'installed':True,'head':head,'image':after['Image'],'sameOtherContainers':True,'sameLimitsMounts':True}))
