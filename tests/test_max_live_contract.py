@@ -74,6 +74,8 @@ def test_projection_keeps_zero_chat_sender_time_whitespace_outgoing_and_media():
 
 def test_group_members_and_own_reply_share_exact_chat_and_do_not_reply_to_member(tmp_path):
     store = SQLiteUserIOStore(tmp_path/'db.sqlite')
+    store.register_account(account_id='max', provider='max', display_name='MAX fixture',
+                           can_read=True, can_reply=True, credential_ref='fixture', enabled=True)
     sent=[]
     class Client:
         def send(self, *, chat_id, text):

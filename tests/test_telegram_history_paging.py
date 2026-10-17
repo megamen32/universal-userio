@@ -116,3 +116,40 @@ def test_mcp_history_read_fetches_exact_older_page_without_marking_seen(fixture)
     assert result["sync"]["oldest_id"] == 5
     assert result["sync"]["has_more"] is False
     assert not any(m["seen_at"] is not None for m in result["chat"]["messages"])
+
+
+@pytest.mark.parametrize("dispatcher", [False, True])
+def test_mcp_latest_history_read_needs_no_before_id(fixture, monkeypatch, dispatcher):
+    store, service, ingest = fixture
+    cid = ingest(10)
+    requests = []
+
+    def runner(request, timeout):
+        payload = json.loads(request.data)
+        requests.append(payload)
+        ingest(11)
+        ingest(12)
+        return io.BytesIO(json.dumps({
+            "account_id": ACCOUNT, "peer_id": PEER, "mirrored": 2,
+            "oldest_id": 11, "has_more": False,
+        }).encode())
+
+    adapter = TelegramChannelAdapter(
+        store, service, store.default_user_id,
+        bridge_url="http://127.0.0.1:1234", runner=runner)
+    monkeypatch.setattr("universal_userio.adapters.UnifiedChannels.adapter",
+                        lambda _channels, _source=None: adapter)
+    args = {"channel": "telegram", "chat_id": cid, "history_limit": 2}
+    if dispatcher:
+        from universal_userio.mcp_dispatch import UserIOToolDispatcher
+        result = UserIOToolDispatcher(store, service).dispatch(
+            "userio.channels.read", args, principal=store.owner())
+    else:
+        from universal_userio.mcp_surface import UserIOMcpSurface
+        result = UserIOMcpSurface(store, service).dispatch("userio.channels.read", args)
+
+    assert result["ok"] is True
+    assert [m["body"] for m in result["chat"]["messages"]] == ["body-11", "body-12"]
+    assert result["sync"]["fresh"] is True
+    assert requests == [{"account_id": ACCOUNT, "peer_id": PEER, "limit": 2, "scan": True}]
+    assert not any(m["seen_at"] is not None for m in result["chat"]["messages"])

@@ -390,14 +390,16 @@ class UserIOMcpSurface:
                 before_id = arguments.get("before_id")
                 history_limit = arguments.get("history_limit")
                 if before_id is not None or history_limit is not None:
-                    if self._optional(arguments, "channel") != "telegram" or before_id is None:
-                        raise ValueError("history pagination requires channel=telegram and before_id")
+                    if self._optional(arguments, "channel") != "telegram":
+                        raise ValueError("history pagination requires channel=telegram")
                     result = adapter.read(
                         chat_id=self._optional(arguments, "chat_id"),
                         message_id=self._optional(arguments, "message_id"),
                         before_id=before_id,
                         history_limit=50 if history_limit is None else history_limit,
                     )
+                    if before_id is None and history_limit is not None and "chat" in result:
+                        result["chat"]["messages"] = result["chat"].get("messages", [])[-history_limit:]
                 else:
                     result = adapter.read(
                         chat_id=self._optional(arguments, "chat_id"),
