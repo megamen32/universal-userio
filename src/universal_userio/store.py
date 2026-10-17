@@ -18,6 +18,7 @@ from .contracts import ConversationPolicy, InboxMessage, ReplyDraft, UserPrincip
 
 
 _ITERATIONS = 310_000
+DRAFT_RETENTION_SECONDS = 3 * 24 * 60 * 60
 _USERNAME = re.compile(r"[A-Za-z0-9_.@+-]{3,64}")
 _DATA_TABLES = ("conversations", "messages", "drafts", "identities", "reply_rules", "provider_accounts")
 CONTEXT_MESSAGE_COUNT_DEFAULT = 3
@@ -2241,7 +2242,9 @@ class SQLiteUserIOStore:
         text, user_id = body.strip(), self._user(user_id)
         if not text:
             raise ValueError("draft body is required")
+        self.expire_proposed_drafts(user_id=user_id)
         with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
                 "SELECT id,conversation_id,status FROM drafts WHERE user_id=? AND id=?",
                 (user_id, draft_id),
@@ -2355,6 +2358,7 @@ class SQLiteUserIOStore:
                          expected_snapshot: dict[str, object] | None = None) -> ReplyDraft:
         # Commit the sending claim before provider IO. Other connections and
         # processes see an immutable draft, not merely an in-process mutex.
+        self.expire_proposed_drafts(user_id=user_id)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             draft = self.draft(draft_id, user_id=user_id)
@@ -2455,6 +2459,7 @@ class SQLiteUserIOStore:
     ) -> list[dict[str, object]]:
         """List proposed drafts with just enough conversation context for operator notifications."""
         user_id = self._user(user_id)
+        self.expire_proposed_drafts(user_id=user_id)
         limit = max(1, min(int(limit), 200))
         with self._lock:
             rows = self._connection.execute(
@@ -2473,11 +2478,71 @@ class SQLiteUserIOStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def _expire_proposed_drafts_locked(self, *, user_id: str, now: float) -> int:
+        """Delete expired proposals while preserving every claimed or sent action."""
+        cutoff = now - DRAFT_RETENTION_SECONDS
+        rows = self._connection.execute(
+            """SELECT d.id FROM drafts d WHERE d.user_id=? AND d.status='proposed'
+               AND d.created_at<=? AND NOT EXISTS (
+                   SELECT 1 FROM workspace_triage t WHERE t.user_id=d.user_id
+                     AND t.selected_draft_id=d.id AND t.send_state IN ('sending','sent'))""",
+            (user_id, cutoff),
+        ).fetchall()
+        expired_ids = [str(row["id"]) for row in rows]
+        if not expired_ids:
+            return 0
+        expired = set(expired_ids)
+        triage_rows = self._connection.execute(
+            """SELECT event_seq,draft_ids_json,selected_draft_id FROM workspace_triage
+               WHERE user_id=? AND send_state='none'""",
+            (user_id,),
+        ).fetchall()
+        for row in triage_rows:
+            draft_ids = json.loads(str(row["draft_ids_json"] or "[]"))
+            kept = [draft_id for draft_id in draft_ids if str(draft_id) not in expired]
+            selected = str(row["selected_draft_id"] or "")
+            if len(kept) != len(draft_ids) or selected in expired:
+                self._connection.execute(
+                    """UPDATE workspace_triage SET draft_ids_json=?,selected_draft_id=?
+                       WHERE user_id=? AND event_seq=? AND send_state='none'""",
+                    (json.dumps(kept, separators=(",", ":")), None if selected in expired else row["selected_draft_id"],
+                     user_id, int(row["event_seq"])),
+                )
+        placeholders = ",".join("?" for _ in expired_ids)
+        params = (user_id, *expired_ids)
+        self._connection.execute(
+            f"DELETE FROM draft_context_snapshots WHERE user_id=? AND draft_id IN ({placeholders})",
+            params,
+        )
+        self._connection.execute(
+            f"DELETE FROM draft_reply_origins WHERE user_id=? AND draft_id IN ({placeholders})",
+            params,
+        )
+        return self._connection.execute(
+            f"""DELETE FROM drafts WHERE user_id=? AND id IN ({placeholders})
+                AND status='proposed' AND created_at<=?""",
+            (user_id, *expired_ids, cutoff),
+        ).rowcount
+
+    def expire_proposed_drafts(
+        self, *, now: float | None = None, user_id: str | None = None
+    ) -> int:
+        """Remove three-day-old proposals; uncertain/sent rows are durable receipts."""
+        user = self._user(user_id)
+        instant = time.time() if now is None else float(now)
+        with self._lock:
+            if self._connection.in_transaction:
+                return self._expire_proposed_drafts_locked(user_id=user, now=instant)
+            with self._connection:
+                self._connection.execute("BEGIN IMMEDIATE")
+                return self._expire_proposed_drafts_locked(user_id=user, now=instant)
+
     def conversation(
         self, conversation_id: str, *, user_id: str | None = None, text_limit: int | None = None
     ) -> dict[str, object] | None:
         conversation_id = self.resolve_conversation_id(conversation_id, user_id=user_id)
         user_id = self._user(user_id)
+        self.expire_proposed_drafts(user_id=user_id)
         with self._lock:
             row = self._connection.execute(
                 "SELECT * FROM conversations WHERE user_id=? AND id=?", (user_id, conversation_id)
@@ -3621,6 +3686,7 @@ class SQLiteUserIOStore:
         user = self._user(user_id)
         if type(event_seq) is not int or event_seq <= 0:
             raise ValueError("event_seq must be a positive integer")
+        self.expire_proposed_drafts(user_id=user)
         with self._lock:
             row = self._connection.execute(
                 "SELECT * FROM workspace_triage WHERE user_id=? AND event_seq=?",
@@ -3759,6 +3825,7 @@ class SQLiteUserIOStore:
     ) -> dict[str, object]:
         user = self._user(user_id)
         request_id, actor = self._triage_request_id(request_id), self._triage_actor(actor)
+        self.expire_proposed_drafts(user_id=user)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(

@@ -1,4 +1,4 @@
-import { conversationDrafts } from "./conversation-drafts"
+import { conversationDrafts, conversationTimeline } from "./conversation-drafts"
 import { groupMatrixChatRows } from "./matrix-chat-groups"
 import { messageAuthor } from './message-author'
 import { hitAuthorLabel, hitChannelLabel, parseDeepLink, SemanticSearchPanel, useSemanticSearch } from "./semantic-search"
@@ -1364,7 +1364,21 @@ export function App() {
           if (conversation.source === 'phone' && viewport.dataset.slot === 'scroll-area-viewport') phoneFollowLatest.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96
         }} className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:!block"><div className="mx-auto flex w-full min-w-0 max-w-[920px] flex-col gap-1.5 px-3 py-5 md:px-6 md:py-7">
           {conversation.phone_history?.has_more && <Button variant="outline" size="sm" className="self-center" disabled={phoneHistoryBusy} onClick={() => void loadOlderPhoneCalls()}>{phoneHistoryBusy ? 'Загружаю…' : 'Показать более ранние звонки'}</Button>}
-          {conversation.messages.map((message, index) => {
+          {conversationTimeline(conversation.messages, conversationDrafts(conversation)).map(entry => {
+            if (entry.kind === "draft") {
+              const item = entry.item
+              const editing = editDraftId === item.id
+              return <div key={`draft:${item.id}`} data-draft-id={item.id} data-draft-status={item.status} data-draft-created-at={item.created_at} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm border border-[#2f80ed]/25 bg-[#dfeeff] px-4 py-3 text-sm text-slate-900 shadow-sm dark:bg-[#182533] dark:text-slate-100 md:max-w-[78%]">
+                <p className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-[11px] opacity-75"><span>{item.created_at ? <time dateTime={new Date(item.created_at * 1000).toISOString()}>Черновик · {new Date(item.created_at * 1000).toLocaleString("ru-RU")}</time> : "Черновик · дата создания не сохранена"}</span>{item.status === "proposed" && <span>Автоудаление через 3 дня после создания</span>}</p>
+                {item.reply_to ? <button type="button" data-draft-source={item.id} className="mb-2 block w-full rounded border-l-2 border-current bg-black/10 px-2 py-1 text-left text-xs" onClick={() => void jumpToDraftSource(item)}><span className="font-semibold">В ответ на сообщение · {timeHM(item.reply_to.received_at)}</span><span className="mt-0.5 block line-clamp-2 whitespace-pre-wrap opacity-80">{item.reply_to.body || "Вложение"}</span></button> : item.status === "proposed" && !item.id.startsWith("draft_web_") && <p className="mb-2 text-xs opacity-75">Исходное сообщение не сохранено для этого черновика</p>}
+                {item.context_status === "stale" && item.status === "proposed" && <p className="mb-2 text-xs font-medium">Переписка изменилась после создания: проверьте актуальность ответа.</p>}
+                {editing
+                  ? <div className="space-y-2"><textarea className="min-h-16 w-full rounded-lg bg-primary-foreground/10 p-2 text-foreground" value={editDraftBody} onChange={(event) => setEditDraftBody(event.target.value)} rows={3} /><div className="flex justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditDraftId(""); setEditDraftBody("") }}>Отмена</Button><Button size="sm" onClick={() => void saveDraftEdit(item.id)}>Сохранить</Button></div></div>
+                  : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? (item.id.startsWith("draft_web_") ? "Не отправлено" : "Черновик") : item.status === "sending" ? "Результат отправки уточняется — не отправляйте повторно" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply || !!approvingDraft} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}
+              </div>
+            }
+            const message = entry.item
+            const index = entry.index
             const isHtmlEmail = /^\s*<(?:!doctype|html|body|table|div|p|span|h[1-6]|a\b)/i.test(message.body)
             const system = message.direction === "system"
             const transcript = system && isMeetingTranscript(message)
@@ -1386,17 +1400,6 @@ export function App() {
               </div>}
               {message.call_audio && <CallAudio recording={message.call_audio} />}
             </Fragment>
-          })}
-          {conversationDrafts(conversation).map((item) => {
-            const editing = editDraftId === item.id
-            return <div key={item.id} data-draft-id={item.id} data-draft-status={item.status} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm border border-[#2f80ed]/25 bg-[#dfeeff] px-4 py-3 text-sm text-slate-900 shadow-sm dark:bg-[#182533] dark:text-slate-100 md:max-w-[78%]">
-              <p className="mb-2 text-[11px] opacity-75">{item.created_at ? <time dateTime={new Date(item.created_at * 1000).toISOString()}>Создано {new Date(item.created_at * 1000).toLocaleString("ru-RU")}</time> : "Дата создания не сохранена"}</p>
-              {item.reply_to ? <button type="button" data-draft-source={item.id} className="mb-2 block w-full rounded border-l-2 border-current bg-black/10 px-2 py-1 text-left text-xs" onClick={() => void jumpToDraftSource(item)}><span className="font-semibold">В ответ на сообщение · {timeHM(item.reply_to.received_at)}</span><span className="mt-0.5 block line-clamp-2 whitespace-pre-wrap opacity-80">{item.reply_to.body || "Вложение"}</span></button> : item.status === "proposed" && !item.id.startsWith("draft_web_") && <p className="mb-2 text-xs opacity-75">Исходное сообщение не сохранено для этого черновика</p>}
-              {item.context_status === "stale" && item.status === "proposed" && <p className="mb-2 text-xs font-medium">Переписка изменилась после создания: проверьте актуальность ответа.</p>}
-              {editing
-                ? <div className="space-y-2"><textarea className="min-h-16 w-full rounded-lg bg-primary-foreground/10 p-2 text-foreground" value={editDraftBody} onChange={(event) => setEditDraftBody(event.target.value)} rows={3} /><div className="flex justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditDraftId(""); setEditDraftBody("") }}>Отмена</Button><Button size="sm" onClick={() => void saveDraftEdit(item.id)}>Сохранить</Button></div></div>
-                : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? (item.id.startsWith("draft_web_") ? "Не отправлено" : "Черновик") : item.status === "approved" ? "Отправлено" : item.status === "rejected" ? "Отклонено" : item.status === "sending" ? "Результат отправки уточняется — не отправляйте повторно" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply || !!approvingDraft} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}
-            </div>
           })}
           <div ref={bottomRef} />
         </div></ScrollArea>
