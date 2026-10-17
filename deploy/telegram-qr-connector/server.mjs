@@ -556,6 +556,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
   const oldestId = ids.length ? Math.min(...ids) : 0;
   const hasMore = messages.length === pageLimit && oldestId > 0;
   let posted = 0;
+  const postedIds = [];
   for (const message of messages) {
     if (!message || !message.date) continue;
     const value = await envelope(chatKey, label, message, client, self,
@@ -563,6 +564,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
     if (!value.body && !(value.attachments && value.attachments.length)) continue;
     await postInbox(accountId, value);
     posted += 1;
+    postedIds.push(Number(message.id));
   }
   const unread = providerUnreadCount(dialog);
   const state = await postUserIO("/v1/telegram/mirror-state", {
@@ -589,7 +591,8 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
     if (deleted.length) await postUserIO("/v1/telegram/mirror-state",
       {account_id:accountId, peer_id:chatKey, deleted_ids:deleted});
   }
-  return { posted, fetched: messages.length, oldest_id: oldestId, has_more: hasMore };
+  return { posted, fetched: messages.length, oldest_id: oldestId, has_more: hasMore,
+    message_ids: postedIds };
 }
 
 async function ingestProviderState(slot, client, accountId, update) {
@@ -1060,7 +1063,8 @@ http.createServer(async (req, res) => {
       res.writeHead(200, {"content-type":"application/json"});
       return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey,
             mirrored:page.posted, fetched:page.fetched, oldest_id:page.oldest_id,
-            has_more:page.has_more, scan}));
+            has_more:page.has_more, message_ids:page.message_ids,
+            provider_read_acknowledged:false, scan}));
     } catch (error) {
       res.writeHead(400, {"content-type":"application/json"});
       return res.end(JSON.stringify({error:String(error.message || error)}));

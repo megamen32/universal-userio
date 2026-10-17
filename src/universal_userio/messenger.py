@@ -46,6 +46,10 @@ class Messenger:
     def _provider(self, account_ref):
         provider = getattr(self.service, 'messenger_providers', {}).get(account_ref)
         account=self._account(account_ref)
+        if (provider is None and account['provider']=='telegram' and account['enabled']
+                and str(account['credential_ref']).startswith('telegram-qr:')):
+            from .messenger_telegram_mirror import TelegramMirrorProvider
+            provider=TelegramMirrorProvider(self.service,account_ref,self.user)
         if account['provider']=='max' and account['enabled'] and str(account['credential_ref']).startswith('connector:'):
             from .messenger_max import PersonalMaxMessengerProvider
             provider=PersonalMaxMessengerProvider(self.service,account_ref,self.user)
