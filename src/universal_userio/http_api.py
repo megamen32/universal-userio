@@ -2208,7 +2208,7 @@ def _download_page() -> str:
 
 def _dashboard_login_page(*, invalid: bool = False) -> str:
     error = (
-        '<p class="error" role="alert">Неверный логин или пароль.</p>' if invalid else ""
+        '<p class="userio-error" role="alert">Неверный логин или пароль.</p>' if invalid else ""
     )
     return f"""<!doctype html>
 <html lang="ru">
@@ -2216,99 +2216,91 @@ def _dashboard_login_page(*, invalid: bool = False) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход — Universal UserIO</title>
-  <style>
-    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
-    body {{ min-height:100vh; margin:0; display:grid; place-items:center; background:#0b1020; color:#edf2ff; }}
-    main {{ width:min(360px, calc(100vw - 48px)); padding:32px; border:1px solid #2b3554; border-radius:18px; background:#121a2e; box-shadow:0 24px 70px #0008; }}
-    h1 {{ margin:0 0 8px; font-size:24px; }}
-    p {{ color:#aebbd7; }}
-    label {{ display:block; margin-top:18px; font-size:14px; }}
-    input {{ box-sizing:border-box; width:100%; margin-top:7px; padding:11px 12px; border:1px solid #3a4769; border-radius:9px; background:#0b1020; color:inherit; font:inherit; }}
-    button {{ width:100%; margin-top:22px; padding:11px; border:0; border-radius:9px; background:#6d7cff; color:white; font:inherit; font-weight:700; cursor:pointer; }}
-    .error {{ padding:10px 12px; border-radius:8px; background:#5b1f2a; color:#ffd9df; }}
-  </style>
+  <link rel="stylesheet" href="/assets/userio-onboarding.css">
+  <script src="/assets/userio-onboarding-theme.js"></script>
 </head>
-<body>
-  <main>
-    <h1>Universal UserIO</h1>
-    <p>Войдите, чтобы открыть свои каналы и аккаунты.</p>
-    {error}
-    <form method="post" action="/auth/session">
-      <label>Логин<input name="username" autocomplete="username" required autofocus></label>
-      <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
-      <button type="submit">Войти</button>
-    </form>
-    <p>Нет аккаунта? <a href="/signup">Зарегистрироваться</a></p>
+<body class="userio-setup-page">
+  <main class="userio-setup-shell">
+    <header class="userio-setup-header">
+      <a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a>
+      <nav class="userio-setup-nav"><a href="/signup">Регистрация</a></nav>
+    </header>
+    <div class="userio-setup-main">
+      <section class="userio-setup-panel">
+        <h1 class="userio-setup-title">Universal UserIO</h1>
+        <p class="userio-setup-lead">Войдите, чтобы открыть свои каналы и аккаунты.</p>
+        {error}
+        <form method="post" action="/auth/session">
+          <label>Логин<input name="username" autocomplete="username" required autofocus></label>
+          <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+          <button type="submit">Войти</button>
+        </form>
+        <p>Нет аккаунта? <a href="/signup">Зарегистрироваться</a></p>
+      </section>
+    </div>
   </main>
 </body>
 </html>"""
 
-
 def _dashboard_signup_page(error: str = "") -> str:
-    error_html = f'<p class="error" role="alert">{error}</p>' if error else ""
+    error_html = f'<p class="userio-error" role="alert">{error}</p>' if error else ""
     return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Регистрация — Universal UserIO</title>
-  <style>
-    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
-    body {{ min-height:100vh; margin:0; display:grid; place-items:center; background:#0b1020; color:#edf2ff; }}
-    main {{ width:min(360px, calc(100vw - 48px)); padding:32px; border:1px solid #2b3554; border-radius:18px; background:#121a2e; box-shadow:0 24px 70px #0008; }}
-    h1 {{ margin:0 0 8px; font-size:24px; }}
-    p {{ color:#aebbd7; }} a {{ color:#9eabff; }}
-    label {{ display:block; margin-top:18px; font-size:14px; }}
-    input {{ box-sizing:border-box; width:100%; margin-top:7px; padding:11px 12px; border:1px solid #3a4769; border-radius:9px; background:#0b1020; color:inherit; font:inherit; }}
-    button {{ width:100%; margin-top:22px; padding:11px; border:0; border-radius:9px; background:#6d7cff; color:white; font:inherit; font-weight:700; cursor:pointer; }}
-    .error {{ padding:10px 12px; border-radius:8px; background:#5b1f2a; color:#ffd9df; }}
-  </style>
+  <link rel="stylesheet" href="/assets/userio-onboarding.css">
+  <script src="/assets/userio-onboarding-theme.js"></script>
 </head>
-<body>
-  <main>
-    <h1>Создать аккаунт</h1>
-    <p>Ваши каналы и сообщения будут изолированы от других пользователей.</p>
-    {error_html}
-    <form method="post" action="/auth/signup">
-      <label>Логин<input name="username" autocomplete="username" minlength="3" maxlength="64" required autofocus></label>
-      <label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
-      <label>Повторите пароль<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required></label>
-      <button type="submit">Зарегистрироваться</button>
-    </form>
-    <p>Уже есть аккаунт? <a href="/login">Войти</a></p>
+<body class="userio-setup-page">
+  <main class="userio-setup-shell">
+    <header class="userio-setup-header">
+      <a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a>
+      <nav class="userio-setup-nav"><a href="/login">Войти</a></nav>
+    </header>
+    <div class="userio-setup-main">
+      <section class="userio-setup-panel">
+        <h1 class="userio-setup-title">Создать аккаунт</h1>
+        <p class="userio-setup-lead">Ваши каналы и сообщения будут изолированы от других пользователей.</p>
+        {error_html}
+        <form method="post" action="/auth/signup">
+          <label>Логин<input name="username" autocomplete="username" minlength="3" maxlength="64" required autofocus></label>
+          <label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+          <label>Повторите пароль<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+          <button type="submit">Зарегистрироваться</button>
+        </form>
+        <p>Уже есть аккаунт? <a href="/login">Войти</a></p>
+      </section>
+    </div>
   </main>
 </body>
 </html>"""
-
 
 def _vk_connect_page(app_id: str) -> str:
     safe_app_id = app_id.strip() or "0"
     return f'''<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Подключить ВКонтакте — UserIO</title>
-<style>body{{font:16px system-ui;max-width:680px;margin:7vh auto;padding:24px;background:#111;color:#eee}}
-#status{{margin:18px 0;color:#aaa}}a{{color:#8ab4f8}}h2{{font-size:20px}}
-.card{{border:1px solid #343434;border-radius:14px;padding:18px;margin-top:25px;background:#1a1a1a}}
-.btn{{display:inline-block;background:#0878f6;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700}}
-li{{margin:8px 0}}code{{background:#252525;padding:2px 5px;border-radius:4px}}
-small{{color:#aaa;line-height:1.45}}</style></head>
-<body><p><a href="/accounts/connect/new">← Аккаунты UserIO</a></p>
-<h1>Подключить ВКонтакте</h1>
+<link rel="stylesheet" href="/assets/userio-onboarding.css">
+<script src="/assets/userio-onboarding-theme.js"></script></head>
+<body class="userio-setup-page"><main class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a><nav class="userio-setup-nav"><a href="/accounts/connect/new">← Аккаунты UserIO</a></nav></header><div class="userio-setup-main">
+<h1 class="userio-setup-title">Подключить ВКонтакте</h1>
 <p><b>VK ID</b> подтверждает профиль, но не предоставляет UserIO доступ
 к личным сообщениям. VK ограничивает этот API для сторонних приложений.</p>
-<section class="card">
+<section class="userio-setup-panel">
   <h2>VK без расширения</h2>
   <p>Для личных переписок есть отдельное подключение VK Мессенджера.
   Оно проверяет доступ к сообщениям перед сохранением аккаунта, затем
   читает историю и новые сообщения с сервера UserIO.</p>
-  <p><a class="btn" href="/vk/personal/connect/new">Подключить личные чаты VK</a></p>
+  <p><a class="userio-setup-button" href="/vk/personal/connect/new">Подключить личные чаты VK</a></p>
 </section>
-<div id="vk_auth"></div><p id="status">Ожидание VK ID…</p>
-<section class="card">
+<div id="vk_auth"></div><p id="status" class="userio-status" role="status">Ожидание VK ID…</p>
+<section class="userio-setup-panel">
   <h2>Для чтения чатов установите расширение</h2>
   <p>Расширение читает открытую сессию VK в Chrome и может передавать в UserIO
   переписки, видимые в этом профиле. Для работы Chrome должен оставаться запущенным.</p>
-  <a class="btn" href="/vk-userio-extension-mv3.zip" download>Скачать расширение для Chrome (ZIP)</a>
+  <a class="userio-setup-button" href="/vk-userio-extension-mv3.zip" download>Скачать расширение для Chrome (ZIP)</a>
   <ol>
     <li>Распакуйте ZIP в постоянную папку.</li>
     <li>Откройте <code>chrome://extensions</code> в Chrome, включите режим разработчика и нажмите «Загрузить распакованное».</li>
@@ -2319,7 +2311,7 @@ small{{color:#aaa;line-height:1.45}}</style></head>
   <small>Важно: это универсальное расширение UserIO с широкими разрешениями на сайты.
     Оно не устанавливается через магазин Chrome и не получает доступ к сообщениям через VK ID.
     <a href="/download">Подробности об установке и разрешениях</a>.</small>
-</section>
+</section></div></main>
 <script src="https://unpkg.com/@vkid/sdk@<3.0.0/dist-sdk/umd/index.js"></script>
 <script>
 (() => {{
@@ -2362,9 +2354,9 @@ small{{color:#aaa;line-height:1.45}}</style></head>
 def _gmail_connect_page() -> str:
     return f'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Connect Gmail</title><style>body{{font:16px system-ui;max-width:560px;margin:10vh auto;padding:24px;background:#111;color:#eee}}input,button{{box-sizing:border-box;width:100%;font:inherit;padding:10px;margin-top:12px}}#status{{margin-top:20px;color:#aaa}}a{{color:#8ab4f8}}small{{color:#aaa}}</style></head>
-<body><h1>Connect Gmail</h1><p>Use a Google App Password for this mailbox. The normal Gmail password is never accepted.</p><small>The connection is checked against Gmail IMAP over TLS, then the App Password is stored in the local secret directory and never returned to the browser.</small>
-<form id="connect"><input id="email" type="email" autocomplete="username" placeholder="you@gmail.com" required><input id="app_password" type="password" autocomplete="new-password" placeholder="16-character App Password" minlength="16" required><button type="submit">Add Gmail account</button></form><p id="status"></p><p><a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Create an App Password</a> · <a href="/">Back to UserIO</a></p>
+<title>Connect Gmail</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head>
+<body class="userio-setup-page"><main class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a><nav class="userio-setup-nav"><a href="/">Back to UserIO</a></nav></header><div class="userio-setup-main"><section class="userio-setup-panel"><h1 class="userio-setup-title">Connect Gmail</h1><p class="userio-setup-lead">Use a Google App Password for this mailbox. The normal Gmail password is never accepted.</p><p class="userio-note">The connection is checked against Gmail IMAP over TLS, then the App Password is stored in the local secret directory and never returned to the browser.</p>
+<form id="connect"><input id="email" type="email" autocomplete="username" placeholder="you@gmail.com" aria-label="you@gmail.com" required><input id="app_password" type="password" autocomplete="new-password" placeholder="16-character App Password" aria-label="16-character App Password" minlength="16" required><button type="submit">Add Gmail account</button></form><p id="status" class="userio-status" role="status"></p><p><a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Create an App Password</a></p>
 <script>
 document.getElementById('connect').onsubmit = async (event) => {{
   event.preventDefault();
@@ -2372,7 +2364,7 @@ document.getElementById('connect').onsubmit = async (event) => {{
   try {{ const response = await fetch('/v1/gmail/accounts', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body:JSON.stringify({{email:document.getElementById('email').value, app_password:document.getElementById('app_password').value}})}}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not add mailbox'); document.getElementById('app_password').value = ''; status.textContent = 'Added and verified. Returning to UserIO…'; setTimeout(() => location.assign('/'), 700); }}
   catch (error) {{ status.textContent = error.message; }}
 }};
-</script></body></html>'''
+</script></section></div></main></body></html>'''
 
 
 def _connect_gmail_account(email: str, app_password: str) -> tuple[str, str]:
