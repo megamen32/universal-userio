@@ -22,3 +22,16 @@ test('new users only see/complete their own slots; transient cookies not persist
   owners.registered('account-10');assert.equal(owners.auth.size,1);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('disconnect removes the saved owner binding for its Telegram slot',()=>{
+ const dir=mkdtempSync(join(process.env.TMPDIR||tmpdir(),'enrollment-disconnect-'));
+ try{
+  const path=join(dir,'owners.json');const owners=new EnrollmentOwners(path);
+  owners.bind('account-4',{user_id:'alice',can_manage:true},{Cookie:'fixture-alice'});
+  assert.equal(owners.allowed('account-4','alice'),true);
+  owners.remove('account-4');
+  assert.equal(owners.allowed('account-4','alice'),false);
+  assert.equal(owners.auth.has('account-4'),false);
+  assert.doesNotMatch(readFileSync(path,'utf8'),/account-4|fixture-alice/);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});

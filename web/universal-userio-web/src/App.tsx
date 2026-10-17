@@ -17,6 +17,7 @@ import { startInboxPolling } from "./inbox-poll"
 import { mergePhoneHistory } from "./phone-history"
 import { CallAudio, type CallRecording } from './call-audio'
 import { InboxNavigation, InboxFolderTabs, InboxFolderEditor, useInboxFolders } from "@/components/inbox-navigation"
+import { accountConnectHref } from "./account-connect.mjs"
 import { inInboxFolder, type InboxFolder } from "./inbox-folders"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
@@ -1160,6 +1161,7 @@ export function App() {
     }
   }
   const unifiedFeed = selectedAccount === "all" && selectedChannel === "all"
+  const connectPlatform = selectedChannel !== "all" ? selectedChannel : accounts.find(item => item.id === selectedAccount)?.provider || "all"
   const platformVisibleInFeed = (source: string) => !unifiedFeed || !hiddenPlatforms.includes(providerForSource(source))
   // Remount the list (with staggered row animation) whenever the view changes.
   const viewKey = `${inboxFolders.active}|${selectedAccount}|${selectedChannel}|${hiddenPlatforms.join(",")}|${hiddenAccounts.join(",")}|${search.trim() ? "search" : "list"}`
@@ -1196,7 +1198,7 @@ export function App() {
     </div>
     <ScrollArea className="min-h-0 min-w-0 flex-1 px-2 [&_[data-slot=scroll-area-viewport]>div]:!block">
       <Button className="mb-2 h-11 w-full justify-start rounded-xl" variant={selectedChannel === "all" && selectedAccount === "all" ? "secondary" : "ghost"} onClick={() => { setSelectedAccount("all"); setSelectedChannel("all"); setDrawerOpen(false) }}><span className="grid size-7 place-items-center rounded-lg bg-[#2f80ed]/10 text-[#2f80ed]"><Inbox className="size-4" /></span><span className="ml-2 text-left"><span className="block text-sm font-medium">Все аккаунты</span><span className="block text-[10px] text-muted-foreground">единая лента и поиск</span></span></Button>
-      <Button className="mb-3 h-auto min-h-10 w-full justify-start whitespace-normal rounded-xl border border-dashed py-2 text-left" variant="outline" onClick={() => window.location.assign("/accounts")}><Plus className="mr-2 size-4" /><span>Подключить аккаунт</span></Button>
+      <Button className="mb-3 h-auto min-h-10 w-full justify-start whitespace-normal rounded-xl border border-dashed py-2 text-left" variant="outline" onClick={() => window.location.assign(accountConnectHref(connectPlatform))}><Plus className="mr-2 size-4" /><span>Подключить {connectPlatform === "all" ? "аккаунт" : displayChannel(connectPlatform)}</span></Button>
       {platforms.map((platform) => {
         const platformAccounts = accounts.filter((item) => providerForSource(item.provider) === platform)
         const platformUnread = unreadByPlatform[platform] || 0

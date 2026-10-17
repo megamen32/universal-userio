@@ -10,7 +10,12 @@
 .userio-setup-page .back { border: 1px solid var(--uo-border); border-radius: 10px; padding: 9px 12px; background: transparent; color: var(--uo-text); }
 .userio-setup-page .connected { margin-top: 18px; }
 .userio-setup-page .connected .account { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--uo-border); font-size: 14px; }
-.userio-setup-page .connected button { border: 1px solid var(--uo-border); background: transparent; color: var(--uo-text); }
+.userio-setup-page #connected-list { max-height: 420px; overflow-y: auto; padding-right: 6px; }
+.userio-setup-page .connected button { flex: 0 0 auto; border: 1px solid var(--uo-border); background: var(--uo-panel); color: var(--uo-text); }
+.userio-setup-page .connected button:hover { border-color: var(--uo-accent); background: var(--uo-panel-raised); }
+.userio-setup-page .userio-choice { background: var(--uo-panel) !important; color: var(--uo-text) !important; }
+.userio-setup-page .userio-choice:hover { background: var(--uo-panel-raised) !important; }
+.userio-setup-page .account-readonly-note { color: var(--uo-muted); font-size: 12px; }
 .userio-setup-page .empty { padding: 18px; border: 1px dashed var(--uo-border); border-radius: 12px; }
 .userio-setup-page #sip-connections .account { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; padding: 15px 0; border-top: 1px solid var(--uo-border); }
 .userio-setup-page #sip-connections .account span { flex-basis: 100%; line-height: 1.5; }
@@ -22,7 +27,7 @@
 <body class="userio-setup-page"><div class="userio-setup-shell">
 <header class="userio-setup-header"><a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a><nav class="userio-setup-nav"><a class="back-inbox" href="/">К сообщениям →</a></nav></header>
 <main class="userio-setup-main"><section id="overview"><h1 class="userio-setup-title">Ваши аккаунты</h1><p class="userio-setup-lead">Все ваши сообщения в одном месте. Подключите нужные сервисы — каждый аккаунт остаётся вашим.</p>
-<section class="connected userio-setup-panel" aria-label="Подключённые аккаунты"><div id="connected-list">Загружаю ваши подключения…</div></section>
+<section class="connected userio-setup-panel" aria-label="Подключённые аккаунты"><p id="disconnect-status" class="userio-status" role="status"></p><div id="connected-list">Загружаю ваши подключения…</div></section>
 <h2 class="userio-setup-section-title">Подключить аккаунт</h2><nav class="userio-choice-grid" aria-label="Выберите сервис">
 <button class="userio-choice" type="button" data-open="telegram"><strong>Telegram</strong><small>QR или номер телефона</small></button>
 <button class="userio-choice" type="button" data-open="max"><strong>MAX</strong><small>Личные переписки</small></button>
@@ -117,20 +122,24 @@ async function connectedAccounts(){
       account.provider==='matrix'?'Matrix':account.provider==='vk'?'ВКонтакте':account.provider;
     title.textContent=label+': '+account.display_name+' · '+(account.enabled===false?'Отключён':account.id.startsWith('phone:sip:')?'Настройки SIP выданы':account.capabilities.includes('read')?'Подключён':'Чтение выключено');
     row.append(title);
-    const managed=account.id.startsWith('matrix:')||account.id.startsWith('email:')||
-      account.id.startsWith('vk:')||account.id.startsWith('sms:user-')||account.id.startsWith('max:')||account.id.includes(':account-')||account.id.startsWith('phone:sip:');
-    if(managed){
-      const remove=document.createElement('button');remove.type='button';remove.textContent='Отключить';
+    if(account.can_disconnect===true){
+      const remove=document.createElement('button');remove.type='button';remove.className='userio-setup-button userio-setup-secondary';remove.textContent='Отключить';
       remove.onclick=async()=>{
-        if(!confirm('Отключить '+account.display_name+'? Сохранённая история останется в UserIO.'))return;
+        const prompt=account.provider==='telegram'
+          ?'Отключить этот Telegram-аккаунт от UserIO? Telegram-вход на этом сервере завершится, сохранённая история останется.'
+          :'Отключить '+account.display_name+'? Сохранённая история останется в UserIO.';
+        if(!confirm(prompt))return;
         remove.disabled=true;
         try{
           const deleted=await fetch('/v1/accounts/'+encodeURIComponent(account.id),{method:'DELETE'});
-          if(!deleted.ok)throw Error('Не удалось отключить');
+          if(!deleted.ok){const detail=await deleted.json().catch(()=>({}));throw Error(detail.error||'Не удалось отключить. Подключение сохранено.');}
+          document.getElementById('disconnect-status').textContent='Подключение отключено. Сохранённая история осталась.';
           await connectedAccounts();
-        }catch(error){alert(error.message);remove.disabled=false;}
+        }catch(error){document.getElementById('disconnect-status').textContent=error.message;remove.disabled=false;}
       };
       row.append(remove);
+    }else if(account.disconnect_reason){
+      const note=document.createElement('small');note.className='account-readonly-note';note.textContent=account.disconnect_reason;row.append(note);
     }
     container.append(row);
   }

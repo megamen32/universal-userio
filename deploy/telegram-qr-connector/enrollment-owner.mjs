@@ -21,6 +21,13 @@ export class EnrollmentOwners {
     return null;
   }
   registered(slot){this.auth.delete(slot);}
+  remove(slot){
+    this.auth.delete(slot);
+    if(!Object.hasOwn(this.owners,slot))return;
+    const next={...this.owners};delete next[slot];
+    const temporary=this.path+'.next';writeFileSync(temporary,JSON.stringify(next),{mode:0o600});chmodSync(temporary,0o600);renameSync(temporary,this.path);
+    this.owners=next;
+  }
   filter(rows,user){return rows.filter(row=>this.allowed(row.id,user));}
 }
 export async function enrollmentPrincipal(base,headers,fetcher){

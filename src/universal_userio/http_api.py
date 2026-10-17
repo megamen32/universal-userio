@@ -84,6 +84,48 @@ def _public_account_source(account: Mapping[str, object], credential_ref: str) -
     return provider
 
 
+def _account_disconnect_reason(account: Mapping[str, object], credential_ref: str) -> str:
+    """Expose safe, owner-managed disconnects without revealing credentials."""
+    provider = str(account.get("provider") or "").lower()
+    account_id = str(account.get("id") or "")
+    if provider == "telegram" and credential_ref.startswith("telegram-qr:account-"):
+        return ""
+    if provider == "chatgpt" and credential_ref.startswith("chatgpt-session:"):
+        return ""
+    if provider == "gmail" and credential_ref.startswith("himalaya:"):
+        return ""
+    if provider in {"matrix", "email", "vk", "yandex", "max"} and credential_ref.startswith("connector:"):
+        return ""
+    if provider == "whatsapp" and ":account-" in account_id:
+        return ""
+    if provider == "phone" and account_id.startswith("phone:sip:"):
+        return ""
+    if provider == "sms" and credential_ref.startswith("sms-agent:"):
+        return "Отключите телефон в приложении SMS Agent"
+    if provider in {"phone", "sms", "telemost"}:
+        return "Общее подключение, управляемое сервером"
+    if credential_ref.startswith(("env:", "sms-native:", "telemost:")):
+        return "Общее подключение, управляемое сервером"
+    return "Для этого типа подключения безопасное отключение не настроено"
+
+
+def _disconnect_telegram_qr(*, token: str, user_id: str, account_id: str,
+                            credential_ref: str) -> None:
+    slot = credential_ref.removeprefix("telegram-qr:")
+    if not re.fullmatch(r"account-\d+", slot):
+        raise ValueError("Telegram QR session reference is invalid")
+    payload = json.dumps({"slot": slot, "account_id": account_id, "user_id": user_id}).encode()
+    request = urllib.request.Request("http://127.0.0.1:18095/disconnect", data=payload,
+        method="POST", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            result = json.loads(response.read())
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError) as error:
+        raise RuntimeError("Telegram did not confirm logout") from error
+    if result.get("disconnected") is not True:
+        raise RuntimeError("Telegram did not confirm logout")
+
+
 def handler(
     service: UserIOService, *, token: str, vkid_app_id: str = "",
     trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
@@ -1619,6 +1661,9 @@ def handler(
                 caps = service._store.user_capabilities(user_id=user_id)
                 for account in accounts:
                     credential_ref = str(account.pop("credential_ref", ""))
+                    disconnect_reason = _account_disconnect_reason(account, credential_ref)
+                    account["can_disconnect"] = not disconnect_reason
+                    account["disconnect_reason"] = disconnect_reason
                     if account.get('provider')=='sms':
                         account['transport']='native' if credential_ref=='sms-native:default' else 'apk' if credential_ref.startswith('sms-agent:') else 'unconfigured'
                     source = _public_account_source(account, credential_ref)
@@ -2069,17 +2114,34 @@ def handler(
                     (a for a in service._store.accounts(user_id=principal.user_id)
                      if a["id"] == account_id), None,
                 )
+                if existing and existing["provider"] == "telegram":
+                    reference = str(existing.get("credential_ref") or "")
+                    if reference.startswith("telegram-qr:"):
+                        try:
+                            _disconnect_telegram_qr(token=token, user_id=principal.user_id,
+                                account_id=account_id, credential_ref=reference)
+                        except (OSError, ValueError, RuntimeError):
+                            self._reply(503, {"error": "Telegram не подтвердил выход; аккаунт сохранён. Попробуйте позже."})
+                            return
                 if existing and account_id.startswith('phone:sip:'):
                     from .sip_connections import request as sip_request
                     try:sip_request('delete',principal.user_id,account_id=account_id)
                     except (OSError,ValueError):
                         self._reply(503,{'error':'Не удалось отключить SIP-аккаунт. Повторите позже; подключение сохранено.'});return
                 deleted = service._store.delete_account(account_id, user_id=principal.user_id)
+                if deleted and existing and existing["provider"] == "chatgpt":
+                    reference = str(existing.get("credential_ref") or "")
+                    if reference.startswith("chatgpt-session:"):
+                        try:
+                            chatgpt_sessions.delete_session(reference.removeprefix("chatgpt-session:"),
+                                                           user=principal.username)
+                        except KeyError:
+                            pass
                 if deleted and existing and existing['provider']=='whatsapp' and ':account-' in account_id:
                     if service.whatsapp_outbox is not None:
                         try:service.whatsapp_outbox.disconnect(user_id=principal.user_id,account_ref=account_id)
                         except (OSError,ValueError):pass # Disabled account also refuses ingress after restart.
-                if deleted and existing and existing["provider"] in {"matrix", "email", "vk", "max"}:
+                if deleted and existing and existing["provider"] in {"matrix", "email", "vk", "max", "yandex"}:
                     ref = str(existing.get("credential_ref") or "")
                     if ref.startswith("connector:"):
                         if existing['provider']=='max':

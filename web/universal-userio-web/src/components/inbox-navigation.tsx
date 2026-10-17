@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useTheme } from '@/components/theme-provider'
 import { FOLDERS_KEY, readInboxFolders, type InboxFolder } from '../inbox-folders'
+import { accountConnectHref } from '../account-connect.mjs'
 
 export type NavigationAccount = { id: string; provider: string; display_name: string; enabled?: boolean }
 export type FolderChoice = { id: string; name: string; source: string }
@@ -74,13 +75,13 @@ export function InboxNavigation(p: NavigationProps) {
                 <span className="userio-account-avatar">{a.display_name.trim().slice(0, 2).toUpperCase()}</span><span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{a.display_name}{a.enabled === false && <span className="block text-xs text-muted-foreground">Отключён</span>}</span>{p.selectedAccount === a.id && <Check className="size-4 shrink-0" />}
               </button>)}</div>
               {platform === 'yandex' && <a href="/telemost" className="userio-account-option" aria-label="Открыть встречи и записи Яндекс Телемоста"><span className="userio-account-avatar">☎</span><span className="min-w-0 flex-1">Встречи и записи<div className="text-xs text-muted-foreground">Управление встречами и записями</div></span><ChevronRight className="size-4 shrink-0" /></a>}
-              <a href="/accounts" className="userio-connect"><Plus className="size-4" />Подключить аккаунт</a>
+              <a href={accountConnectHref(platform)} className="userio-connect"><Plus className="size-4" />Подключить {title}</a>
             </Popover.Content></Popover.Portal>
           </Popover.Root>
         })}
       </div>
       <button type="button" className="userio-service" aria-label="Папки" aria-expanded={p.expanded} aria-pressed={p.expanded} onClick={p.onExpand}><Folders /><span>Папки</span></button>
-      <a className="userio-service" href="/accounts" aria-label="Подключить аккаунт"><Plus /><span>Добавить</span></a>
+      <a className="userio-service" href={accountConnectHref(activePlatform || 'all')} aria-label={`Добавить ${activePlatform === 'all' || !activePlatform ? 'аккаунт' : p.label(activePlatform)}`}><Plus /><span>Добавить</span></a>
       <button type="button" className="userio-service" aria-label={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun /> : <Moon />}</button>
       <button type="button" className="userio-service" aria-label="Настройки" onClick={p.onSettings}><Settings /></button>
     </nav>

@@ -1,7 +1,7 @@
 import http from "node:http";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
@@ -22,6 +22,7 @@ import { readDialogFolders } from './dialog-folders.mjs';
 import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
+import { logoutTelegramClient } from './account-disconnect.mjs';
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -48,6 +49,7 @@ const unreadRefreshLast = new Map();
 // route approved replies through the one process that owns each Telegram
 // session (auth keys are never shared).
 const liveSlots = new Map();
+const disconnectedSlots = new Set();
 let nextSlot = 1;
 let promptSeq = 0;
 const agentDeliverUrl = String(process.env.USERIO_AGENT_DELIVER_URL || "").trim();
@@ -739,7 +741,7 @@ async function syncAccount(slot) {
   if (running && running.running) return;
   setSync(slot, { running: true, status: "starting" });
   const file = `${sessionsDir}/${slot}.session`;
-  while (true) {
+  while (!disconnectedSlots.has(slot)) {
     let client;
     let authTerminal = false;
     try {
@@ -795,6 +797,7 @@ async function syncAccount(slot) {
       // lost when another client shares the session auth key.
       for (let beat = 1; ; beat += 1) {
         await new Promise((resolve) => setTimeout(resolve, 60000));
+        if (disconnectedSlots.has(slot)) break;
         await client.getMe();
         if (beat % 60 === 0) await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
             if (beat % 5 === 0) {
@@ -994,6 +997,69 @@ http.createServer(async (req, res) => {
   if (url.pathname === "/state") {
     res.setHeader("content-type", "application/json");
     return res.end(JSON.stringify(enrollmentOwners.filter(publicState(),browserOwner.principal.user_id)));
+  }
+  if (url.pathname === "/disconnect" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const slotId = String(payload.slot || "");
+      const accountId = String(payload.account_id || "");
+      const userId = String(payload.user_id || "");
+      if (!/^account-\d+$/.test(slotId) || !/^telegram:\d+$/.test(accountId) || !userId) {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "invalid Telegram account reference" }));
+      }
+      if (!enrollmentOwners.allowed(slotId, userId) && enrollmentOwners.owner(slotId) !== enrollmentOwners.legacyUser) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Telegram account belongs to another UserIO user" }));
+      }
+      const sessionFile = `${sessionsDir}/${slotId}.session`;
+      const live = liveSlots.get(slotId);
+      const state = slots.get(slotId);
+      const knownAccount = live?.accountId || state?.accountId || "";
+      if (knownAccount && knownAccount !== accountId) {
+        res.writeHead(409, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Telegram account reference does not match this session" }));
+      }
+      if (!existsSync(sessionFile) && !live?.client) {
+        disconnectedSlots.add(slotId);
+        const timer = unreadRefreshTimers.get(slotId);
+        if (timer) clearTimeout(timer);
+        unreadRefreshTimers.delete(slotId);
+        enrollmentOwners.remove(slotId);
+        slots.delete(slotId);syncs.delete(slotId);liveSlots.delete(slotId);
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ disconnected: true, already_disconnected: true }));
+      }
+      if (!live?.client || knownAccount !== accountId) {
+        res.writeHead(503, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Telegram session is offline; account was kept" }));
+      }
+      try {
+        await logoutTelegramClient(live.client, Api);
+      } catch (error) {
+        console.error(`Telegram logout not confirmed for ${slotId}:`, error?.errorMessage || error?.message || "unknown");
+        res.writeHead(503, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Telegram did not confirm logout; account was kept" }));
+      }
+      disconnectedSlots.add(slotId);
+      const timer = unreadRefreshTimers.get(slotId);
+      if (timer) clearTimeout(timer);
+      unreadRefreshTimers.delete(slotId);
+      liveSlots.delete(slotId);syncs.delete(slotId);slots.delete(slotId);
+      enrollmentOwners.remove(slotId);
+      try { unlinkSync(sessionFile); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+      await live.client.disconnect().catch(() => {});
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ disconnected: true }));
+    } catch {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "invalid disconnect request" }));
+    }
   }
   if (url.pathname === "/new") {
     const created = `account-${nextSlot++}`;
