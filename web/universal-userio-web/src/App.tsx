@@ -1369,7 +1369,7 @@ export function App() {
             const system = message.direction === "system"
             const transcript = system && isMeetingTranscript(message)
             const outgoing = messageIsOutgoing(conversation, message, accounts)
-            const deliveryStatus = outgoingMessageStatus(outgoing, message.provider_read)
+            const deliveryStatus = outgoingMessageStatus(conversation.source, outgoing, message.provider_read)
             const author = messageAuthor(message, conversation.conversation_kind)
             const previous = conversation.messages[index - 1]
             const showDay = !previous || !sameDay(previous.received_at, message.received_at)
