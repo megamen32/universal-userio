@@ -4656,7 +4656,7 @@ class SQLiteUserIOStore:
         with self._lock:
             rows = self._connection.execute(
                 f"""
-                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,c.account_ref,
+                SELECT c.id,c.source,c.sender,c.identity_id,c.updated_at,c.account_ref,c.peer_id,
                        (SELECT body FROM messages WHERE user_id=c.user_id AND conversation_id=c.id AND deleted_at IS NULL
                         ORDER BY received_at DESC,rowid DESC LIMIT 1) AS preview,
                        (SELECT received_at FROM messages WHERE user_id=c.user_id AND conversation_id=c.id AND deleted_at IS NULL

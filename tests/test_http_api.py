@@ -402,6 +402,7 @@ def test_conversation_list_account_activity_keeps_per_source_max_timestamp(tmp_p
 
     telegram = store.conversations(source="telegram")
     assert len(telegram) == 2
+    assert all("peer_id" in row for row in telegram)
     assert all(row["account_last_at"] == 80.0 for row in telegram)
     assert [row["last_at"] for row in telegram] == [80.0, 50.0]
     assert [row["unread_count"] for row in telegram] == [2, 1]

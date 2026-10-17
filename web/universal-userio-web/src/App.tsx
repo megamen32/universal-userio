@@ -1,4 +1,5 @@
 import { conversationDrafts } from "./conversation-drafts"
+import { groupMatrixChatRows } from "./matrix-chat-groups"
 import { messageAuthor } from './message-author'
 import { hitAuthorLabel, hitChannelLabel, parseDeepLink, SemanticSearchPanel, useSemanticSearch } from "./semantic-search"
 import type { SemanticMessageHit, SemanticStatus } from "./semantic-search"
@@ -21,7 +22,7 @@ import { ContextSettingsDialog } from "@/components/context-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
 type AnalysisPolicy = { conversation_id: string; conversation_kind: string; allowed: boolean; action: string }
-type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; match_message_id?: string; match_body?: string; match_type?: "exact" | "fuzzy"; match_field?: "contact" | "message"; analysis_policy?: AnalysisPolicy }
+type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; peer_id?: string; account_refs?: string[]; account_unread_counts?: Record<string, number>; account_conversation_ids?: Record<string, string>; match_message_id?: string; match_body?: string; match_type?: "exact" | "fuzzy"; match_field?: "contact" | "message"; analysis_policy?: AnalysisPolicy }
 type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; conversation_kind?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
 type Message = { source: string; message_id: string; sender: string; sender_name?: string; body: string; direction?: "incoming" | "outgoing" | "system"; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string; call_audio?: CallRecording }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string; created_at?: number; context_status?: "unknown" | "current" | "stale"; reply_to?: { source: string; message_id: string; body: string; received_at: number } | null }
@@ -70,6 +71,12 @@ const displayChannel = (source: string) => {
   const provider = providerForSource(source)
   return ({ telegram: "Telegram", whatsapp: "WhatsApp", gmail: "Почта", max: "MAX", vk: "VK", matrix: "Matrix", sms: "СМС", phone: "Звонки", telemost: "Яндекс Телемост", yandex: "Яндекс Телемост", chatgpt: "ChatGPT" } as Record<string, string>)[provider] || provider[0]?.toUpperCase() + provider.slice(1)
 }
+const matrixAccountDetails = (chat: Chat, accounts: Account[]) => (chat.account_refs || [])
+  .map(id => {
+    const name = accounts.find(account => account.id === id)?.display_name || id
+    const unread = chat.account_unread_counts?.[id] ?? 0
+    return `${name} · ${unread} непрочитанных`
+  }).join('\n')
 const chatKindLabel = (kind?: string) => (Object.entries({ group: "Группа", channel: "Канал", direct: "Личный чат", telegram_bot: "Бот", unknown: "Тип не определён" }).find(([key]) => key === kind)?.[1] || "Тип не определён")
 
 // A message is "mine" (right bubble) when it was authored by the sending
@@ -245,6 +252,8 @@ export function App() {
   const [selectedAccount, setSelectedAccount] = useState<string>("all")
   const [selectedChannel, setSelectedChannel] = useState<string>("all")
   const [selectedChat, setSelectedChat] = useState<string>("")
+  const [selectedChatAccountRefs, setSelectedChatAccountRefs] = useState<string[]>([])
+  const [selectedChatAccountIds, setSelectedChatAccountIds] = useState<Record<string, string>>({})
   const [draft, setDraft] = useState("")
   const [selectedUpload,setSelectedUpload] = useState<{upload_id:string;filename:string;size:number;previewUrl?:string}|null>(null)
   const [uploadBusy,setUploadBusy] = useState(false)
@@ -368,7 +377,7 @@ export function App() {
       const target = event.target as HTMLElement | null
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return
       if (sidebarOpen) { setSidebarOpen(false); return }
-      if (selectedChat) { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
+      if (selectedChat) { setSelectedChat(""); setSelectedChatAccountRefs([]); setSelectedChatAccountIds({}); setConversation(null); setMobilePane("chats"); setDraft("") }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
@@ -684,7 +693,7 @@ export function App() {
     } finally { setPhoneHistoryBusy(false) }
   }
 
-  const openChat = (id: string) => { setSelectedChat(id); setMobilePane("chat"); setDraft("") }
+  const openChat = (id: string, accountRefs: string[] = [], accountIds: Record<string, string> = {}) => { setSelectedChat(id); setSelectedChatAccountRefs(accountRefs); setSelectedChatAccountIds(accountIds); setMobilePane("chat"); setDraft("") }
   const semanticSearch = useSemanticSearch()
   // Hash changes include a second search hit in the same conversation. Wait
   // for that conversation's real data before loading a source outside its page.
@@ -721,7 +730,7 @@ export function App() {
       } catch { /* A removed or unreadable source still opens its chat. */ }
     })()
   }, [deepLinkHash, selectedChat, conversation?.id, conversation?.messages])
-  const closeChat = () => { setSelectedChat(""); setConversation(null); setMobilePane("chats"); setDraft("") }
+  const closeChat = () => { setSelectedChat(""); setSelectedChatAccountRefs([]); setSelectedChatAccountIds({}); setConversation(null); setMobilePane("chats"); setDraft("") }
 
   const jumpToDraftSource = async (item: Draft) => {
     if (!item.reply_to || !conversation) return
@@ -1236,13 +1245,35 @@ export function App() {
       <ScrollArea className="min-h-0 min-w-0 flex-1 px-2 pb-3 [&_[data-slot=scroll-area-viewport]>div]:!block">
         <div key={viewKey}>
         {(!search.trim() || visibleChats.length > 0) && (search.trim() ? ["exact", "fuzzy"] as const : ["all"] as const).map(kind => {
-          const rows = kind === "all" ? visibleChats : visibleChats.filter(chat => chat.match_type === kind)
+          const rows = groupMatrixChatRows(kind === "all" ? visibleChats : visibleChats.filter(chat => chat.match_type === kind))
           const content = <>{rows.map((chat, chatIndex) => {
-          const unread = chat.unread_count > 0
-          return <button key={chat.id} data-conversation-id={chat.id} onClick={() => openChat(chat.id)} style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }} className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
-          <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span><span className="flex shrink-0 items-center gap-1.5">{chat.analysis_policy && <span title={`${chatKindLabel(chat.analysis_policy.conversation_kind)} · Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`} aria-label={`Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`}><Sparkles className={`size-3 ${chat.analysis_policy.allowed ? "text-[#2f80ed]" : "text-muted-foreground/50"}`} /></span>}{chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}{unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}</span></span><span className="mt-1 flex min-w-0 items-center gap-1.5"><span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span><span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview, !!chat.last_at)}</span>{chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">{chat.match_field === "contact" ? "контакт" : "текст"}</span>}</span></span>
-        </button>
-        })}{kind !== "all" && searchMore[kind] && <Button variant="ghost" className="my-2 w-full" disabled={searching} onClick={() => void loadMoreSearch(kind)}>Показать ещё</Button>}</>
+            const unread = chat.unread_count > 0
+            const accountRefs = chat.account_refs || []
+            const hasMirroredAccounts = accountRefs.length > 1
+            const accountCountLabel = accountRefs.length === 2 ? '2 аккаунта' : `${accountRefs.length} аккаунтов`
+            return <button key={chat.id} data-conversation-id={chat.id}
+              onClick={() => openChat(chat.id, accountRefs, chat.account_conversation_ids || {})}
+              style={{ animationDelay: `${selectedAccount === "all" ? Math.min(chatIndex * 4, 48) : 0}ms` }}
+              className={`userio-row-in mb-1 flex w-full gap-3 rounded-xl border border-transparent p-3 text-left transition-all ${selectedChat === chat.id ? "border-[#2f80ed]/20 bg-[#2f80ed]/8 shadow-sm" : "hover:bg-muted/70"}`}>
+              <Avatar><AvatarFallback className={`${avatarColor(chat.sender)} font-medium text-white`}>{initials(titleOf(chat))}</AvatarFallback></Avatar>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className={`min-w-0 truncate text-sm ${unread ? "font-semibold" : "font-medium"}`}>{titleOf(chat)}</span>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {chat.analysis_policy && <span title={`${chatKindLabel(chat.analysis_policy.conversation_kind)} · Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`} aria-label={`Разбор ${chat.analysis_policy.allowed ? "включён" : "выключен"}`}><Sparkles className={`size-3 ${chat.analysis_policy.allowed ? "text-[#2f80ed]" : "text-muted-foreground/50"}`} /></span>}
+                    {chat.last_at && <span className="text-[11px] text-muted-foreground">{listTime(chat.last_at)}</span>}
+                    {unread && <Badge className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{chat.unread_count}</Badge>}
+                    {hasMirroredAccounts && <Badge variant="outline" title={matrixAccountDetails(chat, accounts)} aria-label={`Та же Matrix-переписка в ${accountCountLabel}`}>{accountCountLabel}</Badge>}
+                  </span>
+                </span>
+                <span className="mt-1 flex min-w-0 items-center gap-1.5">
+                  <span className="shrink-0 text-muted-foreground">{channelIcon(chat.source)}</span>
+                  <span className={`min-w-0 truncate text-xs ${unread ? "text-foreground/80" : "text-muted-foreground"}`}>{previewText(chat.preview, !!chat.last_at)}</span>
+                  {chat.match_message_id && <span className="ml-auto shrink-0 rounded bg-[#2f80ed]/10 px-1.5 py-0.5 text-[9px] font-medium text-[#2f80ed]">{chat.match_field === "contact" ? "контакт" : "текст"}</span>}
+                </span>
+              </span>
+            </button>
+          })}{kind !== "all" && searchMore[kind] && <Button variant="ghost" className="my-2 w-full" disabled={searching} onClick={() => void loadMoreSearch(kind)}>Показать ещё</Button>}</>
           return kind === "all" ? <div key={kind}>{content}</div> : <details key={`${search.trim()}-${kind}`} open={kind === "exact" || !visibleChats.some(chat => chat.match_type === "exact")} className="mb-2" aria-label={kind === "exact" ? "Точные совпадения" : "Возможные совпадения"}>
             <summary className="cursor-pointer rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">{kind === "exact" ? "Точные совпадения" : "Возможные совпадения · с опечатками"} <span className="text-muted-foreground">({rows.length}{searchMore[kind] ? "+" : ""})</span></summary>{content}
           </details>
@@ -1285,11 +1316,15 @@ export function App() {
               <span className="shrink-0">{displayChannel(conversation.source)}</span>
               <span className="hidden shrink-0 sm:inline">· {chatKindLabel(analysisPolicy?.conversation_kind || conversation.conversation_kind)}</span>
               {(() => {
-                const platformAccounts = accounts.filter(item => providerForSource(item.provider) === providerForSource(conversation.source))
+                const allPlatformAccounts = accounts.filter(item => providerForSource(item.provider) === providerForSource(conversation.source))
+                const groupedMatrixRoom = providerForSource(conversation.source) === 'matrix' && selectedChatAccountRefs.length > 1
+                const platformAccounts = groupedMatrixRoom
+                  ? allPlatformAccounts.filter(item => selectedChatAccountRefs.includes(item.id))
+                  : allPlatformAccounts
                 const senderAccount = platformAccounts.find(item => item.id === conversation.account_ref)
                 if (!platformAccounts.length) return null
                 return <><span aria-hidden="true">·</span>{platformAccounts.length > 1
-                  ? <select aria-label="Аккаунт отправки" className="min-w-0 max-w-36 rounded bg-transparent text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={event => void setSenderAccount(event.target.value)}><option value="">авто</option>{platformAccounts.map(item => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select>
+                  ? <select aria-label={groupedMatrixRoom ? "Аккаунт этой Matrix-переписки" : "Аккаунт отправки"} className="min-w-0 max-w-44 rounded bg-transparent text-[11px] text-foreground" value={conversation.account_ref || ""} onChange={event => { const accountId = event.target.value; const accountConversationId = selectedChatAccountIds[accountId]; if (groupedMatrixRoom && accountConversationId) openChat(accountConversationId, selectedChatAccountRefs, selectedChatAccountIds); else void setSenderAccount(accountId) }}>{!groupedMatrixRoom && <option value="">авто</option>}{platformAccounts.map(item => <option key={item.id} value={item.id}>{item.display_name}{item.capabilities.includes("reply") ? "" : " · только чтение"}</option>)}</select>
                   : <span className="truncate">{senderAccount?.display_name || platformAccounts[0].display_name}</span>}</>
               })()}
             </div>
