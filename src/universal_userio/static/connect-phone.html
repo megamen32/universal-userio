@@ -1,20 +1,24 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Подключить свой телефон — UserIO</title>
+<link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script>
 <style>
-:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#101820;color:#edf3f8}*{box-sizing:border-box}body{margin:0}main{max-width:1040px;margin:auto;padding:22px 20px 70px}nav{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:28px}a{color:#87bbff}nav a{padding:7px 0}nav .cabinet{margin-left:auto}h1{font-size:clamp(26px,5vw,38px);line-height:1.2;margin:12px 0}h2{font-size:22px;margin:0 0 12px}h3{font-size:17px}p{color:#b9c7d4}section,.card{border:1px solid #30404f;background:#17232e;border-radius:16px;padding:22px;margin-top:20px}.choices{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0}.btn,button{display:inline-block;border:0;border-radius:10px;background:#327feb;color:#fff;padding:13px 19px;font:600 16px system-ui;text-decoration:none;cursor:pointer}.secondary{background:#293c50}button:disabled{opacity:.5;cursor:default}.small{font-size:14px}li{margin:10px 0;color:#d2deea}table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;border-bottom:1px solid #344352;padding:12px 8px;vertical-align:top}input{display:block;width:100%;font:16px system-ui;border:1px solid #586e80;border-radius:8px;background:#0b1520;color:#fff;padding:12px;margin:6px 0 16px}label{display:block;font-size:14px}fieldset{border:0;padding:0;margin:0}output{display:block;color:#b9c7d4;margin:14px 0;white-space:pre-wrap}.result{margin-top:18px;border-top:1px solid #364f62;padding-top:18px}code{overflow-wrap:anywhere}details{margin-top:18px}summary{cursor:pointer;font-weight:600}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#101a24;padding:14px;border-radius:8px;font-size:13px}.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}.note{border-left:3px solid #7bb8ff;padding-left:14px}section{scroll-margin-top:20px}.copy{font-size:14px;padding:8px 13px;margin-bottom:16px}@media(max-width:650px){.two{grid-template-columns:1fr}main{padding:16px 14px 45px}section{padding:18px}nav .cabinet{margin-left:0}td,th{padding:9px 5px}}
-</style></head><body><main>
-<nav><a href="/welcome">UserIO · о сервисе</a><a href="/download">Загрузки</a><a href="/docs/#phone">Документация</a><a href="https://github.com/megamen32/universal-userio">GitHub</a><a class="btn cabinet" href="/">Личный кабинет</a></nav>
-<h1>Подключите свой Android к своему UserIO</h1>
-<p>SMS и звонки настраиваются отдельно. Выберите подходящий способ: для SMS root не нужен; для голосового шлюза нужен совместимый rooted-телефон и SIP-сервер.</p>
-<div class="choices"><a class="btn" href="#sms">Подключить SMS</a><a class="btn secondary" href="#calls">Настроить звонки</a></div>
+.userio-setup-page table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.userio-setup-page th, .userio-setup-page td { padding: 12px 8px; border-bottom: 1px solid var(--uo-border); text-align: left; vertical-align: top; }
+.userio-setup-page .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 650px) { .userio-setup-page .two { grid-template-columns: 1fr; } .userio-setup-page th, .userio-setup-page td { padding: 9px 5px; } }
+</style></head><body class="userio-setup-page"><main class="userio-setup-shell">
+<header class="userio-setup-header"><a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a><nav class="userio-setup-nav"><a href="/welcome">О сервисе</a><a href="/download">Загрузки</a><a href="/docs/#phone">Документация</a><a href="https://github.com/megamen32/universal-userio">GitHub</a><a class="userio-setup-button cabinet" href="/">Личный кабинет</a></nav></header><div class="userio-setup-main">
+<h1 class="userio-setup-title">Подключите свой Android к своему UserIO</h1>
+<p class="userio-setup-lead">SMS и звонки настраиваются отдельно. Выберите подходящий способ: для SMS root не нужен; для голосового шлюза нужен совместимый rooted-телефон и SIP-сервер.</p>
+<div class="userio-choice-grid"><a class="userio-choice" href="#sms"><strong>Подключить SMS</strong></a><a class="userio-choice" href="#calls"><strong>Настроить звонки</strong></a></div>
 <table aria-label="Что поддерживается"><thead><tr><th>Функция</th><th>Android без root</th><th>Android с root</th></tr></thead><tbody>
 <tr><td>Входящие SMS и отправка из UserIO</td><td>SMS Agent APK</td><td>Тот же SMS Agent APK</td></tr>
 <tr><td>Голосовые звонки через SIM</td><td>SMS APK звонки не подключает</td><td>GSM2SIP + совместимый аудиопрофиль + SIP/AgentCall; отдельная настройка</td></tr>
 </tbody></table>
-<section id="sms"><h2>1. SMS: обычный или rooted Android</h2>
+<section class="userio-setup-panel" id="sms"><h2>1. SMS: обычный или rooted Android</h2>
 <p>Нужен Android 8 или новее. Для обоих вариантов используйте один APK. Root-доступ приложению SMS Agent предоставлять не требуется.</p>
-<a class="btn" href="/sms-gateway/agent/download" download>Скачать SMS Agent APK</a>
+<a class="userio-setup-button" href="/sms-gateway/agent/download" download>Скачать SMS Agent APK</a>
 <ol>
 <li>Откройте эту страницу на телефоне, скачайте APK и разрешите установку из браузера, если Android попросит. Установите <b>UserIO SMS Agent</b>.</li>
 <li>Откройте приложение. Через кнопку <b>«Разрешения SMS»</b> разрешите чтение, получение и отправку SMS. Разрешите уведомление фоновой службы.</li>
@@ -25,10 +29,10 @@
 <li>Нажмите в приложении <b>«Сохранить и запустить»</b>. Дождитесь статуса <b>«подключён к UserIO»</b>. В личном кабинете появится ваш отдельный SMS-аккаунт.</li>
 <li>Проверьте одно входящее SMS и отправку на свой тестовый номер. Сообщения должны появляться в аккаунте этого телефона; отправка использует его SIM и оплачивается по её тарифу.</li>
 </ol>
-<p class="note small">Приложение передаёт новые входящие и доступную ему недавнюю входящую историю; полный архив и отправленные из других приложений SMS в этом APK пока не синхронизируются. Отправленные из UserIO сообщения сохраняются в вашем диалоге. Не выбирайте этот вариант как обещание полного архива телефона.</p>
-<div class="card" id="pair"><h3>Привязать телефон к текущему личному кабинету</h3>
+<p class="userio-note note small">Приложение передаёт новые входящие и доступную ему недавнюю входящую историю; полный архив и отправленные из других приложений SMS в этом APK пока не синхронизируются. Отправленные из UserIO сообщения сохраняются в вашем диалоге. Не выбирайте этот вариант как обещание полного архива телефона.</p>
+<div class="userio-setup-panel card" id="pair"><h3>Привязать телефон к текущему личному кабинету</h3>
 <p class="small">У каждого пользователя и телефона свой токен. Общий ключ сервера на телефон не передаётся. Повторная выдача заменяет прежний токен только этого подключения.</p>
-<p id="login-note" hidden><a class="btn" href="/login">Войти в личный кабинет</a> Затем вернитесь к этой форме через «Подключить телефон».</p>
+<p id="login-note" hidden><a class="userio-setup-button" href="/login">Войти в личный кабинет</a> Затем вернитесь к этой форме через «Подключить телефон».</p>
 <form id="connect-form"><fieldset id="fields" disabled>
 <label>Название телефона<input name="display_name" id="name" placeholder="Мой Android" maxlength="80" required></label>
 <label>ID устройства из SMS Agent<input name="device_id" id="device" placeholder="android-1234abcd" maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,99}" required autocomplete="off"></label>
@@ -38,9 +42,9 @@
 <label>Сервер (URL шлюза)<input id="server" readonly></label><button class="secondary copy" type="button" data-copy="server">Скопировать адрес</button>
 <label>Токен только этого устройства<input id="device-token" type="password" readonly autocomplete="off"></label><button class="secondary copy" type="button" data-copy="device-token">Скопировать токен</button>
 <p class="small">Скопируйте токен сейчас: после закрытия страницы он не показывается снова. Не публикуйте его и не используйте чужой токен. Для повторного подключения можно выдать новый.</p>
-<p id="account-result" class="small"></p><a class="btn" href="/">Вернуться в личный кабинет</a>
+<p id="account-result" class="small"></p><a class="userio-setup-button" href="/">Вернуться в личный кабинет</a>
 </div></div></section>
-<section id="rooted"><h2>2. Rooted Android: APK или native-подключение</h2>
+<section class="userio-setup-panel" id="rooted"><h2>2. Rooted Android: APK или native-подключение</h2>
 <p>Для самостоятельного подключения SMS к этому сайту используйте форму и APK выше — они работают и на rooted Android. Не нужно копировать чужие SSH-ключи или менять root-настройки.</p>
 <p>Полное чтение системного SMS-хранилища через Termux/native-шлюз — отдельная операторская установка. Она требует собственного разрешённого доступа к телефону и индивидуальной привязки пользователя. Текущая native-конфигурация S21 не является общедоступным подключением для новых телефонов.</p>
 <details><summary>Если вы администратор своей установки и нужен полный архив</summary>
@@ -49,22 +53,22 @@
 <li>Разверните отдельное ограниченное native-подключение и назначьте его своему UserIO-пользователю. Общий native-адаптер текущего S21 не поддерживает самостоятельную регистрацию других пользователей.</li>
 <li>Проверьте полный архив и постоянное получение новых входящих и отправленных сообщений, восстановление после потери сети и сохранение курсора. Не выдавайте начальный импорт за работающую постоянную синхронизацию.</li></ol>
 </details></section>
-<section id="calls"><h2>3. Звонки: отдельный GSM2SIP-шлюз</h2>
+<section class="userio-setup-panel" id="calls"><h2>3. Звонки: отдельный GSM2SIP-шлюз</h2>
 <p><b>SMS Agent не подключает голосовые звонки.</b> Для звонков через SIM нужен отдельный rooted Android, подходящий аудиопрофиль и SIP/Asterisk с интеграцией AgentCall. Один только root не гарантирует совместимость модели.</p>
-<a class="btn secondary" href="https://github.com/pulpoff/gsm2sip/releases" target="_blank" rel="noreferrer">GSM2SIP: APK и Magisk-модуль</a> <a href="https://github.com/pulpoff/gsm2sip#supported-devices" target="_blank" rel="noreferrer">Проверить совместимость</a>
+<a class="userio-setup-button userio-setup-secondary" href="https://github.com/pulpoff/gsm2sip/releases" target="_blank" rel="noreferrer">GSM2SIP: APK и Magisk-модуль</a> <a href="https://github.com/pulpoff/gsm2sip#supported-devices" target="_blank" rel="noreferrer">Проверить совместимость</a>
 <ol><li>Выделите совместимый телефон с root/Magisk, SIM с голосовым тарифом, стабильным интернетом и питанием. Прочитайте требования и проверку устройства в документации GSM2SIP перед установкой модуля.</li>
 <li>Установите совместимый GSM2SIP/Magisk-вариант по его инструкции. Разрешите доступ к звонкам, микрофону и SMS; обеспечьте работу в фоне. Модуль может потребовать перезагрузки телефона.</li>
 <li>Получите у администратора <b>свой отдельный SIP-аккаунт</b>: сервер, порт, имя и пароль. Укажите их в GSM2SIP и дождитесь успешной регистрации. SMS-токен из формы выше здесь не подходит.</li>
 <li>Администратор настраивает маршруты входящих/исходящих SIM-звонков и AgentCall, затем создаёт <b>отдельный аккаунт звонков именно вашего UserIO-пользователя</b>. Чужой телефон/SIP-аккаунт и общий S21 не используются.</li>
 <li>Проекция разговора должна получать стабильный ID вашего аккаунта и подтверждённый номер собеседника. Входящие, исходящие, текст и отметки начала/завершения одной истории идут в диалог этого номера.</li>
 <li>После настройки проверьте один согласованный звонок на свой тестовый номер: обе стороны слышны, в UserIO видны начало, завершение и полный номер. Повторный звонок тому же человеку должен продолжить тот же диалог.</li></ol>
-<p class="note small">На этом сайте настройку голосового сервера завершает администратор. Самостоятельная выдача SIP-аккаунта через форму SMS сейчас не предусмотрена. На Android без root можно подключить SMS, а обычные SIM-звонки останутся в телефоне.</p>
+<p class="userio-note note small">На этом сайте настройку голосового сервера завершает администратор. Самостоятельная выдача SIP-аккаунта через форму SMS сейчас не предусмотрена. На Android без root можно подключить SMS, а обычные SIM-звонки останутся в телефоне.</p>
 <details><summary>Для администратора: индивидуальная привязка звонков</summary>
 <p>Создайте phone-аккаунт под авторизацией пользователя; назначьте пользователю маршрут <code>phone</code>. Для его экземпляра проекции задайте собственные <code>USERIO_ACCOUNT_ID</code>, <code>USERIO_URL</code> и <code>USERIO_BEARER_TOKEN</code>, а в producer — совпадающий <code>AGENTCALL_PEER_ACCOUNT_REF</code>. Приватный <code>AGENTCALL_RPC_SOCKET</code> должен получать события только разрешённого шлюза. Не подставляйте текущий номер назначения для старых call ID и не переиспользуйте чужую привязку.</p>
 <p><a href="https://github.com/megamen32/universal-userio/blob/main/docs/PHONE-CONNECT.md">Подробный контракт и проверка</a></p></details></section>
-<section><h2>Если подключение не работает</h2>
+<section class="userio-setup-panel"><h2>Если подключение не работает</h2>
 <div class="two"><div><h3>Не появился SMS-аккаунт</h3><p>Проверьте, что вошли в нужный UserIO, скопировали ID из этого приложения и вставили именно его токен. Статус «телефон подключён; регистрация аккаунта ожидается» ещё не означает готовую привязку.</p><h3>Нет новых SMS</h3><p>Проверьте интернет, разрешения, уведомление службы и ограничения батареи. Откройте SMS Agent и посмотрите его статус. Короткие номера и подписи отправителей не являются номерами для ответной отправки.</p></div><div><h3>Телефон отключён или потерян</h3><p>В разделе <a href="/accounts">«Ваши подключения»</a> нажмите «Отключить» у его отдельного SMS-аккаунта. Прежний device-токен больше не разрешает новые операции этого телефона. На доступном телефоне также остановите SMS Agent или удалите приложение.</p><h3>Звонок зарегистрирован, но нет звука</h3><p>Проверьте совместимость аудиопрофиля, микрофон, SIP/RTP-маршрут и настройки шлюза с администратором. Установка SMS APK эту проблему не исправляет.</p></div></div>
-</section></main>
+</section></div></main>
 <script>
 const fields=document.getElementById('fields'),status=document.getElementById('status'),result=document.getElementById('result');
 fetch('/v1/accounts',{credentials:'same-origin',cache:'no-store'}).then(r=>{if(!r.ok)throw Error();fields.disabled=false;status.textContent='Настройки будут привязаны к вашему текущему личному кабинету.'}).catch(()=>{document.getElementById('login-note').hidden=false;status.textContent='Сначала войдите в свой аккаунт UserIO.'});

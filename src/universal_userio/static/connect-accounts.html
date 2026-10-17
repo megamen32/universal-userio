@@ -3,45 +3,40 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Аккаунты · UserIO</title>
-<style>
-:root{font:16px system-ui,sans-serif;color-scheme:dark;background:#101923;color:#e9eff5}
-*{box-sizing:border-box}body{margin:0 auto;max-width:780px;padding:28px 20px 80px}
-a{color:#8cc1ff;text-decoration:none}h1{font-size:25px;letter-spacing:-.5px;margin:24px 0 8px}
-p{color:#abb9c8;line-height:1.5}.choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:9px;margin:24px 0}
-.choices a,.choices button{font:inherit;text-align:left;border:1px solid #3b4f61;border-radius:12px;background:#1a2837;padding:13px;color:#f4f9fd;cursor:pointer}
-.choices a:hover,.choices button:hover,.choices .active{border-color:#7bb8ff;background:#243b53}
-form{display:none;max-width:520px;padding:22px;border:1px solid #34495b;border-radius:16px;background:#172534}
-form.active{display:block}form h2{margin:0 0 12px;font-size:20px}
-label{display:block;margin:15px 0;color:#d5e4f4;font-size:14px}input{display:block;margin-top:6px;width:100%;padding:12px;border:1px solid #566778;border-radius:9px;background:#0d1a26;color:white;font:inherit}
-.submit{margin-top:18px;background:#307fdf;border:0;border-radius:10px;color:white;padding:12px 18px;font:600 15px system-ui;cursor:pointer}
-.submit:disabled{opacity:.5;cursor:wait}.hint{font-size:13px;margin:8px 0 0}
-#status{min-height:24px;margin-top:12px;color:#ccdce9;white-space:pre-wrap}
-.small{font-size:13px}.connected{margin-top:30px}.connected h2{font-size:19px}
-.connected .account{display:flex;align-items:center;gap:14px;justify-content:space-between;
-  padding:11px 0;border-bottom:1px solid #2e4355;font-size:14px}
-.connected button{font:inherit;padding:7px 11px;border-radius:9px;border:1px solid #53697b;
-  color:#f3f7fc;background:transparent;cursor:pointer}
-header{display:flex;align-items:center;justify-content:space-between}.brand{font-size:20px;font-weight:750;color:inherit}.back-inbox,.back{padding:12px;border:1px solid #34495b;border-radius:10px;background:none;color:#b4d4ff;font:inherit;cursor:pointer}.choices span{display:block;color:#abb9c8;font-size:13px;margin-top:5px}.choices b{font-size:16px}.add-title{font-size:20px;margin-top:30px}.step-label{font-size:13px}form,.panel{max-width:none}.panel{background:#172534;border:1px solid #34495b;border-radius:16px;padding:22px}.panel h2{margin-top:0}.panel[hidden],[hidden]{display:none!important}li{margin:10px 0;color:#d5e4f4;line-height:1.5}form details{margin-top:16px}summary{cursor:pointer;padding:10px 0}.submit{display:inline-block;text-decoration:none}.secondary{display:inline-block;margin:12px 8px;padding:12px;border:1px solid #53697b;border-radius:10px;background:none;color:#f3f7fc;font:inherit;cursor:pointer}.connected{margin-top:20px}.empty{padding:18px;border:1px dashed #53697b;border-radius:12px}.note{padding:14px;border-radius:10px;background:#243b53}button,a,input{touch-action:manipulation}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid #8cc1ff;outline-offset:3px}@media(max-width:600px){body{padding:18px 14px 50px}.choices{grid-template-columns:1fr 1fr}.connected .account{align-items:flex-start}.back-inbox{font-size:14px}.panel,form{padding:18px}}
-#sip-connections .account{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;padding:15px 0;border-top:1px solid #34495b}#sip-connections .account span{flex-basis:100%;line-height:1.5}#sip-connections button{min-height:44px;padding:10px 14px;border:1px solid #53697b;border-radius:10px;background:none;color:#f3f7fc;font:inherit;cursor:pointer}
-</style></head>
-<body>
-<header><a class="brand" href="/">UserIO</a><a class="back-inbox" href="/">К сообщениям →</a></header>
-<section id="overview"><h1>Ваши аккаунты</h1><p>Все ваши сообщения в одном месте. Подключите нужные сервисы — каждый аккаунт остаётся вашим.</p>
-<section class="connected" aria-label="Подключённые аккаунты"><div id="connected-list">Загружаю ваши подключения…</div></section>
-<h2 class="add-title">Подключить аккаунт</h2><nav class="choices" aria-label="Выберите сервис">
-<button type="button" data-open="telegram"><b>Telegram</b><span>QR или номер телефона</span></button>
-<button type="button" data-open="max"><b>MAX</b><span>Личные переписки</span></button>
-<button type="button" data-open="whatsapp"><b>WhatsApp</b><span>Связанное устройство</span></button>
-<button type="button" data-open="vk-personal"><b>ВКонтакте</b><span>Личный Мессенджер</span></button>
-<button type="button" data-open="gmail"><b>Gmail</b><span>Пароль приложения Google</span></button>
-<button type="button" data-open="yandex"><b>Яндекс.Почта</b><span>Пароль приложения Яндекса</span></button>
-<button type="button" data-open="imap"><b>Другая почта</b><span>Любой ящик с IMAP</span></button>
-<button type="button" data-open="matrix"><b>Matrix</b><span>SSO или пароль</span></button>
-<button type="button" data-open="sms"><b>SMS на Android</b><span>С root и без root</span></button>
-<button type="button" data-open="calls"><b>Звонки</b><span>SIM-шлюз и SIP</span></button>
+<link rel="stylesheet" href="/assets/userio-onboarding.css"><style>
+.userio-setup-page form:not(.active) { display: none; }
+.userio-setup-page form.active { display: block; }
+.userio-setup-page .back-inbox,
+.userio-setup-page .back { border: 1px solid var(--uo-border); border-radius: 10px; padding: 9px 12px; background: transparent; color: var(--uo-text); }
+.userio-setup-page .connected { margin-top: 18px; }
+.userio-setup-page .connected .account { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--uo-border); font-size: 14px; }
+.userio-setup-page .connected button { border: 1px solid var(--uo-border); background: transparent; color: var(--uo-text); }
+.userio-setup-page .empty { padding: 18px; border: 1px dashed var(--uo-border); border-radius: 12px; }
+.userio-setup-page #sip-connections .account { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; padding: 15px 0; border-top: 1px solid var(--uo-border); }
+.userio-setup-page #sip-connections .account span { flex-basis: 100%; line-height: 1.5; }
+.userio-setup-page #sip-connections button { min-height: 44px; padding: 10px 14px; border: 1px solid var(--uo-border); background: transparent; color: var(--uo-text); }
+.userio-setup-page .hint,
+.userio-setup-page .small { font-size: 13px; color: var(--uo-muted); }
+.userio-setup-page .userio-status { min-height: 24px; white-space: pre-wrap; }
+</style><script src="/assets/userio-onboarding-theme.js"></script></head>
+<body class="userio-setup-page"><div class="userio-setup-shell">
+<header class="userio-setup-header"><a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a><nav class="userio-setup-nav"><a class="back-inbox" href="/">К сообщениям →</a></nav></header>
+<main class="userio-setup-main"><section id="overview"><h1 class="userio-setup-title">Ваши аккаунты</h1><p class="userio-setup-lead">Все ваши сообщения в одном месте. Подключите нужные сервисы — каждый аккаунт остаётся вашим.</p>
+<section class="connected userio-setup-panel" aria-label="Подключённые аккаунты"><div id="connected-list">Загружаю ваши подключения…</div></section>
+<h2 class="userio-setup-section-title">Подключить аккаунт</h2><nav class="userio-choice-grid" aria-label="Выберите сервис">
+<button class="userio-choice" type="button" data-open="telegram"><strong>Telegram</strong><small>QR или номер телефона</small></button>
+<button class="userio-choice" type="button" data-open="max"><strong>MAX</strong><small>Личные переписки</small></button>
+<button class="userio-choice" type="button" data-open="whatsapp"><strong>WhatsApp</strong><small>Связанное устройство</small></button>
+<button class="userio-choice" type="button" data-open="vk-personal"><strong>ВКонтакте</strong><small>Личный Мессенджер</small></button>
+<button class="userio-choice" type="button" data-open="gmail"><strong>Gmail</strong><small>Пароль приложения Google</small></button>
+<button class="userio-choice" type="button" data-open="yandex"><strong>Яндекс.Почта</strong><small>Пароль приложения Яндекса</small></button>
+<button class="userio-choice" type="button" data-open="imap"><strong>Другая почта</strong><small>Любой ящик с IMAP</small></button>
+<button class="userio-choice" type="button" data-open="matrix"><strong>Matrix</strong><small>SSO или пароль</small></button>
+<button class="userio-choice" type="button" data-open="sms"><strong>SMS на Android</strong><small>С root и без root</small></button>
+<button class="userio-choice" type="button" data-open="calls"><strong>Звонки</strong><small>SIM-шлюз и SIP</small></button>
 </nav></section>
 <div id="setup-head" hidden><button id="back-accounts" type="button" class="back">← Все аккаунты</button><p class="step-label">Выберите сервис → Подключите → Проверьте</p></div>
-<form id="matrix">
+<form id="matrix" class="userio-setup-panel">
 <h2>Matrix</h2><ol><li>Укажите адрес своего Matrix-сервера.</li><li>Нажмите «Войти через SSO» или введите Matrix ID и пароль.</li><li>Проверьте подключённый профиль и откройте сообщения.</li></ol>
 <label>Адрес Matrix-сервера<input name="homeserver" type="url" value="https://chat.bezrabotnyi.com" required autocomplete="url"></label>
 <label>Ваш Matrix ID<input name="user_id" placeholder="@bezrabotnyi:chat.bezrabotnyi.com" autocomplete="username"></label>
@@ -55,7 +50,7 @@ header{display:flex;align-items:center;justify-content:space-between}.brand{font
 <p class="hint">После входа проверяем Matrix ID через сервер. Существующие аккаунты других пользователей не меняются.</p>
 <button class="submit" type="submit">Подключить Matrix</button>
 </form>
-<form id="imap">
+<form id="imap" class="userio-setup-panel">
 <h2 id="mail-title">Другая почта</h2><ol id="mail-steps"><li>Разрешите IMAP в настройках ящика.</li><li>Создайте пароль приложения для почты.</li><li>Введите адрес и пароль — проверим доступ.</li></ol><p id="mail-help"></p><details id="mail-server-settings"><summary>Настройки сервера</summary>
 <label>IMAP-сервер<input name="host" placeholder="imap.example.com" required autocomplete="off"></label>
 <label>Порт TLS<input name="port" type="number" min="1" max="65535" value="993" required></label>
@@ -64,17 +59,17 @@ header{display:flex;align-items:center;justify-content:space-between}.brand{font
 <p class="hint">IMAP только через TLS. Письма загружаются без установки отметки «прочитано». Отправка SMTP пока не подключается.</p>
 <button class="submit" type="submit">Подключить почту</button>
 </form>
-<form id="vk-personal" autocomplete="off">
+<form id="vk-personal" class="userio-setup-panel" autocomplete="off">
 <h2>ВКонтакте</h2><ol><li>Нажмите «Войти через VK Мессенджер» и подтвердите свой аккаунт.</li><li>Скопируйте итоговый адрес из адресной строки и вставьте ниже.</li><li>Нажмите «Проверить и подключить».</li></ol>
 <p>Одноразовая авторизация, затем история и новые сообщения синхронизируются с сервера UserIO. Chrome или расширение постоянно держать открытыми не нужно.</p>
-<p><a id="vk-personal-login" href="https://id.vk.ru/auth?app_id=51453752&scope=messages%2Coffline&response_type=silent_token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=1.60.0" target="_blank" rel="noopener noreferrer" class="submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
+<p><a id="vk-personal-login" href="https://id.vk.ru/auth?app_id=51453752&scope=messages%2Coffline&response_type=silent_token&redirect_uri=https%3A%2F%2Foauth.vk.ru%2Fblank.html&v=1.60.0" target="_blank" rel="noopener noreferrer" class="userio-setup-button submit" style="display:inline-block;text-decoration:none">Войти через VK Мессенджер ↗</a></p>
 <p class="hint">После подтверждения входа скопируйте полный адрес итоговой страницы <code>oauth.vk.ru/blank.html</code> из адресной строки и вставьте ниже. Поддерживаются оба ответа VK: токен и одноразовый результат входа. Если VK не дал доступ к сообщениям, UserIO сообщит об этом и не подключит пустой аккаунт. Не пересылайте адрес или токен в переписку.</p>
 <label>Адрес успешной авторизации или токен<input name="authorization" type="password" autocomplete="off" spellcheck="false" required placeholder="Вставьте адрес страницы авторизации VK"></label>
 <details><summary>Проверить конкретный VK ID</summary><label>Ожидаемый VK ID (необязательно)<input name="user_id" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Проверим, что это ваш аккаунт"></label></details>
 <p class="hint">UserIO самостоятельно проверит личные диалоги и историю. Если VK не разрешит чтение, аккаунт не будет помечен подключённым. Ваш текст отправляется из личного аккаунта через кнопку в диалоге. Предложения ИИ требуют подтверждения. Отметки о прочтении не отправляются.</p>
 <button class="submit" type="submit">Проверить и подключить</button><details><summary>Нужно подключить сообщество или расширение?</summary><p><button type="button" data-open="vk-community">Переписка сообщества</button></p><p><a href="/download">Расширение Chrome: альтернативный способ</a></p></details>
 </form>
-<form id="vk-community">
+<form id="vk-community" class="userio-setup-panel">
 <h2>Подключить переписку VK-сообщества</h2>
 <p>Подключается только inbox сообщества/бота. Личные сообщения вашего VK ID остаются отдельно.</p>
 <label>Числовой ID сообщества<input name="group_id" inputmode="numeric" pattern="[0-9]+" required placeholder="123456789"></label>
@@ -83,17 +78,17 @@ header{display:flex;align-items:center;justify-content:space-between}.brand{font
 <p class="hint">Токен хранится отдельно для вашего пользователя UserIO. Он не выводится в списке аккаунтов. Чтение без изменения статуса прочтения; отправка пока выключена.</p>
 <button class="submit" type="submit">Подключить VK-сообщество</button>
 </form>
-<section class="panel" id="telegram" hidden><h2>Telegram</h2><ol><li>Откройте Telegram на телефоне.</li><li>Перейдите в «Настройки → Устройства → Подключить устройство».</li><li>Запустите вход и отсканируйте QR-код. Если включён облачный пароль, введите его в форме.</li></ol><p>Новый аккаунт должен появиться здесь после подтверждения.</p><a class="submit" href="/telegram-qr/">Перейти к входу в Telegram</a><p class="hint">Не пересылайте код входа или пароль в чат. <a href="/docs#telegram">Подробная инструкция</a></p></section>
-<section class="panel" id="whatsapp" hidden><h2>WhatsApp</h2><p>Для QR откройте эту страницу на компьютере или другом устройстве, а сканируйте в WhatsApp на своём телефоне.</p><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Нажмите «Показать QR-код» ниже и отсканируйте его. Ваш WhatsApp появится в вашем UserIO.</li></ol><button class="submit" type="button" id="wa-begin">Показать QR-код</button><button class="secondary" type="button" id="wa-cancel" hidden>Отменить вход</button><div id="wa-qr" hidden><img alt="QR-код входа в WhatsApp" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p class="hint">Подтверждайте только начатый вами вход. QR действует недолго.</p></div><p id="wa-status" role="status" aria-live="polite"></p><p class="hint">Приложение на телефоне продолжит работать. <a href="/docs#whatsapp">Подробная инструкция</a></p></section>
-<section class="panel" id="max" hidden><h2>MAX</h2><ol><li>Откройте MAX на телефоне, в котором уже выполнен вход.</li><li>Покажите QR на компьютере или втором экране. В MAX на своём телефоне выберите «Профиль → Устройства → Войти по QR-коду».</li><li>Отсканируйте QR-код и подтвердите вход на телефоне. Проверим профиль и сохраним его в вашем UserIO.</li></ol><button class="submit" type="button" id="max-begin">Показать QR-код</button><button class="secondary" type="button" id="max-cancel" hidden>Отменить вход</button><div id="max-qr" hidden><img alt="QR-код входа в MAX" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p><a id="max-mobile-link" class="secondary" rel="noopener noreferrer" target="_blank">Открыть MAX и инструкцию ↗</a></p><p class="hint">Покажите QR на компьютере или другом экране. В MAX на своём телефоне откройте Профиль → Устройства → Войти по QR-коду. Ссылка выше открывает инструкцию в MAX, но сама не подтверждает вход. QR действует недолго.</p></div><p id="max-status" role="status" aria-live="polite"></p><p class="hint">Сессии приложения на телефоне остаются на месте. <a href="/docs#max">Подробная инструкция</a></p></section>
-<section class="panel" id="sms" hidden><h2>SMS на Android</h2><ol><li>Установите SMS Agent APK. Подойдёт Android 8+ с root или без него.</li><li>Разрешите SMS и работу приложения в фоне. Скопируйте ID устройства.</li><li>Получите настройки своего телефона, вставьте их в приложение и запустите.</li></ol><a class="submit" href="/connect-phone#sms">Подключить свой телефон</a><a class="secondary" href="/sms-gateway/agent/download" download>Скачать APK</a><p class="hint">Токен выдаётся только вашему телефону. <a href="/docs#phone">Инструкция</a></p></section>
-<section class="panel" id="calls" hidden><h2>Звонки через SIM</h2>
+<section class="userio-setup-panel panel" id="telegram" hidden><h2>Telegram</h2><ol><li>Откройте Telegram на телефоне.</li><li>Перейдите в «Настройки → Устройства → Подключить устройство».</li><li>Запустите вход и отсканируйте QR-код. Если включён облачный пароль, введите его в форме.</li></ol><p>Новый аккаунт должен появиться здесь после подтверждения.</p><a class="userio-setup-button submit" href="/telegram-qr/">Перейти к входу в Telegram</a><p class="hint">Не пересылайте код входа или пароль в чат. <a href="/docs#telegram">Подробная инструкция</a></p></section>
+<section class="userio-setup-panel panel" id="whatsapp" hidden><h2>WhatsApp</h2><p>Для QR откройте эту страницу на компьютере или другом устройстве, а сканируйте в WhatsApp на своём телефоне.</p><ol><li>Откройте WhatsApp на телефоне.</li><li>Выберите «Настройки → Связанные устройства → Привязка устройства».</li><li>Нажмите «Показать QR-код» ниже и отсканируйте его. Ваш WhatsApp появится в вашем UserIO.</li></ol><button class="submit" type="button" id="wa-begin">Показать QR-код</button><button class="secondary" type="button" id="wa-cancel" hidden>Отменить вход</button><div id="wa-qr" hidden><img alt="QR-код входа в WhatsApp" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p class="hint">Подтверждайте только начатый вами вход. QR действует недолго.</p></div><p id="wa-status" class="userio-status" role="status" aria-live="polite"></p><p class="hint">Приложение на телефоне продолжит работать. <a href="/docs#whatsapp">Подробная инструкция</a></p></section>
+<section class="userio-setup-panel panel" id="max" hidden><h2>MAX</h2><ol><li>Откройте MAX на телефоне, в котором уже выполнен вход.</li><li>Покажите QR на компьютере или втором экране. В MAX на своём телефоне выберите «Профиль → Устройства → Войти по QR-коду».</li><li>Отсканируйте QR-код и подтвердите вход на телефоне. Проверим профиль и сохраним его в вашем UserIO.</li></ol><button class="submit" type="button" id="max-begin">Показать QR-код</button><button class="secondary" type="button" id="max-cancel" hidden>Отменить вход</button><div id="max-qr" hidden><img alt="QR-код входа в MAX" style="max-width:260px;width:100%;background:white;border-radius:12px;padding:12px"><p><a id="max-mobile-link" class="secondary" rel="noopener noreferrer" target="_blank">Открыть MAX и инструкцию ↗</a></p><p class="hint">Покажите QR на компьютере или другом экране. В MAX на своём телефоне откройте Профиль → Устройства → Войти по QR-коду. Ссылка выше открывает инструкцию в MAX, но сама не подтверждает вход. QR действует недолго.</p></div><p id="max-status" class="userio-status" role="status" aria-live="polite"></p><p class="hint">Сессии приложения на телефоне остаются на месте. <a href="/docs#max">Подробная инструкция</a></p></section>
+<section class="userio-setup-panel panel" id="sms" hidden><h2>SMS на Android</h2><ol><li>Установите SMS Agent APK. Подойдёт Android 8+ с root или без него.</li><li>Разрешите SMS и работу приложения в фоне. Скопируйте ID устройства.</li><li>Получите настройки своего телефона, вставьте их в приложение и запустите.</li></ol><a class="userio-setup-button submit" href="/connect-phone#sms">Подключить свой телефон</a><a class="secondary" href="/sms-gateway/agent/download" download>Скачать APK</a><p class="hint">Токен выдаётся только вашему телефону. <a href="/docs#phone">Инструкция</a></p></section>
+<section class="userio-setup-panel panel" id="calls" hidden><h2>Звонки через SIM</h2>
 <p>Нужен совместимый Android с <b>root</b>. Для телефона без root подключите <a href="/accounts?service=sms">SMS</a>.</p>
 <ol><li>Установите <a href="https://github.com/pulpoff/gsm2sip/releases" target="_blank" rel="noopener noreferrer">GSM2SIP APK ↗</a> и разрешите root, микрофон и звонки.</li><li>Получите личный SIP-аккаунт ниже. Он подключает ваш телефон к нашему серверу.</li><li>В GSM2SIP укажите SIP server, port 5060, UDP, username и password. Кодеки: PCMU или PCMA. Разрешите работу в фоне.</li></ol>
-<form id="sip-form" class="active"><label>Название телефона<input name="display_name" maxlength="80" required placeholder="Мой Android"></label><label>ID телефона<input name="device_id" pattern="[A-Za-z0-9_\-]{3,64}" maxlength="64" required placeholder="Например, my-android"></label><p class="hint">Придумайте постоянный ID для этого телефона. При повторном подключении используйте тот же ID.</p><button class="submit" type="submit">Получить SIP-настройки</button></form>
-<p id="sip-status" role="status" aria-live="polite"></p><div id="sip-settings" hidden><h3>Настройки вашего телефона</h3><label>Сервер<input id="sip-server" readonly></label><label>Имя пользователя<input id="sip-username" readonly></label><label>Пароль<input id="sip-password" type="password" readonly autocomplete="off"></label><button class="secondary" type="button" id="sip-show-password">Показать пароль</button><p class="hint">Порт 5060 · UDP · PCMU / PCMA. Не передавайте пароль другим людям.</p></div>
+<form id="sip-form" class="userio-setup-panel active"><label>Название телефона<input name="display_name" maxlength="80" required placeholder="Мой Android"></label><label>ID телефона<input name="device_id" pattern="[A-Za-z0-9_\-]{3,64}" maxlength="64" required placeholder="Например, my-android"></label><p class="hint">Придумайте постоянный ID для этого телефона. При повторном подключении используйте тот же ID.</p><button class="submit" type="submit">Получить SIP-настройки</button></form>
+<p id="sip-status" class="userio-status" role="status" aria-live="polite"></p><div id="sip-settings" hidden><h3>Настройки вашего телефона</h3><label>Сервер<input id="sip-server" readonly></label><label>Имя пользователя<input id="sip-username" readonly></label><label>Пароль<input id="sip-password" type="password" readonly autocomplete="off"></label><button class="secondary" type="button" id="sip-show-password">Показать пароль</button><p class="hint">Порт 5060 · UDP · PCMU / PCMA. Не передавайте пароль другим людям.</p></div>
 <div id="sip-connections"></div><button type="button" id="sip-refresh" class="secondary">Обновить статус телефона</button><p class="hint">Выдача настроек и регистрация SIP — первый шаг. Маршрут звонка и двухсторонний звук проверяются отдельно; пока звонки не прошли проверку, UserIO не показывает их доступными. <a href="/docs#phone">Подробная инструкция</a></p></section>
-<p id="status" role="status" aria-live="polite"></p><section id="success" class="panel" hidden><h2>Аккаунт подключён</h2><p id="success-name"></p><a class="submit" href="/">Открыть сообщения</a><button class="secondary" id="connect-another" type="button">Подключить ещё</button></section>
+<p id="status" class="userio-status" role="status" aria-live="polite"></p><section id="success" class="userio-setup-panel panel" hidden><h2>Аккаунт подключён</h2><p id="success-name"></p><a class="userio-setup-button submit" href="/">Открыть сообщения</a><button class="secondary" id="connect-another" type="button">Подключить ещё</button></section>
 <script>
 // VK binds its temporary result to the UUID supplied before authorization.
 // Each form load starts a new attempt. Adding a UUID after the callback
@@ -319,4 +314,4 @@ for(const [kind,form] of Object.entries(forms)){
    finally{button.disabled=false;}
  });
 }
-</script></body></html>
+</script></main></div></body></html>
