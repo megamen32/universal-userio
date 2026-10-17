@@ -712,6 +712,7 @@ def handler(
                         message_id=str(payload.get("message_id") or "").strip(),
                         emoji=str(payload.get("emoji") or "").strip(),
                         confirm=payload.get("confirm") is True, user_id=user_id,
+                        request_id=str(payload.get('request_id') or ''), principal=principal,
                     )
                     self._reply(200, result)
                     return

@@ -68,7 +68,7 @@ const channelIcon = (source: string) => {
 }
 const displayChannel = (source: string) => {
   const provider = providerForSource(source)
-  return ({ telegram: "Telegram", whatsapp: "WhatsApp", gmail: "Почта", max: "MAX", vk: "VK", matrix: "Matrix", sms: "СМС", phone: "Звонки", telemost: "Встречи", yandex: "Яндекс", chatgpt: "ChatGPT" } as Record<string, string>)[provider] || provider[0]?.toUpperCase() + provider.slice(1)
+  return ({ telegram: "Telegram", whatsapp: "WhatsApp", gmail: "Почта", max: "MAX", vk: "VK", matrix: "Matrix", sms: "СМС", phone: "Звонки", telemost: "Яндекс Телемост", yandex: "Яндекс Телемост", chatgpt: "ChatGPT" } as Record<string, string>)[provider] || provider[0]?.toUpperCase() + provider.slice(1)
 }
 const chatKindLabel = (kind?: string) => (Object.entries({ group: "Группа", channel: "Канал", direct: "Личный чат", telegram_bot: "Бот", unknown: "Тип не определён" }).find(([key]) => key === kind)?.[1] || "Тип не определён")
 
@@ -297,6 +297,8 @@ export function App() {
   const [editingMessage, setEditingMessage] = useState<Message | null>(null)
   const [messageEditBody, setMessageEditBody] = useState("")
   const [messageEditBusy, setMessageEditBusy] = useState(false)
+  const [reactionBusy, setReactionBusy] = useState("")
+  const [reactionNotice, setReactionNotice] = useState<{ messageId: string; text: string } | null>(null)
   const [approvingDraft, setApprovingDraft] = useState("")
   const approvalInFlight = useRef(false)
   const [editDraftId, setEditDraftId] = useState("")
@@ -378,10 +380,11 @@ export function App() {
   const canReply = sendEnabled && (!conversationAccount || conversationAccount.capabilities.includes("reply"))
   const canDownload = userCapabilities.download
   const canVkRich = !!conversation && conversation.source === "vk" && /^vk:\d+$/.test(conversation.account_ref || "") && canReply
+  const canReact = !!conversation && ["telegram", "max", "vk"].includes(conversation.source) && canReply
   const canAttach = !!conversation && supportsFileUpload(conversation.source, conversation.account_ref || '') && canReply
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
-  const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))])).sort((a, b) => {
-    const order = ["telegram", "whatsapp", "gmail", "max", "vk", "matrix", "sms", "phone", "telemost", "yandex", "chatgpt"]
+  const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))].map(source => source === "telemost" ? "yandex" : source))).sort((a, b) => {
+    const order = ["telegram", "whatsapp", "gmail", "max", "vk", "matrix", "sms", "phone", "yandex", "chatgpt"]
     return (order.indexOf(a) < 0 ? 99 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 99 : order.indexOf(b)) || a.localeCompare(b)
   }), [accounts, chats])
 
@@ -864,6 +867,21 @@ export function App() {
       notify(`Не удалось изменить: ${(error as Error).message}`)
     } finally { setMessageEditBusy(false) }
   }
+  const reactToMessage = async (message: Message, emoji: string) => {
+    if (!conversation || !canReact || reactionBusy) return
+    setReactionBusy(message.message_id)
+    setReactionNotice(null)
+    try {
+      const result = await api<{ ok: boolean; error?: string }>('/v1/react', { method: 'POST', body: JSON.stringify({
+        conversation_id: conversation.id, message_id: message.message_id, emoji,
+        confirm: true, request_id: `web-react-${crypto.randomUUID()}`,
+      }) })
+      if (!result.ok) throw new Error(result.error || 'Не удалось поставить реакцию')
+      setReactionNotice({ messageId: message.message_id, text: 'Реакция поставлена' })
+    } catch (error) {
+      setReactionNotice({ messageId: message.message_id, text: `Результат не подтверждён: ${(error as Error).message}. Не нажимайте повторно, пока не проверите сообщение в мессенджере.` })
+    } finally { setReactionBusy('') }
+  }
   const createChat = async () => {
     const target = newChatPhone.trim()
     const normalizedTarget = newChatSource === "sms" || newChatSource === "phone"
@@ -1325,6 +1343,10 @@ export function App() {
                 : system
                 ? <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className="my-1 text-center"><span className="inline-flex max-w-[88%] items-center gap-2 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"><MessageBody message={message} conversationId={conversation.id} onAttachmentClick={openAttachment} /><span className="text-[10px] opacity-70">{timeHM(message.received_at)}</span></span></div>
                 : <div data-read-message={message.message_id} data-phone-message={conversation.source === 'phone' ? message.message_id : undefined} className={isHtmlEmail ? "w-full overflow-hidden bg-transparent text-sm" : `self-start w-fit min-w-0 max-w-[88%] overflow-hidden [overflow-wrap:anywhere] rounded-[18px] px-3.5 py-2.5 text-sm shadow-sm md:max-w-[72%] ${outgoing ? "ml-auto rounded-br-[6px] bg-[#2f80ed] text-white" : "rounded-bl-[6px] border border-black/5 bg-white text-slate-900 dark:border-white/5 dark:bg-[#182533] dark:text-slate-100"}`}>{author && <p data-message-author={message.message_id} className={`mb-1 text-xs font-semibold ${outgoing ? "text-white/90" : "text-blue-700 dark:text-blue-300"}`}>{author}</p>}{isHtmlEmail ? <><div className="flex items-center justify-end bg-background px-1 pb-2"><Button variant="outline" size="sm" onClick={() => setExpandedHtml({ body: message.body, title: titleOf(conversation) })}><Expand /> Развернуть</Button></div><iframe className="min-h-[360px] w-full border-0 bg-white" sandbox="" srcDoc={message.body} title={`Email ${message.message_id}`} /></> : editingMessage?.message_id === message.message_id ? <div className="space-y-2"><textarea aria-label="Изменить сообщение" className="min-h-16 w-full rounded bg-background p-2 text-foreground" value={messageEditBody} onChange={event => setMessageEditBody(event.target.value)} /><div className="flex gap-2"><Button variant="secondary" size="sm" disabled={messageEditBusy} onClick={() => setEditingMessage(null)}>Отмена</Button><Button variant="secondary" size="sm" disabled={messageEditBusy || !messageEditBody.trim()} onClick={() => void saveMessageEdit()}>Сохранить изменение</Button></div></div> : <MessageBody message={message} conversationId={conversation.id} onAttachmentClick={openAttachment} />}{(conversation.source === "max" || canVkRich) && outgoing && canReply && (canVkRich || canEditMaxText(message.attachments)) && !!message.body.trim() && editingMessage?.message_id !== message.message_id && <button className="mt-1 block text-xs underline opacity-80" onClick={() => { setEditingMessage(message); setMessageEditBody(message.body) }}>Изменить сообщение</button>}<p className={`mt-1 px-1 text-[11px] ${outgoing && !isHtmlEmail ? "text-white/65" : "text-muted-foreground"}`}>{timeHM(message.received_at)}{message.edited_at ? " · изменено" : ""}{conversation.source === "telegram" && message.provider_read != null ? (message.provider_read ? (outgoing ? " · Прочитано собеседником" : " · Прочитано в Telegram") : (outgoing ? " · Отправлено" : " · Не прочитано в Telegram")) : conversation.source === "vk" && outgoing ? " · Отправлено в VK" : ""}</p></div>}
+              {canReact && !system && <div className={`flex items-center gap-1 px-1 ${outgoing ? 'ml-auto' : ''}`} aria-label={`Реакции на сообщение ${message.message_id}`}>
+                {['👍', '❤️', '😂', '🔥'].map(emoji => <button key={emoji} type="button" className="rounded-full border bg-card px-2 py-1 text-sm hover:bg-muted disabled:opacity-50" aria-label={`Поставить реакцию ${emoji}`} title={`Поставить ${emoji}`} disabled={!!reactionBusy} onClick={() => void reactToMessage(message, emoji)}>{reactionBusy === message.message_id ? '…' : emoji}</button>)}
+                {reactionNotice?.messageId === message.message_id && <span role="status" className="max-w-56 text-[10px] text-muted-foreground">{reactionNotice.text}</span>}
+              </div>}
               {message.call_audio && <CallAudio recording={message.call_audio} />}
             </Fragment>
           })}

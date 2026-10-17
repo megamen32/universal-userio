@@ -778,7 +778,7 @@ class UserIOService:
 
     def react_to_message(
         self, *, conversation_id: str, message_id: str, emoji: str,
-        confirm: bool, user_id: str | None = None,
+        confirm: bool, user_id: str | None = None, request_id: str = '', principal=None,
     ) -> dict[str, object]:
         if confirm is not True:
             return {"ok": False, "error": "exact_confirmation_required"}
@@ -793,19 +793,20 @@ class UserIOService:
         if conversation is None:
             return {"ok": False, "error": "conversation_not_found"}
         source = str(conversation.get("source") or "")
-        outbox_react = (
-            getattr(self.telegram_outbox, "react", None)
-            if self.telegram_outbox is not None else None
-        )
-        if source != "telegram" or not callable(outbox_react):
+        if source not in {"telegram", "max", "vk"}:
             return {"ok": False, "error": "reaction_not_supported_for_source"}
-        receipt = outbox_react(
-            chat=str(conversation.get("sender") or ""),
-            chat_id=str(conversation.get("peer_id") or ""),
-            account_ref=str(conversation.get("account_ref") or ""),
-            message_id=message_id, emoji=emoji,
-        )
-        return {"ok": True, "reacted": True, "source": source, "receipt": receipt}
+        from .messenger import Messenger
+        principal = principal or self._store.owner()
+        if principal.user_id != resolved_user:
+            return {"ok": False, "error": "principal_user_mismatch"}
+        messenger = Messenger(self._store, self, principal)
+        account_ref = str(conversation.get('account_ref') or '')
+        request_id = request_id or ('web-react-' + uuid.uuid4().hex)
+        proposed = messenger.propose(account_ref, conversation_id, message_id,
+            'react', {'emoji':emoji}, request_id)
+        accepted = messenger.approve(proposed['id'], proposed['hash'], True)
+        return {"ok": True, "reacted": accepted['status'] == 'accepted',
+            "source": source, "action": accepted, "receipt": accepted.get('receipt')}
 
     def deep_workspace_triage(
         self, *, event_seq: int, request_id: str, actor: str,

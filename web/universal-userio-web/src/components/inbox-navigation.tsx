@@ -49,7 +49,8 @@ export function InboxNavigation(p: NavigationProps) {
   const { theme, setTheme } = useTheme()
   const [openPlatform, setOpenPlatform] = useState<string | null>(null)
   const activeAccount = p.accounts.find(a => a.id === p.selectedAccount)
-  const activePlatform = activeAccount ? p.provider(activeAccount.provider) : p.selectedChannel
+  const groupPlatform = (source: string) => source === 'telemost' ? 'yandex' : p.provider(source)
+  const activePlatform = activeAccount ? groupPlatform(activeAccount.provider) : p.selectedChannel
   const activeFolder = p.folders.folders.find(f => f.id === p.folders.active)
   const entries = [...STANDARD, ...p.folders.folders.map(f => ({ ...f, short: f.name, Icon: Folder }))]
   return <>
@@ -57,10 +58,10 @@ export function InboxNavigation(p: NavigationProps) {
       <a href="/welcome" className="userio-logo" aria-label="User.io — о сервисе">U</a>
       <div className="userio-rail-scroll">
         <button type="button" className="userio-service" aria-label="Все каналы" aria-pressed={activePlatform === 'all'} onClick={() => p.onSelect('all', 'all')}><InfinityIcon /><span>Все</span></button>
-        {p.platforms.map(platform => {
-          const accounts = p.accounts.filter(a => p.provider(a.provider) === platform)
+        {[...new Set(p.platforms.map(groupPlatform))].map(platform => {
+          const accounts = p.accounts.filter(a => groupPlatform(a.provider) === platform)
           const title = p.label(platform)
-          const short = ({ telegram: 'TG', whatsapp: 'WA', gmail: 'Почта', yandex: 'Яндекс', chatgpt: 'GPT', matrix: 'Matrix', phone: 'Звонки', telemost: 'Встречи' } as Record<string, string>)[platform] || title
+          const short = ({ telegram: 'TG', whatsapp: 'WA', gmail: 'Почта', yandex: 'Яндекс', chatgpt: 'GPT', matrix: 'Matrix', phone: 'Звонки' } as Record<string, string>)[platform] || title
           return <Popover.Root key={platform} open={openPlatform === platform} onOpenChange={value => setOpenPlatform(value ? platform : null)}>
             <Popover.Trigger asChild><button type="button" className="userio-service" data-platform={platform} aria-label={`${title}: выбрать аккаунт`} aria-pressed={activePlatform === platform} title={title}>
               {p.icon(platform)}<span>{short}</span>{(p.unread[platform] || 0) > 0 && <span className="userio-channel-dot" aria-label="Есть непрочитанные" />}
@@ -72,6 +73,7 @@ export function InboxNavigation(p: NavigationProps) {
               <div className="userio-account-options">{accounts.map(a => <button key={a.id} data-account-id={a.id} className="userio-account-option" aria-pressed={p.selectedAccount === a.id} onClick={() => { p.onSelect('all', a.id); setOpenPlatform(null) }}>
                 <span className="userio-account-avatar">{a.display_name.trim().slice(0, 2).toUpperCase()}</span><span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{a.display_name}{a.enabled === false && <span className="block text-xs text-muted-foreground">Отключён</span>}</span>{p.selectedAccount === a.id && <Check className="size-4 shrink-0" />}
               </button>)}</div>
+              {platform === 'yandex' && <a href="/telemost" className="userio-account-option" aria-label="Открыть встречи и записи Яндекс Телемоста"><span className="userio-account-avatar">☎</span><span className="min-w-0 flex-1">Встречи и записи<div className="text-xs text-muted-foreground">Управление встречами и записями</div></span><ChevronRight className="size-4 shrink-0" /></a>}
               <a href="/accounts" className="userio-connect"><Plus className="size-4" />Подключить аккаунт</a>
             </Popover.Content></Popover.Portal>
           </Popover.Root>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from universal_userio.adapters import TelegramQrHttpOutbox
 from universal_userio.ai import OpenAICompatibleDraftGenerator
@@ -267,17 +268,37 @@ def test_failed_triage_keeps_error_detail(tmp_path) -> None:
 def test_react_to_message_routes_telegram_conversation(tmp_path) -> None:
     outbox = _ReactOutbox()
     service = _service(tmp_path, _TriageGenerator(_review_result()), telegram_outbox=outbox)
-    service.receive(InboxMessage("telegram", "c1:12", "Печкин", "вопрос", 1.0, conversation_kind="direct"), route_id="react-test")
-    conversation_id = service._store.workspace_events()["events"][-1]["conversation_id"]
+    account_ref='telegram:1'
+    service._store.register_account(account_id=account_ref, provider='telegram',
+        display_name='Личный Telegram', can_read=True, can_reply=True, credential_ref='telegram-qr:fixture')
+    conversation_id, _ = service.receive(InboxMessage("telegram", "telegram:1|-10042:12", "Печкин", "вопрос", 1.0,
+        peer_id='-10042', conversation_kind="direct"), route_id="react-test", account_ref=account_ref)
 
     result = service.react_to_message(
-        conversation_id=conversation_id, message_id="c1:12", emoji="🐾", confirm=True,
+        conversation_id=conversation_id, message_id="telegram:1|-10042:12", emoji="🐾", confirm=True,
+        request_id='telegram-reaction-request-1',
     )
 
     assert result["ok"] is True
-    assert outbox.calls[0]["message_id"] == "c1:12"
+    assert outbox.calls[0]["account_ref"] == account_ref
+    assert outbox.calls[0]["message_id"] == "12"
     assert outbox.calls[0]["emoji"] == "🐾"
-    assert outbox.calls[0]["chat"] == "Печкин"
+    assert result['action']['status']=='accepted'
+
+
+def test_react_to_message_requires_exact_message_in_conversation(tmp_path) -> None:
+    outbox = _ReactOutbox()
+    service = _service(tmp_path, _TriageGenerator(_review_result()), telegram_outbox=outbox)
+    account_ref='telegram:1'
+    service._store.register_account(account_id=account_ref, provider='telegram',
+        display_name='Личный Telegram', can_read=True, can_reply=True, credential_ref='telegram-qr:fixture')
+    conversation_id, _ = service.receive(InboxMessage("telegram", "telegram:1|-10042:12", "Печкин", "вопрос", 1.0,
+        peer_id='-10042', conversation_kind="direct"), route_id="react-test", account_ref=account_ref)
+    with pytest.raises(KeyError, match='message_not_found'):
+        service.react_to_message(conversation_id=conversation_id,
+            message_id='telegram:1|-10099:12', emoji='👍', confirm=True,
+            request_id='wrong-conversation-request')
+    assert outbox.calls == []
 
 
 def test_react_to_message_requires_exact_confirmation(tmp_path) -> None:

@@ -11,11 +11,11 @@ import urllib.request
 
 from .account_connections import _NoRedirect
 from .messenger import Messenger, canonical
-from .contracts import UserPrincipal
+from .contracts import DeliveryNotSubmittedError, UserPrincipal
 
 
 class TelegramMirrorProvider:
-    operations=frozenset({'history'})
+    operations=frozenset({'history','react'})
 
     def __init__(self, service, account_ref, user_id, opener=None):
         self.service=service; self.account_ref=account_ref; self.authorized_user=user_id
@@ -72,3 +72,24 @@ class TelegramMirrorProvider:
         source=projected['source']
         if (source['account_ref'],source['peer_id'],source['conversation_id'])!=(self.account_ref,peer_id,conversation_id):
             raise ValueError('Telegram projection scope conflict')
+
+    def execute(self, envelope):
+        if (envelope.get('account_ref'), envelope.get('user_id'), envelope.get('action')) != (
+                self.account_ref, self.authorized_user, 'react'):
+            raise DeliveryNotSubmittedError('Telegram reaction account conflict')
+        conversation = self.service._store.conversation(
+            envelope['conversation_id'], user_id=self.authorized_user)
+        if (conversation is None or conversation.get('account_ref') != self.account_ref
+                or str(conversation.get('peer_id')) != str(envelope.get('peer_id'))):
+            raise DeliveryNotSubmittedError('Telegram reaction conversation changed')
+        outbox = getattr(self.service, 'telegram_outbox', None)
+        send = getattr(outbox, 'react', None)
+        if not callable(send):
+            raise DeliveryNotSubmittedError('Telegram reaction route unavailable')
+        result = send(chat=str(conversation.get('sender') or ''),
+            chat_id=str(envelope['peer_id']), account_ref=self.account_ref,
+            message_id=str(envelope['source_provider_message_id']),
+            emoji=str(envelope['payload']['emoji']))
+        return {'account_ref':self.account_ref, 'peer_id':str(envelope['peer_id']),
+            'provider_message_id':str(envelope['source_provider_message_id']),
+            'receipt':result}
