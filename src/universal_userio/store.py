@@ -483,6 +483,20 @@ class SQLiteUserIOStore:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY(user_id,key)
             );
+            CREATE TABLE IF NOT EXISTS user_webhook_settings (
+                user_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                endpoint TEXT NOT NULL,
+                secret_ref TEXT NOT NULL,
+                include_message_text INTEGER NOT NULL DEFAULT 0,
+                cursor INTEGER NOT NULL DEFAULT 0,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at REAL NOT NULL DEFAULT 0,
+                last_attempt_at REAL,
+                last_success_at REAL,
+                last_error TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS conversation_summaries (
                 user_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,
@@ -2757,6 +2771,79 @@ class SQLiteUserIOStore:
             self._connection.execute(
                 "INSERT OR REPLACE INTO user_preferences(user_id,key,value,updated_at) VALUES (?,?,?,?)",
                 (self._user(user_id), key, str(value), time.time()),
+            )
+
+    def webhook_settings(self, *, user_id: str | None = None) -> dict[str, object] | None:
+        user = self._user(user_id)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM user_webhook_settings WHERE user_id=?", (user,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def webhook_users(self) -> list[str]:
+        with self._lock:
+            return [str(row[0]) for row in self._connection.execute(
+                "SELECT user_id FROM user_webhook_settings WHERE enabled=1 ORDER BY updated_at,user_id"
+            ).fetchall()]
+
+    def webhook_event_head(self, *, user_id: str) -> int:
+        with self._lock:
+            return int(self._connection.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM workspace_events WHERE user_id=?",
+                (self._user(user_id),),
+            ).fetchone()[0])
+
+    def save_webhook_settings(self, *, endpoint: str, secret_ref: str,
+                              include_message_text: bool, enabled: bool,
+                              user_id: str | None = None) -> dict[str, object]:
+        user = self._user(user_id)
+        now = time.time()
+        with self._lock, self._connection:
+            head = int(self._connection.execute(
+                "SELECT COALESCE(MAX(seq),0) FROM workspace_events WHERE user_id=?", (user,),
+            ).fetchone()[0])
+            self._connection.execute(
+                """INSERT INTO user_webhook_settings
+                   (user_id,enabled,endpoint,secret_ref,include_message_text,cursor,updated_at)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,
+                     endpoint=excluded.endpoint,secret_ref=excluded.secret_ref,
+                     include_message_text=excluded.include_message_text,cursor=excluded.cursor,
+                     attempt_count=0,next_attempt_at=0,last_attempt_at=NULL,last_error='',updated_at=excluded.updated_at""",
+                (user, int(enabled), endpoint, secret_ref, int(include_message_text), head, now),
+            )
+        return self.webhook_settings(user_id=user) or {}
+
+    def advance_webhook_cursor(self, *, user_id: str, cursor: int, head: int,
+                               delivered: bool = False) -> None:
+        user = self._user(user_id)
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute(
+                """UPDATE user_webhook_settings SET cursor=MAX(cursor,?),attempt_count=0,
+                   next_attempt_at=0,last_attempt_at=COALESCE(?,last_attempt_at),
+                   last_success_at=COALESCE(?,last_success_at),last_error=''
+                   WHERE user_id=?""",
+                (max(0, min(int(cursor), int(head))), now if delivered else None,
+                 now if delivered else None, user),
+            )
+
+    def record_webhook_failure(self, *, user_id: str, message: str, retry_at: float) -> None:
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT attempt_count FROM user_webhook_settings WHERE user_id=?", (user,),
+            ).fetchone()
+            if row is None:
+                return
+            attempts = min(int(row["attempt_count"]) + 1, 12)
+            delay = min(5 * (2 ** min(attempts - 1, 9)), 1800)
+            self._connection.execute(
+                """UPDATE user_webhook_settings SET attempt_count=?,next_attempt_at=?,
+                   last_attempt_at=?,last_error=? WHERE user_id=?""",
+                (attempts, max(float(retry_at), time.time()) + delay, time.time(),
+                 str(message)[:200], user),
             )
 
     def context_settings(self, *, user_id: str | None = None) -> dict[str, object]:

@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import subprocess
 import time
 from base64 import b64decode
@@ -25,7 +26,7 @@ from collections.abc import Mapping
 from . import agent_channel, chatgpt_sessions, collect, vault
 from . import call_audio
 from .account_connections import (
-    connect_matrix, connect_imap, connect_vk_community, connect_vk_personal,
+    ConnectorSecrets, connect_matrix, connect_imap, connect_vk_community, connect_vk_personal,
 )
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
@@ -38,6 +39,7 @@ from .token_permissions import read_only_http_allowed, meeting_recorder_http_all
 from .search import PUBLIC_WEB_URL, run_search_index, search_conversations, search_coverage, search_messages
 from .service import DeliveryUnavailableError, UserIOService
 from .semantic_index import public_settings as public_search_settings
+from .webhooks import send_test as send_webhook_test, validate_webhook_url
 
 
 _STATIC_ROOT = Path(__file__).with_name("static")
@@ -422,6 +424,75 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path == "/v1/webhooks/incoming":
+                    if principal.service_account or principal.read_only or not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "Войдите в личный кабинет с правом чтения"}); return
+                    payload = self._json()
+                    if (set(payload) - {"endpoint", "enabled", "include_message_text", "rotate_secret"}
+                            or type(payload.get("enabled")) is not bool
+                            or type(payload.get("include_message_text")) is not bool
+                            or ("rotate_secret" in payload and type(payload["rotate_secret"]) is not bool)):
+                        self._reply(400, {"error": "Проверьте параметры webhook"}); return
+                    try:
+                        endpoint = validate_webhook_url(str(payload.get("endpoint") or ""))
+                        old = service._store.webhook_settings(user_id=user_id) or {}
+                        vault_store = ConnectorSecrets()
+                        secret = ""
+                        secret_ref = str(old.get("secret_ref") or "")
+                        if secret_ref:
+                            try:
+                                vault_store.load(secret_ref, user_id=user_id, provider="webhook")
+                            except (OSError, ValueError, KeyError):
+                                secret_ref = ""
+                        if not secret_ref or payload.get("rotate_secret") is True:
+                            secret = secrets.token_urlsafe(32)
+                            secret_ref = vault_store.save({
+                                "provider": "webhook", "user_id": user_id,
+                                "kind": "userio-incoming-webhook", "signing_secret": secret,
+                            })
+                        try:
+                            saved = service._store.save_webhook_settings(
+                                endpoint=endpoint, secret_ref=secret_ref,
+                                include_message_text=payload["include_message_text"],
+                                enabled=payload["enabled"], user_id=user_id,
+                            )
+                        except BaseException:
+                            if secret:
+                                vault_store.delete(secret_ref, user_id=user_id, provider="webhook")
+                            raise
+                        old_ref = str(old.get("secret_ref") or "")
+                        if old_ref and old_ref != secret_ref:
+                            try: vault_store.delete(old_ref, user_id=user_id, provider="webhook")
+                            except (OSError, ValueError, KeyError): pass
+                        result = {
+                            "configured": True, "enabled": bool(saved.get("enabled")),
+                            "endpoint": str(saved.get("endpoint") or ""),
+                            "include_message_text": bool(saved.get("include_message_text")),
+                            "secret_configured": True,
+                            "last_attempt_at": saved.get("last_attempt_at"),
+                            "last_success_at": saved.get("last_success_at"),
+                            "last_error": str(saved.get("last_error") or ""),
+                        }
+                        if secret:
+                            result["one_time_signing_secret"] = secret
+                        self._reply(200, result, {"Cache-Control": "no-store"})
+                    except ValueError as error:
+                        self._reply(400, {"error": str(error)})
+                    except (OSError, KeyError, PermissionError):
+                        self._reply(500, {"error": "Не удалось безопасно сохранить настройки webhook"})
+                    return
+                if path == "/v1/webhooks/incoming/test":
+                    if principal.service_account or principal.read_only:
+                        self._reply(403, {"error": "Войдите в личный кабинет"}); return
+                    settings = service._store.webhook_settings(user_id=user_id)
+                    if settings is None:
+                        self._reply(400, {"error": "Сначала сохраните настройки webhook"}); return
+                    try:
+                        send_webhook_test(settings, ConnectorSecrets())
+                    except (ValueError, OSError, RuntimeError):
+                        self._reply(502, {"error": "Проверочный webhook не доставлен. Проверьте адрес и повторите."}); return
+                    self._reply(200, {"ok": True, "message": "Проверочное событие доставлено."}, {"Cache-Control": "no-store"})
+                    return
                 if path.startswith('/v1/personal-tokens/') and path.endswith('/permissions'):
                     if principal.service_account:
                         raise PermissionError('personal login required')
@@ -1655,6 +1726,19 @@ def handler(
                     'can_manage':not principal.read_only and not principal.service_account
                                  and service._store.capability_enabled('read',user_id=user_id)},
                     {'Cache-Control':'no-store'})
+                return
+            if path == "/v1/webhooks/incoming":
+                settings = service._store.webhook_settings(user_id=user_id)
+                self._reply(200, {
+                    "configured": settings is not None,
+                    "enabled": bool(settings and settings.get("enabled")),
+                    "endpoint": str(settings.get("endpoint") or "") if settings else "",
+                    "include_message_text": bool(settings and settings.get("include_message_text")),
+                    "secret_configured": bool(settings and settings.get("secret_ref")),
+                    "last_attempt_at": settings.get("last_attempt_at") if settings else None,
+                    "last_success_at": settings.get("last_success_at") if settings else None,
+                    "last_error": str(settings.get("last_error") or "") if settings else "",
+                }, {"Cache-Control": "no-store"})
                 return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)

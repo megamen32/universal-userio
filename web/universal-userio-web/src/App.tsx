@@ -20,6 +20,7 @@ import { InboxNavigation, InboxFolderTabs, InboxFolderEditor, useInboxFolders } 
 import { accountConnectHref } from "./account-connect.mjs"
 import { inInboxFolder, type InboxFolder } from "./inbox-folders"
 import { ContextSettingsDialog } from "@/components/context-settings-dialog"
+import { WebhookSettingsDialog } from "@/components/webhook-settings-dialog"
 
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
 type AnalysisPolicy = { conversation_id: string; conversation_kind: string; allowed: boolean; action: string }
@@ -288,6 +289,7 @@ export function App() {
   const editFolder = (folder?: InboxFolder) => { setEditingFolder(folder); setFolderEditorOpen(true) }
   const selectFolder = (id: string) => { setSearch(""); inboxFolders.select(id); setSelectedAccount("all"); setSelectedChannel("all"); setMobilePane("chats"); if (window.innerWidth < 768) setSidebarOpen(false) }
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [webhookOpen, setWebhookOpen] = useState(false)
   const [mobilePane, setMobilePane] = useState<"chats" | "chat">("chats")
   const [expandedHtml, setExpandedHtml] = useState<{ body: string; title: string } | null>(null)
   const [attachmentPreview, setAttachmentPreview] = useState<{ message: Message; meta: { kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number } | null; loading: boolean } | null>(null)
@@ -1225,6 +1227,7 @@ export function App() {
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadAiRuns(); setSelectedRun(null); setRunsOpen(true) }}><ChartLine className="size-4" /> Прогон / кошелёк</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => { void loadByok(); void loadPresets(); setByokOpen(true) }}><Sparkles className="size-4" /> Свой ИИ {byokMine ? "· активен" : ""}</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={openContextSettings}><SlidersHorizontal className="size-4" /> Контекст ИИ</Button>
+      <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => setWebhookOpen(true)}>Действие при новом сообщении</Button>
       <Button className="w-full justify-start" variant="ghost" size="sm" onClick={() => setSearchOpen(true)}><SearchIcon className="size-4" /> Смысловой поиск</Button>
       <details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Настройки чтения</summary><label className="flex cursor-pointer items-center justify-between gap-2 py-2"><span>Режим скрытности</span><input aria-label="Режим скрытности" type="checkbox" checked={!autoRead} onChange={event => void setStealth(event.target.checked)} /></label><p className="pb-2">В режиме скрытности просмотр не отмечает сообщения прочитанными. Без него открытый диалог отмечается прочитанным в UserIO и, для Telegram, у собеседника.</p></details><details className="rounded-lg px-2 py-1 text-xs text-muted-foreground"><summary className="cursor-pointer py-1 font-medium text-foreground">Права пользователя</summary><div className="space-y-1 py-1">{([["read", "Чтение"], ["subscribe", "Push"], ["download", "Вложения"], ["send", "Отправка"]] as [keyof UserCapabilities, string][]).map(([name, label]) => <label key={name} className="flex cursor-pointer items-center justify-between gap-2 py-1"><span>{label}</span><input type="checkbox" checked={userCapabilities[name]} onChange={(event) => void setCapability(name, event.target.checked)} /></label>)}</div></details>
       <nav aria-label="О сервисе и исходный код" className="grid grid-cols-2 gap-1 border-t pt-1">
@@ -1445,6 +1448,7 @@ export function App() {
     </section>
     {searchOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setSearchOpen(false)}><div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><header className="mb-3 flex items-center justify-between gap-2"><h2 className="font-semibold">Смысловой поиск по истории</h2><Button variant="ghost" size="icon" onClick={() => setSearchOpen(false)} title="Закрыть"><X /></Button></header><p className="mb-3 text-xs text-muted-foreground">Поиск работает по тексту всегда. Смысловой поиск включается отдельно, индекс хранится в вашей коллекции Qdrant и пополняется в фоне.</p><SemanticSearchPanel session={semanticSearch} /><div className="mt-4 flex justify-end"><Button variant="outline" size="sm" onClick={() => setSearchOpen(false)}>Закрыть</Button></div></div></div>}
     {contextOpen && <ContextSettingsDialog settings={contextSession.draft} loading={contextSession.status === "loading"} ready={contextSession.status === "ready"} loadError={contextSession.loadError} saving={contextSaving} onChange={(draft) => setContextSession((current) => ({ ...current, draft }))} onClose={closeContextSettings} onRetry={requestContextSettings} onSave={() => void saveContextSettings()} />}
+    <WebhookSettingsDialog open={webhookOpen} onClose={() => setWebhookOpen(false)} />
     {newChatOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setNewChatOpen(false)}><div className="w-full max-w-sm rounded-2xl border bg-card p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold">Новое сообщение</h2><p className="mt-1 text-xs text-muted-foreground">Канал: {displayChannel(newChatSource)}. Ваш текст отправляется сразу кнопкой отправки.</p><Input className="mt-3" value={newChatPhone} onChange={(event) => setNewChatPhone(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createChat() }} placeholder={newChatSource === "sms" || newChatSource === "phone" ? "+79XXXXXXXXX" : "Получатель или идентификатор"} autoFocus /><div className="mt-4 flex justify-end gap-2"><Button variant="outline" size="sm" onClick={() => setNewChatOpen(false)}>Отмена</Button><Button size="sm" onClick={() => void createChat()}>Создать</Button></div></div></div>}
   </main>
 }

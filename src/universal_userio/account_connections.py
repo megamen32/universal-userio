@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from .service import UserIOService
 
 log = logging.getLogger("userio.account_connections")
-_PROVIDER_TYPES = frozenset({"matrix", "email", "vk", "max", "yandex"})
+_PROVIDER_TYPES = frozenset({"matrix", "email", "vk", "max", "yandex", "webhook"})
 _ID_RE = re.compile(r"^[a-z0-9]{24,64}$")
 _HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,249}[a-z0-9]$")
 _MX_ID = re.compile(r"^@[^\s:]{1,255}:[a-zA-Z0-9.-]+(?::\d+)?$")

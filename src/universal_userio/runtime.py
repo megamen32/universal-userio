@@ -270,6 +270,9 @@ def main() -> None:
     from .account_connections import UserAccountPoller
     connected_poller = UserAccountPoller(service)
     connected_poller.start()
+    from .webhooks import WebhookDeliveryWorker
+    webhook_delivery = WebhookDeliveryWorker(service._store)
+    webhook_delivery.start()
     # A backend restart must not abandon a recording the worker is still making.
     try:
         from .telemost.meetings import meetings_for
@@ -279,6 +282,7 @@ def main() -> None:
     try:
         server.serve_forever()
     finally:
+        webhook_delivery.close()
         connected_poller.stop.set()
         server.RequestHandlerClass.max_connections.close()
         with service._max_owned_lock:
