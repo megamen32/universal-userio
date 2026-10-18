@@ -91,6 +91,22 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
             <p>UserIO отправляет POST с JSON. Приёмнику нужны заголовки:</p>
             <code className="block break-all rounded-md bg-muted p-2">X-UserIO-Event · X-UserIO-Timestamp · X-UserIO-Signature · Idempotency-Key</code>
             <p>Подпись — HMAC-SHA256 от строки <code>timestamp + "." + исходное тело запроса</code>, результат передаётся как <code>sha256=&lt;hex&gt;</code>. Сверяйте подпись в постоянное время и отклоняйте старые timestamp. Повторы имеют тот же ключ идемпотентности.</p>
+            <p>Событие нового сообщения имеет тип <code>message.received</code> и схему <code>userio.inbound-message.v1</code>. Пример тела без текста переписки:</p>
+            <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-relaxed">{`{
+  "schema": "userio.inbound-message.v1",
+  "event_id": "<стабильный-id>",
+  "event": {
+    "seq": 42,
+    "source": "telegram",
+    "account_ref": "telegram:123",
+    "message_id": "<id-сообщения>",
+    "conversation_id": "<id-чата>",
+    "sender": "Алиса",
+    "received_at": 1792287375.2,
+    "sender_is_bot": false
+  }
+}`}</pre>
+            <p>Кнопка проверки отправляет отдельное событие <code>webhook.test</code> без данных переписки. Успех означает, что адрес ответил HTTP 2xx; это не подтверждает обработку события в Agent Herder.</p>
             <p>Для Agent Herder укажите его совместимый HTTPS webhook-приёмник. UserIO не вызывает MCP-инструменты напрямую.</p>
           </div>
         </details>
