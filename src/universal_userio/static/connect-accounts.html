@@ -10,7 +10,7 @@
 .userio-setup-page .back { border: 1px solid var(--uo-border); border-radius: 10px; padding: 9px 12px; background: transparent; color: var(--uo-text); }
 .userio-setup-page .connected { margin-top: 18px; }
 .userio-setup-page .connected .account { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--uo-border); font-size: 14px; }
-.userio-setup-page #connected-list { max-height: 420px; overflow-y: auto; padding-right: 6px; }
+.userio-setup-page #connected-list { padding-right: 6px; }
 .userio-setup-page .connected button { flex: 0 0 auto; border: 1px solid var(--uo-border); background: var(--uo-panel); color: var(--uo-text); }
 .userio-setup-page .connected button:hover { border-color: var(--uo-accent); background: var(--uo-panel-raised); }
 .userio-setup-page .userio-choice { background: var(--uo-panel) !important; color: var(--uo-text) !important; }
@@ -27,7 +27,7 @@
 <body class="userio-setup-page"><div class="userio-setup-shell">
 <header class="userio-setup-header"><a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a><nav class="userio-setup-nav"><a class="back-inbox" href="/">К сообщениям →</a></nav></header>
 <main class="userio-setup-main"><section id="overview"><h1 class="userio-setup-title">Ваши аккаунты</h1><p class="userio-setup-lead">Все ваши сообщения в одном месте. Подключите нужные сервисы — каждый аккаунт остаётся вашим.</p>
-<section class="connected userio-setup-panel" aria-label="Подключённые аккаунты"><p id="disconnect-status" class="userio-status" role="status"></p><div id="connected-list">Загружаю ваши подключения…</div></section>
+<section class="connected userio-setup-panel" aria-label="Подключённые аккаунты"><p id="disconnect-status" class="userio-status" role="status"></p><p id="connected-count" class="hint">Загружаю список подключений…</p><div id="connected-list">Загружаю ваши подключения…</div></section>
 <h2 class="userio-setup-section-title">Подключить аккаунт</h2><nav class="userio-choice-grid" aria-label="Выберите сервис">
 <button class="userio-choice" type="button" data-open="telegram"><strong>Telegram</strong><small>QR или номер телефона</small></button>
 <button class="userio-choice" type="button" data-open="max"><strong>MAX</strong><small>Личные переписки</small></button>
@@ -111,6 +111,10 @@ async function connectedAccounts(){
   const result=await response.json();
   container.textContent='';
   const accounts=result.accounts||[];
+  const count=document.getElementById('connected-count');
+  count.textContent=accounts.length
+    ?'Подключено: '+accounts.length+' · отключение аккаунта не удаляет сохранённые сообщения.'
+    :'Подключений пока нет.';
   const ownVks=accounts.filter(a=>a.provider==='vk' && /^vk:[0-9]+$/.test(a.id));
   const expected=forms['vk-personal'].elements.user_id;
   if(ownVks.length===1 && !expected.value)expected.value=ownVks[0].id.substring(3);

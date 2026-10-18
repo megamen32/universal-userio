@@ -29,6 +29,10 @@ def test_account_page_uses_server_disconnect_capability_and_shared_card_styles()
     page = Path("src/universal_userio/static/connect-accounts.html").read_text()
     assert "if(account.can_disconnect===true)" in page
     assert "account.disconnect_reason" in page
+    assert "id=\"connected-count\"" in page
+    assert "Подключено: '+accounts.length" in page
+    assert ".userio-setup-page #connected-list { padding-right: 6px; }" in page
+    assert "max-height: 420px" not in page
     assert ".userio-setup-page .userio-choice" in page
     assert "const managed=" not in page
 
