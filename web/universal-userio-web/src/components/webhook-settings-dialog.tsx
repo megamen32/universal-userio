@@ -100,8 +100,9 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
   }
 
   return <div className="fixed inset-0 z-[70] grid place-items-start bg-black/60 p-2 sm:place-items-center sm:p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
-    <section role="dialog" aria-modal="true" aria-labelledby="webhook-title" className="max-h-[calc(100svh-1rem)] min-h-0 w-full max-w-lg touch-pan-y overflow-y-auto overscroll-contain rounded-2xl border bg-background p-4 shadow-2xl sm:max-h-[90svh] sm:p-5">
-      <header><h2 id="webhook-title" className="text-lg font-semibold">Передача новых сообщений</h2><p className="mt-1 text-sm text-muted-foreground">Это настройка отправки новых входящих сообщений в другую систему, а не всплывающие уведомления браузера.</p></header>
+    <section role="dialog" aria-modal="true" aria-labelledby="webhook-title" className="flex max-h-[calc(100svh-1rem)] min-h-0 w-full max-w-lg flex-col overflow-hidden rounded-2xl border bg-background p-4 shadow-2xl sm:max-h-[90svh] sm:p-5">
+      <header className="shrink-0"><h2 id="webhook-title" className="text-lg font-semibold">Передача новых сообщений</h2><p className="mt-1 text-sm text-muted-foreground">Это настройка отправки новых входящих сообщений в другую систему, а не всплывающие уведомления браузера.</p></header>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y">
       {loading ? <p className="py-8 text-sm text-muted-foreground">Загружаю настройки…</p> : loadFailed ? <div className="mt-4 space-y-3 rounded-xl border border-destructive/40 p-4">
         <p className="text-sm font-medium">Не удалось загрузить настройки</p>
         <p role="alert" className="text-sm text-destructive">{error}</p>
@@ -110,13 +111,13 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
       </div> : settingsLoaded && <div className="mt-4 space-y-4">
         <div className="rounded-xl bg-muted/50 p-3 text-sm">
           <p className="font-medium">Сначала подготовьте систему, которая будет принимать сообщения</p>
-          <p className="mt-2 text-sm text-muted-foreground">Попросите её администратора дать вам HTTPS-адрес и заранее сказать, куда безопасно добавить ключ подписи. Для Agent Herder администратор GPTAdmin настраивает приём UserIO и передачу в нужную сессию. Одного MCP-подключения недостаточно.</p>
+          <p className="mt-2 text-sm text-muted-foreground">Попросите администратора дать адрес, начинающийся с <code>https://</code>, и заранее объяснить, как безопасно передать ключ — секретный пароль UserIO. Не отправляйте его обычным сообщением. Для Agent Herder администратор GPTAdmin принимает сообщения UserIO и направляет их в нужную сессию. Подключение ИИ через MCP само по себе сообщения не принимает.</p>
           <div className="mt-2 rounded-lg border bg-background/50 p-3">
             <p className="text-sm font-medium">Текст просьбы администратору</p>
-            <p className="mt-1 text-sm text-muted-foreground">«Настрой приём новых сообщений UserIO в GPTAdmin и передачу в нужную сессию Agent Herder. Пришли HTTPS-адрес и скажи, куда безопасно добавить ключ подписи. Не включай приём, пока ключ не будет установлен».</p>
+            <p className="mt-1 text-sm text-muted-foreground">«Настрой в GPTAdmin приём новых сообщений UserIO и передачу в нужную сессию Agent Herder. Пришли адрес, начинающийся с https://, и объясни, как безопасно передать секретный ключ UserIO. Не включай отправку, пока ключ не добавлен».</p>
             <Button className="mt-2" size="sm" variant="outline" onClick={async () => {
               try {
-                await navigator.clipboard.writeText("Настрой приём новых сообщений UserIO в GPTAdmin и передачу в нужную сессию Agent Herder. Пришли HTTPS-адрес и скажи, куда безопасно добавить ключ подписи. Не включай приём, пока ключ не будет установлен.")
+                await navigator.clipboard.writeText("Настрой в GPTAdmin приём новых сообщений UserIO и передачу в нужную сессию Agent Herder. Пришли адрес, начинающийся с https://, и объясни, как безопасно передать секретный ключ UserIO. Не включай отправку, пока ключ не добавлен.")
                 setRequestCopied(true)
                 setRequestCopyError(false)
               } catch {
@@ -128,8 +129,8 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
             {requestCopyError && <p role="status" className="mt-1 text-xs text-muted-foreground">Не удалось скопировать. Выделите текст просьбы выше и скопируйте вручную.</p>}
           </div>
           {!settings.configured ? <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-            <li>Когда получите адрес, вставьте его ниже и нажмите «Сохранить», оставив «Отправлять события» выключенным. UserIO покажет ключ подписи один раз.</li>
-            <li>Добавьте ключ в защищённое хранилище получателя. Когда администратор подтвердит это, включите «Отправлять события» и сохраните ещё раз. Текст сообщений останется выключенным.</li>
+            <li>Когда получите адрес, вставьте его ниже и нажмите «Сохранить», оставив «Отправлять события» выключенным. UserIO покажет секретный ключ один раз.</li>
+            <li>Добавьте ключ в защищённое хранилище паролей получателя. Когда администратор подтвердит это, включите «Отправлять события» и сохраните ещё раз. Текст сообщений останется выключенным.</li>
           </ol> : !settings.enabled ? <p className="mt-3 text-sm text-muted-foreground">Адрес сохранён, передача выключена. Включайте «Отправлять события» и сохраняйте только после того, как администратор установит ключ в защищённое хранилище. Если ключ не сохранили, перевыпустите его, пока передача выключена.</p> : <p className="mt-3 text-sm text-muted-foreground">Передача включена: новые входящие отправляются получателю. Текст сообщений добавляется только по отдельному переключателю ниже.</p>}
         </div>
         <label className="block space-y-1 text-sm"><span>HTTPS-адрес получателя</span><Input type="url" inputMode="url" autoComplete="url" placeholder="Например, https://ваш-сервис.example/…" value={settings.endpoint} onChange={event => setSettings(current => ({ ...current, endpoint: event.target.value }))} /></label>
@@ -187,8 +188,9 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
         <p className="text-xs text-muted-foreground">Отправляются только новые входящие сообщения из чатов, разрешённых в настройках обработки. Ссылка принимает только публичные HTTPS-адреса; каждый запрос содержит HMAC-подпись и ключ идемпотентности.</p>
-        <footer className="flex flex-wrap justify-end gap-2 border-t pt-3"><Button variant="outline" onClick={onClose}>Закрыть</Button><span className="flex flex-col items-end gap-1"><Button variant="outline" disabled={loading || !settingsLoaded || !settings.configured || testing || saving} onClick={() => void test()}>{testing ? "Проверяю…" : "Проверить связь"}</Button>{!settings.configured && <span className="text-right text-xs text-muted-foreground">Сначала сохраните адрес получателя</span>}</span><Button disabled={loading || !settingsLoaded || saving} onClick={() => void save()}>{saving ? "Сохраняю…" : "Сохранить"}</Button></footer>
       </div>}
+      </div>
+      {settingsLoaded && <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t bg-background pt-3"><Button variant="outline" onClick={onClose}>Закрыть</Button><span className="flex flex-col items-end gap-1"><Button variant="outline" disabled={loading || !settings.configured || testing || saving} onClick={() => void test()}>{testing ? "Проверяю…" : "Проверить связь"}</Button>{!settings.configured && <span className="text-right text-xs text-muted-foreground">Сначала сохраните адрес получателя</span>}</span><Button disabled={loading || saving} onClick={() => void save()}>{saving ? "Сохраняю…" : "Сохранить"}</Button></footer>}
     </section>
   </div>
 }
