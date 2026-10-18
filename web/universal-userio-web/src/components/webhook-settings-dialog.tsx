@@ -110,9 +110,9 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
           <p className="font-medium">Сначала подготовьте получателя</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
             <li>Попросите владельца нужной системы подготовить HTTPS-адрес для новых сообщений из UserIO.</li>
-            <li>Он также должен сказать, куда добавить ключ безопасности: UserIO покажет его один раз после сохранения.</li>
+            <li>Заранее уточните, куда безопасно сохранить ключ подписи: после сохранения UserIO покажет его только один раз. Не отправляйте ключ обычным сообщением.</li>
           </ul>
-          <p className="mt-2 text-sm"><span className="font-medium">Можно написать владельцу Agent Herder:</span> «Подготовь HTTPS-адрес, который будет принимать новые сообщения из UserIO, и подскажи, куда добавить ключ безопасности. Пришли мне этот адрес». Само MCP-подключение адресом не является: нужен отдельно настроенный веб-приёмник.</p>
+          <p className="mt-2 text-sm"><span className="font-medium">Можно написать владельцу Agent Herder:</span> «Подготовь HTTPS-адрес для новых сообщений из UserIO и заранее скажи, где безопасно сохранить ключ подписи. Пришли мне адрес». Само MCP-подключение адресом не является: нужен отдельно настроенный веб-приёмник.</p>
         </div>
         <label className="block space-y-1 text-sm"><span>HTTPS-адрес получателя</span><Input type="url" inputMode="url" autoComplete="url" placeholder="Например, https://ваш-сервис.example/…" value={settings.endpoint} onChange={event => setSettings(current => ({ ...current, endpoint: event.target.value }))} /></label>
         <details className="rounded-xl border p-3 text-sm">
@@ -122,7 +122,7 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
             <p>UserIO отправляет POST с JSON. Приёмнику нужны заголовки:</p>
             <code className="block break-all rounded-md bg-muted p-2">X-UserIO-Event · X-UserIO-Timestamp · X-UserIO-Signature · Idempotency-Key</code>
             <p>Подпись — HMAC-SHA256 от строки <code>timestamp + "." + исходное тело запроса</code>, результат передаётся как <code>sha256=&lt;hex&gt;</code>. Приёмник сам задаёт допустимое время подписи и должен отклонять слишком старые запросы. Ключ идемпотентности одинаков для повторов одного события.</p>
-            <p>При недоставке UserIO повторяет событие: интервал растёт от 5 секунд до 30 минут. После ответа HTTP 2xx очередь переходит к следующему событию.</p>
+            <p>Если получатель не ответил HTTP 2xx или соединение завершилось ошибкой/таймаутом, UserIO повторяет доставку без общего лимита попыток: интервал растёт от 5 секунд до 30 минут. Для одного события ключ <code>Idempotency-Key</code> остаётся тем же, а время и подпись при каждом повторе новые. Приёмник должен распознавать уже обработанный ключ и не выполнять событие повторно; на такой дубликат нужно ответить HTTP 2xx.</p>
             <p>Событие нового сообщения имеет тип <code>message.received</code> и схему <code>userio.inbound-message.v1</code>. Пример тела без текста переписки:</p>
             <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-relaxed">{`{
   "schema": "userio.inbound-message.v1",
