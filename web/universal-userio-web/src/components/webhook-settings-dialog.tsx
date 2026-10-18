@@ -122,6 +122,7 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
             <p>UserIO отправляет POST с JSON. Приёмнику нужны заголовки:</p>
             <code className="block break-all rounded-md bg-muted p-2">X-UserIO-Event · X-UserIO-Timestamp · X-UserIO-Signature · Idempotency-Key</code>
             <p>Подпись — HMAC-SHA256 от строки <code>timestamp + "." + исходное тело запроса</code>, результат передаётся как <code>sha256=&lt;hex&gt;</code>. Приёмник сам задаёт допустимое время подписи и должен отклонять слишком старые запросы. Ключ идемпотентности одинаков для повторов одного события.</p>
+            <p>Заголовок <code>X-UserIO-Timestamp</code> содержит Unix-время в секундах. UserIO не задаёт допустимое окно возраста — его настраивают на стороне приёмника. При повторной доставке timestamp и подпись обновляются, а ключ идемпотентности остаётся прежним.</p>
             <p>Если получатель не ответил HTTP 2xx или соединение завершилось ошибкой/таймаутом, UserIO повторяет доставку без общего лимита попыток: интервал растёт от 5 секунд до 30 минут. Для одного события ключ <code>Idempotency-Key</code> остаётся тем же, а время и подпись при каждом повторе новые. Приёмник должен распознавать уже обработанный ключ и не выполнять событие повторно; на такой дубликат нужно ответить HTTP 2xx.</p>
             <p>Событие нового сообщения имеет тип <code>message.received</code> и схему <code>userio.inbound-message.v1</code>. Пример тела без текста переписки:</p>
             <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-relaxed">{`{
@@ -138,6 +139,7 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
     "sender_is_bot": false
   }
 }`}</pre>
+            <p>Если включить «Включать текст сообщения», в объекте <code>event</code> появятся поля <code>text</code> и <code>text_truncated</code>. Если выключить — этих полей не будет.</p>
             <p>Кнопка проверки отправляет отдельное событие <code>webhook.test</code> без данных переписки. Успех означает, что адрес ответил HTTP 2xx; это не подтверждает обработку события в Agent Herder.</p>
             <p>Для Agent Herder укажите его совместимый HTTPS webhook-приёмник. UserIO не вызывает MCP-инструменты напрямую.</p>
           </div>
