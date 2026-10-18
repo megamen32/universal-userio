@@ -135,7 +135,7 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
         </div>
         <label className="block space-y-1 text-sm"><span>HTTPS-адрес получателя</span><Input type="url" inputMode="url" autoComplete="url" placeholder="Например, https://ваш-сервис.example/…" value={settings.endpoint} onChange={event => setSettings(current => ({ ...current, endpoint: event.target.value }))} /></label>
         <details className="rounded-xl border p-3 text-sm">
-          <summary className="cursor-pointer font-medium">Техническая настройка приёмника и проверка подписи</summary>
+          <summary className="cursor-pointer font-medium">Для разработчика: HMAC-подпись, повторы и пример JSON</summary>
           <div className="mt-3 space-y-2 text-xs text-muted-foreground">
             <p>Сохраните адрес: новый ключ подписи появится здесь один раз. Скопируйте его в секреты приёмника. При перевыпуске ключа обновите его и там.</p>
             <p>UserIO отправляет POST с JSON. Приёмнику нужны заголовки:</p>
