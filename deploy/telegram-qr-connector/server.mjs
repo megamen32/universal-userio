@@ -926,15 +926,35 @@ function publicState() {
   return publicIngressState(slots, syncs, liveSlots);
 }
 
-const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Telegram · Аккаунты UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Подключение Telegram</h1><p class="userio-setup-lead">Добавьте личный аккаунт Telegram, чтобы читать сообщения в UserIO.</p><section class="userio-setup-panel"><h2>Войти по номеру телефона</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p></section><div id=cards aria-live="polite"></div></main></div><script>
+function clearSlot(slotId) {
+  disconnectedSlots.add(slotId);
+  const timer = unreadRefreshTimers.get(slotId);
+  if (timer) clearTimeout(timer);
+  unreadRefreshTimers.delete(slotId);
+  const live = liveSlots.get(slotId);
+  liveSlots.delete(slotId);
+  slots.delete(slotId);
+  syncs.delete(slotId);
+  enrollmentOwners.remove(slotId);
+  try { unlinkSync(`${sessionsDir}/${slotId}.session`); }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  return live;
+}
+
+const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Подключённые аккаунты и сохранённые входы. Старые сеансы без имени отмечены отдельно.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p></section><div id=cards aria-live="polite"></div></main></div><script type="module">
+import { telegramAccountCard } from "__PREFIX__/account-card.mjs";
 var prefix = location.pathname.replace(/\\/$/, "");
 var seen = new Map();
-var statusNames={idle:"Подготавливаем вход",waiting:"Отсканируйте QR-код",connecting:"Подключаем аккаунт",connected:"Аккаунт подключён","connected-unregistered":"Вход выполнен, сохранение аккаунта не завершено","code-required":"Введите код входа","password-required":"Введите облачный пароль",error:"Вход не завершён. Попробуйте заново"};
+var accounts = new Map();
+var accountsRefreshAt = 0;
 function esc(v){return String(v==null?"":v).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 function card(s){
   var a = function(p){ return prefix + p; };
-  var html = '<section class="userio-setup-panel" id="card-'+s.id+'"><h2>'+esc(s.name||'Подключение Telegram')+(s.mode==="phone"&&s.phone?" ("+esc(s.phone)+")":"")+'</h2><p class="userio-status" role="status">'+esc(statusNames[s.status]||'Проверяем подключение')+'</p>';
-  if (s.sync) html += '<p class="userio-note">'+esc(s.sync==='relogin-required'?'Telegram отозвал вход этого аккаунта — войдите заново, отправка с него невозможна':s.sync==='retrying'?'Синхронизация восстанавливается':'Синхронизация сообщений включена')+(s.syncChats?' · '+s.syncChats+' диалогов':'')+'</p>';
+  var view = telegramAccountCard(s, accounts.get(s.accountId));
+  var html = '<section class="userio-setup-panel" id="card-'+esc(s.id)+'"><h2>'+esc(view.title)+'</h2><p class="userio-status" role="status">'+esc(view.status)+'</p>';
+  if (view.sessionLabel) html += '<p class="userio-note">'+esc(view.sessionLabel)+'</p>';
+  if (view.note) html += '<p class="userio-note">'+esc(view.note)+'</p>';
+  if (view.action) html += '<div class="userio-setup-actions"><button class="userio-setup-button userio-setup-secondary" type="button" data-account-action="'+esc(view.action.kind)+'" data-account-id="'+esc(view.action.accountId||'')+'" data-slot="'+esc(view.action.slot||'')+'" data-label="'+esc(view.title)+'">'+esc(view.action.label)+'</button><p class="userio-note" data-action-status aria-live="polite"></p></div>';
   if (s.qr) html += '<img class="userio-qr" src="'+s.qr+'" alt="QR-код входа в Telegram"><p class="userio-note">Telegram \\u2192 Настройки → Устройства → Подключить устройство</p>';
   if (s.status === "code-required") html += '<form method=post action="'+a('/code?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Введите код входа'+(s.codeViaApp?" (пришёл в Telegram)":" (SMS)")+'</p><input name=code inputmode=numeric autocomplete=one-time-code autofocus><button class="userio-setup-button" type=submit>Подтвердить код</button></form>';
   if (s.status === "password-required") html += '<form method=post action="'+a('/password?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Облачный пароль'+(s.passwordHint?" (подсказка: "+esc(s.passwordHint)+")":"")+'</p><input type=password name=password autocomplete=off><button class="userio-setup-button" type=submit>Подтвердить</button></form>';
@@ -942,11 +962,21 @@ function card(s){
   html += '</section>';
   return html;
 }
+async function refreshAccounts(force){
+  if(!force&&Date.now()<accountsRefreshAt)return;
+  accountsRefreshAt=Date.now()+10000;
+  try{const response=await fetch('/v1/accounts',{cache:'no-store'});if(!response.ok)return;const data=await response.json();accounts=new Map((data.accounts||[]).filter(function(row){return row.provider==='telegram';}).map(function(row){return [row.id,row];}));}
+  catch{}
+}
 function render(list){
   var box = document.getElementById("cards");
+  var connected = list.filter(function(s){return s.status==='connected'&&s.sync!=='relogin-required';}).length;
+  var revoked = list.filter(function(s){return s.sync==='relogin-required';}).length;
+  document.getElementById('account-summary').textContent='Подключено аккаунтов: '+connected+' · отозванные сеансы: '+revoked;
   var live = new Set(list.map(function(s){return s.id;}));
   list.forEach(function(s){
-    var sig = [s.status,s.name,s.qr.slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
+    var account=accounts.get(s.accountId)||{};
+    var sig = [s.status,s.name,s.accountId,account.display_name,account.can_disconnect,s.qr.slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
     if (seen.get(s.id) === sig) return;
     seen.set(s.id, sig);
     var el = document.getElementById("card-"+s.id);
@@ -957,13 +987,30 @@ function render(list){
     if (!live.has(id)) { var el = document.getElementById("card-"+id); if (el) el.remove(); seen.delete(id); }
   });
 }
-function poll(){ fetch(prefix+"/state").then(function(r){return r.json();}).then(render).catch(function(){}); }
+async function poll(){ await refreshAccounts(false); fetch(prefix+"/state").then(function(r){if(!r.ok)throw Error('state unavailable');return r.json();}).then(render).catch(function(){}); }
 setInterval(poll, 1500);
 document.addEventListener("submit", function(e){
   var f = e.target;
   if (f.dataset.async !== "1") return;
   e.preventDefault();
   fetch(f.getAttribute("action"), {method:"POST", body:new URLSearchParams(new FormData(f))}).catch(function(){}).then(poll);
+});
+document.addEventListener('click',async function(event){
+  var button=event.target.closest('[data-account-action]');if(!button)return;
+  var kind=button.dataset.accountAction,label=button.dataset.label||'этот аккаунт';
+  var question=kind==='account'
+    ? (button.textContent==='Отключить аккаунт'?'Отключить «'+label+'»? Сохранённая история останется в UserIO.':'Убрать отключённый аккаунт «'+label+'» из UserIO? История останется.')
+    : 'Убрать отключённую сессию «'+label+'» из UserIO? Сохранённая история останется.';
+  if(!confirm(question))return;
+  button.disabled=true;var status=button.parentElement.querySelector('[data-action-status]');status.textContent='Выполняем…';
+  try{
+    var response=kind==='account'
+      ? await fetch('/v1/accounts/'+encodeURIComponent(button.dataset.accountId),{method:'DELETE'})
+      : await fetch(prefix+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:button.dataset.slot})});
+    var data=await response.json().catch(function(){return {};});
+    if(!response.ok)throw Error(data.error||'Не удалось убрать аккаунт. Запись сохранена.');
+    await refreshAccounts(true);await poll();
+  }catch(error){status.textContent=error.message||'Не удалось убрать аккаунт.';button.disabled=false;}
 });
 poll();
 </script>`;
@@ -972,7 +1019,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -997,6 +1044,37 @@ http.createServer(async (req, res) => {
   if (url.pathname === "/state") {
     res.setHeader("content-type", "application/json");
     return res.end(JSON.stringify(enrollmentOwners.filter(publicState(),browserOwner.principal.user_id)));
+  }
+  if (url.pathname === "/account-card.mjs" && req.method === "GET") {
+    res.setHeader("content-type", "text/javascript; charset=utf-8");
+    res.setHeader("cache-control", "public, max-age=300");
+    return res.end(readFileSync(new URL("./account-card.mjs", import.meta.url)));
+  }
+  if (url.pathname === "/remove" && req.method === "POST") {
+    if (!browserOwner.principal.can_manage) {
+      res.writeHead(403, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "Нет права управлять аккаунтами" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const slotId = String(payload.slot || "");
+      if (!/^account-\d+$/.test(slotId)) throw new Error("invalid session");
+      if (!enrollmentOwners.allowed(slotId, browserOwner.principal.user_id)) {
+        res.writeHead(403, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Сессия принадлежит другому пользователю" }));
+      }
+      if (syncs.get(slotId)?.status !== "relogin-required") {
+        res.writeHead(409, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Сессию можно убрать только после подтверждённого отзыва входа" }));
+      }
+      const live = clearSlot(slotId);
+      if (live?.client) await live.client.disconnect().catch(() => {});
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ removed: true, provider_already_revoked: true }));
+    } catch {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "Не удалось убрать отключённую сессию" }));
+    }
   }
   if (url.pathname === "/disconnect" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
@@ -1026,12 +1104,13 @@ http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ error: "Telegram account reference does not match this session" }));
       }
       if (!existsSync(sessionFile) && !live?.client) {
-        disconnectedSlots.add(slotId);
-        const timer = unreadRefreshTimers.get(slotId);
-        if (timer) clearTimeout(timer);
-        unreadRefreshTimers.delete(slotId);
-        enrollmentOwners.remove(slotId);
-        slots.delete(slotId);syncs.delete(slotId);liveSlots.delete(slotId);
+        clearSlot(slotId);
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ disconnected: true, already_disconnected: true }));
+      }
+      if (syncs.get(slotId)?.status === "relogin-required") {
+        const removed = clearSlot(slotId);
+        if (removed?.client) await removed.client.disconnect().catch(() => {});
         res.writeHead(200, { "content-type": "application/json" });
         return res.end(JSON.stringify({ disconnected: true, already_disconnected: true }));
       }
@@ -1046,14 +1125,8 @@ http.createServer(async (req, res) => {
         res.writeHead(503, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "Telegram did not confirm logout; account was kept" }));
       }
-      disconnectedSlots.add(slotId);
-      const timer = unreadRefreshTimers.get(slotId);
-      if (timer) clearTimeout(timer);
-      unreadRefreshTimers.delete(slotId);
-      liveSlots.delete(slotId);syncs.delete(slotId);slots.delete(slotId);
-      enrollmentOwners.remove(slotId);
-      try { unlinkSync(sessionFile); } catch (error) { if (error?.code !== "ENOENT") throw error; }
-      await live.client.disconnect().catch(() => {});
+      const removed = clearSlot(slotId);
+      await removed?.client?.disconnect().catch(() => {});
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ disconnected: true }));
     } catch {
