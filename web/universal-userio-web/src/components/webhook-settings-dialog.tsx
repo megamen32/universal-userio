@@ -139,7 +139,24 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
     "sender_is_bot": false
   }
 }`}</pre>
-            <p>Если включить «Включать текст сообщения», в объекте <code>event</code> появятся поля <code>text</code> и <code>text_truncated</code>. Если выключить — этих полей не будет.</p>
+            <p>Если включить «Включать текст сообщения», в объекте <code>event</code> появятся поля <code>text</code> и <code>text_truncated</code>. В <code>text</code> уходит до 8000 символов; если текст длиннее, он обрезается, а <code>text_truncated</code> будет <code>true</code>. При коротком тексте флаг равен <code>false</code>. Если передача текста выключена, обоих полей не будет.</p>
+            <p>Пример тела с включённой передачей текста:</p>
+            <pre className="overflow-x-auto rounded-md bg-muted p-2 text-[11px] leading-relaxed">{`{
+  "schema": "userio.inbound-message.v1",
+  "event_id": "<стабильный-id>",
+  "event": {
+    "seq": 43,
+    "source": "telegram",
+    "account_ref": "telegram:123",
+    "message_id": "<id-сообщения>",
+    "conversation_id": "<id-чата>",
+    "sender": "Алиса",
+    "received_at": 1792287376.4,
+    "sender_is_bot": false,
+    "text": "Привет! Как дела?",
+    "text_truncated": false
+  }
+}`}</pre>
             <p>Кнопка проверки отправляет отдельное событие <code>webhook.test</code> без данных переписки. Успех означает, что адрес ответил HTTP 2xx; это не подтверждает обработку события в Agent Herder.</p>
             <p>Для Agent Herder укажите его совместимый HTTPS webhook-приёмник. UserIO не вызывает MCP-инструменты напрямую.</p>
           </div>
