@@ -48,10 +48,12 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
   const [rotateSecret, setRotateSecret] = useState(false)
+  const [requestCopied, setRequestCopied] = useState(false)
+  const [requestCopyError, setRequestCopyError] = useState(false)
 
   const loadSettings = useCallback(async () => {
     setLoading(true); setLoadFailed(false); setSettingsLoaded(false)
-    setError(""); setNotice(""); setSecret(""); setRotateSecret(false)
+    setError(""); setNotice(""); setSecret(""); setRotateSecret(false); setRequestCopied(false); setRequestCopyError(false)
     try {
       const value = await request<Settings>("/v1/webhooks/incoming")
       setSettings({ ...empty, ...value })
@@ -112,7 +114,23 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
             <li>Попросите владельца нужной системы подготовить HTTPS-адрес для новых сообщений из UserIO.</li>
             <li>Заранее уточните, куда безопасно сохранить ключ подписи: после сохранения UserIO покажет его только один раз. Не отправляйте ключ обычным сообщением.</li>
           </ul>
-          <p className="mt-2 text-sm"><span className="font-medium">Можно написать владельцу Agent Herder:</span> «Подготовь HTTPS-адрес для новых сообщений из UserIO и заранее скажи, где безопасно сохранить ключ подписи. Пришли мне адрес». Само MCP-подключение адресом не является: нужен отдельно настроенный веб-приёмник.</p>
+          <p className="mt-2 text-sm">Если вы подключаете Agent Herder, попросите администратора GPTAdmin настроить приём сообщений UserIO и передачу в нужную сессию Agent Herder. Он выдаст HTTPS-адрес получателя. MCP-подключение само по себе этот адрес не заменяет.</p>
+          <div className="mt-2 rounded-lg border bg-background/50 p-3">
+            <p className="text-sm font-medium">Текст просьбы администратору</p>
+            <p className="mt-1 text-sm text-muted-foreground">«Настрой приём новых сообщений UserIO в GPTAdmin и передавай их в нужную сессию Agent Herder. Пришли мне HTTPS-адрес и укажи, куда безопасно сохранить ключ подписи. Текст сообщений пока не включай».</p>
+            <Button className="mt-2" size="sm" variant="outline" onClick={async () => {
+              try {
+                await navigator.clipboard.writeText("Настрой приём новых сообщений UserIO в GPTAdmin и передавай их в нужную сессию Agent Herder. Пришли мне HTTPS-адрес и укажи, куда безопасно сохранить ключ подписи. Текст сообщений пока не включай.")
+                setRequestCopied(true)
+                setRequestCopyError(false)
+              } catch {
+                setRequestCopied(false)
+                setRequestCopyError(true)
+              }
+            }}>{requestCopied ? "Скопировано" : "Скопировать просьбу"}</Button>
+            {requestCopied && <span role="status" className="ml-2 text-xs text-muted-foreground">Можно отправить администратору</span>}
+            {requestCopyError && <p role="status" className="mt-1 text-xs text-muted-foreground">Не удалось скопировать. Выделите текст просьбы выше и скопируйте вручную.</p>}
+          </div>
         </div>
         <label className="block space-y-1 text-sm"><span>HTTPS-адрес получателя</span><Input type="url" inputMode="url" autoComplete="url" placeholder="Например, https://ваш-сервис.example/…" value={settings.endpoint} onChange={event => setSettings(current => ({ ...current, endpoint: event.target.value }))} /></label>
         <details className="rounded-xl border p-3 text-sm">
