@@ -104,8 +104,8 @@ function installPermissionPrompt(onGranted: () => void) {
   button.id = PROMPT_ID
   button.type = "button"
   button.textContent = "🔔 Только черновики, не новые сообщения"
-  button.title = "Уведомления о новых сообщениях настраиваются отдельно: «Уведомления и интеграции»."
-  button.setAttribute("aria-label", "Включить браузерные уведомления только о черновиках. Новые сообщения настраиваются отдельно в разделе «Уведомления и интеграции».")
+  button.title = "Передача новых сообщений в другие системы настраивается отдельно."
+  button.setAttribute("aria-label", "Включить браузерные уведомления только о черновиках. Передача новых сообщений настраивается отдельно.")
   Object.assign(button.style, {
     position: "fixed", right: "16px", bottom: "16px", zIndex: "2147483647",
     border: "1px solid rgba(127,127,127,.35)", borderRadius: "999px", padding: "9px 14px",
@@ -118,6 +118,16 @@ function installPermissionPrompt(onGranted: () => void) {
     if (permission === "granted") onGranted()
   }
   document.body.appendChild(button)
+  const syncVisibility = () => {
+    if (!button.isConnected) {
+      observer.disconnect()
+      return
+    }
+    button.hidden = Boolean(document.querySelector('[role="dialog"][aria-modal="true"]'))
+  }
+  const observer = new MutationObserver(syncVisibility)
+  observer.observe(document.body, { childList: true, subtree: true })
+  syncVisibility()
 }
 
 export function startDraftBrowserNotifications() {

@@ -99,7 +99,7 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
 
   return <div className="fixed inset-0 z-[70] grid place-items-center bg-black/60 p-4" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}>
     <section role="dialog" aria-modal="true" aria-labelledby="webhook-title" className="max-h-[90svh] w-full max-w-lg overflow-y-auto rounded-2xl border bg-background p-5 shadow-2xl">
-      <header><h2 id="webhook-title" className="text-lg font-semibold">Уведомления о новых сообщениях</h2><p className="mt-1 text-sm text-muted-foreground">UserIO может передавать сведения о новом сообщении в другую систему. Сначала в той системе должен быть создан адрес для приёма уведомлений, затем его можно добавить здесь.</p></header>
+      <header><h2 id="webhook-title" className="text-lg font-semibold">Передача новых сообщений</h2><p className="mt-1 text-sm text-muted-foreground">Это настройка отправки новых входящих сообщений в другую систему, а не всплывающие уведомления браузера.</p></header>
       {loading ? <p className="py-8 text-sm text-muted-foreground">Загружаю настройки…</p> : loadFailed ? <div className="mt-4 space-y-3 rounded-xl border border-destructive/40 p-4">
         <p className="text-sm font-medium">Не удалось загрузить настройки</p>
         <p role="alert" className="text-sm text-destructive">{error}</p>
@@ -107,16 +107,16 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
         <Button variant="outline" onClick={() => void loadSettings()}>Повторить</Button>
       </div> : settingsLoaded && <div className="mt-4 space-y-4">
         <div className="rounded-xl bg-muted/50 p-3 text-sm">
-          <p className="font-medium">Что понадобится</p>
+          <p className="font-medium">Сначала подготовьте получателя</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
-            <li>Готовый HTTPS-адрес для входящих уведомлений из системы-получателя.</li>
-            <li>Доступ к её настройкам: после сохранения UserIO один раз покажет ключ, который нужно добавить туда.</li>
+            <li>Попросите владельца нужной системы подготовить HTTPS-адрес для новых сообщений из UserIO.</li>
+            <li>Он также должен сказать, куда добавить ключ безопасности: UserIO покажет его один раз после сохранения.</li>
           </ul>
-          <p className="mt-2 text-sm"><span className="font-medium">Agent Herder:</span> обычное MCP-подключение не является таким адресом. Нужен отдельно настроенный веб-приёмник. Если у вас нет его адреса, попросите администратора предоставить его; без адреса подключение начать нельзя.</p>
+          <p className="mt-2 text-sm"><span className="font-medium">Можно написать владельцу Agent Herder:</span> «Подготовь HTTPS-адрес, который будет принимать новые сообщения из UserIO, и подскажи, куда добавить ключ безопасности. Пришли мне этот адрес». Само MCP-подключение адресом не является: нужен отдельно настроенный веб-приёмник.</p>
         </div>
         <label className="block space-y-1 text-sm"><span>HTTPS-адрес получателя</span><Input type="url" inputMode="url" autoComplete="url" placeholder="Например, https://ваш-сервис.example/…" value={settings.endpoint} onChange={event => setSettings(current => ({ ...current, endpoint: event.target.value }))} /></label>
         <details className="rounded-xl border p-3 text-sm">
-          <summary className="cursor-pointer font-medium">Как настроить приёмник и проверить подпись</summary>
+          <summary className="cursor-pointer font-medium">Техническая настройка приёмника и проверка подписи</summary>
           <div className="mt-3 space-y-2 text-xs text-muted-foreground">
             <p>Сохраните адрес: новый ключ подписи появится здесь один раз. Скопируйте его в секреты приёмника. При перевыпуске ключа обновите его и там.</p>
             <p>UserIO отправляет POST с JSON. Приёмнику нужны заголовки:</p>
