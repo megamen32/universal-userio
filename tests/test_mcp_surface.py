@@ -20,6 +20,26 @@ class Outbox:
     def send_reply(self, **kwargs): self.calls.append(kwargs); return "receipt"
 
 
+def test_channels_list_honors_conversation_id_scope(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    selected_id, _ = service.receive(
+        InboxMessage("telegram", "selected", "Selected", "fixture one", 1.0),
+        route_id="telegram",
+    )
+    other_id, _ = service.receive(
+        InboxMessage("telegram", "other", "Other", "fixture two", 2.0),
+        route_id="telegram",
+    )
+    surface = UserIOMcpSurface(store, service)
+
+    result = surface.dispatch("userio.channels.list", {
+        "channel": "telegram", "conversation_ids": [selected_id],
+    })
+
+    assert [chat["id"] for chat in result["chats"]] == [selected_id]
+
+
 def test_http_mcp_stream_emits_ready_before_waiting_for_updates(
     tmp_path, monkeypatch
 ) -> None:

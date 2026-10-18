@@ -380,6 +380,12 @@ class UserIOMcpSurface:
                     )
                 adapter = channels.adapter(self._optional(arguments, "channel"))
                 chats = adapter.list(limit=int(arguments.get("limit", 100)))
+                if "conversation_ids" in arguments:
+                    allowed_ids = {
+                        str(value).strip() for value in arguments["conversation_ids"]
+                        if str(value).strip()
+                    }
+                    chats = [chat for chat in chats if str(chat.get("id", "")) in allowed_ids]
                 return {"ok": True, "chats": [
                     chat for chat in chats
                     if str(chat["id"]) not in ignored_chats
