@@ -110,14 +110,14 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
         <Button variant="outline" onClick={() => void loadSettings()}>Повторить</Button>
       </div> : settingsLoaded && <div className="mt-4 space-y-4">
         <div className="rounded-xl bg-muted/50 p-3 text-sm">
-          <p className="font-medium">Сначала подготовьте систему, которая будет принимать сообщения</p>
-          <p className="mt-2 text-sm text-muted-foreground">Попросите администратора дать адрес, начинающийся с <code>https://</code>, и заранее объяснить, как безопасно передать ключ — секретный пароль UserIO. Не отправляйте его обычным сообщением. Для Agent Herder администратор GPTAdmin принимает сообщения UserIO и направляет их в нужную сессию. Подключение ИИ через MCP само по себе сообщения не принимает.</p>
-          <div className="mt-2 rounded-lg border bg-background/50 p-3">
-            <p className="text-sm font-medium">Текст просьбы администратору</p>
-            <p className="mt-1 text-sm text-muted-foreground">«Настрой в GPTAdmin приём новых сообщений UserIO и передачу в нужную сессию Agent Herder. Пришли адрес, начинающийся с https://, и объясни, как безопасно передать секретный ключ UserIO. Не включай отправку, пока ключ не добавлен».</p>
+          <p className="font-medium">Сначала попросите администратора настроить получателя</p>
+          <p className="mt-1 text-sm text-muted-foreground">Для Agent Herder это администратор GPTAdmin: он выдаст адрес сайта, начинающийся с <code>https://</code>, и направит сообщения в нужную сессию. Ключ — секретный пароль UserIO; заранее уточните безопасный способ его передачи. Не отправляйте ключ обычным сообщением. Подключение ИИ через MCP само по себе сообщения не принимает.</p>
+          <details className="mt-2 rounded-lg border bg-background/50 p-3">
+            <summary className="cursor-pointer text-sm font-medium">Готовый текст просьбы администратору</summary>
+            <p className="mt-2 text-sm text-muted-foreground">«Настрой в GPTAdmin приём новых сообщений UserIO и передачу в нужную сессию Agent Herder. Пришли адрес, начинающийся с https://, и объясни безопасный способ передачи ключа UserIO. Не включай отправку, пока ключ не добавлен».</p>
             <Button className="mt-2" size="sm" variant="outline" onClick={async () => {
               try {
-                await navigator.clipboard.writeText("Настрой в GPTAdmin приём новых сообщений UserIO и передачу в нужную сессию Agent Herder. Пришли адрес, начинающийся с https://, и объясни, как безопасно передать секретный ключ UserIO. Не включай отправку, пока ключ не добавлен.")
+                await navigator.clipboard.writeText("Настрой в GPTAdmin приём новых сообщений UserIO и передачу в нужную сессию Agent Herder. Пришли адрес, начинающийся с https://, и объясни безопасный способ передачи ключа UserIO. Не включай отправку, пока ключ не добавлен.")
                 setRequestCopied(true)
                 setRequestCopyError(false)
               } catch {
@@ -127,10 +127,10 @@ export function WebhookSettingsDialog({ open, onClose }: { open: boolean; onClos
             }}>{requestCopied ? "Скопировано" : "Скопировать просьбу"}</Button>
             {requestCopied && <span role="status" className="ml-2 text-xs text-muted-foreground">Можно отправить администратору</span>}
             {requestCopyError && <p role="status" className="mt-1 text-xs text-muted-foreground">Не удалось скопировать. Выделите текст просьбы выше и скопируйте вручную.</p>}
-          </div>
+          </details>
           {!settings.configured ? <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
-            <li>Когда получите адрес, вставьте его ниже и нажмите «Сохранить», оставив «Отправлять события» выключенным. UserIO покажет секретный ключ один раз.</li>
-            <li>Добавьте ключ в защищённое хранилище паролей получателя. Когда администратор подтвердит это, включите «Отправлять события» и сохраните ещё раз. Текст сообщений останется выключенным.</li>
+            <li>Получите адрес, вставьте его ниже и сохраните с выключенной отправкой. UserIO покажет секретный ключ один раз.</li>
+            <li>Передайте ключ администратору безопасным способом. После его подтверждения включите отправку и сохраните ещё раз. Текст сообщений останется выключенным.</li>
           </ol> : !settings.enabled ? <p className="mt-3 text-sm text-muted-foreground">Адрес сохранён, передача выключена. Включайте «Отправлять события» и сохраняйте только после того, как администратор установит ключ в защищённое хранилище. Если ключ не сохранили, перевыпустите его, пока передача выключена.</p> : <p className="mt-3 text-sm text-muted-foreground">Передача включена: новые входящие отправляются получателю. Текст сообщений добавляется только по отдельному переключателю ниже.</p>}
         </div>
         <label className="block space-y-1 text-sm"><span>HTTPS-адрес получателя</span><Input type="url" inputMode="url" autoComplete="url" placeholder="Например, https://ваш-сервис.example/…" value={settings.endpoint} onChange={event => setSettings(current => ({ ...current, endpoint: event.target.value }))} /></label>
