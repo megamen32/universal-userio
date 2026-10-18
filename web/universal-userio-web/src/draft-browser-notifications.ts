@@ -103,9 +103,9 @@ function installPermissionPrompt(onGranted: () => void) {
   const button = document.createElement("button")
   button.id = PROMPT_ID
   button.type = "button"
-  button.textContent = "🔔 Уведомления только о черновиках"
-  button.title = "Это отдельно от новых сообщений. Их настройки: «Уведомления и интеграции»."
-  button.setAttribute("aria-label", "Включить уведомления браузера только о черновиках. Новые сообщения настраиваются отдельно в разделе «Уведомления и интеграции».")
+  button.textContent = "🔔 Только черновики, не новые сообщения"
+  button.title = "Уведомления о новых сообщениях настраиваются отдельно: «Уведомления и интеграции»."
+  button.setAttribute("aria-label", "Включить браузерные уведомления только о черновиках. Новые сообщения настраиваются отдельно в разделе «Уведомления и интеграции».")
   Object.assign(button.style, {
     position: "fixed", right: "16px", bottom: "16px", zIndex: "2147483647",
     border: "1px solid rgba(127,127,127,.35)", borderRadius: "999px", padding: "9px 14px",
