@@ -86,9 +86,10 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.channels.download",
-        "Download a supported attachment as base64, or open a small Telegram PDF/text/Office document as an MCP resource for the model.",
+        "Download a Telegram attachment as base64 or MCP content. Documents use Firecrawl AnyDoc; videos return up to four key frames and a transcript. Set include_images=false to omit image/frame bytes.",
         schema({"file_ref": {"type": "string"},
-                "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"}}, ["file_ref"]),
+                "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
+                "include_images":{"type":"boolean","default":True}}, ["file_ref"]),
     ),
     ToolSpec(
         "userio.channels.send_draft",

@@ -38,10 +38,12 @@ command, not an empty emoji added to the message. Fresh MAX resolve includes
 `reaction_info` and `reaction_readback.status`; auxiliary read failure is
 explicitly unavailable and does not hide the message or imply zero reactions.
 
-Telegram administration has a separate `telegram_admin` personal-token scope,
-bound to explicitly selected Telegram accounts. It is not included in ordinary
-messenger-sender tokens. A basic group is distinct from a supergroup (represented
-by Telegram as a megagroup channel) and a broadcast channel. `group_create` takes
+Telegram administration is an additional `telegram_admin` right on an existing
+`scoped_messenger` account grant. Group/channel creation requires account-wide
+chat scope; invites, removals and channel deletion also require the exact target
+conversation to be inside that token's chat grant. A basic group is distinct
+from a supergroup (represented by Telegram as a megagroup channel) and a
+broadcast channel. `group_create` takes
 exact numeric Telegram user IDs; invite/remove require one existing UserIO
 conversation. Removing a member from a supergroup is a ban and requires
 `ban_on_supergroup:true`; UserIO never automatically unbans. Basic-group removal

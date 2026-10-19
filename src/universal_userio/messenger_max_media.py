@@ -46,7 +46,7 @@ def image_content(data, kind):
             'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'mimeType':'image/png','partial':False}
 
 
-def transcribe(data, mime, *, diarize=False):
+def transcribe(data, mime, *, diarize=False, filename="voice.m4a"):
     # Same protected key loader as deploy/telegram-qr-connector/transcription.mjs.
     key=next((os.environ.get(k,'').strip() for k in ('USERIO_STT_API_KEY','USERIO_WHISPER_API_KEY','GREPMESH_STT_API_KEY')
               if os.environ.get(k,'').strip()),'')
@@ -58,9 +58,10 @@ def transcribe(data, mime, *, diarize=False):
     model=os.environ.get('USERIO_STT_MODEL') or os.environ.get('USERIO_WHISPER_MODEL') or 'whisper-1'
     response_format='verbose_json' if diarize else 'json'
     boundary='userio-'+uuid.uuid4().hex
+    filename=str(filename).replace('"','').replace('\\','').replace('\r','').replace('\n','')[:128] or 'audio.bin'
     prefix=(f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n{model}\r\n'
             f'--{boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\n{response_format}\r\n'
-            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="voice.m4a"\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
             f'Content-Type: {mime or "audio/mp4"}\r\n\r\n').encode()
     if diarize:
         prefix=(f'--{boundary}\r\nContent-Disposition: form-data; name="diarize"\r\n\r\ntrue\r\n').encode()+prefix

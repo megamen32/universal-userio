@@ -899,13 +899,13 @@ class SQLiteUserIOStore:
             ).fetchone()
         return None if row is None else UserPrincipal(
             str(row["id"]), str(row["username"]), str(row["role"]),
-            read_only=row["kind"] == "personal" and row["scope"] == "read_only",
+            # Legacy admin-only tokens fail closed after that token scope was
+            # replaced by per-account rights on scoped_messenger tokens.
+            read_only=row["kind"] == "personal" and row["scope"] in {"read_only", "telegram_admin"},
             messenger_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
                                 if row['scope'] in {'messenger_actions','telegram_admin'} else tuple(g['account_ref'] for g in json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None),
             meeting_recorder=row['kind']=='personal' and row['scope']=='meeting_recording',
             messenger_grants=tuple(json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None,
-            telegram_admin_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
-                if row['scope']=='telegram_admin' else None),
         )
 
     def register_oauth_client(

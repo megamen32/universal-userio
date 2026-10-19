@@ -35,6 +35,8 @@ class UserIOToolDispatcher:
                         for a in self._store.accounts(user_id=principal.user_id) if a['id'] in principal.messenger_accounts]}
                 if name.startswith('userio.messenger.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name.startswith('userio.channels.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
                 return {'ok':False,'error':str(error).strip("'")}
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS:
@@ -156,6 +158,8 @@ class UserIOToolDispatcher:
                 file_ref=self._required(arguments,"file_ref")
                 mode=arguments.get('mode','base64')
                 if mode=='mcp_resource':
+                    include_images=arguments.get('include_images',True)
+                    if type(include_images) is not bool: raise ValueError('include_images_must_be_boolean')
                     channel,separator,provider_ref=file_ref.partition(':')
                     if not separator or channel!='telegram':
                         raise ValueError('mcp_resource_mode_requires_telegram')
@@ -164,7 +168,7 @@ class UserIOToolDispatcher:
                     if not callable(bounded): raise ValueError('bounded_telegram_download_unavailable')
                     from .mcp_files import MAX_MCP_FILE_BYTES,mcp_attachment
                     file=bounded(file_ref=provider_ref,max_bytes=MAX_MCP_FILE_BYTES)
-                    metadata,blocks=mcp_attachment(file)
+                    metadata,blocks=mcp_attachment(file,include_images=include_images)
                     return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
                 if mode!='base64': raise ValueError('invalid_download_mode')
                 file = channels.download(file_ref=file_ref)

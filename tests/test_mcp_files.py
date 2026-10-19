@@ -1,6 +1,4 @@
 import base64
-import io
-import zipfile
 
 import pytest
 
@@ -26,14 +24,68 @@ def test_mcp_pdf_is_embedded_as_bounded_resource():
     assert base64.b64decode(blocks[0]["resource"]["blob"])==file.data
 
 
-def test_docx_extraction_is_bounded_and_typed():
-    output=io.BytesIO()
-    with zipfile.ZipFile(output,"w",zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("word/document.xml","<document><p>Hello <t>world</t></p></document>")
-    metadata,blocks=mcp_attachment(ChannelFile("contract.docx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",output.getvalue()))
-    assert "Hello world" in metadata["text"]
+def test_csv_uses_anydoc_markdown_extraction():
+    metadata,blocks=mcp_attachment(ChannelFile("contacts.csv","text/csv",b"Name,Role\nAda,Engineer\n"))
+    assert metadata["extraction"]=="firecrawl-anydoc"
+    assert "Ada" in metadata["text"] and "Engineer" in metadata["text"]
     assert any(block["type"]=="resource" for block in blocks)
+
+
+def test_image_opt_out_omits_all_image_bytes():
+    image=ChannelFile("photo.jpg","image/jpeg",b"synthetic-image")
+    metadata,blocks=mcp_attachment(image,include_images=False)
+    assert metadata["delivery"]=="text_only"
+    assert blocks==[]
+
+
+def test_video_frames_and_transcript_respect_image_opt_out(monkeypatch):
+    from universal_userio import mcp_files
+    monkeypatch.setattr(mcp_files,"_video_blocks",lambda data,include_images: (
+        {"frame_count":int(include_images),"frames":[{"time_seconds":1.0}] if include_images else [],"duration_seconds":4.0,
+         "transcription_status":"completed"},
+        [{"type":"image","data":"ZmFrZQ==","mimeType":"image/jpeg"}] if include_images else
+        [{"type":"text","text":"Расшифровка видео: привет"}],
+    ))
+    video=ChannelFile("clip.mp4","video/mp4",b"synthetic-video")
+    metadata,blocks=mcp_attachment(video,include_images=False)
+    assert metadata["transcription_status"]=="completed"
+    assert metadata["frame_count"]==0
+    assert metadata["delivery"]=="text_only"
+    assert [block["type"] for block in blocks]==["text"]
+
+
+def test_video_extracts_four_evenly_spaced_frames_and_uses_existing_transcriber(monkeypatch):
+    from types import SimpleNamespace
+    from universal_userio import mcp_files
+    import universal_userio.messenger_max_media as media
+    monkeypatch.setattr(mcp_files.subprocess,"run",lambda *args,**kwargs:
+        SimpleNamespace(returncode=0,stdout=b"8.0"))
+    commands=[]
+    def ffmpeg(args,data,*,timeout,output_limit):
+        commands.append(args)
+        return b"synthetic-frame" if "mjpeg" in args else b"synthetic-audio"
+    monkeypatch.setattr(mcp_files,"_ffmpeg_output",ffmpeg)
+    monkeypatch.setattr(media,"transcribe",lambda data,mime,*,filename:
+        {"transcript":"recognized words","partial":False})
+    metadata,blocks=mcp_files._video_blocks(b"synthetic-video",include_images=True)
+    assert [frame["time_seconds"] for frame in metadata["frames"]]==[1.0,3.0,5.0,7.0]
+    assert metadata["transcription_status"]=="completed"
+    assert metadata["transcription_partial"] is False
+    assert blocks[0]["type"]=="text" and "recognized words" in blocks[0]["text"]
+    assert sum(block["type"]=="image" for block in blocks)==4
+    assert len(commands)==5
+
+
+def test_video_stays_downloadable_when_ffprobe_is_unavailable(monkeypatch):
+    from universal_userio import mcp_files
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("ffprobe")
+    monkeypatch.setattr(mcp_files.subprocess, "run", missing)
+    metadata, blocks = mcp_attachment(ChannelFile("clip.mp4", "video/mp4", b"synthetic-video"))
+    assert metadata["media_status"] == "unavailable"
+    assert metadata["transcription_status"] == "unavailable"
+    assert metadata["delivery"] == "embedded_resource"
+    assert len(blocks) == 1 and blocks[0]["type"] == "resource"
 
 
 @pytest.mark.parametrize("file",[

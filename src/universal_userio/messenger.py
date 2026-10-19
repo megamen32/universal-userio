@@ -97,10 +97,12 @@ class Messenger:
             and callable(getattr(admin_outbox,'telegram_admin_execute',None)))
         admin_reason=''
         if not admin_supported: admin_reason='provider_not_supported'
-        elif self.principal.telegram_admin_accounts is None and self.principal.messenger_accounts is not None:
-            admin_reason='telegram_admin_scope_required'
-        elif self.principal.telegram_admin_accounts is not None and account_ref not in self.principal.telegram_admin_accounts:
-            admin_reason='account_outside_credential_scope'
+        elif self.principal.messenger_grants is not None:
+            grant=next((g for g in self.principal.messenger_grants if g['account_ref']==account_ref),None)
+            if grant is None: admin_reason='account_outside_credential_scope'
+            elif not grant.get('telegram_admin',False): admin_reason='telegram_admin_permission_required'
+        elif self.principal.messenger_accounts is not None:
+            admin_reason='telegram_admin_permission_required'
         elif self.principal.read_only: admin_reason='read_only_token'
         elif 'reply' not in account['capabilities']: admin_reason='account_capability_disabled'
         elif not self.store.capability_enabled('send',user_id=self.user): admin_reason='user_capability_disabled'
@@ -108,7 +110,7 @@ class Messenger:
                 'sender_id':getattr(provider, 'sender_id', ''),
                 'history_mode':'provider' if 'history' in ops and not authentication_required else 'stored',
                 'provider_status':'authentication_required' if authentication_required else 'configured' if provider is not None else 'unconfigured',
-                'credential_scope':('telegram_admin' if self.principal.telegram_admin_accounts is not None
+                'credential_scope':('scoped_messenger' if self.principal.messenger_grants is not None
                                     else 'messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
@@ -560,12 +562,6 @@ class Messenger:
                                                 (self.user,action_id)).fetchone()
         if row is None: raise KeyError('action_not_found')
         e = json.loads(row['envelope'])
-        if (e.get('action')=='telegram_admin' and self.principal.telegram_admin_accounts is None
-                and self.principal.messenger_accounts is not None):
-            raise PermissionError('telegram_admin_scope_required')
-        if self.principal.telegram_admin_accounts is not None and (
-                e.get('action')!='telegram_admin' or e.get('account_ref') not in self.principal.telegram_admin_accounts):
-            raise PermissionError('telegram_admin_scope_only')
         self._allow(e['account_ref'],'read')
         return {'id':row['id'],'hash':row['hash'],'status':row['status'], 'created_at':row['created_at'],
                 'envelope':e,'receipt':json.loads(row['receipt']) if row['receipt'] else None}
@@ -573,12 +569,6 @@ class Messenger:
     def approve(self, action_id, expected_hash, confirm):
         if confirm is not True: raise ValueError('exact_confirmation_required')
         action = self.get(action_id); e = action['envelope']
-        if (e.get('action')=='telegram_admin' and self.principal.telegram_admin_accounts is None
-                and self.principal.messenger_accounts is not None):
-            raise PermissionError('telegram_admin_scope_required')
-        if self.principal.telegram_admin_accounts is not None and (
-                e.get('action')!='telegram_admin' or e.get('account_ref') not in self.principal.telegram_admin_accounts):
-            raise PermissionError('telegram_admin_scope_only')
         if expected_hash != action['hash']: raise ValueError('action_snapshot_conflict')
         if e.get('action')=='telegram_admin':
             if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:
@@ -674,9 +664,6 @@ def dispatch(store, service, principal, name, arguments):
     api = Messenger(store,service,principal)
     op = name.removeprefix('userio.messenger.')
     try:
-        if principal.telegram_admin_accounts is not None and op not in {
-                'capabilities','telegram_admin.propose','get','approve'}:
-            raise PermissionError('telegram_admin_scope_only')
         if principal.read_only and op not in {'capabilities','history','get','resolve','media','events'}:
             raise PermissionError('read_only_token')
         if op == 'capabilities': return {'ok':True,**api.capabilities(**arguments)}

@@ -58,8 +58,9 @@ TOOL_SPECS = (
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
         "include_images": {"type": "boolean", "default": True},
     })),
-    ToolSpec("userio.channels.download", "Download a supported attachment as base64, or open a small Telegram PDF/text/Office document as an MCP resource for the model.", _schema({
+    ToolSpec("userio.channels.download", "Download a Telegram attachment as base64 or MCP content. Documents use Firecrawl AnyDoc; videos return up to four key frames and a transcript. Set include_images=false to omit image/frame bytes.", _schema({
         "file_ref": {"type": "string"}, "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
+        "include_images":{"type":"boolean","default":True},
     }, ["file_ref"])),
     ToolSpec("userio.channels.send_draft", "Queue a draft; never send or bypass approval.", _schema({
         "chat_id": {"type": "string"}, "text": {"type": "string"},
@@ -261,15 +262,17 @@ class UserIOMcpSurface:
             spec for spec in TOOL_SPECS
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
             and (principal.messenger_grants is None or any(g['access']=='read_write' for g in principal.messenger_grants)
-                 or spec.name in READ_ONLY_TOOLS)
-            and (principal.telegram_admin_accounts is None or spec.name in {
-                'userio.messenger.capabilities','userio.messenger.telegram_admin.propose',
-                'userio.messenger.get','userio.messenger.approve'})
-            and (principal.messenger_accounts is None or principal.telegram_admin_accounts is not None
-                 or spec.name!='userio.messenger.telegram_admin.propose')
+                 or spec.name in READ_ONLY_TOOLS
+                 or spec.name in {'userio.messenger.telegram_admin.propose','userio.messenger.approve'}
+                 and any(g.get('telegram_admin') for g in principal.messenger_grants))
+            and (spec.name!='userio.messenger.telegram_admin.propose'
+                 or principal.messenger_accounts is None and principal.messenger_grants is None
+                 or any(g.get('telegram_admin') for g in principal.messenger_grants or ()))
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
-                 or principal.messenger_grants is not None and spec.name=='userio.accounts.list'
+                 or principal.messenger_grants is not None and spec.name in {
+                    'userio.accounts.list','userio.channels.list','userio.channels.read',
+                    'userio.channels.download','userio.channels.send_draft'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -487,6 +490,8 @@ class UserIOMcpSurface:
                         for a in self._store.accounts(user_id=principal.user_id) if a['id'] in principal.messenger_accounts]}
                 if name.startswith('userio.messenger.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name.startswith('userio.channels.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
                 return {'ok':False,'error':str(error).strip("'")}
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
@@ -588,6 +593,8 @@ class UserIOMcpSurface:
                 file_ref=self._required(arguments,"file_ref")
                 mode=arguments.get('mode','base64')
                 if mode=='mcp_resource':
+                    include_images=arguments.get('include_images',True)
+                    if type(include_images) is not bool: raise ValueError('include_images_must_be_boolean')
                     channel,separator,provider_ref=file_ref.partition(':')
                     if not separator or channel!='telegram':
                         raise ValueError('mcp_resource_mode_requires_telegram')
@@ -596,7 +603,7 @@ class UserIOMcpSurface:
                     if not callable(bounded): raise ValueError('bounded_telegram_download_unavailable')
                     from .mcp_files import MAX_MCP_FILE_BYTES,mcp_attachment
                     file=bounded(file_ref=provider_ref,max_bytes=MAX_MCP_FILE_BYTES)
-                    metadata,blocks=mcp_attachment(file)
+                    metadata,blocks=mcp_attachment(file,include_images=include_images)
                     return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
                 if mode!='base64': raise ValueError('invalid_download_mode')
                 file = channels.download(file_ref=file_ref)

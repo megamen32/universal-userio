@@ -14,7 +14,7 @@ universal-userio = "universal_userio.runtime:main"
 
 [project.optional-dependencies]
 matrix-calls = ["livekit>=1.1.20,<2", "audioop-lts; python_version>='3.13'"]
-telegram = ["telethon>=1.42,<2", "pydantic>=2", "qrcode>=7,<9"]
+telegram = ["telethon>=1.42,<2", "pydantic>=2", "qrcode>=7,<9", "firecrawl-anydoc==0.2.4"]
 chatgpt = ["curl-cffi>=0.5"]
 max = ["websocket-client>=1.6", "qrcode>=7,<9", "msgpack==1.2.3", "lz4==4.4.5"]
 fast-agent = ["fast-agent-mcp==0.10.43"]
