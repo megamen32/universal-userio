@@ -87,4 +87,3 @@ def test_telegram_reply_capability_approves_and_projects_exact_reply(tmp_path):
     assert replayed["action"]["receipt"] == accepted["receipt"]
     assert len(outbox.calls) == 1
     store.close()
-
