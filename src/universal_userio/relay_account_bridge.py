@@ -179,6 +179,41 @@ class RelayAccountBridge:
     def react(self, **kwargs):
         return self.fallback.react(**kwargs)
 
+    def supports_reply(self, account_ref: str, chat_id: str | None = None) -> bool:
+        if not callable(getattr(self.fallback, "reply_message", None)):
+            return False
+        # The exact relay-bound private chat retains its separate approved-draft
+        # path; other chats use the fallback's source-bound MCP action flow.
+        return not (chat_id is not None and self.source_bound_pair(account_ref, chat_id))
+
+    def reply_message(self, **kwargs):
+        account_ref, chat_id = kwargs.get("account_ref", ""), kwargs.get("chat_id", "")
+        if not self.supports_reply(account_ref, chat_id):
+            raise DeliveryNotSubmittedError("This exact relay-bound Telegram chat uses approved drafts")
+        return self.fallback.reply_message(**kwargs)
+
+    @staticmethod
+    def _telegram_admin_operation(operation: str) -> bool:
+        return operation in {"group_create", "group_invite", "group_remove", "channel_create", "channel_delete"}
+
+    def telegram_admin_prepare(self, *, account_ref: str, operation: str, payload: dict[str, object]):
+        if not re.fullmatch(r"telegram:[1-9][0-9]*", account_ref) or not self._telegram_admin_operation(operation):
+            raise DeliveryNotSubmittedError("Telegram admin scope is invalid")
+        prepare = getattr(self.fallback, "telegram_admin_prepare", None)
+        if not callable(prepare):
+            raise DeliveryNotSubmittedError("Telegram admin preflight is unavailable")
+        return prepare(account_ref=account_ref, operation=operation, payload=payload)
+
+    def telegram_admin_execute(self, *, account_ref: str, operation: str,
+                               payload: dict[str, object], request_id: str):
+        if (not re.fullmatch(r"telegram:[1-9][0-9]*", account_ref)
+                or not self._telegram_admin_operation(operation) or not request_id):
+            raise DeliveryNotSubmittedError("Telegram admin scope is invalid")
+        execute = getattr(self.fallback, "telegram_admin_execute", None)
+        if not callable(execute):
+            raise DeliveryNotSubmittedError("Telegram admin execution is unavailable")
+        return execute(account_ref=account_ref, operation=operation, payload=payload, request_id=request_id)
+
     def supports_edit(self, account_ref: str, chat_id: str) -> bool:
         # The source-bound relay pair has a separate approval/dispatch owner;
         # other Telegram chats continue through the user's QR connector.
