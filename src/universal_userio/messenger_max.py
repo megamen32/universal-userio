@@ -111,6 +111,11 @@ class MaxMessengerProvider:
     def media(self, projected, *, attachment_index=0):
         from .adapters import MaxChannelAdapter
         source=projected['source']
+        attachments=projected.get('media') or []
+        if (type(attachment_index) is not int or not 0<=attachment_index<8
+                or attachments and attachment_index>=len(attachments)
+                or not attachments and attachment_index!=0):
+            raise ValueError('invalid_attachment_index')
         row=self.client.get_message(chat_id=source['peer_id'],message_id=source['provider_message_id'])
         native=self._native_binding({'peer_id':source['peer_id']},row)
         expected={k:source[k] for k in ('account_ref','peer_id','provider_message_id','direction','thread_id','reply_to_provider_message_id')}
@@ -119,6 +124,14 @@ class MaxMessengerProvider:
         attaches=row.get('attaches') or []
         if digest(native)!=digest(expected) or attachment_index>=len(attaches):
             raise ValueError('MAX actual media source changed')
+        selected=attachments[attachment_index] if attachments else {}
+        actual=attaches[attachment_index]
+        actual_id=next((str(actual.get(key)) for key in ('fileId','photoId','videoId','audioId','stickerId')
+                        if actual.get(key) is not None),'')
+        if (selected.get('attachment_id') and str(selected['attachment_id'])!=actual_id
+                or selected.get('filename') and str(selected['filename']) not in
+                {str(actual.get('name') or ''),str(actual.get('fileName') or '')}):
+            raise ValueError('MAX selected attachment changed')
         if attaches[attachment_index].get('_type')=='STICKER':
             file=MaxChannelAdapter(self.service._store,self.service,self.authorized_user).download_for_ai(
                 file_ref=source['message_id'],max_bytes=2*1024*1024,attachment_idx=attachment_index)

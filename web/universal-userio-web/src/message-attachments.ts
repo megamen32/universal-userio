@@ -17,7 +17,7 @@ export function messageAttachments(items?: unknown[]): Attachment[] {
     const data = item as Record<string, unknown>
     const kind = (text(data.kind) || text(data._type)).toLowerCase()
     // A shared link is part of the text, not a downloadable file.
-    if (kind === 'share' || kind === 'control') return []
+    if (kind === 'share' || kind === 'control' || kind === 'telegram_routing') return []
     const size = Number(data.size ?? data.file_size)
     return [{
       index, kind,

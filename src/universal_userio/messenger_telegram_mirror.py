@@ -4,6 +4,7 @@ No new client, session, read acknowledgement or mutation route is created.
 Only IDs returned by the just-completed native page are projected as fresh.
 """
 import base64
+import hashlib
 import json
 import os
 import time
@@ -15,14 +16,14 @@ from .contracts import DeliveryNotSubmittedError, InboxMessage, UserPrincipal
 
 
 class TelegramMirrorProvider:
-    operations=frozenset({'history'})
+    operations=frozenset({'history','download'})
 
     def __init__(self, service, account_ref, user_id, opener=None):
         self.service=service; self.account_ref=account_ref; self.authorized_user=user_id
         self.sender_id=account_ref.split(':',1)[1]
         self.opener=opener or urllib.request.build_opener(_NoRedirect,urllib.request.ProxyHandler({})).open
         outbox=getattr(service,'telegram_outbox',None)
-        operations={'history'}
+        operations={'history','download'}
         if callable(getattr(outbox,'react',None)): operations.add('react')
         if callable(getattr(outbox,'edit_message',None)): operations.add('edit')
         supports_reply=getattr(outbox,'supports_reply',None)
@@ -112,6 +113,26 @@ class TelegramMirrorProvider:
         return {'messages':list(reversed(projected)),'next_cursor':next_cursor,
             'partial':True,'coverage':'bounded_native_history_page','observed_at':time.time(),
             'native_fetched':page.get('fetched'),'provider_read_acknowledged':False}
+
+    def media(self, projected, *, attachment_index=0):
+        """Return one stored Telegram message's native media through its owned bridge."""
+        source=projected.get('source') or {}
+        if (source.get('account_ref')!=self.account_ref
+                or not source.get('conversation_id') or not source.get('message_id')):
+            raise ValueError('Telegram media source scope conflict')
+        selected=next((item for item in projected.get('media') or []
+                       if item.get('attachment_index')==attachment_index),None)
+        if selected is None:
+            raise ValueError('invalid_attachment_index')
+        from .adapters import TelegramChannelAdapter
+        from .mcp_files import MAX_MCP_FILE_BYTES
+        file=TelegramChannelAdapter(self.service._store,self.service,self.authorized_user).download(
+            file_ref=str(source['message_id']),attachment_index=attachment_index,
+            max_bytes=MAX_MCP_FILE_BYTES)
+        return {'kind':'file','status':'ready','filename':file.filename,
+                'mimeType':file.content_type,'bytes':len(file.data),
+                'sha256':hashlib.sha256(file.data).hexdigest(),
+                'dataBase64':base64.b64encode(file.data).decode(),'partial':False}
 
     def import_projection(self, projected, *, peer_id, conversation_id, kind='unknown'):
         # Reconciliation already ingested these rows using the selected client.

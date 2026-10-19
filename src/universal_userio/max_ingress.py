@@ -49,7 +49,8 @@ def message_envelope(row: dict, *, chat_id: str, own_id: str, kind: str = "direc
         }}
         for src, dst in [("fileId", "attachment_id"), ("photoId", "attachment_id"),
                          ("videoId", "attachment_id"), ("audioId", "attachment_id"), ("stickerId", "attachment_id"),
-                         ("name", "filename"), ("size", "size")]:
+                         ("name", "filename"), ("fileName", "filename"),
+                         ("mimeType", "content_type"), ("size", "size")]:
             if src in item:
                 att[dst] = item[src]
         if typ == "sticker":

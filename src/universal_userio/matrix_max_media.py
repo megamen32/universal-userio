@@ -34,8 +34,17 @@ def download(service, user_id, conversation, record, *, max_bytes=2*1024*1024, a
     if attachment_index>=len(attachments):
         raise ValueError('Вложение не найдено')
     attachment=attachments[attachment_index]
+    stored=next((item for item in record.get('attachments') or []
+                 if item.get('idx')==attachment_index),None)
+    stored_id=str((stored or {}).get('attachment_id') or '')
+    actual_id=next((str(attachment.get(key)) for key in
+                    ('fileId','photoId','videoId','audioId','stickerId')
+                    if attachment.get(key) is not None),'')
+    if stored is None or stored_id and stored_id!=actual_id:
+        raise ValueError('MAX selected attachment source changed')
     kind=attachment.get("_type")
-    filename=metadata(attachment)['filename']
+    public=metadata(attachment)
+    filename=public['filename']
     if kind=="PHOTO":
         url=attachment.get("baseUrl")
         filename="max-photo.jpg"
@@ -51,4 +60,7 @@ def download(service, user_id, conversation, record, *, max_bytes=2*1024*1024, a
     else:
         raise ValueError("MAX native attachment type unavailable")
     data,mime=fetch_native_url(url,maximum=max_bytes)
-    return ChannelFile(filename,mime or metadata(attachment)['content_type'],data)
+    content_type=mime or public['content_type']
+    if content_type=='application/octet-stream' and public['content_type']!='application/octet-stream':
+        content_type=public['content_type']
+    return ChannelFile(filename,content_type,data)

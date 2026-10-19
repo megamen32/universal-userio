@@ -236,7 +236,7 @@ def test_scoped_token_reads_and_downloads_only_its_exact_telegram_chat(tmp_path,
             return {"chat":store.conversation(chat_id,user_id=store.default_user_id)}
         def download_for_ai(self,*,file_ref,max_bytes):
             assert file_ref==message_id and max_bytes>0
-            return ChannelFile("notes.csv","text/csv",b"Name,Role\nAda,Secretary\n")
+            return ChannelFile("notes.txt","text/plain",b"Name,Role\nAda,Secretary\n")
         def download(self,*,file_ref):
             return self.download_for_ai(file_ref=file_ref,max_bytes=1024)
 

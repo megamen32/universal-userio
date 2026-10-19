@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from tests.test_max_web_delivery import setup
+from test_max_web_delivery import setup
 from universal_userio.http_api import handler
 
 
@@ -62,6 +62,8 @@ def test_max_raw_download_uses_exact_index_and_unicode_filename(web, monkeypatch
     monkeypatch.setattr('universal_userio.matrix_max_media.fetch_native_url',lambda url,**kw:(url.rsplit('/',1)[1].encode(),'application/pdf'))
     code,headers,body=request(f'/v1/conversations/{cid}/media/max-0-123/raw?attachment_index=1')
     assert code==200 and body==b'8'
+    assert int(headers['Content-Length'])==len(body)
+    assert headers['X-Content-SHA256']==hashlib.sha256(body).hexdigest()
     assert reads[0]['attachment']['fileId']==8
     assert "filename*=UTF-8''" in headers['Content-Disposition']
     assert unquote(headers['Content-Disposition'].split("filename*=UTF-8''")[1])=='картинка.png'

@@ -150,6 +150,7 @@ def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(t
     assert read_spec["inputSchema"]["properties"]["include_images"]["default"] is True
     assert "include_images=false" in read_spec["description"]
     assert download_spec["inputSchema"]["properties"]["mode"]["enum"]==["base64","mcp_resource"]
+    assert download_spec["inputSchema"]["properties"]["attachment_index"]["maximum"]==7
 
 
 @pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])
