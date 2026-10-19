@@ -224,18 +224,12 @@ class SQLiteUserIOStore:
         columns = {str(row["name"]) for row in self._connection.execute("PRAGMA table_info(contact_names)")}
         if "is_explicit" in columns:
             return
-        # Older rows mixed user aliases with names copied from incoming
-        # Telegram messages. Preserve distinct aliases; reclassify exact copies
-        # of provider sender names so refreshed Telegram profiles can replace
-        # stale synced labels.
+        # Older rows do not record whether the label came from Telegram sync or
+        # an explicit alias. Treat them as synced so a fresh Telegram profile
+        # can replace stale labels; new explicit aliases carry is_explicit=1.
         self._connection.execute(
-            "ALTER TABLE contact_names ADD COLUMN is_explicit INTEGER NOT NULL DEFAULT 1"
+            "ALTER TABLE contact_names ADD COLUMN is_explicit INTEGER NOT NULL DEFAULT 0"
         )
-        self._connection.execute("""UPDATE contact_names SET is_explicit=0
-            WHERE source='telegram' AND EXISTS (
-              SELECT 1 FROM messages m WHERE m.user_id=contact_names.user_id
-                AND m.source=contact_names.source AND m.sender=contact_names.sender
-                AND m.sender_name=contact_names.name)""")
 
     def _bootstrap_owner(self) -> None:
         row = self._connection.execute(

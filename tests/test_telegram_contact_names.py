@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import threading
 from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer
@@ -86,6 +87,22 @@ def test_refreshed_telegram_profile_replaces_synced_old_contact_name(tmp_path):
 
     row = store.conversations(source="telegram", account_ref=account)[0]
     assert row["display_name"] == "Alice Example"
+    store.close()
+
+
+def test_legacy_contact_names_migrate_without_sender_name_column(tmp_path):
+    path = tmp_path / "legacy-contact-names.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE contact_names(user_id TEXT,source TEXT,sender TEXT,name TEXT,updated_at REAL,PRIMARY KEY(user_id,source,sender))")
+    connection.execute("INSERT INTO contact_names VALUES(?,?,?,?,?)",
+        ("user_owner", "telegram", "900000111", "Old Telegram Name", 2))
+    connection.commit()
+    connection.close()
+
+    store = SQLiteUserIOStore(path)
+    row = store._connection.execute("SELECT name,is_explicit FROM contact_names").fetchone()
+    assert row["name"] == "Old Telegram Name"
+    assert row["is_explicit"] == 0
     store.close()
 
 
