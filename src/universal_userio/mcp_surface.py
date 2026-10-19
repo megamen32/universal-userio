@@ -34,7 +34,7 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 
 TOOL_SPECS = (
-    ToolSpec("userio.channels.list", "List this user's chats across connected channels, or search their retained history when a search query is given.", _schema({
+    ToolSpec("userio.channels.list", "List this user's chats across connected channels, or search their retained history when a search query is given. Read chats from the MCP CallToolResult `structuredContent.chats` array (or `chats` if your client unwraps it); do not assume `chats` is a top-level property on the MCP wrapper.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},

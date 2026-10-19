@@ -392,6 +392,9 @@ class Messenger:
             raise ValueError('request_id_required')
         payload = self._payload(action,payload)
         conv = self._conversation(account_ref,conversation_id)
+        supports_action=getattr(self._provider(account_ref),'supports_action',None)
+        if callable(supports_action) and supports_action(action,conv) is False:
+            raise PermissionError('provider_not_supported_for_conversation')
         if not self.store.route_allowed(user_id=self.user, source=conv['source'],route_id=conv['route_id']):
             raise PermissionError('route_disabled')
         projected, source_hash = self._binding(conv,source_message_id)

@@ -19,6 +19,7 @@ import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirr
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
 import { readDialogFolders } from './dialog-folders.mjs';
+import { editOwnedTelegramText, TelegramEditRefused } from './message-edit.mjs';
 import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
@@ -1311,6 +1312,62 @@ http.createServer(async (req, res) => {
       }
     });
     return;
+  }
+  if (url.pathname === "/edit" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized", submitted: false }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "").trim();
+      const messageRef = String(payload.message_id || "").trim();
+      const chatId = String(payload.chat_id || "").trim();
+      if (!accountId || !chatId || !messageRef || typeof payload.expected_text !== "string"
+          || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 4096) {
+        throw new TelegramEditRefused("invalid_edit", "Account, chat, message and text are required");
+      }
+      const separator = messageRef.indexOf("|");
+      if (separator <= 0 || messageRef.slice(0, separator) !== accountId) {
+        throw new TelegramEditRefused("account_scope_conflict", "Message does not belong to this Telegram account");
+      }
+      const scoped = messageRef.slice(separator + 1);
+      const lastColon = scoped.lastIndexOf(":");
+      const peerId = lastColon > 0 ? scoped.slice(0, lastColon) : "";
+      const messageId = Number(lastColon > 0 ? scoped.slice(lastColon + 1) : "");
+      if (peerId !== chatId || !Number.isSafeInteger(messageId) || messageId <= 0) {
+        throw new TelegramEditRefused("message_scope_conflict", "Message does not belong to this Telegram chat");
+      }
+      const chosen = [...liveSlots].find(([, item]) => item.accountId === accountId);
+      if (!chosen) {
+        res.writeHead(404, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Telegram account is not connected", code: "account_not_connected", submitted: false }));
+      }
+      const [slot, item] = chosen;
+      const peer = item.labelPeers.idPeers.get(chatId);
+      if (!peer || !item.client) {
+        res.writeHead(404, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "Telegram chat is not connected", code: "chat_not_known", submitted: false }));
+      }
+      const edited = await editOwnedTelegramText({
+        client: item.client, api: Api, peer, messageId,
+        expectedText: payload.expected_text, text: payload.text,
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, slot, account_id: accountId, peer_id: chatId,
+        message_id: edited.messageId, text: edited.text, edit_date: edited.editDate, out: edited.out }));
+    } catch (error) {
+      if (error?.submitted === false) {
+        res.writeHead(409, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: error.message, code: error.code || "edit_refused", submitted: false }));
+      }
+      // The API call may have reached Telegram; leave the durable UserIO action
+      // uncertain instead of suggesting a retry that could overwrite newer text.
+      console.error("Telegram edit outcome is unknown:", error?.name || "Error");
+      res.writeHead(502, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "Telegram edit outcome is unknown", submitted: "unknown" }));
+    }
   }
   if (url.pathname === "/react" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;

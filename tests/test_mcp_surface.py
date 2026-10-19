@@ -40,6 +40,20 @@ def test_channels_list_honors_conversation_id_scope(tmp_path) -> None:
     assert [chat["id"] for chat in result["chats"]] == [selected_id]
 
 
+def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+    tools = surface.dispatch("tools/list", {}, principal=store.owner())["tools"]
+    description = next(item["description"] for item in tools if item["name"] == "userio.channels.list")
+    from universal_userio.mcp_catalog import TOOL_SPECS as MODULAR_TOOL_SPECS
+    modular_description = next(item.description for item in MODULAR_TOOL_SPECS if item.name == "userio.channels.list")
+
+    assert "structuredContent.chats" in description
+    assert "top-level" in description
+    assert "structuredContent.chats" in modular_description
+    assert "top-level" in modular_description
+
+
 @pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])
 def test_channels_search_returns_conversations_in_chats_for_reading(tmp_path, query) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")

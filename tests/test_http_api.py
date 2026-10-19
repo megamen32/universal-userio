@@ -713,7 +713,7 @@ def test_vk_identity_connect_does_not_claim_message_capabilities(tmp_path) -> No
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     try:
-        page = Request(base + "/vk/connect/new", headers={
+        page = Request(base + "/vk/callback", headers={
             "X-UserIO-Authenticated": "1", "X-UserIO-Proxy-Token": "proxy-secret",
         })
         with urlopen(page) as response:

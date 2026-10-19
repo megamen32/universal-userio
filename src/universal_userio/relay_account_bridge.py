@@ -12,7 +12,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from .contracts import InboxMessage
+from .contracts import DeliveryNotSubmittedError, InboxMessage
 
 SCHEMA = "userio.approved-source-reply.v1"
 DOMAIN = SCHEMA + "\n"
@@ -178,6 +178,16 @@ class RelayAccountBridge:
 
     def react(self, **kwargs):
         return self.fallback.react(**kwargs)
+
+    def supports_edit(self, account_ref: str, chat_id: str) -> bool:
+        # The source-bound relay pair has a separate approval/dispatch owner;
+        # other Telegram chats continue through the user's QR connector.
+        return not self.source_bound_pair(account_ref, chat_id)
+
+    def edit_message(self, **kwargs):
+        if self.source_bound_pair(kwargs.get('account_ref',''),kwargs.get('chat_id','')):
+            raise DeliveryNotSubmittedError('This exact relay-bound Telegram chat does not support edits')
+        return self.fallback.edit_message(**kwargs)
 
     def acknowledge(self, **kwargs):
         if self.source_bound_pair(kwargs.get('account_ref',''),kwargs.get('chat_id','')):

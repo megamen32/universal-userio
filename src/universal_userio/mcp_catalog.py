@@ -49,7 +49,9 @@ IGNORED_CHATS_SCHEMA = {
 TOOL_SPECS = (
     ToolSpec(
         "userio.channels.list",
-        "List this user's chats across connected channels, or search their retained history when a search query is given.",
+        "List this user's chats across connected channels, or search their retained history when a search query is given. "
+        "Read chats from the MCP CallToolResult `structuredContent.chats` array (or `chats` if your client unwraps it); "
+        "do not assume `chats` is a top-level property on the MCP wrapper.",
         schema(
             {
                 "channel": CHANNEL_SCHEMA,

@@ -126,3 +126,50 @@ def test_pinned_slot_is_sent_with_the_account():
     sent = json.loads(captured["request"].data.decode())
     assert sent["account_id"] == "telegram:540308572"
     assert sent["slot"] == "account-1"
+
+
+def test_edit_posts_exact_source_snapshot_to_account_bound_connector():
+    def run(request, **_kwargs):
+        captured["request"] = request
+        return _Response(json.dumps({"ok": True, "account_id": "telegram:540308572",
+            "peer_id": "-10042", "message_id": "77", "text": "after",
+            "edit_date": 1700000100, "out": True}).encode())
+
+    outbox = TelegramQrHttpOutbox("http://127.0.0.1:18095", "token-1", runner=run)
+    result = outbox.edit_message(chat_id="-10042", account_ref="telegram:540308572",
+        message_id="telegram:540308572|-10042:77", expected_text="before", text="after")
+    request = captured["request"]
+    assert request.full_url == "http://127.0.0.1:18095/edit"
+    assert request.get_header("Authorization") == "Bearer token-1"
+    assert json.loads(request.data.decode()) == {"account_id":"telegram:540308572", "chat_id":"-10042",
+        "message_id":"telegram:540308572|-10042:77", "expected_text":"before", "text":"after"}
+    assert result["text"] == "after" and result["out"] is True
+
+
+def test_edit_refuses_account_and_peer_mismatch_before_connector_call():
+    called = []
+    outbox = TelegramQrHttpOutbox("http://127.0.0.1:18095", "token-1",
+        runner=lambda *a, **k: called.append(a))
+    try:
+        outbox.edit_message(chat_id="-10099", account_ref="telegram:540308572",
+            message_id="telegram:540308572|-10042:77", expected_text="before", text="after")
+    except ValueError as error:
+        assert "does not match" in str(error)
+    else:
+        raise AssertionError("cross-chat edit reference must be rejected")
+    assert called == []
+
+
+def test_edit_preserves_uncertain_provider_outcome():
+    def fail(request, **_kwargs):
+        raise urllib.error.HTTPError(request.full_url, 502, "uncertain", {},
+            io.BytesIO(b'{"error":"Telegram edit outcome is unknown","submitted":"unknown"}'))
+
+    outbox = TelegramQrHttpOutbox("http://127.0.0.1:18095", "token-1", runner=fail)
+    try:
+        outbox.edit_message(chat_id="-10042", account_ref="telegram:540308572",
+            message_id="telegram:540308572|-10042:77", expected_text="before", text="after")
+    except RuntimeError as error:
+        assert "outcome is unknown" in str(error)
+    else:
+        raise AssertionError("an uncertain Telegram edit must not look like a safe refusal")

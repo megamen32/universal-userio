@@ -1151,10 +1151,40 @@ class UserIOService:
                    for a in self._store.accounts(user_id=user_id)):
             raise DeliveryUnavailableError('Отправка MAX выключена для этого аккаунта')
 
-    def edit_max_message(self, conversation_id: str, *, message_id: str, body: str,
-                         expected_body: str, user_id: str | None = None) -> dict:
+    def edit_message(self, conversation_id: str, *, message_id: str, body: str,
+                     expected_body: str, user_id: str | None = None) -> dict:
         user = self._store._user(user_id)
         conv = self._store.conversation(conversation_id, user_id=user)
+        if conv and conv['source']=='telegram':
+            if not self._store.send_enabled(user_id=user) or not self._store.route_allowed(
+                    user_id=user, source='telegram', route_id=str(conv['route_id'])):
+                raise DeliveryUnavailableError('Изменение сообщений запрещено настройками аккаунта')
+            account_ref=str(conv.get('account_ref') or '')
+            record=self._store.message(message_id,source='telegram',user_id=user)
+            prefix=account_ref+'|'+str(conv.get('peer_id') or '')+':'
+            if (not record or record['conversation_id']!=conversation_id or record['direction']!='outgoing'
+                    or not account_ref.startswith('telegram:') or not message_id.startswith(prefix)):
+                raise ValueError('Можно изменять только своё сообщение в этом диалоге')
+            if record['body']!=expected_body:
+                raise ValueError('Сообщение уже изменилось. Обновите диалог.')
+            if not isinstance(body,str) or not body.strip() or body==expected_body:
+                raise ValueError('Введите новый текст сообщения')
+            if len(body.encode('utf-16-le'))//2>4096:
+                raise ValueError('Telegram ограничивает текст сообщения 4096 символами')
+            # The same immutable source-bound approval journal used by the MCP
+            # keeps Telegram edits single-submit and recoverable on uncertain I/O.
+            from .messenger import Messenger
+            from .contracts import UserPrincipal
+            api=Messenger(self._store,self,UserPrincipal(user,'web-message-edit','user'))
+            proposal=api.propose(account_ref,conversation_id,message_id,'edit',
+                {'text':body,'expected_text':expected_body},'web-edit-'+uuid.uuid4().hex)
+            accepted=api.approve(proposal['id'],proposal['hash'],True)
+            if accepted.get('status')!='accepted':
+                raise RuntimeError('Telegram edit was not confirmed')
+            edited=self._store.message(message_id,source='telegram',user_id=user)
+            if not edited or edited['body']!=body:
+                raise RuntimeError('Telegram edit was accepted but the local readback is stale')
+            return edited
         if conv and conv['source']=='vk':
             from .vk_web import VKWeb
             return VKWeb(self,user).edit(conversation_id,message_id,body.strip(),expected_body)
@@ -1187,6 +1217,12 @@ class UserIOService:
         self.receive(inbox_message_from_envelope(envelope, received_at=record["received_at"]),
                      route_id=str(conv["route_id"]), user_id=user, account_ref=str(conv.get("account_ref") or "max"))
         return self._store.message(source="max", message_id=message_id, user_id=user)
+
+    def edit_max_message(self, conversation_id: str, *, message_id: str, body: str,
+                         expected_body: str, user_id: str | None = None) -> dict:
+        """Backward-compatible entry point for the existing MAX edit route."""
+        return self.edit_message(conversation_id,message_id=message_id,body=body,
+                                 expected_body=expected_body,user_id=user_id)
 
     def _generator_for(self, user_id: str | None) -> object:
         """BYOK: a user's own endpoint/model/key wins over the server default."""

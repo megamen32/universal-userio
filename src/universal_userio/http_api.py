@@ -1346,7 +1346,7 @@ def handler(
                         return
                     conversation_id, message_id = path.removeprefix("/v1/conversations/").split("/messages/", 1)
                     payload = self._json()
-                    message = service.edit_max_message(unquote(conversation_id), message_id=unquote(message_id),
+                    message = service.edit_message(unquote(conversation_id), message_id=unquote(message_id),
                         body=str(payload.get("body") or ""), expected_body=str(payload.get("expected_body") or ""),
                         user_id=principal.user_id)
                     self._reply(200, {"message": message})
@@ -2166,6 +2166,21 @@ def handler(
                 self._reply(200, payload)
                 return
             record = service._store.conversation(conversation_id, user_id=user_id)
+            if record and record.get('source')=='telegram' and record.get('messages'):
+                from .messenger import Messenger
+                messenger=Messenger(service._store,service,principal)
+                account_ref=str(record.get('account_ref') or '')
+                try:
+                    capability=messenger.capabilities(account_ref)['operations']['edit']['allowed'] if account_ref else False
+                    provider=messenger._provider(account_ref) if account_ref else None
+                    supports=getattr(provider,'supports_action',None)
+                    conversation_supported=(not callable(supports) or supports('edit',record))
+                except (KeyError,PermissionError,ValueError):
+                    capability=False;conversation_supported=False
+                for message in record['messages']:
+                    message['can_edit']=bool(capability and conversation_supported
+                        and message.get('direction')=='outgoing' and not message.get('attachments')
+                        and str(message.get('body') or '').strip())
             call_audio.enrich(record)
             self._reply(200 if record else 404, record or {"error": "conversation not found"})
 

@@ -346,6 +346,45 @@ class TelegramQrHttpOutbox:
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
 
+    def edit_message(self, *, chat_id: str, account_ref: str, message_id: str,
+                     expected_text: str, text: str) -> dict[str, object]:
+        if not account_ref or not chat_id or not message_id or not expected_text or not text.strip():
+            raise ValueError("Telegram edit requires account, chat, source and text")
+        try:
+            scope, native = message_id.split("|", 1)
+            peer_id, native_id = native.rsplit(":", 1)
+        except ValueError as error:
+            raise ValueError("Telegram edit requires an exact stored message reference") from error
+        if scope != account_ref or peer_id != chat_id or not native_id.isdigit():
+            raise ValueError("Telegram edit message reference does not match the account and chat")
+        payload = json.dumps({"account_id": account_ref, "chat_id": chat_id,
+                              "message_id": message_id, "expected_text": expected_text,
+                              "text": text}).encode()
+        request = urllib.request.Request(
+            f"{self._base_url}/edit", data=payload, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                result = json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:200]
+            if error.code in _CONNECTOR_REFUSED_HTTP:
+                code = _connector_code(detail)
+                message = ("Сообщение в Telegram уже изменилось. Обновите диалог перед новой правкой."
+                           if code == "source_changed" else
+                           f"Telegram отказал в изменении до отправки (HTTP {error.code}).")
+                raise DeliveryNotSubmittedError(message) from error
+            raise RuntimeError(f"telegram-qr edit outcome is unknown: HTTP {error.code}") from error
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError("telegram-qr edit outcome is unknown: connector is unreachable") from error
+        if (result.get("ok") is not True or result.get("account_id") != account_ref
+                or str(result.get("peer_id")) != chat_id or str(result.get("message_id")) != native_id
+                or result.get("text") != text or result.get("out") is not True
+                or type(result.get("edit_date")) not in (int, float) or result["edit_date"] <= 0):
+            raise RuntimeError("Telegram edit receipt could not be verified")
+        return result
+
 
 class HimalayaGmailOutbox:
     """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""

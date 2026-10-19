@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from universal_userio.contracts import InboxMessage
+from universal_userio.contracts import DeliveryNotSubmittedError, InboxMessage
 from universal_userio.relay_account_bridge import RelayAccountBridge, DOMAIN, canonical_approval
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
@@ -47,8 +47,9 @@ def case(tmp_path):
             sent.append(json.loads(request.data)); result={"providerMessageId":"91","duplicate":False}
         return Response(json.dumps(result).encode())
     class Fallback:
-        calls=[]
+        calls=[]; edits=[]
         def send_reply(self, **kwargs): self.calls.append(kwargs);return "qr:unchanged"
+        def edit_message(self, **kwargs): self.edits.append(kwargs);return {"ok":True}
     fallback=Fallback()
     bridge=RelayAccountBridge(fallback=fallback,store=store,base_url="http://relay",token_file=str(token),
         approval_key="fixture-userio-service-key",account_id="telegram:900000103",peer_id="8634588930",
@@ -104,6 +105,20 @@ def test_other_account_uses_original_qr_outbox(case):
     cb=bridge.prepare_reply(chat='other',chat_id='42',account_ref='telegram:900000101',body='x',
         draft_id='old',user_id=store.default_user_id,conversation_id='oldconv')
     assert cb()=='qr:unchanged' and not sent
+
+
+def test_ordinary_telegram_edit_uses_qr_fallback_but_relay_pair_is_denied(case):
+    store,service,bridge,events,sent,health,guard,fallback=case
+    kwargs={'chat_id':'42','account_ref':'telegram:900000101','message_id':'telegram:900000101|42:77',
+        'expected_text':'before','text':'after'}
+    assert bridge.supports_edit(kwargs['account_ref'],kwargs['chat_id'])
+    assert bridge.edit_message(**kwargs)=={'ok':True}
+    assert fallback.edits==[kwargs]
+    bound={**kwargs,'chat_id':bridge.peer_id,'account_ref':bridge.account_id}
+    assert not bridge.supports_edit(bound['account_ref'],bound['chat_id'])
+    with pytest.raises(DeliveryNotSubmittedError,match='exact relay-bound'):
+        bridge.edit_message(**bound)
+    assert fallback.edits==[kwargs]
 
 
 def test_bare_draft_id_and_unclaimed_origin_cannot_send(case):
