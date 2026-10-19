@@ -95,6 +95,7 @@ class SQLiteUserIOStore:
             if self._is_legacy() or self._table_exists("legacy_conversations"):
                 self._migrate_legacy()
             self._data_schema()
+            self._contact_names_migration()
             self._conversation_secretary_jobs_migration()
             self._workspace_policy_migration()
             message_columns = {
@@ -218,6 +219,23 @@ class SQLiteUserIOStore:
         ):
             if name not in columns:
                 self._connection.execute(f"ALTER TABLE api_tokens ADD COLUMN {name} {definition}")
+
+    def _contact_names_migration(self) -> None:
+        columns = {str(row["name"]) for row in self._connection.execute("PRAGMA table_info(contact_names)")}
+        if "is_explicit" in columns:
+            return
+        # Older rows mixed user aliases with names copied from incoming
+        # Telegram messages. Preserve distinct aliases; reclassify exact copies
+        # of provider sender names so refreshed Telegram profiles can replace
+        # stale synced labels.
+        self._connection.execute(
+            "ALTER TABLE contact_names ADD COLUMN is_explicit INTEGER NOT NULL DEFAULT 1"
+        )
+        self._connection.execute("""UPDATE contact_names SET is_explicit=0
+            WHERE source='telegram' AND EXISTS (
+              SELECT 1 FROM messages m WHERE m.user_id=contact_names.user_id
+                AND m.source=contact_names.source AND m.sender=contact_names.sender
+                AND m.sender_name=contact_names.name)""")
 
     def _bootstrap_owner(self) -> None:
         row = self._connection.execute(
@@ -405,7 +423,7 @@ class SQLiteUserIOStore:
             );
             CREATE TABLE IF NOT EXISTS contact_names (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,sender TEXT NOT NULL,
-                name TEXT NOT NULL,updated_at REAL NOT NULL,
+                name TEXT NOT NULL,updated_at REAL NOT NULL,is_explicit INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY(user_id,source,sender)
             );
             CREATE TABLE IF NOT EXISTS drafts (
@@ -1782,8 +1800,11 @@ class SQLiteUserIOStore:
             if getattr(message, "sender_name", ""):
                 self._connection.execute(
                     """
-                    INSERT OR REPLACE INTO contact_names
-                    (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)
+                    INSERT INTO contact_names
+                    (user_id,source,sender,name,updated_at,is_explicit) VALUES (?,?,?,?,?,0)
+                    ON CONFLICT(user_id,source,sender) DO UPDATE SET
+                      name=excluded.name,updated_at=excluded.updated_at
+                    WHERE contact_names.is_explicit=0
                     """,
                     (user_id, message.source, message.sender, message.sender_name, now),
                 )
@@ -2593,7 +2614,7 @@ class SQLiteUserIOStore:
                 (user_id, conversation_id),
             ).fetchall()
             name_row = self._connection.execute(
-                "SELECT name FROM contact_names WHERE user_id=? AND source=? AND sender=?",
+                "SELECT name,is_explicit FROM contact_names WHERE user_id=? AND source=? AND sender=?",
                 (user_id, row["source"], f"chat:{row['account_ref']}:{row['peer_id']}"
                  if row["source"] in {"max", "phone", "vk", "yandex"} and row["account_ref"] and row["peer_id"] else row["sender"]),
             ).fetchone()
@@ -2613,7 +2634,8 @@ class SQLiteUserIOStore:
                     profile_name = "@" + profile_name.lstrip("@")
                 else:
                     profile_name = str(profile_row["phone"] or "").strip()
-            display_name = (profile_name or (str(name_row["name"]) if name_row else ""))
+            explicit_name = str(name_row["name"] or "") if name_row and name_row["is_explicit"] else ""
+            display_name = explicit_name or profile_name or (str(name_row["name"]) if name_row else "")
             history_row = None
             if row["source"] == "telegram" and row["account_ref"] and row["peer_id"]:
                 history_row = self._connection.execute("""SELECT oldest_id,complete,fetched_count
@@ -4854,6 +4876,8 @@ class SQLiteUserIOStore:
                        CASE WHEN c.source='telegram' AND c.account_ref LIKE 'telegram:%'
                                   AND c.peer_id=substr(c.account_ref,10) THEN 'Избранное'
                          WHEN c.source='telegram' THEN COALESCE(
+                           NULLIF((SELECT name FROM contact_names WHERE user_id=c.user_id
+                            AND source=c.source AND sender=c.sender AND is_explicit=1),''),
                            NULLIF(trim(COALESCE(sp.first_name,'')||' '||COALESCE(sp.last_name,'')),''),
                            NULLIF('@'||sp.username,'@'), NULLIF(sp.phone,''),
                            NULLIF((SELECT name FROM contact_names WHERE user_id=c.user_id

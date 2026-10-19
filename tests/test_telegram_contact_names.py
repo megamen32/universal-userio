@@ -63,11 +63,29 @@ def test_explicit_contact_alias_still_wins_over_synced_profile(tmp_path):
     initialize_search(store)
     save_profile(store, store.default_user_id, cid, {"first_name": "Alice", "last_name": "Example"})
     with store._connection:
-        store._connection.execute("INSERT INTO contact_names(user_id,source,sender,name,updated_at) VALUES(?,?,?,?,?)",
+        store._connection.execute("INSERT INTO contact_names(user_id,source,sender,name,updated_at,is_explicit) VALUES(?,?,?,?,?,1)",
             (store.default_user_id, "telegram", "900000111", "My contact", 2))
 
     row = store.conversations(source="telegram", account_ref=account)[0]
     assert row["display_name"] == "My contact"
+    store.close()
+
+
+def test_refreshed_telegram_profile_replaces_synced_old_contact_name(tmp_path):
+    store = SQLiteUserIOStore(tmp_path / "refreshed-name.sqlite3")
+    service = UserIOService(store, object(), object())
+    account = "telegram:8810909089"
+    store.register_account(account_id=account, provider="telegram", display_name="Secretary",
+                           can_read=True, can_reply=True, credential_ref="fixture")
+    cid = _conversation(store, service, account=account, peer="900000111", sender="900000111")
+    initialize_search(store)
+    with store._connection:
+        store._connection.execute("INSERT INTO contact_names(user_id,source,sender,name,updated_at,is_explicit) VALUES(?,?,?,?,?,0)",
+            (store.default_user_id, "telegram", "900000111", "Old Telegram Name", 2))
+    save_profile(store, store.default_user_id, cid, {"first_name": "Alice", "last_name": "Example"})
+
+    row = store.conversations(source="telegram", account_ref=account)[0]
+    assert row["display_name"] == "Alice Example"
     store.close()
 
 

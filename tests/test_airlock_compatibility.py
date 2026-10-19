@@ -48,20 +48,32 @@ def test_airlock_can_poll_then_draft_and_exactly_approve_over_mcp(tmp_path) -> N
     def rpc(method: str, params: dict) -> dict:
         nonlocal request_id
         request_id += 1
+        params = {
+            **params,
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
+        }
         payload = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
             "params": params,
         }
+        headers = {
+            "Authorization": "Bearer airlock-token",
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": method,
+        }
+        if method == "tools/call":
+            headers["Mcp-Name"] = params["name"]
         request = Request(
             f"http://127.0.0.1:{server.server_port}/mcp",
             data=json.dumps(payload).encode(),
             method="POST",
-            headers={
-                "Authorization": "Bearer airlock-token",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         with urlopen(request) as response:
             return json.loads(response.read())["result"]
@@ -71,14 +83,7 @@ def test_airlock_can_poll_then_draft_and_exactly_approve_over_mcp(tmp_path) -> N
         return result["structuredContent"]
 
     try:
-        initialized = rpc(
-            "initialize",
-            {
-                "protocolVersion": "2026-07-28",
-                "clientInfo": {"name": "airlock-agent", "version": "0.7"},
-                "capabilities": {},
-            },
-        )
+        discovered = rpc("server/discover", {})
         manifest = rpc("tools/list", {})
         polled = call_tool(
             "userio.workspace.poll", {"after": 0, "limit": 10}
@@ -92,7 +97,7 @@ def test_airlock_can_poll_then_draft_and_exactly_approve_over_mcp(tmp_path) -> N
             {"chat_id": conversation_id, "text": "Exact reply"},
         )
 
-        assert initialized["protocolVersion"] == "2026-07-28"
+        assert discovered["supportedVersions"] == ["2026-07-28"]
         assert "userio.workspace.poll" in {
             tool["name"] for tool in manifest["tools"]
         }
