@@ -71,7 +71,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.channels.read",
-        "Read one user-owned chat or message with bounded text.",
+        "Read one user-owned chat or message. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
             {
                 "channel": CHANNEL_SCHEMA,
@@ -80,6 +80,7 @@ TOOL_SPECS = (
                 "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
                 "history_limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "ignored_chats": IGNORED_CHATS_SCHEMA,
+                "include_images": {"type": "boolean", "default": True},
             }
         ),
     ),

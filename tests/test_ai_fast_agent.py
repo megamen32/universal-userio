@@ -69,7 +69,7 @@ def test_vision_payload_contains_bytes_without_transport_secrets() -> None:
         history=[], max_drafts=0,
     )
     payload = requests[0]
-    assert payload["model"] == "MiniMax-M3"
+    assert payload["model"] == "MiniMax-M3.1-Flash"
     content = payload["messages"][1]["content"]
     assert content[1]["image_url"]["url"] == "data:image/png;base64," + base64.b64encode(raw).decode()
     assert "SECRET_SENTINEL" not in json.dumps(payload)
@@ -209,7 +209,7 @@ def test_triage_routes_image_attachments_to_minimax_m3(attachments) -> None:
         history=[],
     )
 
-    assert requests[0]["model"] == "MiniMax-M3"
+    assert requests[0]["model"] == "MiniMax-M3.1-Flash"
 
 
 def test_read_more_switches_to_image_model_and_honours_context_cap() -> None:
@@ -240,7 +240,7 @@ def test_read_more_switches_to_image_model_and_honours_context_cap() -> None:
         max_context_messages=2,
     )
 
-    assert [payload["model"] for payload in requests] == ["MiniMax-M2.7", "MiniMax-M3"]
+    assert [payload["model"] for payload in requests] == ["MiniMax-M2.7", "MiniMax-M3.1-Flash"]
     tool_result = json.loads(requests[1]["messages"][-1]["content"])
     # The ceiling covers the initial message plus one older page entry.
     assert len(tool_result["older_messages"]) == 1

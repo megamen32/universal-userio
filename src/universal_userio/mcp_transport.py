@@ -71,11 +71,16 @@ def json_rpc_response(
         elif method in {"tools/list", "tools/call"}:
             result = surface.dispatch(method, params, principal=principal)
             if method == "tools/call":
+                result = dict(result)
+                media_blocks = result.pop("_mcp_content_blocks", [])
+                content = [{
+                    "type": "text",
+                    "text": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                }]
+                if isinstance(media_blocks, list):
+                    content.extend(block for block in media_blocks if isinstance(block, dict))
                 result = {
-                    "content": [{
-                        "type": "text",
-                        "text": json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-                    }],
+                    "content": content,
                     "structuredContent": result,
                     "isError": result.get("ok") is False,
                 }

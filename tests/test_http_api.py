@@ -67,7 +67,7 @@ def test_context_preferences_http_are_authenticated_and_user_scoped(tmp_path) ->
         assert owner_payload["context"]["cache_channels"]["telegram"] is True
         assert owner_payload["context"]["cache_channels"]["gmail"] is False
         assert owner_payload["context"]["models"] == {
-            "text": "MiniMax-M2.7", "image": "MiniMax-M3",
+            "text": "MiniMax-M2.7", "image": "MiniMax-M3.1-Flash",
         }
         assert request("POST", other_token, {
             "message_count": 7, "max_message_count": 80,
@@ -86,7 +86,7 @@ def test_context_preferences_http_are_authenticated_and_user_scoped(tmp_path) ->
             "cache_conversation_kinds": {
                 "direct": True, "group": False, "channel": False, "unknown": False,
             },
-            "models": {"text": "MiniMax-M2.7", "image": "MiniMax-M3"},
+            "models": {"text": "MiniMax-M2.7", "image": "MiniMax-M3.1-Flash"},
         }})
         assert request("GET", "owner-token")[1]["context"]["message_count"] == 3
         assert request("POST", other_token, {

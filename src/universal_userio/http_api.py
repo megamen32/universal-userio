@@ -55,8 +55,8 @@ def _context_preferences(service: UserIOService, user_id: str) -> dict[str, obje
     settings["models"] = {
         "text": os.environ.get("USERIO_AI_MODEL", "MiniMax-M2.7").strip()
         or "MiniMax-M2.7",
-        "image": os.environ.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3").strip()
-        or "MiniMax-M3",
+        "image": os.environ.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3.1-Flash").strip()
+        or "MiniMax-M3.1-Flash",
     }
     return settings
 

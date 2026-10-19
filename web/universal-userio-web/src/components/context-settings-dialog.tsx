@@ -96,7 +96,7 @@ export function ContextSettingsDialog({ settings, loading, ready, loadError, sav
           <p className="mt-1 text-xs text-muted-foreground">Текст идёт в быструю модель; безопасно загруженные изображения Telegram и WhatsApp автоматически переключают разбор на vision-модель. Модели задаются владельцем deployment.</p>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {settings.models.text !== undefined && <label className="text-sm"><span className="mb-1 block text-muted-foreground">Без изображений</span><Input readOnly value={settings.models.text} placeholder="MiniMax-M2.7" /></label>}
-          {settings.models.image !== undefined && <label className="text-sm"><span className="mb-1 block text-muted-foreground">С изображениями</span><Input readOnly value={settings.models.image} placeholder="MiniMax-M3" /></label>}
+          {settings.models.image !== undefined && <label className="text-sm"><span className="mb-1 block text-muted-foreground">С изображениями</span><Input readOnly value={settings.models.image} placeholder="MiniMax-M3.1-Flash" /></label>}
         </div>
       </section>}
 

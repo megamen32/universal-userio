@@ -89,8 +89,8 @@ summary cache and approval/outbox state. The only analysis tool is the existing
 bounded `read_more_context`; there is no shell, separate MCP service or new
 inference worker. Existing `USERIO_AI_ENDPOINT` and `USERIO_AI_TOKEN` configure
 an isolated SDK context without new credentials or process-wide environment
-changes. Text uses MiniMax-M2.7; images use MiniMax-M3. If a later history page
-contains an image, the native pre-request hook switches to M3 before that
+changes. Text uses MiniMax-M2.7; images use MiniMax-M3.1-Flash. If a later history page
+contains an image, the native pre-request hook switches to M3.1-Flash before that
 image reaches the provider.
 
 Install the core's Python environment under its reviewed finite build budget

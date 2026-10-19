@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
 from io import StringIO
 import pytest
 
-from universal_userio.contracts import InboxMessage
+from universal_userio.contracts import ChannelFile, InboxMessage
+from universal_userio.adapters import TelegramChannelAdapter
 from universal_userio.mcp_http import McpHttpEndpoint
 from universal_userio.mcp_surface import UserIOMcpSurface
 from universal_userio.mcp_transport import StdioJsonRpcTransport
+from universal_userio.mcp_transport import json_rpc_response
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
@@ -40,11 +44,72 @@ def test_channels_list_honors_conversation_id_scope(tmp_path) -> None:
     assert [chat["id"] for chat in result["chats"]] == [selected_id]
 
 
+def test_mcp_read_includes_image_content_by_default_and_reports_audio_status(tmp_path, monkeypatch):
+    store = SQLiteUserIOStore(tmp_path / "media-read.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(InboxMessage(
+        "telegram", "tg:photo-1", "Alice", "Посмотри сюда", 1.0,
+        attachments=(
+            {"kind": "photo", "content_type": "image/png", "filename": "photo.png", "idx": 0},
+            {"kind": "voice", "content_type": "audio/ogg", "filename": "voice.ogg",
+             "idx": 1, "transcription_status": "not_requested", "transcript": ""},
+        ),
+    ), route_id="telegram")
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", lambda self, **_kwargs:
+                        ChannelFile("photo.png", "image/png", b"\x89PNG\r\n\x1a\nfixture"))
+    surface = UserIOMcpSurface(store, service)
+
+    response = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "userio.channels.read", "arguments": {
+            "channel": "telegram", "chat_id": conversation_id,
+        }},
+    })
+
+    result = response["result"]
+    image = next(block for block in result["content"] if block["type"] == "image")
+    assert not any(block["type"] == "audio" for block in result["content"])
+    assert image["data"] == base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode()
+    assert image["mimeType"] == "image/png"
+    delivery = result["structuredContent"]["media_delivery"]
+    assert next(item for item in delivery if item["kind"] == "photo")["image_included"] is True
+    voice_status = next(item for item in delivery if item["kind"] == "voice")
+    assert voice_status["transcription_status"] == "not_requested"
+    assert voice_status["delivery_note"] == "Аудио не отправлено модели; транскрипции нет."
+
+
+def test_mcp_read_can_opt_out_of_image_bytes_without_hiding_media_status(tmp_path, monkeypatch):
+    store = SQLiteUserIOStore(tmp_path / "media-opt-out.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(InboxMessage(
+        "telegram", "tg:photo-2", "Alice", "Что на фото?", 1.0,
+        attachments=({"kind": "photo", "content_type": "image/jpeg", "filename": "photo.jpg", "idx": 0},),
+    ), route_id="telegram")
+    calls = []
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", lambda self, **kwargs:
+                        calls.append(kwargs) or ChannelFile("photo.jpg", "image/jpeg", b"\xff\xd8\xfffixture"))
+    surface = UserIOMcpSurface(store, service)
+
+    response = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "userio.channels.read", "arguments": {
+            "channel": "telegram", "chat_id": conversation_id, "include_images": False,
+        }},
+    })
+
+    result = response["result"]
+    assert not any(block["type"] == "image" for block in result["content"])
+    assert calls == []
+    assert result["structuredContent"]["media_delivery"][0]["image_included"] is False
+    assert result["structuredContent"]["media_delivery"][0]["opted_out"] is True
+
+
 def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
     tools = surface.dispatch("tools/list", {}, principal=store.owner())["tools"]
     description = next(item["description"] for item in tools if item["name"] == "userio.channels.list")
+    read_spec = next(item for item in tools if item["name"] == "userio.channels.read")
     from universal_userio.mcp_catalog import TOOL_SPECS as MODULAR_TOOL_SPECS
     modular_description = next(item.description for item in MODULAR_TOOL_SPECS if item.name == "userio.channels.list")
 
@@ -52,6 +117,8 @@ def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(t
     assert "top-level" in description
     assert "structuredContent.chats" in modular_description
     assert "top-level" in modular_description
+    assert read_spec["inputSchema"]["properties"]["include_images"]["default"] is True
+    assert "include_images=false" in read_spec["description"]
 
 
 @pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])

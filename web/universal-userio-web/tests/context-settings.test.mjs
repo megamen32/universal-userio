@@ -34,11 +34,11 @@ test("extended responses preserve backend fields and models", () => {
     summary_retention_days: 120,
     cache_channels: { telegram: false, gmail: true, matrix: true },
     cache_conversation_kinds: { direct: true, group: true },
-    models: { text: "MiniMax-M2.7", image: "MiniMax-M3" },
+    models: { text: "MiniMax-M2.7", image: "MiniMax-M3.1-Flash" },
     future_policy: "keep-me",
   })
 
-  assert.deepEqual(settings.models, { text: "MiniMax-M2.7", image: "MiniMax-M3" })
+  assert.deepEqual(settings.models, { text: "MiniMax-M2.7", image: "MiniMax-M3.1-Flash" })
   assert.equal(settings.cache_channels.matrix, true)
   assert.equal(contextSettingsPayload(settings).future_policy, "keep-me")
 })

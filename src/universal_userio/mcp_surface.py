@@ -14,6 +14,10 @@ from .store import SQLiteUserIOStore
 
 
 _WORKSPACE_EVENT_BODY_LIMIT = 4096
+_MCP_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+_MCP_IMAGE_MAX_TOTAL_BYTES = 4 * 1024 * 1024
+_MCP_IMAGE_MAX_COUNT = 4
+_MCP_IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,12 +50,13 @@ TOOL_SPECS = (
         "conversation_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100},
         "account_ref": {"type": "string", "maxLength": 128},
     })),
-    ToolSpec("userio.channels.read", "Read one user-owned chat or message with bounded text.", _schema({
+    ToolSpec("userio.channels.read", "Read one user-owned chat or message. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
         "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "history_limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+        "include_images": {"type": "boolean", "default": True},
     })),
     ToolSpec("userio.channels.download", "Download a file when its adapter supports it.", _schema({
         "file_ref": {"type": "string"},
@@ -290,6 +295,140 @@ class UserIOMcpSurface:
             },
         ]}
 
+    def _include_read_media(
+        self, result: dict[str, Any], *, arguments: dict[str, Any], user_id: str,
+    ) -> dict[str, Any]:
+        """Attach bounded MCP image blocks and make transcript delivery explicit."""
+        include_images = arguments.get("include_images", True)
+        if type(include_images) is not bool:
+            raise ValueError("include_images must be a boolean")
+        record = result.get("chat") or result.get("message") or {}
+        messages = record.get("messages") if isinstance(record, dict) else None
+        if not isinstance(messages, list):
+            messages = [record] if isinstance(record, dict) and record else []
+        media_delivery: list[dict[str, Any]] = []
+        content_blocks: list[dict[str, Any]] = []
+        total_bytes = 0
+        image_count = 0
+        image_attempts = 0
+        channels = UnifiedChannels(self._store, self._service, user_id)
+
+        for message in reversed(messages):
+            if not isinstance(message, dict):
+                continue
+            attachments = message.get("attachments")
+            if not isinstance(attachments, list):
+                continue
+            source = str(message.get("source") or arguments.get("channel") or "")
+            adapter_name = source.split(":", 1)[0]
+            if adapter_name in {"gmail", "email"}:
+                adapter_name = "mail"
+            message_id = str(message.get("message_id") or "")
+            for attachment in reversed(attachments):
+                if not isinstance(attachment, dict):
+                    continue
+                kind = str(attachment.get("kind") or "").casefold()
+                content_type = str(attachment.get("content_type") or "").split(";", 1)[0].lower()
+                is_image = kind in {"image", "photo", "picture", "sticker"} or content_type.startswith("image/")
+                is_audio = kind in {"audio", "voice"} or content_type.startswith("audio/")
+                item: dict[str, Any] = {
+                    "message_id": message_id,
+                    "attachment_idx": int(attachment.get("idx") or 0),
+                    "kind": kind or ("image" if is_image else "audio" if is_audio else "file"),
+                }
+                if is_image:
+                    item["image_included"] = False
+                    if not include_images:
+                        item["opted_out"] = True
+                        item["reason"] = "caller_opted_out"
+                    elif image_attempts >= _MCP_IMAGE_MAX_COUNT:
+                        item["reason"] = "image_count_limit"
+                    elif total_bytes >= _MCP_IMAGE_MAX_TOTAL_BYTES:
+                        item["reason"] = "image_byte_limit"
+                    elif not message_id or not adapter_name:
+                        item["reason"] = "message_reference_missing"
+                    else:
+                        image_attempts += 1
+                        try:
+                            adapter = channels.adapter(adapter_name)
+                            bounded_download = getattr(adapter, "download_for_ai", None)
+                            if callable(bounded_download):
+                                kwargs: dict[str, Any] = {
+                                    "file_ref": message_id,
+                                    "max_bytes": min(_MCP_IMAGE_MAX_BYTES,
+                                                      _MCP_IMAGE_MAX_TOTAL_BYTES - total_bytes),
+                                }
+                                if adapter_name == "max":
+                                    kwargs["attachment_idx"] = item["attachment_idx"]
+                                file = bounded_download(**kwargs)
+                            else:
+                                declared_size = attachment.get("size")
+                                if type(declared_size) is not int or not 0 < declared_size <= _MCP_IMAGE_MAX_BYTES:
+                                    item["reason"] = "bounded_download_unavailable"
+                                    media_delivery.append(item)
+                                    continue
+                                file_ref = str(attachment.get("attachment_id") or message_id)
+                                if adapter_name == "vk" and not attachment.get("attachment_id"):
+                                    file_ref = f"{message_id}:{item['attachment_idx']}"
+                                file = adapter.download(file_ref=file_ref)
+                            data = getattr(file, "data", None)
+                            mime = str(getattr(file, "content_type", "") or "").split(";", 1)[0].lower()
+                            if not isinstance(data, bytes) or not data or len(data) > _MCP_IMAGE_MAX_BYTES:
+                                item["reason"] = "image_unavailable_or_too_large"
+                            else:
+                                signatures = {
+                                    "image/png": data.startswith(b"\x89PNG\r\n\x1a\n"),
+                                    "image/jpeg": data.startswith(b"\xff\xd8\xff"),
+                                    "image/gif": data.startswith((b"GIF87a", b"GIF89a")),
+                                    "image/webp": data.startswith(b"RIFF") and data[8:12] == b"WEBP",
+                                }
+                                mime = mime if mime in _MCP_IMAGE_MIMES else next(
+                                    (candidate for candidate, valid in signatures.items() if valid), "",
+                                )
+                                if not mime or not signatures[mime]:
+                                    item["reason"] = "unsupported_or_invalid_image"
+                                elif total_bytes + len(data) > _MCP_IMAGE_MAX_TOTAL_BYTES:
+                                    item["reason"] = "image_byte_limit"
+                                else:
+                                    image_count += 1
+                                    total_bytes += len(data)
+                                    item.update({"image_included": True, "content_type": mime,
+                                                 "size": len(data), "vision_instruction": "describe_image"})
+                                    content_blocks.extend([
+                                        {"type": "text", "text": (
+                                            "Изображение из сообщения " + message_id
+                                            + ": просмотри его и скажи, что на нём изображено. "
+                                              "Если деталей не видно, прямо укажи это."
+                                        )},
+                                        {"type": "image", "data": base64.b64encode(data).decode("ascii"),
+                                         "mimeType": mime},
+                                    ])
+                        except Exception as error:
+                            item["reason"] = f"download_failed:{type(error).__name__}"
+                    media_delivery.append(item)
+                elif is_audio:
+                    transcript = str(attachment.get("transcript") or "").strip()
+                    status = str(attachment.get("transcription_status") or (
+                        "completed" if transcript else "unknown"
+                    ))
+                    item.update({
+                        "transcription_status": status,
+                        "transcript_available": bool(transcript),
+                        "transcript_in_message_body": bool(transcript),
+                        "audio_bytes_included": False,
+                        "ai_input": ("transcript_only" if transcript else "audio_not_sent_and_not_transcribed"),
+                        "delivery_note": (
+                            "В модель передан текст транскрипции; аудио не отправлено."
+                            if transcript else
+                            "Аудио не отправлено модели; транскрипции нет."
+                        ),
+                    })
+                    media_delivery.append(item)
+        result["media_delivery"] = media_delivery
+        if content_blocks:
+            result["_mcp_content_blocks"] = content_blocks
+        return result
+
     def read_resource(
         self, uri: str, *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
@@ -350,14 +489,17 @@ class UserIOMcpSurface:
         if name.startswith('userio.messenger.'):
             from .messenger import dispatch
             return dispatch(self._store, self._service, principal, name, arguments)
+        user_id = principal.user_id
         if name.startswith(('userio.calls.matrix.','userio.calls.telegram.','userio.meetings.telemost.','userio.diagnostic.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
             # Keep the compatibility HTTP surface on the authoritative MAX
             # reader, including its bounded cached-history contract.
             from .mcp_dispatch import UserIOToolDispatcher
-            return UserIOToolDispatcher(self._store, self._service).dispatch(
+            result = UserIOToolDispatcher(self._store, self._service).dispatch(
                 name, arguments, principal=principal,
             )
-        user_id = principal.user_id
+            if name == "userio.channels.read" and result.get("ok"):
+                result = self._include_read_media(result, arguments=arguments, user_id=user_id)
+            return result
         channels = UnifiedChannels(self._store, self._service, user_id)
         try:
             if name == "tools/list":
@@ -429,7 +571,9 @@ class UserIOMcpSurface:
                 conversation_id = str(record.get("id") or record.get("conversation_id") or "")
                 if conversation_id in ignored_chats:
                     raise KeyError("chat not found")
-                return {"ok": True, **result}
+                return self._include_read_media(
+                    {"ok": True, **result}, arguments=arguments, user_id=user_id,
+                )
             if name == "userio.channels.download":
                 file = channels.download(file_ref=self._required(arguments, "file_ref"))
                 return {"ok": True, "file": {

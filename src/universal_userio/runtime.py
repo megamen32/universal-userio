@@ -156,7 +156,7 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
         endpoint=_required(environment, "USERIO_AI_ENDPOINT"),
         token=_required(environment, "USERIO_AI_TOKEN"),
         model=_required(environment, "USERIO_AI_MODEL"),
-        image_model=environment.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3").strip() or "MiniMax-M3",
+        image_model=environment.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3.1-Flash").strip() or "MiniMax-M3.1-Flash",
         summary_model=environment.get("USERIO_AI_SUMMARY_MODEL", "").strip() or None,
     )
     sms_url, sms_token = environment.get("USERIO_SMS_GATEWAY_URL", "").strip(), environment.get("USERIO_SMS_GATEWAY_TOKEN", "").strip()
