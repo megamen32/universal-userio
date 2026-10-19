@@ -26,6 +26,7 @@ import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
 import { logoutTelegramClient } from './account-disconnect.mjs';
 import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs";
+import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -68,6 +69,7 @@ const agentDeliverIgnoredChats = String(process.env.USERIO_AGENT_IGNORED_CHATS |
   .split(",").map((value) => value.trim()).filter(Boolean);
 const agentDeliverCallbackSecret = String(process.env.USERIO_AGENT_DELIVER_CALLBACK_HMAC_SECRET || "").trim();
 const agentDeliverReceiptPath = `${stateDir}/agent-deliver-callbacks.jsonl`;
+const telegramAdminJournal = new TelegramAdminJournal(`${stateDir}/admin-actions.jsonl`);
 const agentDeliverDebouncePath = `${stateDir}/agent-deliver-debounce.json`;
 const agentDeliverDebounce = new Map();
 const agentDeliverTimers = new Map();
@@ -1227,6 +1229,34 @@ http.createServer(async (req, res) => {
     } catch (error) {
       res.writeHead(400, {"content-type":"application/json"});
       return res.end(JSON.stringify({error:String(error.message || error)}));
+    }
+  }
+  if ((url.pathname === "/admin/prepare" || url.pathname === "/admin/execute") && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "");
+      const item = [...liveSlots.values()].find((entry) => entry.accountId === accountId);
+      if (!item) throw new Error("telegram_account_not_connected");
+      const operation = String(payload.operation || "");
+      let result;
+      if (url.pathname === "/admin/prepare") {
+        const resolved = await prepareTelegramAdmin(item.client, Api, operation, payload.payload);
+        result = { ok: true, account_id: accountId, operation, resolved };
+      } else {
+        result = await executeTelegramAdmin(item.client, Api, telegramAdminJournal, {
+          accountId, operation, payload: payload.payload, requestId: payload.request_id,
+        });
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: String(error.message || "telegram_admin_failed") }));
     }
   }
   if (url.pathname === "/download" && req.method === "POST") {

@@ -109,12 +109,35 @@ def test_mcp_read_can_opt_out_of_image_bytes_without_hiding_media_status(tmp_pat
     assert result["structuredContent"]["media_delivery"][0]["opted_out"] is True
 
 
+def test_telegram_download_can_open_document_as_mcp_resource(tmp_path,monkeypatch):
+    store=SQLiteUserIOStore(tmp_path/"mcp-document.sqlite3")
+    service=UserIOService(store,Generator(),Outbox())
+    monkeypatch.setattr(TelegramChannelAdapter,"download_for_ai",lambda self,**kwargs:
+        ChannelFile("contract.txt","text/plain",b"Payment is due on Friday."))
+    surface=UserIOMcpSurface(store,service)
+    response=json_rpc_response(surface,{
+        "jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"userio.channels.download","arguments":{
+            "file_ref":"telegram:tg:document-4","mode":"mcp_resource"},"_meta":{
+            "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities":{},
+            "io.modelcontextprotocol/clientInfo":{"name":"test","version":"1"}}}})
+    result=response["result"]
+    assert result["resultType"]=="complete"
+    assert "Payment is due on Friday." in next(block["text"] for block in result["content"] if block["type"]=="text")
+    resource=next(block["resource"] for block in result["content"] if block["type"]=="resource")
+    assert resource["mimeType"]=="text/plain"
+    assert base64.b64decode(resource["blob"])==b"Payment is due on Friday."
+    assert result["structuredContent"]["file"]["delivery"]=="embedded_resource"
+
+
 def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
     tools = surface.dispatch("tools/list", {}, principal=store.owner())["tools"]
     description = next(item["description"] for item in tools if item["name"] == "userio.channels.list")
     read_spec = next(item for item in tools if item["name"] == "userio.channels.read")
+    download_spec = next(item for item in tools if item["name"] == "userio.channels.download")
     from universal_userio.mcp_catalog import TOOL_SPECS as MODULAR_TOOL_SPECS
     modular_description = next(item.description for item in MODULAR_TOOL_SPECS if item.name == "userio.channels.list")
 
@@ -124,6 +147,7 @@ def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(t
     assert "top-level" in modular_description
     assert read_spec["inputSchema"]["properties"]["include_images"]["default"] is True
     assert "include_images=false" in read_spec["description"]
+    assert download_spec["inputSchema"]["properties"]["mode"]["enum"]==["base64","mcp_resource"]
 
 
 @pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])

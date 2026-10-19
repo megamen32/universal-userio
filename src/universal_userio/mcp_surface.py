@@ -58,8 +58,8 @@ TOOL_SPECS = (
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
         "include_images": {"type": "boolean", "default": True},
     })),
-    ToolSpec("userio.channels.download", "Download a file when its adapter supports it.", _schema({
-        "file_ref": {"type": "string"},
+    ToolSpec("userio.channels.download", "Download a supported attachment as base64, or open a small Telegram PDF/text/Office document as an MCP resource for the model.", _schema({
+        "file_ref": {"type": "string"}, "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
     }, ["file_ref"])),
     ToolSpec("userio.channels.send_draft", "Queue a draft; never send or bypass approval.", _schema({
         "chat_id": {"type": "string"}, "text": {"type": "string"},
@@ -201,6 +201,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.upload': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
@@ -261,6 +262,11 @@ class UserIOMcpSurface:
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
             and (principal.messenger_grants is None or any(g['access']=='read_write' for g in principal.messenger_grants)
                  or spec.name in READ_ONLY_TOOLS)
+            and (principal.telegram_admin_accounts is None or spec.name in {
+                'userio.messenger.capabilities','userio.messenger.telegram_admin.propose',
+                'userio.messenger.get','userio.messenger.approve'})
+            and (principal.messenger_accounts is None or principal.telegram_admin_accounts is not None
+                 or spec.name!='userio.messenger.telegram_admin.propose')
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
                  or principal.messenger_grants is not None and spec.name=='userio.accounts.list'
@@ -575,7 +581,21 @@ class UserIOMcpSurface:
                     {"ok": True, **result}, arguments=arguments, user_id=user_id,
                 )
             if name == "userio.channels.download":
-                file = channels.download(file_ref=self._required(arguments, "file_ref"))
+                file_ref=self._required(arguments,"file_ref")
+                mode=arguments.get('mode','base64')
+                if mode=='mcp_resource':
+                    channel,separator,provider_ref=file_ref.partition(':')
+                    if not separator or channel!='telegram':
+                        raise ValueError('mcp_resource_mode_requires_telegram')
+                    adapter=channels.adapter('telegram')
+                    bounded=getattr(adapter,'download_for_ai',None)
+                    if not callable(bounded): raise ValueError('bounded_telegram_download_unavailable')
+                    from .mcp_files import MAX_MCP_FILE_BYTES,mcp_attachment
+                    file=bounded(file_ref=provider_ref,max_bytes=MAX_MCP_FILE_BYTES)
+                    metadata,blocks=mcp_attachment(file)
+                    return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
+                if mode!='base64': raise ValueError('invalid_download_mode')
+                file = channels.download(file_ref=file_ref)
                 return {"ok": True, "file": {
                     "filename": file.filename, "content_type": file.content_type,
                     "encoding": "base64", "data": base64.b64encode(file.data).decode(),

@@ -901,9 +901,11 @@ class SQLiteUserIOStore:
             str(row["id"]), str(row["username"]), str(row["role"]),
             read_only=row["kind"] == "personal" and row["scope"] == "read_only",
             messenger_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
-                                if row['scope']=='messenger_actions' else tuple(g['account_ref'] for g in json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None),
+                                if row['scope'] in {'messenger_actions','telegram_admin'} else tuple(g['account_ref'] for g in json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None),
             meeting_recorder=row['kind']=='personal' and row['scope']=='meeting_recording',
             messenger_grants=tuple(json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None,
+            telegram_admin_accounts=(tuple(json.loads(row['account_refs'] or '[]'))
+                if row['scope']=='telegram_admin' else None),
         )
 
     def register_oauth_client(
@@ -2038,7 +2040,9 @@ class SQLiteUserIOStore:
         return {"count": len(dialogs), "observed_at": float(observed_at)}
 
     def create_conversation(
-        self, source: str, sender: str, *, user_id: str | None = None
+        self, source: str, sender: str, *, user_id: str | None = None,
+        account_ref: str = "", peer_id: str = "", conversation_kind: str = "unknown",
+        route_id: str | None = None,
     ) -> dict[str, object]:
         """Create (or return the existing) empty conversation for source+sender.
 
@@ -2049,7 +2053,8 @@ class SQLiteUserIOStore:
         source, sender = source.strip(), sender.strip()
         if not source or not sender:
             raise ValueError("source and sender are required")
-        message_key = ("email:" + sender.casefold()
+        message_key = (f"telegram:{account_ref}:{peer_id}" if source == "telegram" and account_ref and peer_id
+                       else "email:" + sender.casefold()
                        if source in {"mail", "email", "gmail"} or source.startswith("gmail:")
                        else f"{source}:{sender}")
         conversation_id = self.conversation_id_for_key(message_key, user_id=user_id)
@@ -2062,8 +2067,14 @@ class SQLiteUserIOStore:
                 (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at)
                 VALUES (?,?,?,?,?,?,NULL,'approve',?)
                 """,
-                (user_id, conversation_id, message_key, source, source, sender, time.time()),
+                (user_id, conversation_id, message_key, route_id or source, source, sender, time.time()),
             )
+            if source == "telegram" and account_ref and peer_id:
+                self._connection.execute(
+                    "UPDATE conversations SET account_ref=?,peer_id=?,conversation_kind=?,route_id=? "
+                    "WHERE user_id=? AND id=?",
+                    (account_ref,peer_id,conversation_kind,route_id or source,user_id,conversation_id),
+                )
         record = self.conversation(conversation_id, user_id=user_id)
         assert record is not None
         return record

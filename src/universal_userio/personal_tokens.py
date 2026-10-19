@@ -23,11 +23,12 @@ class PersonalTokens:
                 "WHERE user_id=? AND kind='personal' AND name<>'' ORDER BY created_at DESC",
                 (user_id,),
             ).fetchall()
-        return [dict(row) | {'grants': json.loads(row['account_refs'] or '[]') if row['scope']=='scoped_messenger' else None} for row in rows]
+        return [dict(row) | {'grants': json.loads(row['account_refs'] or '[]') if row['scope']=='scoped_messenger' else None,
+            'account_refs':json.loads(row['account_refs'] or '[]') if row['scope'] in {'messenger_actions','telegram_admin'} else None} for row in rows]
 
     def create(self, user_id: str, name: str, *, scope: str = "full_access", account_refs=None, grants=None) -> dict:
-        if not isinstance(scope, str) or scope not in {"full_access", "read_only", "messenger_actions", "meeting_recording", "scoped_messenger"}:
-            raise ValueError("scope must be full_access, read_only, messenger_actions or meeting_recording")
+        if not isinstance(scope, str) or scope not in {"full_access", "read_only", "messenger_actions", "telegram_admin", "meeting_recording", "scoped_messenger"}:
+            raise ValueError("unsupported token scope")
         if scope == 'scoped_messenger':
             from .scoped_permissions import validate_grants
             if account_refs is not None:
@@ -43,6 +44,14 @@ class PersonalTokens:
             if any(ref not in owned or owned[ref]['provider'] not in {'telegram','max','gmail','vk'}
                    or not owned[ref]['enabled'] or 'reply' not in owned[ref]['capabilities'] for ref in account_refs):
                 raise ValueError('messenger sender accounts must be owned, enabled and reply-capable')
+        elif scope == 'telegram_admin':
+            if (not isinstance(account_refs,list) or not 1<=len(account_refs)<=16
+                    or any(not isinstance(ref,str) for ref in account_refs) or len(set(account_refs))!=len(account_refs)):
+                raise ValueError('explicit Telegram admin account_refs required')
+            owned={a['id']:a for a in self.store.accounts(user_id=user_id)}
+            if any(ref not in owned or owned[ref]['provider']!='telegram' or not owned[ref]['enabled']
+                   or 'reply' not in owned[ref]['capabilities'] for ref in account_refs):
+                raise ValueError('Telegram admin accounts must be owned, enabled and reply-capable')
         elif account_refs is not None and scope != 'scoped_messenger':
             raise ValueError('account_refs is supported only for messenger_actions')
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:

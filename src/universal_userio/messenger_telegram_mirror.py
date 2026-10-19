@@ -36,6 +36,31 @@ class TelegramMirrorProvider:
             return supports(self.account_ref,str(conversation.get('peer_id') or ''))
         return callable(getattr(outbox,'edit_message',None))
 
+    def execute_telegram_admin(self, envelope):
+        if (envelope.get('action')!='telegram_admin' or envelope.get('channel')!='telegram'
+                or envelope.get('account_ref')!=self.account_ref
+                or envelope.get('user_id')!=self.authorized_user):
+            raise DeliveryNotSubmittedError('Telegram admin account conflict')
+        operation=envelope.get('operation')
+        if operation not in {'group_create','group_invite','group_remove','channel_create','channel_delete'}:
+            raise DeliveryNotSubmittedError('Telegram admin operation unavailable')
+        outbox=getattr(self.service,'telegram_outbox',None)
+        execute=getattr(outbox,'telegram_admin_execute',None)
+        if not callable(execute): raise DeliveryNotSubmittedError('Telegram admin route unavailable')
+        result=execute(account_ref=self.account_ref,operation=operation,payload=envelope['payload'],
+                       request_id=envelope['action_id'])
+        if (not isinstance(result,dict) or result.get('account_id')!=self.account_ref
+                or result.get('operation')!=operation or result.get('ok') is not True
+                or result.get('status') not in {'complete','partial'}
+                or not isinstance(result.get('receipt'),str) or not result['receipt']):
+            raise RuntimeError('Telegram admin provider receipt is invalid')
+        peer_id=str(result.get('peer_id') or envelope.get('peer_id') or '')
+        if operation in {'group_create','channel_create'} and not peer_id:
+            raise RuntimeError('Telegram admin creation receipt has no peer')
+        return {'account_ref':self.account_ref,'operation':operation,'peer_id':peer_id,
+                'status':result['status'],'receipt':result['receipt'],
+                'result':{k:result[k] for k in ('title','conversation_kind','missing_invitees','participant_id') if k in result}}
+
     def history(self, *, peer_id, conversation_id, limit=50, cursor=''):
         before=0
         if cursor:
@@ -174,6 +199,16 @@ class TelegramMirrorProvider:
             'provider_thread_id':str(result.get('thread_id') or '')}
 
     def project_receipt(self,envelope,result):
+        if envelope.get('action')=='telegram_admin':
+            if envelope.get('operation') not in {'group_create','channel_create'}: return
+            peer_id=str(result.get('peer_id') or '')
+            detail=result.get('result') or {}
+            kind=str(detail.get('conversation_kind') or ('group' if envelope['operation']=='group_create' else 'channel'))
+            if not peer_id or kind not in {'group','channel'}: raise ValueError('Telegram created peer type is invalid')
+            self.service._store.create_conversation('telegram',str(detail.get('title') or envelope['payload'].get('title') or peer_id),
+                user_id=self.authorized_user,account_ref=self.account_ref,peer_id=peer_id,
+                conversation_kind=kind,route_id='telegram')
+            return
         if envelope.get('action')!='reply': return
         conversation=self.service._store.conversation(
             envelope['conversation_id'],user_id=self.authorized_user)

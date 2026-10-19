@@ -153,9 +153,21 @@ class UserIOToolDispatcher:
                 else: raise KeyError('unknown call operation')
                 return {'ok':True,'call':call}
             if name == "userio.channels.download":
-                file = channels.download(
-                    file_ref=self._required(arguments, "file_ref")
-                )
+                file_ref=self._required(arguments,"file_ref")
+                mode=arguments.get('mode','base64')
+                if mode=='mcp_resource':
+                    channel,separator,provider_ref=file_ref.partition(':')
+                    if not separator or channel!='telegram':
+                        raise ValueError('mcp_resource_mode_requires_telegram')
+                    adapter=channels.adapter('telegram')
+                    bounded=getattr(adapter,'download_for_ai',None)
+                    if not callable(bounded): raise ValueError('bounded_telegram_download_unavailable')
+                    from .mcp_files import MAX_MCP_FILE_BYTES,mcp_attachment
+                    file=bounded(file_ref=provider_ref,max_bytes=MAX_MCP_FILE_BYTES)
+                    metadata,blocks=mcp_attachment(file)
+                    return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
+                if mode!='base64': raise ValueError('invalid_download_mode')
+                file = channels.download(file_ref=file_ref)
                 return {
                     "ok": True,
                     "file": {

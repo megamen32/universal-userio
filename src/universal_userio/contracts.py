@@ -91,6 +91,7 @@ class UserPrincipal:
     messenger_accounts: tuple[str, ...] | None = None
     meeting_recorder: bool = False
     messenger_grants: tuple[dict[str, Any], ...] | None = None
+    telegram_admin_accounts: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

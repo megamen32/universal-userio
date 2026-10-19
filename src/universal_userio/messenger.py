@@ -17,6 +17,8 @@ from .source_projection import canonical_author, canonical_source
 SCHEMA = 'userio.messenger.v1'
 OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
 READ_OPERATIONS = frozenset({'read', 'history', 'download'})
+TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
+                                      'channel_create', 'channel_delete'})
 
 
 def canonical(value) -> bytes:
@@ -87,13 +89,31 @@ class Messenger:
             result[name] = {'supported': supported, 'allowed': supported and not reason, 'reason':reason}
             if name=='typing' and supported:
                 result[name]['stop_mode']=getattr(provider,'typing_stop_mode','provider_command')
+        admin_outbox=getattr(self.service,'telegram_outbox',None)
+        admin_supported=(account['provider']=='telegram' and account['enabled']
+            and str(account.get('credential_ref') or '').startswith('telegram-qr:')
+            and callable(getattr(provider,'execute_telegram_admin',None))
+            and callable(getattr(admin_outbox,'telegram_admin_prepare',None))
+            and callable(getattr(admin_outbox,'telegram_admin_execute',None)))
+        admin_reason=''
+        if not admin_supported: admin_reason='provider_not_supported'
+        elif self.principal.telegram_admin_accounts is None and self.principal.messenger_accounts is not None:
+            admin_reason='telegram_admin_scope_required'
+        elif self.principal.telegram_admin_accounts is not None and account_ref not in self.principal.telegram_admin_accounts:
+            admin_reason='account_outside_credential_scope'
+        elif self.principal.read_only: admin_reason='read_only_token'
+        elif 'reply' not in account['capabilities']: admin_reason='account_capability_disabled'
+        elif not self.store.capability_enabled('send',user_id=self.user): admin_reason='user_capability_disabled'
         return {'schema':SCHEMA, 'account_ref':account_ref, 'channel':account['provider'],
                 'sender_id':getattr(provider, 'sender_id', ''),
                 'history_mode':'provider' if 'history' in ops and not authentication_required else 'stored',
                 'provider_status':'authentication_required' if authentication_required else 'configured' if provider is not None else 'unconfigured',
-                'credential_scope':('messenger_actions' if self.principal.messenger_accounts is not None
+                'credential_scope':('telegram_admin' if self.principal.telegram_admin_accounts is not None
+                                    else 'messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
+                'telegram_admin':{'supported':admin_supported,'allowed':admin_supported and not admin_reason,
+                    'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS)},
                 **({'reaction_options':provider.reaction_options} if hasattr(provider,'reaction_options') else {}),
                 'upload_limits':{'max_bytes':2*1024*1024,'ttl_seconds':900,'max_staged':4}}
 
@@ -432,6 +452,107 @@ class Messenger:
                     (self.user,action_id,request_id,canonical(envelope).decode(),action_hash,'proposed',time.time()))
         return self.get(action_id)
 
+    @staticmethod
+    def _telegram_admin_payload(operation, payload):
+        if not isinstance(payload,dict): raise ValueError('payload_must_be_object')
+        schemas={
+            'group_create':{'title','participant_ids'},
+            'group_invite':{'conversation_id','participant_id'},
+            'group_remove':{'conversation_id','participant_id','ban_on_supergroup'},
+            'channel_create':{'title','about'},
+            'channel_delete':{'conversation_id','confirmation_phrase'},
+        }
+        if operation not in schemas or set(payload)-schemas[operation]:
+            raise ValueError('invalid_telegram_admin_payload')
+        value=dict(payload)
+        if operation in {'group_create','channel_create'}:
+            title=value.get('title')
+            if not isinstance(title,str) or not title.strip() or len(title)>128: raise ValueError('title_required')
+            value['title']=title.strip()
+        if operation=='group_create':
+            users=value.get('participant_ids')
+            if not isinstance(users,list) or not 1<=len(users)<=50: raise ValueError('participant_ids_required')
+            if any(not isinstance(v,str) or not re.fullmatch(r'[1-9][0-9]*',v) for v in users):
+                raise ValueError('exact_telegram_user_ids_required')
+            if len(set(users))!=len(users): raise ValueError('duplicate_participant')
+            value['participant_ids']=users
+        if operation=='channel_create':
+            about=value.get('about','')
+            if not isinstance(about,str) or len(about)>255: raise ValueError('invalid_channel_about')
+            value={'title':value['title'].strip(),'about':about,'private':True,'broadcast':True}
+        if operation in {'group_invite','group_remove','channel_delete'}:
+            cid=value.get('conversation_id')
+            if not isinstance(cid,str) or not cid: raise ValueError('conversation_id_required')
+        if operation in {'group_invite','group_remove'}:
+            uid=value.get('participant_id')
+            if not isinstance(uid,str) or not re.fullmatch(r'[1-9][0-9]*',uid):
+                raise ValueError('exact_telegram_user_id_required')
+        if operation=='group_remove':
+            if type(value.get('ban_on_supergroup',False)) is not bool: raise ValueError('ban_flag_must_be_boolean')
+        if operation=='channel_delete':
+            if not isinstance(value.get('confirmation_phrase'),str) or not value['confirmation_phrase']:
+                raise ValueError('channel_delete_phrase_required')
+        return value
+
+    def propose_telegram_admin(self, account_ref, operation, payload, request_id):
+        if operation not in TELEGRAM_ADMIN_OPERATIONS: raise ValueError('invalid_telegram_admin_operation')
+        account=self._account(account_ref)
+        caps=self.capabilities(account_ref)['telegram_admin']
+        if not caps['allowed']: raise PermissionError(caps['reason'])
+        if account['provider']!='telegram' or not account['enabled']:
+            raise PermissionError('telegram_account_required')
+        if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}',request_id):
+            raise ValueError('request_id_required')
+        value=self._telegram_admin_payload(operation,payload)
+        self._init_actions()
+        with self.store._lock:
+            existing=self.store._connection.execute('SELECT id,envelope FROM messenger_actions WHERE user_id=? AND request_id=?',(self.user,request_id)).fetchone()
+        if existing:
+            old=json.loads(existing['envelope'])
+            old_payload={k:v for k,v in old.get('payload',{}).items() if k not in {'prepared','peer_id','conversation_kind'}}
+            if old.get('account_ref')!=account_ref or old.get('operation')!=operation or old_payload!=value:
+                raise ValueError('idempotency_conflict')
+            return self.get(existing['id'])
+        conversation=None
+        if 'conversation_id' in value:
+            conversation=self._conversation(account_ref,value['conversation_id'])
+            if conversation.get('source')!='telegram': raise ValueError('telegram_conversation_required')
+            value['peer_id']=str(conversation['peer_id'])
+            value['conversation_kind']=str(conversation.get('conversation_kind') or 'unknown')
+        outbox=getattr(self.service,'telegram_outbox',None)
+        try:
+            prepared=outbox.telegram_admin_prepare(account_ref=account_ref,operation=operation,payload=value)
+        except DeliveryNotSubmittedError as error:
+            raise ValueError('telegram_admin_preflight_refused') from error
+        except (OSError,RuntimeError) as error:
+            raise ValueError('telegram_admin_preflight_unavailable') from error
+        if (not isinstance(prepared,dict) or prepared.get('account_id')!=account_ref
+                or prepared.get('operation')!=operation):
+            raise ValueError('telegram_admin_preflight_identity_conflict')
+        value['prepared']=prepared.get('resolved',{})
+        if operation=='channel_delete':
+            peer=str(value.get('peer_id') or '')
+            expected=f'DELETE CHANNEL {peer}'
+            if value['confirmation_phrase']!=expected: raise ValueError('channel_delete_phrase_mismatch')
+            if value.get('conversation_kind')!='channel': raise ValueError('broadcast_channel_required')
+        if operation in {'group_invite','group_remove'} and value.get('conversation_kind') not in {'group','channel'}:
+            raise ValueError('group_or_supergroup_required')
+        envelope={'schema':SCHEMA,'user_id':self.user,'account_ref':account_ref,'channel':'telegram',
+            'conversation_id':conversation['id'] if conversation else '', 'peer_id':str(value.get('peer_id') or ''),
+            'action':'telegram_admin','operation':operation,'payload':value,'request_id':request_id}
+        action_id='action_'+hashlib.sha256((self.user+'\0'+request_id).encode()).hexdigest()
+        envelope['action_id']=action_id
+        action_hash=digest(envelope)
+        self._init_actions()
+        with self.store._lock,self.store._connection:
+            self.store._connection.execute('BEGIN IMMEDIATE')
+            row=self.store._connection.execute('SELECT hash FROM messenger_actions WHERE user_id=? AND id=?',(self.user,action_id)).fetchone()
+            if row and row['hash']!=action_hash: raise ValueError('idempotency_conflict')
+            if not row:
+                self.store._connection.execute('INSERT INTO messenger_actions (user_id,id,request_id,envelope,hash,status,created_at) VALUES (?,?,?,?,?,?,?)',
+                    (self.user,action_id,request_id,canonical(envelope).decode(),action_hash,'proposed',time.time()))
+        return self.get(action_id)
+
     def get(self, action_id):
         self._init_actions()
         with self.store._lock:
@@ -439,6 +560,12 @@ class Messenger:
                                                 (self.user,action_id)).fetchone()
         if row is None: raise KeyError('action_not_found')
         e = json.loads(row['envelope'])
+        if (e.get('action')=='telegram_admin' and self.principal.telegram_admin_accounts is None
+                and self.principal.messenger_accounts is not None):
+            raise PermissionError('telegram_admin_scope_required')
+        if self.principal.telegram_admin_accounts is not None and (
+                e.get('action')!='telegram_admin' or e.get('account_ref') not in self.principal.telegram_admin_accounts):
+            raise PermissionError('telegram_admin_scope_only')
         self._allow(e['account_ref'],'read')
         return {'id':row['id'],'hash':row['hash'],'status':row['status'], 'created_at':row['created_at'],
                 'envelope':e,'receipt':json.loads(row['receipt']) if row['receipt'] else None}
@@ -446,10 +573,52 @@ class Messenger:
     def approve(self, action_id, expected_hash, confirm):
         if confirm is not True: raise ValueError('exact_confirmation_required')
         action = self.get(action_id); e = action['envelope']
+        if (e.get('action')=='telegram_admin' and self.principal.telegram_admin_accounts is None
+                and self.principal.messenger_accounts is not None):
+            raise PermissionError('telegram_admin_scope_required')
+        if self.principal.telegram_admin_accounts is not None and (
+                e.get('action')!='telegram_admin' or e.get('account_ref') not in self.principal.telegram_admin_accounts):
+            raise PermissionError('telegram_admin_scope_only')
         if expected_hash != action['hash']: raise ValueError('action_snapshot_conflict')
-        self._allow(e['account_ref'],e['action'])
+        if e.get('action')=='telegram_admin':
+            if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:
+                raise PermissionError(self.capabilities(e['account_ref'])['telegram_admin']['reason'])
+        else:
+            self._allow(e['account_ref'],e['action'])
         if action['status']=='accepted': return action
-        if action['status']=='sending': raise ValueError('delivery_uncertain_do_not_retry')
+        admin_recovery=(action['status']=='sending' and e.get('action')=='telegram_admin')
+        if action['status']=='sending' and not admin_recovery: raise ValueError('delivery_uncertain_do_not_retry')
+        if e['action']=='telegram_admin':
+            provider=self._provider(e['account_ref'])
+            if provider is None or getattr(provider,'account_ref',None)!=e['account_ref']:
+                raise ValueError('provider_account_conflict')
+            if e.get('conversation_id'):
+                conv=self._conversation(e['account_ref'],e['conversation_id'])
+                if str(conv.get('peer_id'))!=e['peer_id'] or str(conv.get('conversation_kind'))!=e['payload'].get('conversation_kind'):
+                    raise ValueError('telegram_admin_target_changed')
+            if not admin_recovery:
+                with self.store._lock,self.store._connection:
+                    self.store._connection.execute('BEGIN IMMEDIATE')
+                    changed=self.store._connection.execute("UPDATE messenger_actions SET status='sending' WHERE user_id=? AND id=? AND status='proposed'",(self.user,action_id)).rowcount
+                    if changed!=1: raise ValueError('delivery_claim_conflict')
+            try:
+                result=provider.execute_telegram_admin(e)
+                if (not isinstance(result,dict) or result.get('account_ref')!=e['account_ref']
+                        or result.get('operation')!=e['operation'] or not result.get('receipt')
+                        or result.get('status') not in {'complete','partial'}):
+                    raise RuntimeError('telegram_admin_receipt_identity_conflict')
+                with self.store._lock,self.store._connection:
+                    self.store._connection.execute("UPDATE messenger_actions SET status='accepted',receipt=? WHERE user_id=? AND id=? AND status='sending'",(canonical(result).decode(),self.user,action_id))
+            except DeliveryNotSubmittedError:
+                if admin_recovery: raise
+                with self.store._lock,self.store._connection:
+                    self.store._connection.execute("UPDATE messenger_actions SET status='proposed' WHERE user_id=? AND id=? AND status='sending'",(self.user,action_id))
+                raise
+            projector=getattr(provider,'project_receipt',None)
+            if callable(projector):
+                try: projector(e,result)
+                except Exception: pass
+            return self.get(action_id)
         conv = self._conversation(e['account_ref'],e['conversation_id'])
         if str(conv['peer_id'])!=e['peer_id'] or not self.store.route_allowed(
                 user_id=self.user,source=conv['source'],route_id=conv['route_id']):
@@ -505,6 +674,9 @@ def dispatch(store, service, principal, name, arguments):
     api = Messenger(store,service,principal)
     op = name.removeprefix('userio.messenger.')
     try:
+        if principal.telegram_admin_accounts is not None and op not in {
+                'capabilities','telegram_admin.propose','get','approve'}:
+            raise PermissionError('telegram_admin_scope_only')
         if principal.read_only and op not in {'capabilities','history','get','resolve','media','events'}:
             raise PermissionError('read_only_token')
         if op == 'capabilities': return {'ok':True,**api.capabilities(**arguments)}
@@ -514,6 +686,7 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'events': return {'ok':True,**api.events(**arguments)}
         if op == 'upload': return {'ok':True,'upload':api.upload(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
+        if op == 'telegram_admin.propose': return {'ok':True,'action':api.propose_telegram_admin(**arguments)}
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
         if op == 'approve': return {'ok':True,'action':api.approve(**arguments)}
         raise KeyError('unknown_messenger_operation')

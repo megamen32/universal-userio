@@ -293,6 +293,44 @@ class TelegramQrHttpOutbox:
     def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen, timeout: int = 20) -> None:
         self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
 
+    def _telegram_admin_call(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+        request=urllib.request.Request(f"{self._base_url}/{endpoint}",data=json.dumps(payload).encode(),method="POST",
+            headers={"Content-Type":"application/json","Authorization":f"Bearer {self._token}"})
+        try:
+            with self._runner(request,timeout=self._timeout) as response:
+                result=json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail=error.read().decode(errors="replace")[:200]
+            if error.code in _CONNECTOR_REFUSED_HTTP:
+                raise TelegramConnectorRefused(_connector_refusal_message(error.code,detail),
+                    connector_code=_connector_code(detail),http_status=error.code) from error
+            raise RuntimeError("Telegram admin outcome may be unknown") from error
+        except (OSError,urllib.error.URLError) as error:
+            raise RuntimeError("Telegram admin outcome may be unknown: connector is unreachable") from error
+        if not isinstance(result,dict): raise RuntimeError("Telegram admin response is invalid")
+        return result
+
+    def telegram_admin_prepare(self, *, account_ref: str, operation: str,
+                               payload: dict[str, object]) -> dict[str, object]:
+        result=self._telegram_admin_call("/admin/prepare",{"account_id":account_ref,
+            "operation":operation,"payload":payload})
+        if result.get("ok") is not True: raise TelegramConnectorRefused("Telegram admin preflight refused")
+        return result
+
+    def telegram_admin_execute(self, *, account_ref: str, operation: str, payload: dict[str, object],
+                               request_id: str) -> dict[str, object]:
+        result=self._telegram_admin_call("/admin/execute",{"account_id":account_ref,
+            "operation":operation,"payload":payload,"request_id":request_id})
+        if result.get("ok") is not True or result.get("account_id")!=account_ref:
+            raise RuntimeError("Telegram admin receipt identity conflict")
+        return result
+
+    def telegram_admin_status(self, *, account_ref: str, request_id: str) -> dict[str, object]:
+        result=self._telegram_admin_call("/admin/status",{"account_id":account_ref,"request_id":request_id})
+        if result.get("ok") is not True or result.get("account_id")!=account_ref:
+            raise RuntimeError("Telegram admin status identity conflict")
+        return result
+
     def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "", slot: str = "") -> str:
         if not chat or not body:
             raise ValueError("Telegram delivery requires chat and body")
