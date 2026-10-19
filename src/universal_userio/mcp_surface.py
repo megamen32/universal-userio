@@ -374,10 +374,24 @@ class UserIOMcpSurface:
                 query = str(arguments.get("search") or "").strip()
                 if query:
                     from .search_surface import search_response
-                    return search_response(
+                    result = search_response(
                         self._store, query, arguments, user_id=user_id,
                         source=self._optional(arguments, "channel"), ignored=ignored_chats,
                     )
+                    if result.get("scope") == "conversation":
+                        # Keep the list tool's established response shape so callers
+                        # can pass a found chat straight to userio.channels.read.
+                        result["chats"] = [
+                            {
+                                **row,
+                                "channel": row["source"],
+                                "title": row["display_name"] or row["identity_id"] or row["sender"],
+                                "last_message_snippet": row["preview"],
+                                "unread": row["unread_count"],
+                            }
+                            for row in result.get("results", [])
+                        ]
+                    return result
                 adapter = channels.adapter(self._optional(arguments, "channel"))
                 chats = adapter.list(limit=int(arguments.get("limit", 100)))
                 if "conversation_ids" in arguments:

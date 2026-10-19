@@ -40,6 +40,34 @@ def test_channels_list_honors_conversation_id_scope(tmp_path) -> None:
     assert [chat["id"] for chat in result["chats"]] == [selected_id]
 
 
+@pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])
+def test_channels_search_returns_conversations_in_chats_for_reading(tmp_path, query) -> None:
+    store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    selected_id, _ = service.receive(
+        InboxMessage("telegram", "target", "Дмитрий Семерин", "Нужная переписка", 1.0),
+        route_id="telegram",
+    )
+    service.receive(
+        InboxMessage("telegram", "other", "Анна Иванова", "Другая переписка", 2.0),
+        route_id="telegram",
+    )
+    surface = UserIOMcpSurface(store, service)
+
+    found = surface.dispatch("userio.channels.list", {
+        "channel": "telegram", "limit": 30, "search": query,
+        "scope": "conversation", "mode": "text",
+    })
+
+    assert [chat["id"] for chat in found["chats"]] == [selected_id]
+    assert found["chats"][0]["title"] == "Дмитрий Семерин"
+    assert found["chats"][0]["channel"] == "telegram"
+    history = surface.dispatch("userio.channels.read", {
+        "channel": "telegram", "chat_id": found["chats"][0]["id"],
+    })
+    assert history["chat"]["messages"][0]["body"] == "Нужная переписка"
+
+
 def test_http_mcp_stream_emits_ready_before_waiting_for_updates(
     tmp_path, monkeypatch
 ) -> None:
