@@ -25,6 +25,7 @@ class TelegramMirrorProvider:
         operations={'history'}
         if callable(getattr(outbox,'react',None)): operations.add('react')
         if callable(getattr(outbox,'edit_message',None)): operations.add('edit')
+        if callable(getattr(outbox,'reply_message',None)): operations.add('reply')
         self.operations=frozenset(operations)
 
     def supports_action(self, action, conversation):
@@ -89,7 +90,7 @@ class TelegramMirrorProvider:
     def execute(self, envelope):
         action=envelope.get('action')
         if (envelope.get('account_ref'), envelope.get('user_id')) != (
-                self.account_ref, self.authorized_user) or action not in {'react','edit'}:
+                self.account_ref, self.authorized_user) or action not in {'react','edit','reply'}:
             raise DeliveryNotSubmittedError('Telegram account operation conflict')
         conversation = self.service._store.conversation(
             envelope['conversation_id'], user_id=self.authorized_user)
@@ -114,35 +115,81 @@ class TelegramMirrorProvider:
                 'provider_message_id':str(envelope['source_provider_message_id']),
                 'receipt':result}
 
-        if projected['source']['direction']!='outgoing' or projected['text']!=envelope['payload']['expected_text']:
-            raise DeliveryNotSubmittedError('Telegram edit source is no longer the owned current message')
-        edit=getattr(outbox,'edit_message',None)
-        if not callable(edit):
-            raise DeliveryNotSubmittedError('Telegram edit route unavailable')
-        result=edit(chat_id=str(envelope['peer_id']),account_ref=self.account_ref,
-            message_id=str(envelope['source_message_id']),expected_text=str(envelope['payload']['expected_text']),
-            text=str(envelope['payload']['text']))
+        if action=='edit':
+            if projected['source']['direction']!='outgoing' or projected['text']!=envelope['payload']['expected_text']:
+                raise DeliveryNotSubmittedError('Telegram edit source is no longer the owned current message')
+            edit=getattr(outbox,'edit_message',None)
+            if not callable(edit):
+                raise DeliveryNotSubmittedError('Telegram edit route unavailable')
+            result=edit(chat_id=str(envelope['peer_id']),account_ref=self.account_ref,
+                message_id=str(envelope['source_message_id']),expected_text=str(envelope['payload']['expected_text']),
+                text=str(envelope['payload']['text']))
+            if (not isinstance(result,dict) or result.get('ok') is not True
+                    or result.get('account_id')!=self.account_ref
+                    or str(result.get('peer_id'))!=str(envelope['peer_id'])
+                    or str(result.get('message_id'))!=str(envelope['source_provider_message_id'])
+                    or result.get('text')!=envelope['payload']['text'] or result.get('out') is not True):
+                raise RuntimeError('Telegram edit readback identity conflict')
+
+            current=self.service._store.message(envelope['source_message_id'],source='telegram',
+                                                user_id=self.authorized_user)
+            if current is None or current['conversation_id']!=conversation['id']:
+                raise RuntimeError('Telegram edited message mirror row disappeared')
+            row, _ = self.service.receive(InboxMessage(
+                source='telegram', message_id=str(envelope['peer_id'])+':'+str(envelope['source_provider_message_id']),
+                sender=str(current['sender']), sender_name=str(current.get('sender_name') or ''),
+                body=str(result['text']), received_at=float(current['received_at']), direction='outgoing',
+                peer_id=str(envelope['peer_id']), conversation_kind=str(conversation.get('conversation_kind') or 'unknown'),
+                edited_at=float(result['edit_date']), attachments=tuple(current.get('attachments') or ()),
+                reconciliation=True), route_id=str(conversation['route_id']), user_id=self.authorized_user,
+                account_ref=self.account_ref)
+            if row!=conversation['id']:
+                raise RuntimeError('Telegram edit changed the conversation identity')
+            return {'account_ref':self.account_ref,'peer_id':str(envelope['peer_id']),
+                'provider_message_id':str(envelope['source_provider_message_id']),
+                'receipt':f"telegram-qr-edit:{result.get('slot','?')}:{envelope['source_provider_message_id']}"}
+
+        reply=getattr(outbox,'reply_message',None)
+        if not callable(reply):
+            raise DeliveryNotSubmittedError('Telegram reply route unavailable')
+        result=reply(chat_id=str(envelope['peer_id']),account_ref=self.account_ref,
+            message_id=str(envelope['source_provider_message_id']),
+            thread_id=str(envelope.get('thread_id') or ''),expected_text=projected['text'],
+            text=str(envelope['payload']['text']),request_id=str(envelope['action_id']))
         if (not isinstance(result,dict) or result.get('ok') is not True
                 or result.get('account_id')!=self.account_ref
                 or str(result.get('peer_id'))!=str(envelope['peer_id'])
-                or str(result.get('message_id'))!=str(envelope['source_provider_message_id'])
-                or result.get('text')!=envelope['payload']['text'] or result.get('out') is not True):
-            raise RuntimeError('Telegram edit readback identity conflict')
-
-        current=self.service._store.message(envelope['source_message_id'],source='telegram',
-                                            user_id=self.authorized_user)
-        if current is None or current['conversation_id']!=conversation['id']:
-            raise RuntimeError('Telegram edited message mirror row disappeared')
-        row, _ = self.service.receive(InboxMessage(
-            source='telegram', message_id=str(envelope['peer_id'])+':'+str(envelope['source_provider_message_id']),
-            sender=str(current['sender']), sender_name=str(current.get('sender_name') or ''),
-            body=str(result['text']), received_at=float(current['received_at']), direction='outgoing',
-            peer_id=str(envelope['peer_id']), conversation_kind=str(conversation.get('conversation_kind') or 'unknown'),
-            edited_at=float(result['edit_date']), attachments=tuple(current.get('attachments') or ()),
-            reconciliation=True), route_id=str(conversation['route_id']), user_id=self.authorized_user,
-            account_ref=self.account_ref)
-        if row!=conversation['id']:
-            raise RuntimeError('Telegram edit changed the conversation identity')
+                or not str(result.get('message_id') or '').isdigit()
+                or not 0<int(result.get('message_id') or '0')<=0x7FFFFFFF
+                or str(result.get('reply_to_id'))!=str(envelope['source_provider_message_id'])
+                or str(result.get('thread_id') or '')!=str(envelope.get('thread_id') or '')
+                or result.get('text')!=envelope['payload']['text'] or result.get('out') is not True
+                or type(result.get('date')) not in (int,float) or result['date']<=0):
+            raise RuntimeError('Telegram reply receipt identity conflict')
         return {'account_ref':self.account_ref,'peer_id':str(envelope['peer_id']),
-            'provider_message_id':str(envelope['source_provider_message_id']),
-            'receipt':f"telegram-qr-edit:{result.get('slot','?')}:{envelope['source_provider_message_id']}"}
+            'provider_message_id':str(result['message_id']),
+            'receipt':f"telegram-qr-reply:{result.get('slot','?')}:{result['message_id']}:{envelope['action_id']}",
+            'text':str(result['text']),'provider_at':float(result['date']),
+            'reply_to_provider_message_id':str(result['reply_to_id']),
+            'provider_thread_id':str(result.get('thread_id') or '')}
+
+    def project_receipt(self,envelope,result):
+        if envelope.get('action')!='reply': return
+        conversation=self.service._store.conversation(
+            envelope['conversation_id'],user_id=self.authorized_user)
+        if (conversation is None or conversation.get('account_ref')!=self.account_ref
+                or str(conversation.get('peer_id'))!=str(envelope.get('peer_id'))):
+            raise ValueError('Telegram reply receipt conversation changed')
+        message=InboxMessage(
+            source='telegram',message_id=str(envelope['peer_id'])+':'+str(result['provider_message_id']),
+            sender=str(conversation.get('sender') or ''),
+            sender_name=str(conversation.get('display_name') or ''),body=str(result['text']),
+            received_at=float(result['provider_at']),direction='outgoing',
+            peer_id=str(envelope['peer_id']),
+            conversation_kind=str(conversation.get('conversation_kind') or 'unknown'),
+            reconciliation=True,provider_reply_to=str(result['reply_to_provider_message_id']),
+            provider_thread_id=str(result.get('provider_thread_id') or ''))
+        row,_=self.service.receive(message,route_id=str(conversation['route_id']),
+            user_id=self.authorized_user,account_ref=self.account_ref)
+        if row!=conversation['id']:
+            raise ValueError('Telegram reply receipt changed the conversation identity')

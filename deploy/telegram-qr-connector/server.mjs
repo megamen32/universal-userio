@@ -20,6 +20,7 @@ import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./logi
 import { acknowledgeRead } from './read-receipt.mjs';
 import { readDialogFolders } from './dialog-folders.mjs';
 import { editOwnedTelegramText, TelegramEditRefused } from './message-edit.mjs';
+import { sendTelegramReply, TelegramReplyRefused } from './message-reply.mjs';
 import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
@@ -1249,7 +1250,18 @@ http.createServer(async (req, res) => {
         const chatId = String(payload.chat_id || "").trim();
         const wantAccount = String(payload.account_id || "").trim();
         const wantSlot = String(payload.slot || "").trim();
-        const text = String(payload.body || "").trim();
+        const rawText = String(payload.body || "");
+        const replyToId = String(payload.reply_to_id || "").trim();
+        const threadId = String(payload.thread_id || "").trim();
+        const expectedText = payload.expected_text;
+        const text = replyToId ? rawText : rawText.trim();
+        if ((replyToId || threadId || expectedText !== undefined) && (!replyToId || !wantAccount || !chatId || !/^[1-9][0-9]*$/.test(replyToId)
+            || Number(replyToId) > 0x7fffffff || threadId && (!/^[1-9][0-9]*$/.test(threadId)
+            || Number(threadId) > 0x7fffffff) || typeof expectedText !== "string")) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "account, exact chat, source message and source text are required for replies",
+            code: "invalid_reply_scope", submitted: false }));
+        }
         if ((!chat && !chatId) || !text) {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id) and body are required" }));
@@ -1267,8 +1279,20 @@ http.createServer(async (req, res) => {
         }
         const trySend = async (slot, item) => {
           const peers = item.labelPeers;
-          const peer = (chat && peers.labelPeers.get(chat)) || (chatId && peers.idPeers.get(chatId)) || null;
+          const peer = replyToId
+            ? peers.idPeers.get(chatId)
+            : (chat && peers.labelPeers.get(chat)) || (chatId && peers.idPeers.get(chatId)) || null;
           if (!peer || !item.client) return false;
+          if (replyToId) {
+            const sent = await sendTelegramReply({ client: item.client, peer, messageId: replyToId,
+              threadId, expectedText, text });
+            console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id: chatId,
+              message_id: sent.messageId, reply_to_id: sent.replyToId, thread_id: sent.threadId,
+              text: sent.text, date: sent.date, out: sent.out }));
+            return true;
+          }
           const sent = await item.client.sendMessage(peer, { message: text });
           console.log(`send ${slot}: "${chat || chatId}" msg ${sent && sent.id}`);
           res.writeHead(200, { "content-type": "application/json" });
@@ -1303,6 +1327,11 @@ http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: `no connected account knows chat "${chat || chatId}"`,
           code: "chat_not_known", submitted: false }));
       } catch (error) {
+        if (error instanceof TelegramReplyRefused || error?.submitted === false) {
+          res.writeHead(409, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: error.message || "Telegram reply refused before send",
+            code: error.code || "reply_refused", submitted: false }));
+        }
         console.error("send error:", (error && error.message) || error);
         res.writeHead(502, { "content-type": "application/json" });
         // An exception can arrive with a message already on the wire, so the
