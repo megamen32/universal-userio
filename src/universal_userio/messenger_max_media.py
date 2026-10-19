@@ -8,6 +8,7 @@ import base64
 import hashlib
 import io
 import json
+import mimetypes
 import os
 import subprocess
 import urllib.parse
@@ -97,9 +98,14 @@ def read_attachment(client, *, peer, message_id, attachment):
     if typ=='AUDIO':return transcribe(data,mime)
     if mime.startswith('image/'):return image_content(data,'file')
     name=str(attachment.get('name') or attachment.get('fileName') or '')
+    if not name:
+        name='Вложение MAX'
+    if not mime or mime=='application/octet-stream':
+        mime=str(attachment.get('mimeType') or mimetypes.guess_type(name)[0] or mime or 'application/octet-stream')
+    result={'kind':'file','status':'ready','filename':name,'mimeType':mime,
+            'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),
+            'dataBase64':base64.b64encode(data).decode(),'partial':False}
     if mime.startswith('text/') or name.lower().endswith(('.txt','.csv','.md','.json','.log')):
         text=data.decode('utf-8',errors='strict')
-        return {'kind':'file','status':'ready','text':text[:32000],'partial':len(text)>32000,
-                'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'mimeType':mime}
-    return {'kind':'file','status':'unsupported_content_type','mimeType':mime,'bytes':len(data),
-            'sha256':hashlib.sha256(data).hexdigest(),'partial':True}
+        result.update(text=text[:32000],text_truncated=len(text)>32000)
+    return result

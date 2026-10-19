@@ -20,6 +20,14 @@ test('link previews do not displace files or change their provider index', () =>
   assert.deepEqual(messageAttachments([{ kind: 'share' }, { kind: 'document', name: 'Каталог.pdf', file_size: 100 }]).map(a => [a.index, a.filename, a.size]), [[1, 'Каталог.pdf', 100]])
 })
 
+test('Telegram routing metadata stays hidden without shifting the selected file index', () => {
+  const attachments = messageAttachments([
+    { kind: 'telegram_routing', provider_ref: '{"peer_id":"-1001"}' },
+    { kind: 'document', filename: 'Заявка.xlsx', size: 64 },
+  ])
+  assert.deepEqual(attachments.map(item => [item.index, item.filename]), [[1, 'Заявка.xlsx']])
+})
+
 test('preview and downloads address the selected attachment', () => {
   assert.equal(attachmentMediaPath('conv', 'message/id', 2), '/v1/conversations/conv/media/message%2Fid?attachment_index=2')
   assert.equal(attachmentMediaPath('conv', 'message/id', 2, true), '/v1/conversations/conv/media/message%2Fid/raw?attachment_index=2')

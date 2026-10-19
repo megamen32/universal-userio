@@ -802,23 +802,22 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             result["message"] = self._promote_author(result["message"], chat)
         return result
 
-    def download(self, *, file_ref: str) -> ChannelFile:
+    def download(self, *, file_ref: str, attachment_index: int = 0,
+                 max_bytes: int | None = None) -> ChannelFile:
+        if type(attachment_index) is not int or not 0 <= attachment_index < 8:
+            raise ValueError("invalid_attachment_index")
+        message = self._store.message(file_ref, source="telegram", user_id=self._user_id)
+        if message is None:
+            raise KeyError("Telegram message not found")
+        media = [item for item in self._store.attachments_for_message(
+            source="telegram", message_id=file_ref, user_id=self._user_id)
+            if str(item.get("kind") or "").lower() != "telegram_routing"]
+        selected = next((item for item in media if item.get("idx") == attachment_index), None)
+        if selected is None:
+            raise KeyError("Telegram attachment not found")
         return _download_via_bridge(
             channel="telegram",
-            message=self._store.message(file_ref, user_id=self._user_id),
-            file_ref=file_ref,
-            bridge_url=self._bridge_url,
-            token_env="USERIO_API_TOKEN",
-            chat_field="chat",
-            chat_id_field="chat_id",
-            message_field="message_id",
-            runner=self._runner,
-        )
-
-    def download_for_ai(self, *, file_ref: str, max_bytes: int) -> ChannelFile:
-        return _download_via_bridge(
-            channel="telegram",
-            message=self._store.message(file_ref, user_id=self._user_id),
+            message=message,
             file_ref=file_ref,
             bridge_url=self._bridge_url,
             token_env="USERIO_API_TOKEN",
@@ -828,6 +827,10 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             runner=self._runner,
             max_bytes=max_bytes,
         )
+
+    def download_for_ai(self, *, file_ref: str, max_bytes: int,
+                        attachment_index: int = 0) -> ChannelFile:
+        return self.download(file_ref=file_ref,attachment_index=attachment_index,max_bytes=max_bytes)
 
 
 class WhatsAppChannelAdapter(StoredChannelAdapter):
@@ -1038,10 +1041,23 @@ class MaxChannelAdapter(StoredChannelAdapter):
             source="max", limit=max(1, min(limit, 100)), user_id=self._user_id)}
         return [{**chat, "title": names.get(chat["id"]) or chat["title"]} for chat in chats]
 
-    def download(self, *, file_ref: str) -> ChannelFile:
-        raise AdapterNotSupported(
-            "MAX adapter does not deliver attachments yet; media remains in the MAX app.",
-        )
+    def download(self, *, file_ref: str, attachment_index: int = 0) -> ChannelFile:
+        if type(attachment_index) is not int or not 0 <= attachment_index < 8:
+            raise ValueError("invalid_attachment_index")
+        message = self._store.message(file_ref, source="max", user_id=self._user_id)
+        if message is None:
+            raise KeyError("MAX message not found")
+        conversation = self._store.conversation(str(message.get("conversation_id") or ""),
+                                                user_id=self._user_id)
+        if conversation is None or conversation.get("source") != "max":
+            raise KeyError("MAX conversation not found")
+        attachments = self._store.attachments_for_message(
+            source="max", message_id=file_ref, user_id=self._user_id)
+        if not any(item.get("idx") == attachment_index for item in attachments):
+            raise KeyError("MAX attachment not found")
+        from .matrix_max_media import download as download_max
+        return download_max(self._service, self._user_id, conversation, message,
+                            max_bytes=2 * 1024 * 1024, attachment_index=attachment_index)
 
     def download_for_ai(self, *, file_ref: str, max_bytes: int,
                         attachment_idx: int = 0) -> ChannelFile:
@@ -1120,6 +1136,7 @@ def _download_via_bridge(
         chat_field: sender,
         chat_id_field: sender,
         message_field: str(file_ref),
+        **({"max_bytes": max_bytes} if max_bytes is not None else {}),
         **(bridge_context or {}),
     }).encode()
     request = urllib.request.Request(
@@ -1753,10 +1770,19 @@ class UnifiedChannels(StoredChannelAdapter):
             raise ValueError("unknown channel")
         return adapter_type(self._store, self._service, self._user_id)
 
-    def download(self, *, file_ref: str) -> ChannelFile:
+    def download(self, *, file_ref: str, attachment_index: int = 0,
+                 max_bytes: int | None = None) -> ChannelFile:
         channel, separator, provider_ref = file_ref.partition(":")
         if separator and channel in self._types:
-            return self.adapter(channel).download(file_ref=provider_ref)
+            adapter = self.adapter(channel)
+            if channel == "telegram":
+                return adapter.download(file_ref=provider_ref, attachment_index=attachment_index,
+                                        max_bytes=max_bytes)
+            if channel == "max":
+                return adapter.download(file_ref=provider_ref, attachment_index=attachment_index)
+            if attachment_index != 0:
+                raise ValueError("invalid_attachment_index")
+            return adapter.download(file_ref=provider_ref)
         raise AdapterNotSupported("not supported by adapter")
 
 

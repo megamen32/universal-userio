@@ -1,6 +1,7 @@
 """Per-token account and chat grants; enforced before any provider operation."""
 from __future__ import annotations
 import json
+import hashlib
 
 READ_TOOLS = {'capabilities', 'history', 'get', 'resolve', 'media', 'events'}
 
@@ -231,26 +232,42 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
 
     if name == 'userio.channels.download':
         file_ref = str(arguments['file_ref'])
+        attachment_index = arguments.get('attachment_index',0)
+        if type(attachment_index) is not int or not 0<=attachment_index<8:
+            raise ValueError('invalid_attachment_index')
         mode = arguments.get('mode','base64')
         if mode == 'mcp_resource':
             include_images = arguments.get('include_images',True)
             if type(include_images) is not bool: raise ValueError('include_images_must_be_boolean')
             channel_ref, separator, provider_ref = file_ref.partition(':')
-            if not separator or channel_ref != 'telegram':
-                raise ValueError('mcp_resource_mode_requires_telegram')
+            if not separator or channel_ref not in {'telegram','max'}:
+                raise ValueError('mcp_resource_mode_requires_telegram_or_max')
             from .mcp_files import MAX_MCP_FILE_BYTES, mcp_attachment
-            adapter = channels.adapter('telegram')
-            bounded = getattr(adapter,'download_for_ai',None)
-            if not callable(bounded):
-                raise ValueError('bounded_telegram_download_unavailable')
-            file = bounded(file_ref=provider_ref,max_bytes=MAX_MCP_FILE_BYTES)
+            if channel_ref=='telegram':
+                download_args={'file_ref':provider_ref,'max_bytes':MAX_MCP_FILE_BYTES}
+                if attachment_index:
+                    download_args['attachment_index']=attachment_index
+                file=channels.adapter('telegram').download_for_ai(**download_args)
+            else:
+                file = channels.download(file_ref=file_ref,attachment_index=attachment_index,
+                                         max_bytes=MAX_MCP_FILE_BYTES)
             metadata, blocks = mcp_attachment(file,include_images=include_images)
             return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
         if mode != 'base64':
             raise ValueError('invalid_download_mode')
-        file = channels.download(file_ref=file_ref)
+        from .mcp_files import MAX_MCP_FILE_BYTES
+        channel_ref,_,provider_ref=file_ref.partition(':')
+        if channel_ref=='telegram':
+            download_args={'file_ref':provider_ref,'max_bytes':MAX_MCP_FILE_BYTES}
+            if attachment_index:
+                download_args['attachment_index']=attachment_index
+            file=channels.adapter('telegram').download_for_ai(**download_args)
+        else:
+            file = channels.download(file_ref=file_ref,attachment_index=attachment_index,
+                                     max_bytes=MAX_MCP_FILE_BYTES)
         import base64
         return {'ok':True,'file':{'filename':file.filename,'content_type':file.content_type,
+            'size':len(file.data),'sha256':hashlib.sha256(file.data).hexdigest(),
             'encoding':'base64','data':base64.b64encode(file.data).decode('ascii')}}
 
     if name == 'userio.channels.send_draft':

@@ -208,7 +208,7 @@ const MessageBody = ({ message, conversationId, onAttachmentClick }: { message: 
   if (attachments.length) return <div className="min-w-0 max-w-full space-y-2 [overflow-wrap:anywhere]">
     {message.body.trim() && !MEDIA_PLACEHOLDER.test(message.body.trim()) && message.body !== '[Вложение VK]' && <p className="whitespace-pre-wrap">{message.body}</p>}
     {attachments.map(attachment => {
-      const available = message.source === 'max' || attachment.index === 0
+      const available = message.source === 'max' || message.source === 'telegram' || attachment.index === 0
       const unavailable = 'Это вложение пока нельзя скачать'
       return <div key={attachment.index} data-attachment-index={attachment.index} className="w-full min-w-0 max-w-sm rounded-xl border border-current/15 p-2.5">
       {attachment.kind === 'sticker' && attachment.src
@@ -784,6 +784,15 @@ export function App() {
   const openAttachment = async (message: Message, index = 0, download = false) => {
     if (!conversation) return
     if (!canDownload) { notify("Скачивание отключено в настройках пользователя"); return }
+    if (download) {
+      const attachment = messageAttachments(message.attachments).find(item => item.index === index)
+      await downloadAttachment(
+        attachmentMediaPath(conversation.id, message.message_id, index, true),
+        attachment?.filename || mediaLabel(message.body) || "Вложение",
+        attachment?.contentType || "application/octet-stream",
+      )
+      return
+    }
     if (!download) setAttachmentPreview({ message, meta: null, loading: true })
     try {
       const data = await api<{ kind: string | null; available: boolean; reason?: string; download_url?: string; filename?: string; content_type?: string; size?: number }>(
@@ -806,11 +815,21 @@ export function App() {
         notify(`Скачивание не удалось: HTTP ${response.status}`)
         return
       }
-      const blob = await response.blob()
-      const objectUrl = URL.createObjectURL(new Blob([blob], { type: contentType }))
+      const bytes = await response.arrayBuffer()
+      const declaredLength = Number(response.headers.get("Content-Length"))
+      if (Number.isFinite(declaredLength) && declaredLength !== bytes.byteLength) throw new Error("Размер скачанного файла не совпал")
+      const expectedSha = response.headers.get("X-Content-SHA256")
+      if (expectedSha) {
+        const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("")
+        if (digest !== expectedSha.toLowerCase()) throw new Error("Контрольная сумма скачанного файла не совпала")
+      }
+      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: response.headers.get("Content-Type") || contentType }))
       const anchor = document.createElement("a")
       anchor.href = objectUrl
-      anchor.download = filename
+      const disposition = response.headers.get("Content-Disposition") || ""
+      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+      const actualName = encodedName ? decodeURIComponent(encodedName) : filename
+      anchor.download = actualName
       document.body.appendChild(anchor)
       anchor.click()
       document.body.removeChild(anchor)

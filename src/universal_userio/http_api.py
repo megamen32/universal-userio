@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import imaplib
 import json
 import mimetypes
@@ -210,6 +211,7 @@ def handler(
             self.send_header("Content-Type", content_type or "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Content-Disposition", disposition)
+            self.send_header("X-Content-SHA256", hashlib.sha256(body).hexdigest())
             self.send_header("Cache-Control", "private, max-age=0")
             self.end_headers()
             self.wfile.write(body)
@@ -2131,7 +2133,7 @@ def handler(
                     except (ValueError,RuntimeError,OSError):
                         self._reply(503,{'error':'Не удалось скачать вложение MAX. Допустимый размер — до 2 МБ. Попробуйте позже.'});return
                     self._reply_raw(200,file.data,content_type=file.content_type,filename=file.filename);return
-                if attachment_index:
+                if attachment_index and source_hint != 'telegram':
                     self._reply(400, {'error': 'Выбор нескольких вложений пока недоступен для этого сервиса'});return
                 if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:'):
                     from .vk_web import VKWeb
@@ -2151,7 +2153,8 @@ def handler(
                     if attachments:
                         file_ref = str(attachments[0].get("attachment_id") or message_id)
                 try:
-                    file = adapter.download(file_ref=file_ref)
+                    file = (adapter.download(file_ref=file_ref, attachment_index=attachment_index)
+                            if source_hint == 'telegram' else adapter.download(file_ref=file_ref))
                 except KeyError:
                     self._reply(404, {"error": "message not found"})
                     return
@@ -2228,7 +2231,7 @@ def handler(
                     payload.update({k:selected[k] for k in ('kind','filename','content_type','size','available','download_url')})
                     payload['reason']='' if selected['available'] else 'Это вложение пока нельзя скачать'
                     self._reply(200,payload);return
-                if attachment_index:
+                if attachment_index and source_hint != 'telegram':
                     self._reply(400, {'error': 'Выбор нескольких вложений пока недоступен для этого сервиса'});return
                 if source_hint=='vk' and str(conv.get('account_ref') or '').startswith('vk:') and attachments:
                     from .vk_web import VKWeb
@@ -2245,7 +2248,8 @@ def handler(
                 if str(message.get("source") or "") == "vk" and attachments:
                     file_ref = str(attachments[0].get("attachment_id") or message_id)
                 try:
-                    file = adapter.download(file_ref=file_ref)
+                    file = (adapter.download(file_ref=file_ref, attachment_index=attachment_index)
+                            if source_hint == 'telegram' else adapter.download(file_ref=file_ref))
                 except (AdapterNotSupported, KeyError, ValueError) as error:
                     payload["reason"] = str(error)
                 else:
@@ -2254,7 +2258,11 @@ def handler(
                     payload["filename"] = file.filename
                     payload["content_type"] = file.content_type
                     payload["size"] = len(file.data)
-                    payload["download_url"] = f"/v1/conversations/{real_id}/media/{message_id}/raw"
+                    download_url=(f"/v1/conversations/{quote(real_id,safe='')}/media/"
+                                  f"{quote(message_id,safe='')}/raw")
+                    if source_hint=='telegram':
+                        download_url+=f"?attachment_index={attachment_index}"
+                    payload["download_url"] = download_url
                 self._reply(200, payload)
                 return
             record = service._store.conversation(conversation_id, user_id=user_id)

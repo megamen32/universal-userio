@@ -27,6 +27,7 @@ import { httpConnectOptions } from './http-connect-socket.mjs';
 import { logoutTelegramClient } from './account-disconnect.mjs';
 import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs";
 import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
+import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -922,6 +923,7 @@ function telegramMessageLocator(payload) {
 
 async function downloadTelegramMedia(payload) {
   const locator = telegramMessageLocator(payload);
+  const maxBytes = boundedMediaLimit(payload?.max_bytes);
   const candidates = [...liveSlots].filter(([, item]) =>
     !locator.accountId || item.accountId === locator.accountId
   );
@@ -937,8 +939,10 @@ async function downloadTelegramMedia(payload) {
     const message = messages && messages[0];
     if (!message) continue;
     if (!message.media) throw new Error(`message ${locator.messageId} has no media`);
+    assertDeclaredMediaWithinLimit(message, maxBytes);
     const bytes = await item.client.downloadMedia(message);
     if (!bytes || !bytes.length) throw new Error(`message ${locator.messageId} media download returned empty data`);
+    if (maxBytes !== null && bytes.length > maxBytes) throw new Error("Telegram media exceeds the bounded download limit");
     return { slot, bytes: Buffer.from(bytes), ...mediaDownloadDescriptor(message) };
   }
   throw new Error(`no connected Telegram account can resolve message ${locator.messageId}`);
