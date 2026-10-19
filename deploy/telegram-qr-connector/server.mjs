@@ -25,6 +25,7 @@ import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
 import { logoutTelegramClient } from './account-disconnect.mjs';
+import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -482,16 +483,6 @@ function messageBody(message) {
   return "";
 }
 
-function entityLabel(entity) {
-  if (!entity) return "telegram";
-  return String(
-    entity.title
-    || [entity.firstName, entity.lastName].filter(Boolean).join(" ")
-    || entity.username
-    || String(entity.id),
-  );
-}
-
 async function envelope(chatKey, label, message, client, self, options) {
   let senderEntity = message.sender || null;
   const shouldTranscribe = !options || options.transcribeAudio !== false;
@@ -543,6 +534,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     ...mirrorMetadata(message, options && options.dialog),
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
+    ...(entityName(chatEntity) ? { sender_name: entityName(chatEntity) } : {}),
     body: normalized.body.slice(0, 8000),
     ...(attachments.length ? { attachments: attachments.map((attachment, idx) => ({ ...attachment, idx })) } : {}),
   };
@@ -601,6 +593,31 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
 
 async function ingestProviderState(slot, client, accountId, update) {
   const name = update.className;
+  if (name === "UpdateUserName") {
+    const live = liveSlots.get(slot);
+    if (live) {
+      try {
+        const user = await client.getEntity(update.userId);
+        const peerKey = String(await client.getPeerId(user, true));
+        const label = resolveDialogLabel(user, "");
+        for (const [chatKey, peer] of live.labelPeers.idPeers) {
+          if (chatKey !== peerKey || !peer || peer.className !== "User" || !label || label === peerKey) continue;
+          live.dialogLabels.set(chatKey, label);
+          live.labelPeers.labelPeers.set(label, user);
+        }
+        if (label && label !== peerKey) {
+          await postUserIO("/v1/contact-profiles", { account_id: accountId, profiles: [{
+            peer_id: peerKey, username: String(user.username || ""),
+            first_name: String(user.firstName || ""), last_name: String(user.lastName || ""),
+            phone: String(user.phone || ""),
+          }] });
+        }
+      } catch (error) {
+        console.warn(`telegram name update ${slot}:`, (error && error.message) || error);
+      }
+    }
+    return;
+  }
   const inbox = name === "UpdateReadHistoryInbox" || name === "UpdateReadChannelInbox";
   const outbox = name === "UpdateReadHistoryOutbox" || name === "UpdateReadChannelOutbox";
   if (inbox || outbox) {
@@ -687,8 +704,8 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
   let chats = 0;
   for (const dialog of dialogs) {
     try {
-      const label = entityLabel(dialog.entity);
       const chatKey = String(dialog.id);
+      const label = resolveDialogLabel(dialog.entity, dialogLabels.get(chatKey));
       dialogLabels.set(chatKey, label);
       if (labelPeers) {
         if (!labelPeers.idPeers.has(chatKey)) labelPeers.idPeers.set(chatKey, dialog.entity);
@@ -718,7 +735,8 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   if (!chatKey) return;
   let chatEntity = message.chat || null;
   if (!chatEntity && typeof message.getChat === "function") chatEntity = await message.getChat();
-  const label = dialogLabels.get(chatKey) || entityLabel(chatEntity) || "telegram";
+  const label = resolveDialogLabel(chatEntity, dialogLabels.get(chatKey));
+  dialogLabels.set(chatKey, label);
   const live = liveSlots.get(slot);
   if (live && chatEntity && label && label !== "telegram") {
     live.labelPeers.labelPeers.set(label, chatEntity);
@@ -768,7 +786,7 @@ async function syncAccount(slot) {
       const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
-      liveSlots.set(slot, { client, labelPeers, accountId });
+      liveSlots.set(slot, { client, labelPeers, accountId, dialogLabels });
       slots.set(slot, { ...(slots.get(slot) || {}), status: "connected", name: displayName, accountId });
       // Attach push ingestion before reconciliation. A slow historical media
       // item must not postpone delivery of genuinely new messages.

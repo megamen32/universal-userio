@@ -493,7 +493,7 @@ class StoredChannelAdapter:
             {
                 "id": record["id"],
                 "channel": _public_channel(str(record["source"])),
-                "title": record["identity_id"] or record["sender"],
+                "title": record["display_name"] or record["identity_id"] or record["sender"],
                 "last_message_snippet": str(record["preview"] or "")[:500],
                 "unread": int(record["unread_count"]),
             }

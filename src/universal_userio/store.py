@@ -4823,13 +4823,23 @@ class SQLiteUserIOStore:
                        CASE WHEN c.source='telegram' AND trs.unread_count IS NOT NULL
                          THEN 'telegram' ELSE 'local_mirror' END AS unread_source,
                        trs.unread_observed_at AS unread_observed_at,
-                       (SELECT name FROM contact_names WHERE user_id=c.user_id
-                        AND source=c.source AND sender=
-                          CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name,
+                       CASE WHEN c.source='telegram' AND c.account_ref LIKE 'telegram:%'
+                                  AND c.peer_id=substr(c.account_ref,10) THEN 'Избранное'
+                         ELSE COALESCE(
+                           NULLIF((SELECT name FROM contact_names WHERE user_id=c.user_id
+                            AND source=c.source AND sender=
+                              CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END),''),
+                           NULLIF(trim(COALESCE(sp.first_name,'')||' '||COALESCE(sp.last_name,'')),''),
+                           NULLIF('@'||sp.username,'@'), NULLIF(sp.phone,''),
+                           CASE WHEN c.source='telegram' THEN NULLIF(linked.display_name,'') END,
+                           NULLIF(c.sender,'')) END AS display_name,
                        activity.account_last_at AS account_last_at
                 FROM conversations c LEFT JOIN telegram_read_state trs
                   ON trs.user_id=c.user_id AND trs.account_ref=c.account_ref
                   AND trs.peer_id=c.peer_id AND c.source='telegram'
+                LEFT JOIN search_profiles sp ON sp.user_id=c.user_id AND sp.conversation_id=c.id
+                LEFT JOIN provider_accounts linked ON linked.user_id=c.user_id
+                  AND linked.provider='telegram' AND linked.id='telegram:'||c.peer_id
                 -- Aggregate once per account source. The old scalar MAX() was
                 -- executed for every chat row (many full source scans) and
                 -- made switching accounts take several seconds.
