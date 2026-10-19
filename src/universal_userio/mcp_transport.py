@@ -10,6 +10,9 @@ from threading import Condition
 from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
 
+MODERN_PROTOCOL_VERSION = "2026-07-28"
+SUPPORTED_MODERN_PROTOCOL_VERSIONS = [MODERN_PROTOCOL_VERSION]
+_SERVER_INFO = {"name": "universal-userio", "version": "0.2.0"}
 
 
 class ResourceSubscriptionHub:
@@ -54,8 +57,36 @@ def json_rpc_response(
     params = request.get("params", {})
     if not isinstance(params, dict):
         return _error(request_id, -32602, "Invalid params")
+    request_meta = params.get("_meta")
+    modern = isinstance(request_meta, dict) and "io.modelcontextprotocol/protocolVersion" in request_meta
+    requested_protocol = request_meta.get("io.modelcontextprotocol/protocolVersion") if isinstance(request_meta, dict) else None
+    if modern and not isinstance(request_meta.get("io.modelcontextprotocol/clientCapabilities"), dict):
+        return _error(request_id, -32600, "Modern MCP request requires clientCapabilities metadata")
+    if modern and requested_protocol not in SUPPORTED_MODERN_PROTOCOL_VERSIONS:
+        return _error(request_id, -32022, "Unsupported protocol version", {
+            "supported": SUPPORTED_MODERN_PROTOCOL_VERSIONS,
+            "requested": requested_protocol,
+        })
+    if modern and method == "initialize":
+        return _error(request_id, -32601, "Method not found")
+    if method == "server/discover" and not modern:
+        return _error(request_id, -32600, "server/discover requires modern MCP metadata")
     try:
-        if method == "initialize":
+        if method == "server/discover":
+            can_read = principal is None or surface._store.capability_enabled("read", user_id=principal.user_id)
+            result = {
+                "resultType": "complete",
+                "supportedVersions": SUPPORTED_MODERN_PROTOCOL_VERSIONS,
+                "capabilities": {
+                    **({"tools": {}} if can_read else {}),
+                    **({"resources": {}} if can_read else {}),
+                },
+                "_meta": {"io.modelcontextprotocol/serverInfo": _SERVER_INFO},
+                "instructions": "UserIO reads user-owned conversations and exposes bounded message media to MCP tools.",
+                "ttlMs": 300000,
+                "cacheScope": "private" if principal is not None else "public",
+            }
+        elif method == "initialize":
             # This transport implements the legacy initialize/initialized era.
             # The 2026-07-28 revision removes this handshake and uses
             # server/discover plus per-request _meta, so never claim it here.
@@ -64,7 +95,7 @@ def json_rpc_response(
             can_subscribe = principal is None or (can_read and surface._store.capability_enabled("subscribe", user_id=principal.user_id))
             result = {
                 "protocolVersion": protocol,
-                "serverInfo": {"name": "universal-userio", "version": "0.2.0"},
+                "serverInfo": _SERVER_INFO,
                 "capabilities": {
                     "tools": {"listChanged": False},
                     "resources": {"subscribe": can_subscribe, "listChanged": False},
@@ -96,6 +127,8 @@ def json_rpc_response(
                 return _error(request_id, -32602, "uri is required")
             result = surface.read_resource(uri, principal=principal)
         elif method in {"resources/subscribe", "resources/unsubscribe"}:
+            if modern:
+                return _error(request_id, -32601, "Method not found")
             uri = params.get("uri")
             if not isinstance(uri, str) or not uri:
                 return _error(request_id, -32602, "uri is required")
@@ -112,7 +145,7 @@ def json_rpc_response(
             else:
                 subscription_hub.unsubscribe(principal.user_id, uri)
             result = {}
-        elif method == "ping":
+        elif method == "ping" and not modern:
             result = {}
         else:
             return _error(request_id, -32601, "Method not found")
@@ -122,6 +155,11 @@ def json_rpc_response(
         return _error(request_id, -32002, str(error).strip("'") or "resource not found")
     except (TypeError, ValueError) as error:
         return _error(request_id, -32602, str(error) or "Invalid params")
+    if modern:
+        result = dict(result)
+        result.setdefault("resultType", "complete")
+        if method != "server/discover":
+            result.setdefault("_meta", {"io.modelcontextprotocol/serverInfo": _SERVER_INFO})
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
@@ -130,8 +168,11 @@ def sse_message(payload: dict[str, Any]) -> bytes:
     return f"event: message\ndata: {data}\n\n".encode()
 
 
-def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+def _error(request_id: Any, code: int, message: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    error = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
 class StdioJsonRpcTransport:

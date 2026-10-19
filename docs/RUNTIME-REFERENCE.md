@@ -2,7 +2,7 @@
 
 Universal UserIO is the canonical messaging runtime for human communications.
 It owns users, accounts, conversations, messages, attachments, source cursors,
-deduplication, per-user policy, AI drafts, approval and MCP 2.0 subscriptions.
+deduplication, per-user policy, AI drafts, approval and MCP `2026-07-28`.
 Provider libraries/sidecars own provider sessions and transport details.
 NoticePlace is intentionally separate and is reserved for system/agent alerts.
 

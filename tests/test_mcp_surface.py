@@ -63,10 +63,15 @@ def test_mcp_read_includes_image_content_by_default_and_reports_audio_status(tmp
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": "userio.channels.read", "arguments": {
             "channel": "telegram", "chat_id": conversation_id,
+        }, "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1"},
         }},
     })
 
     result = response["result"]
+    assert result["resultType"] == "complete"
     image = next(block for block in result["content"] if block["type"] == "image")
     assert not any(block["type"] == "audio" for block in result["content"])
     assert image["data"] == base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode()
@@ -348,6 +353,76 @@ def test_mcp_initialize_does_not_claim_support_for_the_modern_protocol(tmp_path)
     assert payload["conversation"]["messages"][0]["body"] == "modern hello"
 
 
+def _modern_mcp_request(request_id, method, params=None):
+    params = dict(params or {})
+    params["_meta"] = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {"name": "test-client", "version": "1"},
+    }
+    return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+
+
+def test_mcp_latest_discovery_and_stateless_tool_calls(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "mcp-latest.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    surface = UserIOMcpSurface(store, service)
+
+    discovered = json_rpc_response(surface, _modern_mcp_request(1, "server/discover"))
+    assert discovered["result"]["supportedVersions"] == ["2026-07-28"]
+    assert discovered["result"]["resultType"] == "complete"
+    assert discovered["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "universal-userio"
+    assert "subscribe" not in discovered["result"]["capabilities"].get("resources", {})
+
+    listed = json_rpc_response(surface, _modern_mcp_request(2, "tools/list"))
+    assert listed["result"]["resultType"] == "complete"
+    assert listed["result"]["tools"]
+
+    called = json_rpc_response(surface, _modern_mcp_request(3, "tools/call", {
+        "name": "userio.channels.list", "arguments": {"channel": "telegram"},
+    }))
+    assert called["result"]["resultType"] == "complete"
+    assert any(block["type"] == "text" for block in called["result"]["content"])
+
+
+def test_mcp_latest_requires_metadata_and_rejects_unsupported_version(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "mcp-latest-errors.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+
+    missing = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {},
+    })
+    assert missing["error"]["code"] == -32600
+
+    unsupported = _modern_mcp_request(2, "tools/list")
+    unsupported["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = "1900-01-01"
+    error = json_rpc_response(surface, unsupported)
+    assert error["error"]["code"] == -32022
+    assert error["error"]["data"] == {
+        "supported": ["2026-07-28"], "requested": "1900-01-01",
+    }
+    assert json_rpc_response(surface, _modern_mcp_request(3, "initialize"))["error"]["code"] == -32601
+    assert json_rpc_response(surface, _modern_mcp_request(4, "ping"))["error"]["code"] == -32601
+
+
+def test_stdio_mcp_latest_serves_discovery_and_tool_call(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "mcp-latest-stdio.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+    requests = [
+        _modern_mcp_request(1, "server/discover"),
+        _modern_mcp_request(2, "tools/call", {
+            "name": "userio.channels.list", "arguments": {"channel": "telegram"},
+        }),
+    ]
+    source = StringIO("".join(json.dumps(item) + "\n" for item in requests))
+    sink = StringIO()
+
+    StdioJsonRpcTransport(surface, source, sink).serve()
+
+    results = [json.loads(line)["result"] for line in sink.getvalue().splitlines()]
+    assert results[0]["supportedVersions"] == ["2026-07-28"]
+    assert results[1]["resultType"] == "complete"
+    assert results[1]["structuredContent"]["chats"] == []
 def test_mcp2_resource_subscription_receives_update(tmp_path) -> None:
     from universal_userio.mcp_transport import ResourceSubscriptionHub, json_rpc_response
     from universal_userio.contracts import UserPrincipal

@@ -2,7 +2,9 @@
 
 ## Транспорт
 
-Удалённый сервер расположен на `/mcp`. Для опубликованного сервиса используйте HTTPS и OAuth либо персональный Bearer-токен. В проверенной реализации HTTP возвращает JSON, а при запросе соответствующего формата может использовать SSE.
+Текущая редакция MCP — `2026-07-28`. UserIO принимает её современный stateless-формат и сохраняет старый handshake `2024-11-05` для совместимых клиентов. Для начала клиент может вызвать `server/discover`; каждый современный запрос содержит `_meta.io.modelcontextprotocol/protocolVersion` и `_meta.io.modelcontextprotocol/clientCapabilities`.
+
+Удалённый сервер расположен на `/mcp`. Для опубликованного сервиса используйте HTTPS и OAuth либо персональный Bearer-токен. Современный HTTP-клиент отправляет `MCP-Protocol-Version`, `Mcp-Method` и, для `tools/call`/`resources/read`, `Mcp-Name`; тело и заголовки должны совпадать. Клиент указывает поддержку `application/json` и `text/event-stream`; UserIO отвечает одним из этих форматов.
 
 Локальный stdio-режим запускается отдельно:
 
@@ -12,20 +14,25 @@ python -m universal_userio
 
 Это запуск локального MCP-сервера, а не автоматическое подключение к вашему аккаунту на публичном User.io.
 
-## Сначала запросите схемы
+## Обнаружение и схемы
 
-После установления MCP-соединения и инициализации клиентом получите список инструментов:
+Современный клиент может сначала узнать редакции протокола и возможности сервера:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "tools/list",
-  "params": {}
+  "method": "server/discover",
+  "params": {
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
+  }
 }
 ```
 
-Используйте `inputSchema` из ответа установленной версии. Для каждого инструмента проверяйте обязательные поля и допустимые значения; не добавляйте аргументы по аналогии с другим каналом.
+Затем получите список инструментов с тем же `_meta` в `params`. Для каждого инструмента используйте `inputSchema` установленной версии и проверяйте обязательные поля; не добавляйте аргументы по аналогии с другим каналом.
 
 ## Пример чтения списка Telegram-чатов
 
@@ -36,10 +43,18 @@ python -m universal_userio
   "method": "tools/call",
   "params": {
     "name": "userio.channels.list",
-    "arguments": {"channel": "telegram"}
+    "arguments": {"channel": "telegram"},
+    "_meta": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    }
   }
 }
 ```
+
+При `userio.channels.read` MCP возвращает вложенные изображения как стандартные image content blocks по умолчанию; передайте `include_images: false`, чтобы отказаться от байтов изображения. Для голосовых `media_delivery` показывает состояние распознавания и наличие транскрипции в тексте. Сырые голосовые байты этим инструментом модели не передаются.
+
+Внутренний AI-обработчик UserIO также подгружает ограниченные изображения в vision-модель; по умолчанию это `MiniMax-M3.1-Flash`, настраиваемая через `USERIO_AI_IMAGE_MODEL`.
 
 ## Основные группы
 
@@ -72,7 +87,7 @@ python -m universal_userio
 <summary>Исходники и справка</summary>
 
 - [UserIO · README и контракт каналов](https://github.com/megamen32/universal-userio/blob/main/README.md)
-- [MCP · инструменты и схемы](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+- [MCP 2026-07-28 · инструменты и схемы](https://modelcontextprotocol.io/specification/2026-07-28/server/tools)
 
 </details>
 
