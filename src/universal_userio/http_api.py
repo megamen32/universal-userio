@@ -32,7 +32,7 @@ from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
 from .mcp_surface import UserIOMcpSurface
-from .mcp_transport import ResourceSubscriptionHub, json_rpc_response, sse_message
+from .mcp_transport import MODERN_PROTOCOL_VERSION, ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
 from .personal_tokens import PersonalTokens
 from .token_permissions import read_only_http_allowed, meeting_recorder_http_allowed
@@ -443,6 +443,25 @@ def handler(
                         if isinstance(request_meta, dict) else None
                     )
                     http_version = self.headers.get("MCP-Protocol-Version")
+                    if http_version == MODERN_PROTOCOL_VERSION and request_version is None:
+                        # Some HTTP MCP clients send the modern version and
+                        # routing headers but omit the matching per-request
+                        # metadata. Treat that as no advertised client features.
+                        if request_params is None:
+                            request_params = {}
+                        if not isinstance(request_params, dict) or (
+                            "_meta" in request_params and not isinstance(request_meta, dict)
+                        ):
+                            self._reply(400, {"error": "modern MCP request metadata is invalid"})
+                            return
+                        request_meta = dict(request_meta or {})
+                        request_meta.setdefault(
+                            "io.modelcontextprotocol/protocolVersion", http_version
+                        )
+                        request_meta.setdefault("io.modelcontextprotocol/clientCapabilities", {})
+                        request_params = {**request_params, "_meta": request_meta}
+                        request = {**request, "params": request_params}
+                        request_version = http_version
                     if request_version is not None or http_version is not None:
                         def header_mismatch(message: str) -> None:
                             self._reply(400, {

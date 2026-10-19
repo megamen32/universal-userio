@@ -711,6 +711,34 @@ def test_http_mcp_latest_protocol_uses_per_request_version_and_header(tmp_path) 
         server.server_close()
 
 
+def test_http_mcp_modern_version_header_fills_omitted_empty_client_metadata(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "mcp-header-compat.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        body = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "userio.channels.list", "arguments": {"channel": "telegram"}},
+        }).encode()
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/mcp", data=body, method="POST",
+            headers={
+                "Authorization": "Bearer test-token", "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call",
+                "Mcp-Name": "userio.channels.list",
+            },
+        )
+        with urlopen(request) as response:
+            payload = json.loads(response.read())
+        assert payload["result"]["resultType"] == "complete"
+        assert payload["result"]["structuredContent"]["ok"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_http_mcp_exclusions_apply_only_to_the_requesting_consumer(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     hermes_conversation_id, _ = service.receive(
