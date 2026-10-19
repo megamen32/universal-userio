@@ -71,7 +71,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.channels.read",
-        "Read one user-owned chat or message with bounded text.",
+        "Read one user-owned chat or message. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
             {
                 "channel": CHANNEL_SCHEMA,
@@ -80,13 +80,16 @@ TOOL_SPECS = (
                 "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
                 "history_limit": {"type": "integer", "minimum": 1, "maximum": 100},
                 "ignored_chats": IGNORED_CHATS_SCHEMA,
+                "include_images": {"type": "boolean", "default": True},
             }
         ),
     ),
     ToolSpec(
         "userio.channels.download",
-        "Download a file when its adapter supports it.",
-        schema({"file_ref": {"type": "string"}}, ["file_ref"]),
+        "Download a Telegram attachment as base64 or MCP content. Documents use Firecrawl AnyDoc; videos return up to four key frames and a transcript. Set include_images=false to omit image/frame bytes.",
+        schema({"file_ref": {"type": "string"},
+                "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
+                "include_images":{"type":"boolean","default":True}}, ["file_ref"]),
     ),
     ToolSpec(
         "userio.channels.send_draft",
@@ -359,6 +362,11 @@ MESSENGER_SPECS = (
                 'action':{'type':'string','enum':['reply','edit','react','sticker','file','typing']},
                 'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
+    ToolSpec('userio.messenger.telegram_admin.propose',
+        'Prepare one Telegram group or private broadcast-channel action for explicit approval. Never executes the Telegram change. Channel deletion requires the exact phrase DELETE CHANNEL <peer_id>; supergroup removal is a ban.',
+        schema({'account_ref':{'type':'string'},'operation':{'type':'string','enum':['group_create','group_invite','group_remove','channel_create','channel_delete']},
+                'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
+               ['account_ref','operation','payload','request_id'])),
     ToolSpec('userio.messenger.get',
         'Read the durable operation and receipt. Sending means UNKNOWN: never replay with a new request ID.',
         schema({'action_id':{'type':'string'}}, ['action_id'])),
@@ -441,6 +449,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.read": "read",

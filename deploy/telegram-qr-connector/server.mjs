@@ -20,10 +20,13 @@ import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./logi
 import { acknowledgeRead } from './read-receipt.mjs';
 import { readDialogFolders } from './dialog-folders.mjs';
 import { editOwnedTelegramText, TelegramEditRefused } from './message-edit.mjs';
+import { sendTelegramReply, TelegramReplyRefused } from './message-reply.mjs';
 import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
 import { logoutTelegramClient } from './account-disconnect.mjs';
+import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs";
+import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -66,6 +69,7 @@ const agentDeliverIgnoredChats = String(process.env.USERIO_AGENT_IGNORED_CHATS |
   .split(",").map((value) => value.trim()).filter(Boolean);
 const agentDeliverCallbackSecret = String(process.env.USERIO_AGENT_DELIVER_CALLBACK_HMAC_SECRET || "").trim();
 const agentDeliverReceiptPath = `${stateDir}/agent-deliver-callbacks.jsonl`;
+const telegramAdminJournal = new TelegramAdminJournal(`${stateDir}/admin-actions.jsonl`);
 const agentDeliverDebouncePath = `${stateDir}/agent-deliver-debounce.json`;
 const agentDeliverDebounce = new Map();
 const agentDeliverTimers = new Map();
@@ -481,16 +485,6 @@ function messageBody(message) {
   return "";
 }
 
-function entityLabel(entity) {
-  if (!entity) return "telegram";
-  return String(
-    entity.title
-    || [entity.firstName, entity.lastName].filter(Boolean).join(" ")
-    || entity.username
-    || String(entity.id),
-  );
-}
-
 async function envelope(chatKey, label, message, client, self, options) {
   let senderEntity = message.sender || null;
   const shouldTranscribe = !options || options.transcribeAudio !== false;
@@ -542,6 +536,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     ...mirrorMetadata(message, options && options.dialog),
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
+    ...(entityName(chatEntity) ? { sender_name: entityName(chatEntity) } : {}),
     body: normalized.body.slice(0, 8000),
     ...(attachments.length ? { attachments: attachments.map((attachment, idx) => ({ ...attachment, idx })) } : {}),
   };
@@ -600,6 +595,31 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
 
 async function ingestProviderState(slot, client, accountId, update) {
   const name = update.className;
+  if (name === "UpdateUserName") {
+    const live = liveSlots.get(slot);
+    if (live) {
+      try {
+        const user = await client.getEntity(update.userId);
+        const peerKey = String(await client.getPeerId(user, true));
+        const label = resolveDialogLabel(user, "");
+        for (const [chatKey, peer] of live.labelPeers.idPeers) {
+          if (chatKey !== peerKey || !peer || peer.className !== "User" || !label || label === peerKey) continue;
+          live.dialogLabels.set(chatKey, label);
+          live.labelPeers.labelPeers.set(label, user);
+        }
+        if (label && label !== peerKey) {
+          await postUserIO("/v1/contact-profiles", { account_id: accountId, profiles: [{
+            peer_id: peerKey, username: String(user.username || ""),
+            first_name: String(user.firstName || ""), last_name: String(user.lastName || ""),
+            phone: String(user.phone || ""),
+          }] });
+        }
+      } catch (error) {
+        console.warn(`telegram name update ${slot}:`, (error && error.message) || error);
+      }
+    }
+    return;
+  }
   const inbox = name === "UpdateReadHistoryInbox" || name === "UpdateReadChannelInbox";
   const outbox = name === "UpdateReadHistoryOutbox" || name === "UpdateReadChannelOutbox";
   if (inbox || outbox) {
@@ -686,8 +706,8 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
   let chats = 0;
   for (const dialog of dialogs) {
     try {
-      const label = entityLabel(dialog.entity);
       const chatKey = String(dialog.id);
+      const label = resolveDialogLabel(dialog.entity, dialogLabels.get(chatKey));
       dialogLabels.set(chatKey, label);
       if (labelPeers) {
         if (!labelPeers.idPeers.has(chatKey)) labelPeers.idPeers.set(chatKey, dialog.entity);
@@ -717,7 +737,8 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   if (!chatKey) return;
   let chatEntity = message.chat || null;
   if (!chatEntity && typeof message.getChat === "function") chatEntity = await message.getChat();
-  const label = dialogLabels.get(chatKey) || entityLabel(chatEntity) || "telegram";
+  const label = resolveDialogLabel(chatEntity, dialogLabels.get(chatKey));
+  dialogLabels.set(chatKey, label);
   const live = liveSlots.get(slot);
   if (live && chatEntity && label && label !== "telegram") {
     live.labelPeers.labelPeers.set(label, chatEntity);
@@ -767,7 +788,7 @@ async function syncAccount(slot) {
       const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
-      liveSlots.set(slot, { client, labelPeers, accountId });
+      liveSlots.set(slot, { client, labelPeers, accountId, dialogLabels });
       slots.set(slot, { ...(slots.get(slot) || {}), status: "connected", name: displayName, accountId });
       // Attach push ingestion before reconciliation. A slow historical media
       // item must not postpone delivery of genuinely new messages.
@@ -1210,6 +1231,34 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({error:String(error.message || error)}));
     }
   }
+  if ((url.pathname === "/admin/prepare" || url.pathname === "/admin/execute") && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "");
+      const item = [...liveSlots.values()].find((entry) => entry.accountId === accountId);
+      if (!item) throw new Error("telegram_account_not_connected");
+      const operation = String(payload.operation || "");
+      let result;
+      if (url.pathname === "/admin/prepare") {
+        const resolved = await prepareTelegramAdmin(item.client, Api, operation, payload.payload);
+        result = { ok: true, account_id: accountId, operation, resolved };
+      } else {
+        result = await executeTelegramAdmin(item.client, Api, telegramAdminJournal, {
+          accountId, operation, payload: payload.payload, requestId: payload.request_id,
+        });
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(result));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: String(error.message || "telegram_admin_failed") }));
+    }
+  }
   if (url.pathname === "/download" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
     if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
@@ -1249,7 +1298,18 @@ http.createServer(async (req, res) => {
         const chatId = String(payload.chat_id || "").trim();
         const wantAccount = String(payload.account_id || "").trim();
         const wantSlot = String(payload.slot || "").trim();
-        const text = String(payload.body || "").trim();
+        const rawText = String(payload.body || "");
+        const replyToId = String(payload.reply_to_id || "").trim();
+        const threadId = String(payload.thread_id || "").trim();
+        const expectedText = payload.expected_text;
+        const text = replyToId ? rawText : rawText.trim();
+        if ((replyToId || threadId || expectedText !== undefined) && (!replyToId || !wantAccount || !chatId || !/^[1-9][0-9]*$/.test(replyToId)
+            || Number(replyToId) > 0x7fffffff || threadId && (!/^[1-9][0-9]*$/.test(threadId)
+            || Number(threadId) > 0x7fffffff) || typeof expectedText !== "string")) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "account, exact chat, source message and source text are required for replies",
+            code: "invalid_reply_scope", submitted: false }));
+        }
         if ((!chat && !chatId) || !text) {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id) and body are required" }));
@@ -1267,8 +1327,20 @@ http.createServer(async (req, res) => {
         }
         const trySend = async (slot, item) => {
           const peers = item.labelPeers;
-          const peer = (chat && peers.labelPeers.get(chat)) || (chatId && peers.idPeers.get(chatId)) || null;
+          const peer = replyToId
+            ? peers.idPeers.get(chatId)
+            : (chat && peers.labelPeers.get(chat)) || (chatId && peers.idPeers.get(chatId)) || null;
           if (!peer || !item.client) return false;
+          if (replyToId) {
+            const sent = await sendTelegramReply({ client: item.client, peer, messageId: replyToId,
+              threadId, expectedText, text });
+            console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id: chatId,
+              message_id: sent.messageId, reply_to_id: sent.replyToId, thread_id: sent.threadId,
+              text: sent.text, date: sent.date, out: sent.out }));
+            return true;
+          }
           const sent = await item.client.sendMessage(peer, { message: text });
           console.log(`send ${slot}: "${chat || chatId}" msg ${sent && sent.id}`);
           res.writeHead(200, { "content-type": "application/json" });
@@ -1303,6 +1375,11 @@ http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: `no connected account knows chat "${chat || chatId}"`,
           code: "chat_not_known", submitted: false }));
       } catch (error) {
+        if (error instanceof TelegramReplyRefused || error?.submitted === false) {
+          res.writeHead(409, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: error.message || "Telegram reply refused before send",
+            code: error.code || "reply_refused", submitted: false }));
+        }
         console.error("send error:", (error && error.message) || error);
         res.writeHead(502, { "content-type": "application/json" });
         // An exception can arrive with a message already on the wire, so the

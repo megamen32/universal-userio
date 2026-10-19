@@ -31,7 +31,7 @@ _READ_MORE_MAX_NEW_MESSAGES = 150
 _READ_MORE_MAX_TOKEN_BUDGET = 12000
 _DEFAULT_INITIAL_CONTEXT_MESSAGES = 4
 _DEFAULT_TEXT_MODEL = "MiniMax-M2.7"
-_DEFAULT_IMAGE_MODEL = "MiniMax-M3"
+_DEFAULT_IMAGE_MODEL = "MiniMax-M3.1-Flash"
 _IMAGE_KINDS = {"image", "photo", "picture", "sticker"}
 _IMAGE_SUFFIXES = (".avif", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".webp")
 
@@ -229,6 +229,9 @@ class OpenAICompatibleDraftGenerator:
             "owner_messages_after_current, when present, are replies the owner already sent after "
             "the selected incoming message. Assess the current need for action using those replies; "
             "do not propose repeating an answer already sent. A reply alone is not proof of read status.\n"
+            "When image pixels are attached, describe the visible content briefly in Russian so the owner "
+            "can tell the image was received. Separate visible facts from guesses. If no pixels were "
+            "available, say so instead of guessing.\n"
             + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         )
         initial_content, vision_bytes, vision_images = self._vision_content_with_usage(

@@ -22,6 +22,7 @@ The HTTP and stdio surfaces share `mcp_catalog.MESSENGER_SPECS`.
 | `userio.messenger.media` | `account_ref`, `conversation_id`, `message_id`, optional `attachment_index`0–7 | Actual bounded image bytes or transcript/status. Unsupported media is explicit |
 | `userio.messenger.upload` | Exact account/conversation/source, filename/MIME/base64 bytes/SHA/request_id | Private bounded new-file staging, no provider send. See [new-file contract](contracts/messenger-upload-v1.md) |
 | `userio.messenger.propose` | `account_ref`, `conversation_id`, `source_message_id`, `action`, `payload`, `request_id`16–128 characters | Immutable action with `id`, `hash`, `created_at`, `status`, `envelope`, `receipt`. No provider mutation |
+| `userio.messenger.telegram_admin.propose` | Telegram `account_ref`, one of `group_create`, `group_invite`, `group_remove`, `channel_create`, `channel_delete`, exact payload, `request_id` | Read-only preflight and immutable action proposal. Does not change Telegram until the existing `approve` tool confirms this exact hash |
 | `userio.messenger.approve` | `action_id`, `expected_hash`, `confirm:true` | Execute exactly the human-approved action. Durable accepted receipt or explicit failure/unknown |
 | `userio.messenger.get` | `action_id` | Read the durable outcome; never generate a second intent to resolve `sending` |
 
@@ -36,6 +37,25 @@ immutable approval path; whitespace is invalid. MAX uses its native cancel
 command, not an empty emoji added to the message. Fresh MAX resolve includes
 `reaction_info` and `reaction_readback.status`; auxiliary read failure is
 explicitly unavailable and does not hide the message or imply zero reactions.
+
+Telegram administration is an additional `telegram_admin` right on an existing
+`scoped_messenger` account grant. Group/channel creation requires account-wide
+chat scope; invites, removals and channel deletion also require the exact target
+conversation to be inside that token's chat grant. A basic group is distinct
+from a supergroup (represented by Telegram as a megagroup channel) and a
+broadcast channel. `group_create` takes
+exact numeric Telegram user IDs; invite/remove require one existing UserIO
+conversation. Removing a member from a supergroup is a ban and requires
+`ban_on_supergroup:true`; UserIO never automatically unbans. Basic-group removal
+sets `revoke_history:false`. New broadcast channels are private by default.
+`channel_delete` requires `DELETE CHANNEL <peer_id>` in the proposal and the
+selected account must still be the channel creator at execution time. Leaving a
+channel is a separate Telegram operation and is not substituted for deletion.
+
+Creation and participant changes are durable-once. If Telegram's outcome or the
+HTTP response is uncertain, retrying the same exact approval only asks the
+connector for its saved result; a new intent is never generated. Group creation
+can be partial; any known `missing_invitees` remain visible in the receipt.
 MAX SavedMessages uses its actual peer`0`, not a guessed personal contact.
 
 Native sticker references use the received opaque attachment identity. In MAX,

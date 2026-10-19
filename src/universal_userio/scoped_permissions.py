@@ -11,11 +11,14 @@ def validate_grants(store, user_id, grants):
     owned = {a['id']: a for a in store.accounts(user_id=user_id)}
     result, seen = [], set()
     for grant in grants:
-        if not isinstance(grant, dict) or set(grant) != {'account_ref', 'access', 'chats'}:
+        if not isinstance(grant, dict) or set(grant) - {'account_ref', 'access', 'chats', 'telegram_admin'} or not {'account_ref', 'access', 'chats'} <= set(grant):
             raise ValueError('Неверный формат прав аккаунта.')
         ref, access, chats = grant['account_ref'], grant['access'], grant['chats']
+        telegram_admin = grant.get('telegram_admin', False)
         if not isinstance(ref, str) or ref in seen or ref not in owned or not owned[ref]['enabled']:
             raise ValueError('Аккаунт должен быть подключён к вашему UserIO и выбран один раз.')
+        if type(telegram_admin) is not bool or telegram_admin and owned[ref]['provider'] != 'telegram':
+            raise ValueError('Право управления группами и каналами доступно только Telegram-аккаунтам.')
         if access not in {'read_only', 'read_write'}:
             raise ValueError('Выберите чтение либо чтение и запись.')
         if chats is not None:
@@ -35,7 +38,8 @@ def validate_grants(store, user_id, grants):
                     raise ValueError('Права чата не могут превышать права аккаунта.')
                 chat_ids.add(cid)
         seen.add(ref)
-        result.append({'account_ref':ref, 'access':access, 'chats':chats})
+        result.append({'account_ref':ref, 'access':access, 'chats':chats,
+                       'telegram_admin':telegram_admin})
     return result
 
 
@@ -48,15 +52,61 @@ def grant_for(principal, account_ref, conversation_id=None):
     return None
 
 
+def _scoped_conversation(store, principal, source, *, chat_id=None, message_id=None):
+    if bool(chat_id) == bool(message_id):
+        raise ValueError('exact_chat_or_message_required')
+    if chat_id:
+        conversation = store.conversation(str(chat_id), user_id=principal.user_id)
+    else:
+        message = store.message(str(message_id), user_id=principal.user_id)
+        conversation = store.conversation(str(message['conversation_id']), user_id=principal.user_id) if message else None
+    if conversation is None:
+        raise KeyError('chat_not_found')
+    actual_source = str(conversation['source'])
+    source_matches = (not source or actual_source == source
+        or source == 'mail' and (actual_source in {'mail','email','gmail'} or actual_source.startswith(('gmail:','email:')))
+        or source == 'matrix' and actual_source.startswith('matrix:'))
+    if not source_matches:
+        raise KeyError('chat_not_found')
+    access = grant_for(principal, conversation['account_ref'], str(conversation['id']))
+    if access is None:
+        raise PermissionError('chat_or_account_outside_token_scope')
+    return conversation, access
+
+
 def enforce(store, principal, name, args):
     if principal.messenger_grants is None:
         return
     if name in {'tools/list','tools/call','userio.accounts.list'}:
         return
+    if name == 'userio.channels.list':
+        ref = args.get('account_ref')
+        if ref is not None and grant_for(principal, ref) is None:
+            raise PermissionError('chat_or_account_outside_token_scope')
+        return
+    if name == 'userio.channels.read':
+        _scoped_conversation(store, principal, args.get('channel'),
+                             chat_id=args.get('chat_id'), message_id=args.get('message_id'))
+        return
+    if name == 'userio.channels.download':
+        file_ref = args.get('file_ref')
+        channel, separator, message_id = str(file_ref or '').partition(':')
+        if not separator or not message_id:
+            raise ValueError('invalid_file_ref')
+        _scoped_conversation(store, principal, channel, message_id=message_id)
+        return
+    if name == 'userio.channels.send_draft':
+        conversation, access = _scoped_conversation(
+            store, principal, None, chat_id=args.get('chat_id'))
+        if access != 'read_write':
+            raise PermissionError('chat_read_only_token')
+        return
     if not name.startswith('userio.messenger.'):
         raise PermissionError('scoped_messenger_only')
     op = name.removeprefix('userio.messenger.')
     ref, cid = args.get('account_ref'), args.get('conversation_id')
+    admin = op == 'telegram_admin.propose'
+    admin_operation = args.get('operation', '') if admin else ''
     if op in {'get','approve'}:
         with store._lock:
             if not store._table_exists('messenger_actions'):
@@ -67,6 +117,25 @@ def enforce(store, principal, name, args):
             raise KeyError('action_not_found')
         envelope = json.loads(row['envelope'])
         ref, cid = envelope['account_ref'], envelope['conversation_id']
+        admin = envelope.get('action') == 'telegram_admin'
+        admin_operation = envelope.get('operation', '') if admin else ''
+    if admin:
+        grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
+        if grant is None:
+            raise PermissionError('chat_or_account_outside_token_scope')
+        if not grant.get('telegram_admin', False):
+            raise PermissionError('telegram_admin_permission_required')
+        if admin_operation in {'group_create', 'channel_create'}:
+            if grant['chats'] is not None:
+                raise PermissionError('telegram_admin_create_requires_account_scope')
+            cid = None
+        else:
+            if op == 'telegram_admin.propose':
+                payload = args.get('payload') if isinstance(args.get('payload'), dict) else {}
+                cid = payload.get('conversation_id')
+            if not cid or grant_for(principal, ref, cid) is None:
+                raise PermissionError('telegram_admin_chat_outside_token_scope')
+        return
     elif op == 'resolve':
         with store._lock:
             row = store._connection.execute('SELECT id FROM conversations WHERE user_id=? AND account_ref=? AND peer_id=?',
@@ -83,10 +152,121 @@ def enforce(store, principal, name, args):
         raise PermissionError('exact_chat_required')
 
 
+def _dispatch_scoped_channels(store, service, principal, name, arguments):
+    from .adapters import UnifiedChannels, _public_channel
+    from .mcp_catalog import TOOL_CAPABILITIES
+
+    required = TOOL_CAPABILITIES.get(name)
+    if required and not store.capability_enabled(required,user_id=principal.user_id):
+        raise PermissionError(f'{required}_capability_disabled')
+    channels = UnifiedChannels(store, service, principal.user_id)
+    channel = arguments.get('channel')
+    if name == 'userio.channels.list':
+        ignored = arguments.get('ignored_chats', [])
+        if not isinstance(ignored, list) or len(ignored) > 100 or any(not isinstance(x, str) for x in ignored):
+            raise ValueError('invalid_ignored_chats')
+        limit = arguments.get('limit', 100)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('limit_must_be_1_to_100')
+        query = str(arguments.get('search') or '').strip()
+        scoped = []
+        owned = {account['id']:account for account in store.accounts(user_id=principal.user_id)}
+        for grant in principal.messenger_grants:
+            if arguments.get('account_ref') and arguments['account_ref'] != grant['account_ref']:
+                continue
+            account = owned.get(grant['account_ref'])
+            if account is None or channel and account['provider'] != channel:
+                continue
+            if query:
+                from .search_surface import search_response
+                permitted = [c['conversation_id'] for c in grant['chats']] if grant['chats'] is not None else []
+                requested = arguments.get('conversation_ids') or []
+                if requested and permitted:
+                    permitted = [cid for cid in permitted if cid in requested]
+                    if not permitted:
+                        continue
+                elif requested and grant['chats'] is None:
+                    permitted = requested
+                result = search_response(store, query, {
+                    **arguments, 'account_ref':grant['account_ref'], 'conversation_ids':permitted,
+                }, user_id=principal.user_id, source=channel, ignored=ignored)
+                scoped.extend(result.get('results') or [])
+                continue
+            rows = store.conversations(source=channel, account_ref=grant['account_ref'],
+                                       limit=100, user_id=principal.user_id)
+            allowed = None if grant['chats'] is None else {c['conversation_id'] for c in grant['chats']}
+            for row in rows:
+                if row['id'] in ignored or allowed is not None and row['id'] not in allowed:
+                    continue
+                scoped.append({
+                    'id':row['id'], 'channel':_public_channel(str(row['source'])),
+                    'title':row['display_name'] or row['identity_id'] or row['sender'],
+                    'last_message_snippet':str(row['preview'] or '')[:500],
+                    'unread':int(row['unread_count']),
+                    '_sort_at':float(row.get('last_at') or 0),
+                })
+        if query:
+            scoped.sort(key=lambda row:float(row.get('score') or row.get('received_at') or 0),reverse=True)
+            return {'ok':True,'scope':arguments.get('scope') or 'conversation',
+                    'results':scoped[:limit],'limit':limit}
+        scoped.sort(key=lambda row:row.pop('_sort_at',0),reverse=True)
+        return {'ok':True,'chats':scoped[:limit]}
+
+    if name == 'userio.channels.read':
+        ignored = arguments.get('ignored_chats', [])
+        if not isinstance(ignored, list) or len(ignored) > 100 or any(not isinstance(x, str) for x in ignored):
+            raise ValueError('invalid_ignored_chats')
+        adapter = channels.adapter(channel)
+        if channel == 'telegram':
+            result = adapter.read(chat_id=arguments.get('chat_id'), message_id=arguments.get('message_id'),
+                before_id=arguments.get('before_id'), history_limit=arguments.get('history_limit',50))
+        else:
+            result = adapter.read(chat_id=arguments.get('chat_id'), message_id=arguments.get('message_id'))
+        record = result.get('chat') or result.get('message') or {}
+        if str(record.get('conversation_id') or record.get('id') or '') in ignored:
+            raise KeyError('chat_not_found')
+        from .mcp_surface import UserIOMcpSurface
+        return UserIOMcpSurface(store,service,principal)._include_read_media(
+            {'ok':True,**result},arguments=arguments,user_id=principal.user_id)
+
+    if name == 'userio.channels.download':
+        file_ref = str(arguments['file_ref'])
+        mode = arguments.get('mode','base64')
+        if mode == 'mcp_resource':
+            include_images = arguments.get('include_images',True)
+            if type(include_images) is not bool: raise ValueError('include_images_must_be_boolean')
+            channel_ref, separator, provider_ref = file_ref.partition(':')
+            if not separator or channel_ref != 'telegram':
+                raise ValueError('mcp_resource_mode_requires_telegram')
+            from .mcp_files import MAX_MCP_FILE_BYTES, mcp_attachment
+            adapter = channels.adapter('telegram')
+            bounded = getattr(adapter,'download_for_ai',None)
+            if not callable(bounded):
+                raise ValueError('bounded_telegram_download_unavailable')
+            file = bounded(file_ref=provider_ref,max_bytes=MAX_MCP_FILE_BYTES)
+            metadata, blocks = mcp_attachment(file,include_images=include_images)
+            return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
+        if mode != 'base64':
+            raise ValueError('invalid_download_mode')
+        file = channels.download(file_ref=file_ref)
+        import base64
+        return {'ok':True,'file':{'filename':file.filename,'content_type':file.content_type,
+            'encoding':'base64','data':base64.b64encode(file.data).decode('ascii')}}
+
+    if name == 'userio.channels.send_draft':
+        draft = channels.send(chat_id=arguments['chat_id'],text=arguments['text'],
+                              attachments=arguments.get('attachments'))
+        return {'ok':True,'draft':{'id':draft.id,'conversation_id':draft.conversation_id,
+            'body':draft.body,'status':draft.status,'approval_required':True,'sent':False}}
+    raise KeyError('unknown_scoped_channel_operation')
+
+
 def dispatch_scoped(store, service, principal, name, arguments):
     from .messenger import Messenger, dispatch
     enforce(store, principal, name, arguments)
     op = name.removeprefix('userio.messenger.')
+    if name.startswith('userio.channels.'):
+        return _dispatch_scoped_channels(store,service,principal,name,arguments)
     if op != 'events':
         result = dispatch(store,service,principal,name,arguments)
         if op == 'capabilities' and result.get('ok') and grant_for(principal, arguments.get('account_ref')) == 'read_only':

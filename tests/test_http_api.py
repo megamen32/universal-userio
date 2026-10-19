@@ -67,7 +67,7 @@ def test_context_preferences_http_are_authenticated_and_user_scoped(tmp_path) ->
         assert owner_payload["context"]["cache_channels"]["telegram"] is True
         assert owner_payload["context"]["cache_channels"]["gmail"] is False
         assert owner_payload["context"]["models"] == {
-            "text": "MiniMax-M2.7", "image": "MiniMax-M3",
+            "text": "MiniMax-M2.7", "image": "MiniMax-M3.1-Flash",
         }
         assert request("POST", other_token, {
             "message_count": 7, "max_message_count": 80,
@@ -86,7 +86,7 @@ def test_context_preferences_http_are_authenticated_and_user_scoped(tmp_path) ->
             "cache_conversation_kinds": {
                 "direct": True, "group": False, "channel": False, "unknown": False,
             },
-            "models": {"text": "MiniMax-M2.7", "image": "MiniMax-M3"},
+            "models": {"text": "MiniMax-M2.7", "image": "MiniMax-M3.1-Flash"},
         }})
         assert request("GET", "owner-token")[1]["context"]["message_count"] == 3
         assert request("POST", other_token, {
@@ -619,6 +619,93 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
         with urlopen(request) as response:
             result = json.loads(response.read())["result"]
         assert "userio.draft.approve_send" in [tool["name"] for tool in result["tools"]]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_http_mcp_latest_protocol_uses_per_request_version_and_header(tmp_path) -> None:
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "mcp-latest-http.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/mcp"
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "userio.channels.list", "arguments": {"channel": "telegram"},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1"},
+            },
+        },
+    }).encode()
+    headers = {
+        "Authorization": "Bearer test-token", "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream", "Mcp-Method": "tools/call",
+        "Mcp-Name": "userio.channels.list",
+        "Origin": url.rsplit("/mcp", 1)[0],
+    }
+    try:
+        valid = Request(url, data=body, method="POST", headers={**headers, "MCP-Protocol-Version": "2026-07-28"})
+        with urlopen(valid) as response:
+            raw = response.read().decode()
+            payload = json.loads(raw.split("data: ", 1)[1].split("\n", 1)[0]) if raw.startswith("event:") else json.loads(raw)
+            result = payload["result"]
+        assert result["resultType"] == "complete"
+        assert result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "universal-userio"
+
+        missing = Request(url, data=body, method="POST", headers=headers)
+        try:
+            urlopen(missing)
+        except HTTPError as error:
+            assert error.code == 400
+            assert "MCP-Protocol-Version" in json.loads(error.read())["error"]["message"]
+        else:
+            raise AssertionError("modern MCP request without version header was accepted")
+
+        mismatch = Request(url, data=body, method="POST", headers={**headers, "MCP-Protocol-Version": "2025-11-25"})
+        try:
+            urlopen(mismatch)
+        except HTTPError as error:
+            assert error.code == 400
+            assert json.loads(error.read())["error"]["code"] == -32020
+        else:
+            raise AssertionError("mismatched MCP protocol header was accepted")
+
+        wrong_name = Request(
+            url, data=body, method="POST",
+            headers={**headers, "MCP-Protocol-Version": "2026-07-28", "Mcp-Name": "other.tool"},
+        )
+        try:
+            urlopen(wrong_name)
+        except HTTPError as error:
+            assert error.code == 400
+            assert json.loads(error.read())["error"]["code"] == -32020
+        else:
+            raise AssertionError("mismatched MCP name header was accepted")
+
+        foreign_origin = Request(
+            url, data=body, method="POST",
+            headers={**headers, "MCP-Protocol-Version": "2026-07-28", "Origin": "https://attacker.example"},
+        )
+        try:
+            urlopen(foreign_origin)
+        except HTTPError as error:
+            assert error.code == 403
+        else:
+            raise AssertionError("foreign Origin was accepted by MCP endpoint")
+
+        malformed_origin = Request(
+            url, data=body, method="POST",
+            headers={**headers, "MCP-Protocol-Version": "2026-07-28", "Origin": "https://[invalid"},
+        )
+        try:
+            urlopen(malformed_origin)
+        except HTTPError as error:
+            assert error.code == 403
+        else:
+            raise AssertionError("malformed Origin was accepted by MCP endpoint")
     finally:
         server.shutdown()
         server.server_close()

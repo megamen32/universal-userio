@@ -55,8 +55,8 @@ def _context_preferences(service: UserIOService, user_id: str) -> dict[str, obje
     settings["models"] = {
         "text": os.environ.get("USERIO_AI_MODEL", "MiniMax-M2.7").strip()
         or "MiniMax-M2.7",
-        "image": os.environ.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3").strip()
-        or "MiniMax-M3",
+        "image": os.environ.get("USERIO_AI_IMAGE_MODEL", "MiniMax-M3.1-Flash").strip()
+        or "MiniMax-M3.1-Flash",
     }
     return settings
 
@@ -186,6 +186,7 @@ def handler(
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -246,6 +247,25 @@ def handler(
                 scheme = "https" if self.headers.get("Forwarded", "").startswith("proto=https") else "http"
             return f"{scheme}://{self.headers.get('Host', 'localhost')}"
 
+        def _mcp_origin_allowed(self) -> bool:
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True
+            try:
+                parsed = urlparse(origin)
+                expected = urlparse(self._base_url())
+            except ValueError:
+                return False
+            return bool(
+                parsed.scheme in {"http", "https"}
+                and parsed.netloc
+                and parsed.netloc.lower() == expected.netloc.lower()
+                and parsed.scheme == expected.scheme
+                and not parsed.username and not parsed.password
+                and parsed.path in {"", "/"} and not parsed.params
+                and not parsed.query and not parsed.fragment
+            )
+
         def _cookie_principal(self, name: str) -> UserPrincipal | None:
             cookie = SimpleCookie()
             try:
@@ -298,6 +318,9 @@ def handler(
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path == "/mcp" and not self._mcp_origin_allowed():
+                self._reply(403, {"error": "origin_not_allowed"})
+                return
             restricted = self._principal()
             if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
                 self._reply(403, {'error': 'meeting_recording_scope_only'})
@@ -413,7 +436,50 @@ def handler(
                         self.close_connection=True
                         return
                     request = self._json()
+                    request_params = request.get("params") if isinstance(request, dict) else None
+                    request_meta = request_params.get("_meta") if isinstance(request_params, dict) else None
+                    request_version = (
+                        request_meta.get("io.modelcontextprotocol/protocolVersion")
+                        if isinstance(request_meta, dict) else None
+                    )
+                    http_version = self.headers.get("MCP-Protocol-Version")
+                    if request_version is not None or http_version is not None:
+                        def header_mismatch(message: str) -> None:
+                            self._reply(400, {
+                                "jsonrpc": "2.0", "id": request.get("id"),
+                                "error": {"code": -32020, "message": message},
+                            })
+
+                        if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                            self._reply(400, {"error": "modern MCP requires Content-Type: application/json"})
+                            return
+                        if not isinstance(request_version, str) or not request_version:
+                            header_mismatch("modern MCP requires per-request protocolVersion metadata")
+                            return
+                        if not http_version:
+                            header_mismatch("MCP-Protocol-Version header is required")
+                            return
+                        if http_version != request_version:
+                            header_mismatch("MCP-Protocol-Version header does not match request metadata")
+                            return
+                        if self.headers.get("Mcp-Method") != request.get("method"):
+                            header_mismatch("Mcp-Method header is missing or does not match request method")
+                            return
+                        expected_name = None
+                        if request.get("method") == "tools/call" and isinstance(request_params, dict):
+                            expected_name = request_params.get("name")
+                        elif request.get("method") == "resources/read" and isinstance(request_params, dict):
+                            expected_name = request_params.get("uri")
+                        if expected_name is not None and self.headers.get("Mcp-Name") != expected_name:
+                            header_mismatch("Mcp-Name header is missing or does not match request name")
+                            return
                     response = json_rpc_response(surface, request, principal=principal, subscription_hub=subscriptions)
+                    if isinstance(response, dict) and response.get("error", {}).get("code") == -32022 and http_version:
+                        self._reply(400, response)
+                        return
+                    if isinstance(response, dict) and response.get("error", {}).get("code") == -32601 and http_version:
+                        self._reply(404, response)
+                        return
                     if response is None:
                         self.send_response(202)
                         self.send_header("Content-Length", "0")
@@ -1394,6 +1460,12 @@ def handler(
                     self._oauth_error(error)
                 return
             if requested_path == "/mcp":
+                if not self._mcp_origin_allowed():
+                    self._reply(403, {"error": "origin_not_allowed"})
+                    return
+                if self.headers.get("MCP-Protocol-Version") == "2026-07-28":
+                    self._reply(405, {"error": "GET is not supported by MCP 2026-07-28"})
+                    return
                 principal = self._principal()
                 if principal is None:
                     self._mcp_unauthorized()
@@ -1405,6 +1477,7 @@ def handler(
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
+                self.send_header("X-Accel-Buffering", "no")
                 self.end_headers()
                 ready = {"jsonrpc": "2.0", "method": "userio/ready", "params": {"endpoint": "/mcp", "username": principal.username}}
                 self.wfile.write(sse_message(ready)); self.wfile.flush()

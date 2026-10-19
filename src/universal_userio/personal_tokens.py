@@ -23,11 +23,12 @@ class PersonalTokens:
                 "WHERE user_id=? AND kind='personal' AND name<>'' ORDER BY created_at DESC",
                 (user_id,),
             ).fetchall()
-        return [dict(row) | {'grants': json.loads(row['account_refs'] or '[]') if row['scope']=='scoped_messenger' else None} for row in rows]
+        return [dict(row) | {'grants': json.loads(row['account_refs'] or '[]') if row['scope']=='scoped_messenger' else None,
+            'account_refs':json.loads(row['account_refs'] or '[]') if row['scope'] in {'messenger_actions','telegram_admin'} else None} for row in rows]
 
     def create(self, user_id: str, name: str, *, scope: str = "full_access", account_refs=None, grants=None) -> dict:
         if not isinstance(scope, str) or scope not in {"full_access", "read_only", "messenger_actions", "meeting_recording", "scoped_messenger"}:
-            raise ValueError("scope must be full_access, read_only, messenger_actions or meeting_recording")
+            raise ValueError("unsupported token scope")
         if scope == 'scoped_messenger':
             from .scoped_permissions import validate_grants
             if account_refs is not None:

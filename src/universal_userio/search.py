@@ -162,7 +162,10 @@ MESSAGE_SELECT = '''SELECT d.id AS document_id,c.id AS conversation_id,d.message
       m.message_id,m.body,m.received_at,c.source,c.sender,c.account_ref,c.peer_id,
       c.conversation_kind,m.direction,m.provider_thread_id,m.provider_reply_to,'' AS sender_name,
       COALESCE(p.username,'') AS peer_username,
-      COALESCE(n.name,'') AS display_name
+      COALESCE(NULLIF((SELECT name FROM contact_names x WHERE x.user_id=c.user_id
+        AND x.source=c.source AND x.sender=c.sender AND x.is_explicit=1),''),
+        NULLIF(trim(COALESCE(p.first_name,'')||' '||COALESCE(p.last_name,'')),''),
+        NULLIF('@'||p.username,'@'),NULLIF(p.phone,''),NULLIF(n.name,''),'') AS display_name
     FROM search_documents d JOIN conversations c ON c.id=d.conversation_id AND c.user_id=d.user_id
     JOIN messages m ON m.rowid=d.message_rowid AND m.user_id=d.user_id
     LEFT JOIN search_profiles p ON p.user_id=c.user_id AND p.conversation_id=c.id
@@ -577,10 +580,15 @@ def search_conversations(store: Any, query: str, *, source: str|None=None, accou
     if account_ref: where.append('c.account_ref=?'); args.append(account_ref)
     base='''SELECT d.*,c.source,c.sender,c.identity_id,c.account_ref,c.updated_at,
       m.message_id,m.body,m.received_at,
-      (SELECT name FROM contact_names n WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=
-        CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END) AS display_name
+      COALESCE(NULLIF((SELECT name FROM contact_names x WHERE x.user_id=c.user_id
+        AND x.source=c.source AND x.sender=c.sender AND x.is_explicit=1),''),
+        NULLIF(trim(COALESCE(p.first_name,'')||' '||COALESCE(p.last_name,'')),''),
+        NULLIF('@'||p.username,'@'),NULLIF(p.phone,''),
+        (SELECT name FROM contact_names n WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=
+        CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END)) AS display_name
       FROM search_documents d JOIN conversations c ON c.id=d.conversation_id AND c.user_id=d.user_id
-      LEFT JOIN messages m ON m.rowid=d.message_rowid'''
+      LEFT JOIN messages m ON m.rowid=d.message_rowid
+      LEFT JOIN search_profiles p ON p.user_id=c.user_id AND p.conversation_id=c.id'''
     quoted=lambda t:'"'+t.replace('"','""')+'"'
     indexed=[t for t in tokens if len(t)>=3]
     exact_clause=('d.id IN (SELECT rowid FROM search_fts WHERE search_fts MATCH ?)' if indexed else '1=1')

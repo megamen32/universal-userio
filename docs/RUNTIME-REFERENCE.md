@@ -2,7 +2,7 @@
 
 Universal UserIO is the canonical messaging runtime for human communications.
 It owns users, accounts, conversations, messages, attachments, source cursors,
-deduplication, per-user policy, AI drafts, approval and MCP 2.0 subscriptions.
+deduplication, per-user policy, AI drafts, approval and MCP `2026-07-28`.
 Provider libraries/sidecars own provider sessions and transport details.
 NoticePlace is intentionally separate and is reserved for system/agent alerts.
 
@@ -387,7 +387,7 @@ selected production runtime. UserIO forms recent context, controls bounded
 `read_more_context`, owns summary caching and stores exact drafts/results.
 
 Text uses the configured model (`MiniMax-M2.7` in the current deployment);
-account-scoped hydrated images use the configured image model (`MiniMax-M3`).
+account-scoped hydrated images use the configured image model (`MiniMax-M3.1-Flash`).
 The model receives conversation content, not provider/outbox credentials or
 browser-session data. The separate deep-analysis worker owns its native agent
 session and reports results through the existing job API.

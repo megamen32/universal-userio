@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
+import json
 from io import StringIO
 import pytest
 
-from universal_userio.contracts import InboxMessage
+from universal_userio.contracts import ChannelFile, InboxMessage
+from universal_userio.adapters import TelegramChannelAdapter
 from universal_userio.mcp_http import McpHttpEndpoint
 from universal_userio.mcp_surface import UserIOMcpSurface
 from universal_userio.mcp_transport import StdioJsonRpcTransport
+from universal_userio.mcp_transport import json_rpc_response
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
@@ -40,11 +44,102 @@ def test_channels_list_honors_conversation_id_scope(tmp_path) -> None:
     assert [chat["id"] for chat in result["chats"]] == [selected_id]
 
 
+def test_mcp_read_includes_image_content_by_default_and_reports_audio_status(tmp_path, monkeypatch):
+    store = SQLiteUserIOStore(tmp_path / "media-read.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(InboxMessage(
+        "telegram", "tg:photo-1", "Alice", "Посмотри сюда", 1.0,
+        attachments=(
+            {"kind": "photo", "content_type": "image/png", "filename": "photo.png", "idx": 0},
+            {"kind": "voice", "content_type": "audio/ogg", "filename": "voice.ogg",
+             "idx": 1, "transcription_status": "not_requested", "transcript": ""},
+        ),
+    ), route_id="telegram")
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", lambda self, **_kwargs:
+                        ChannelFile("photo.png", "image/png", b"\x89PNG\r\n\x1a\nfixture"))
+    surface = UserIOMcpSurface(store, service)
+
+    response = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "userio.channels.read", "arguments": {
+            "channel": "telegram", "chat_id": conversation_id,
+        }, "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            "io.modelcontextprotocol/clientInfo": {"name": "test", "version": "1"},
+        }},
+    })
+
+    result = response["result"]
+    assert result["resultType"] == "complete"
+    image = next(block for block in result["content"] if block["type"] == "image")
+    assert not any(block["type"] == "audio" for block in result["content"])
+    assert image["data"] == base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode()
+    assert image["mimeType"] == "image/png"
+    delivery = result["structuredContent"]["media_delivery"]
+    photo=next(item for item in delivery if item["kind"] == "photo")
+    assert photo["image_included"] is True
+    assert photo["file_ref"].startswith("telegram:")
+    voice_status = next(item for item in delivery if item["kind"] == "voice")
+    assert voice_status["transcription_status"] == "not_requested"
+    assert voice_status["delivery_note"] == "Аудио не отправлено модели; транскрипции нет."
+
+
+def test_mcp_read_can_opt_out_of_image_bytes_without_hiding_media_status(tmp_path, monkeypatch):
+    store = SQLiteUserIOStore(tmp_path / "media-opt-out.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    conversation_id, _ = service.receive(InboxMessage(
+        "telegram", "tg:photo-2", "Alice", "Что на фото?", 1.0,
+        attachments=({"kind": "photo", "content_type": "image/jpeg", "filename": "photo.jpg", "idx": 0},),
+    ), route_id="telegram")
+    calls = []
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", lambda self, **kwargs:
+                        calls.append(kwargs) or ChannelFile("photo.jpg", "image/jpeg", b"\xff\xd8\xfffixture"))
+    surface = UserIOMcpSurface(store, service)
+
+    response = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "userio.channels.read", "arguments": {
+            "channel": "telegram", "chat_id": conversation_id, "include_images": False,
+        }},
+    })
+
+    result = response["result"]
+    assert not any(block["type"] == "image" for block in result["content"])
+    assert calls == []
+    assert result["structuredContent"]["media_delivery"][0]["image_included"] is False
+    assert result["structuredContent"]["media_delivery"][0]["opted_out"] is True
+
+
+def test_telegram_download_can_open_document_as_mcp_resource(tmp_path,monkeypatch):
+    store=SQLiteUserIOStore(tmp_path/"mcp-document.sqlite3")
+    service=UserIOService(store,Generator(),Outbox())
+    monkeypatch.setattr(TelegramChannelAdapter,"download_for_ai",lambda self,**kwargs:
+        ChannelFile("contract.txt","text/plain",b"Payment is due on Friday."))
+    surface=UserIOMcpSurface(store,service)
+    response=json_rpc_response(surface,{
+        "jsonrpc":"2.0","id":4,"method":"tools/call",
+        "params":{"name":"userio.channels.download","arguments":{
+            "file_ref":"telegram:tg:document-4","mode":"mcp_resource"},"_meta":{
+            "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities":{},
+            "io.modelcontextprotocol/clientInfo":{"name":"test","version":"1"}}}})
+    result=response["result"]
+    assert result["resultType"]=="complete"
+    assert "Payment is due on Friday." in next(block["text"] for block in result["content"] if block["type"]=="text")
+    resource=next(block["resource"] for block in result["content"] if block["type"]=="resource")
+    assert resource["mimeType"]=="text/plain"
+    assert base64.b64decode(resource["blob"])==b"Payment is due on Friday."
+    assert result["structuredContent"]["file"]["delivery"]=="embedded_resource"
+
+
 def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
     tools = surface.dispatch("tools/list", {}, principal=store.owner())["tools"]
     description = next(item["description"] for item in tools if item["name"] == "userio.channels.list")
+    read_spec = next(item for item in tools if item["name"] == "userio.channels.read")
+    download_spec = next(item for item in tools if item["name"] == "userio.channels.download")
     from universal_userio.mcp_catalog import TOOL_SPECS as MODULAR_TOOL_SPECS
     modular_description = next(item.description for item in MODULAR_TOOL_SPECS if item.name == "userio.channels.list")
 
@@ -52,6 +147,9 @@ def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(t
     assert "top-level" in description
     assert "structuredContent.chats" in modular_description
     assert "top-level" in modular_description
+    assert read_spec["inputSchema"]["properties"]["include_images"]["default"] is True
+    assert "include_images=false" in read_spec["description"]
+    assert download_spec["inputSchema"]["properties"]["mode"]["enum"]==["base64","mcp_resource"]
 
 
 @pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])
@@ -252,7 +350,7 @@ def test_mcp_tool_call_uses_standard_content_result(tmp_path) -> None:
     assert result["structuredContent"] == {"ok": True, "chats": []}
 
 
-def test_mcp2_negotiates_modern_protocol_and_exposes_resources(tmp_path) -> None:
+def test_mcp_initialize_does_not_claim_support_for_the_modern_protocol(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
     conversation_id, _ = service.receive(
@@ -265,7 +363,7 @@ def test_mcp2_negotiates_modern_protocol_and_exposes_resources(tmp_path) -> None
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2026-07-28", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
     })
-    assert initialized["result"]["protocolVersion"] == "2026-07-28"
+    assert initialized["result"]["protocolVersion"] == "2024-11-05"
     assert "resources" in initialized["result"]["capabilities"]
 
     resources = json_rpc_response(surface, {"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
@@ -281,6 +379,76 @@ def test_mcp2_negotiates_modern_protocol_and_exposes_resources(tmp_path) -> None
     assert payload["conversation"]["messages"][0]["body"] == "modern hello"
 
 
+def _modern_mcp_request(request_id, method, params=None):
+    params = dict(params or {})
+    params["_meta"] = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {"name": "test-client", "version": "1"},
+    }
+    return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+
+
+def test_mcp_latest_discovery_and_stateless_tool_calls(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "mcp-latest.sqlite3")
+    service = UserIOService(store, Generator(), Outbox())
+    surface = UserIOMcpSurface(store, service)
+
+    discovered = json_rpc_response(surface, _modern_mcp_request(1, "server/discover"))
+    assert discovered["result"]["supportedVersions"] == ["2026-07-28"]
+    assert discovered["result"]["resultType"] == "complete"
+    assert discovered["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"] == "universal-userio"
+    assert "subscribe" not in discovered["result"]["capabilities"].get("resources", {})
+
+    listed = json_rpc_response(surface, _modern_mcp_request(2, "tools/list"))
+    assert listed["result"]["resultType"] == "complete"
+    assert listed["result"]["tools"]
+
+    called = json_rpc_response(surface, _modern_mcp_request(3, "tools/call", {
+        "name": "userio.channels.list", "arguments": {"channel": "telegram"},
+    }))
+    assert called["result"]["resultType"] == "complete"
+    assert any(block["type"] == "text" for block in called["result"]["content"])
+
+
+def test_mcp_latest_requires_metadata_and_rejects_unsupported_version(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "mcp-latest-errors.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+
+    missing = json_rpc_response(surface, {
+        "jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {},
+    })
+    assert missing["error"]["code"] == -32600
+
+    unsupported = _modern_mcp_request(2, "tools/list")
+    unsupported["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = "1900-01-01"
+    error = json_rpc_response(surface, unsupported)
+    assert error["error"]["code"] == -32022
+    assert error["error"]["data"] == {
+        "supported": ["2026-07-28"], "requested": "1900-01-01",
+    }
+    assert json_rpc_response(surface, _modern_mcp_request(3, "initialize"))["error"]["code"] == -32601
+    assert json_rpc_response(surface, _modern_mcp_request(4, "ping"))["error"]["code"] == -32601
+
+
+def test_stdio_mcp_latest_serves_discovery_and_tool_call(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "mcp-latest-stdio.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+    requests = [
+        _modern_mcp_request(1, "server/discover"),
+        _modern_mcp_request(2, "tools/call", {
+            "name": "userio.channels.list", "arguments": {"channel": "telegram"},
+        }),
+    ]
+    source = StringIO("".join(json.dumps(item) + "\n" for item in requests))
+    sink = StringIO()
+
+    StdioJsonRpcTransport(surface, source, sink).serve()
+
+    results = [json.loads(line)["result"] for line in sink.getvalue().splitlines()]
+    assert results[0]["supportedVersions"] == ["2026-07-28"]
+    assert results[1]["resultType"] == "complete"
+    assert results[1]["structuredContent"]["chats"] == []
 def test_mcp2_resource_subscription_receives_update(tmp_path) -> None:
     from universal_userio.mcp_transport import ResourceSubscriptionHub, json_rpc_response
     from universal_userio.contracts import UserPrincipal

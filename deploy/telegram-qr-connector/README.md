@@ -116,6 +116,18 @@ separate; this option does not silently turn an automatic “all groups” filte
 into a UserIO allow-all policy. Missing known chats can then use the existing
 exact-account `/reconcile` history route; historical ingestion remains silent.
 
+## Approved Telegram administration
+
+The authenticated `/admin/prepare` route resolves exact user/peer IDs and
+checks current group/channel type and creator rights without mutating Telegram.
+`/admin/execute` is called only by UserIO after the immutable proposal hash is
+explicitly approved. Its fsynced `admin-actions.jsonl` journal is keyed by the
+UserIO action ID: a stored complete/partial result is returned again, while a
+previous `sending`/unknown result is never submitted a second time. Group
+membership changes use the basic-group methods or supergroup channel methods
+according to the live Telegram entity; supergroup removal is a ban. Channel
+deletion checks current creator ownership again immediately before deletion.
+
 
 ## Personal browser enrollment
 

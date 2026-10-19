@@ -175,14 +175,14 @@ def test_native_reply_sees_sticker_pixels_and_not_provider_url(tmp_path):
         service.propose_from_conversation(cid,limit=3)
         assert len(calls)==1 and len(requests)==1
         for request in requests:
-            assert request['model']=='MiniMax-M3'
+            assert request['model']=='MiniMax-M3.1-Flash'
             assert 'Write as the owner' in json.dumps(request['messages'][0])
             text='\n'.join(part['text'] for entry in request['messages']
                            if isinstance(entry['content'],list)
                            for part in entry['content'] if part.get('type')=='text')
             assert 'Image provenance:' in text and '"context_role":"latest_message"' in text
             assert '"image_available":true' in text
-        assert requests[0]['model']=='MiniMax-M3'
+        assert requests[0]['model']=='MiniMax-M3.1-Flash'
         wire=json.dumps(requests[0],ensure_ascii=False)
         assert 'data:image/png;base64,' in wire
         assert '"kind": "sticker"' in wire or '\\"kind\\":\\"sticker\\"' in wire
@@ -208,7 +208,7 @@ def test_native_read_more_switches_to_m3_before_sending_new_image():
         )
         assert result == TRIAGE
         assert anchors == ["rowid:7"]
-        assert [request["model"] for request in requests] == ["MiniMax-M2.7", "MiniMax-M3"]
+        assert [request["model"] for request in requests] == ["MiniMax-M2.7", "MiniMax-M3.1-Flash"]
         assert "data:image/png;base64," in json.dumps(requests[1])
         assert "SECRET_SENTINEL" not in json.dumps(requests)
         assert generator.last_native_run["read_calls"] == 1
@@ -238,7 +238,7 @@ def test_native_summary_uses_exact_bounded_schema_and_image_model():
         system = next(m["content"] for m in requests[0]["messages"] if m["role"] == "system")
         assert "Update the cached factual conversation summary" in system
         assert '"summary"' in system
-        assert requests[0]["model"] == "MiniMax-M3"
+        assert requests[0]["model"] == "MiniMax-M3.1-Flash"
         assert "data:image/gif;base64," in json.dumps(requests[0])
         assert "Договорились сделать макет." in json.dumps(requests[0], ensure_ascii=False)
 
