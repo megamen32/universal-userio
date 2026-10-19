@@ -1,3 +1,9 @@
+import json
+import threading
+from urllib.request import Request, urlopen
+from http.server import ThreadingHTTPServer
+
+from universal_userio.http_api import handler
 from universal_userio.contracts import InboxMessage
 from universal_userio.adapters import StoredChannelAdapter
 from universal_userio.search import initialize_search, save_profile
@@ -79,3 +85,31 @@ def test_saved_messages_get_a_friendly_title_and_channel_list_uses_it(tmp_path):
     rows = TelegramList(store, service, store.default_user_id).list()
     assert rows[0]["title"] == "Избранное"
     store.close()
+
+
+def test_conversation_http_list_exposes_the_synced_name_to_the_web_client(tmp_path):
+    store = SQLiteUserIOStore(tmp_path / "http-names.sqlite3")
+    service = UserIOService(store, object(), object())
+    account = "telegram:8810909089"
+    store.register_account(account_id=account, provider="telegram", display_name="Secretary",
+                           can_read=True, can_reply=True, credential_ref="fixture")
+    cid = _conversation(store, service, account=account, peer="900000111", sender="900000111")
+    initialize_search(store)
+    save_profile(store, store.default_user_id, cid, {"first_name": "Alice", "last_name": "Example"})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = Request(
+            f"http://127.0.0.1:{server.server_port}/v1/conversations?source=telegram&account_ref={account}",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        with urlopen(request) as response:
+            rows = json.loads(response.read())["conversations"]
+        assert rows[0]["id"] == cid
+        assert rows[0]["display_name"] == "Alice Example"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        store.close()
