@@ -56,8 +56,10 @@ def json_rpc_response(
         return _error(request_id, -32602, "Invalid params")
     try:
         if method == "initialize":
-            requested = str(params.get("protocolVersion") or "")
-            protocol = "2026-07-28" if requested == "2026-07-28" else "2024-11-05"
+            # This transport implements the legacy initialize/initialized era.
+            # The 2026-07-28 revision removes this handshake and uses
+            # server/discover plus per-request _meta, so never claim it here.
+            protocol = "2024-11-05"
             can_read = principal is None or surface._store.capability_enabled("read", user_id=principal.user_id)
             can_subscribe = principal is None or (can_read and surface._store.capability_enabled("subscribe", user_id=principal.user_id))
             result = {

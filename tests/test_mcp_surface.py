@@ -319,7 +319,7 @@ def test_mcp_tool_call_uses_standard_content_result(tmp_path) -> None:
     assert result["structuredContent"] == {"ok": True, "chats": []}
 
 
-def test_mcp2_negotiates_modern_protocol_and_exposes_resources(tmp_path) -> None:
+def test_mcp_initialize_does_not_claim_support_for_the_modern_protocol(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
     conversation_id, _ = service.receive(
@@ -332,7 +332,7 @@ def test_mcp2_negotiates_modern_protocol_and_exposes_resources(tmp_path) -> None
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2026-07-28", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}},
     })
-    assert initialized["result"]["protocolVersion"] == "2026-07-28"
+    assert initialized["result"]["protocolVersion"] == "2024-11-05"
     assert "resources" in initialized["result"]["capabilities"]
 
     resources = json_rpc_response(surface, {"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
