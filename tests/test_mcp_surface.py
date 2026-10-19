@@ -77,7 +77,9 @@ def test_mcp_read_includes_image_content_by_default_and_reports_audio_status(tmp
     assert image["data"] == base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode()
     assert image["mimeType"] == "image/png"
     delivery = result["structuredContent"]["media_delivery"]
-    assert next(item for item in delivery if item["kind"] == "photo")["image_included"] is True
+    photo=next(item for item in delivery if item["kind"] == "photo")
+    assert photo["image_included"] is True
+    assert photo["file_ref"].startswith("telegram:")
     voice_status = next(item for item in delivery if item["kind"] == "voice")
     assert voice_status["transcription_status"] == "not_requested"
     assert voice_status["delivery_note"] == "Аудио не отправлено модели; транскрипции нет."

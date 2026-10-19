@@ -54,8 +54,9 @@ python -m universal_userio
 
 При `userio.channels.read` MCP возвращает вложенные изображения как стандартные image content blocks по умолчанию; передайте `include_images: false`, чтобы отказаться от байтов изображения. Для голосовых `media_delivery` показывает состояние распознавания и наличие транскрипции в тексте. Сырые голосовые байты этим инструментом модели не передаются.
 
-Чтобы секретарь прочитал небольшой Telegram-документ, передайте точный `file_ref`
-в `userio.channels.download` с `mode: "mcp_resource"`. MCP добавит вложенный файл
+Чтобы секретарь прочитал небольшой Telegram-документ, возьмите `file_ref` из
+`media_delivery` ответа `userio.channels.read` и передайте его в
+`userio.channels.download` с `mode: "mcp_resource"`. MCP добавит вложенный файл
 как стандартный resource content block; TXT/Markdown/CSV и DOCX/ODT дополнительно
 возвращают извлечённый текст. PDF, DOCX и другие разрешённые файлы ограничены 4 МиБ.
 Для обычной выгрузки base64 оставьте `mode: "base64"` (значение по умолчанию).

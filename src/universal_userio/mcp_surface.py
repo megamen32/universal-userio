@@ -342,6 +342,10 @@ class UserIOMcpSurface:
                     "attachment_idx": int(attachment.get("idx") or 0),
                     "kind": kind or ("image" if is_image else "audio" if is_audio else "file"),
                 }
+                if message_id and adapter_name:
+                    item["file_ref"]=f"{adapter_name}:{message_id}"
+                if message_id and adapter_name:
+                    item["file_ref"]=f"{adapter_name}:{message_id}"
                 if is_image:
                     item["image_included"] = False
                     if not include_images:
