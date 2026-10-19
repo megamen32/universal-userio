@@ -25,12 +25,19 @@ class TelegramMirrorProvider:
         operations={'history'}
         if callable(getattr(outbox,'react',None)): operations.add('react')
         if callable(getattr(outbox,'edit_message',None)): operations.add('edit')
-        if callable(getattr(outbox,'reply_message',None)): operations.add('reply')
+        supports_reply=getattr(outbox,'supports_reply',None)
+        if callable(getattr(outbox,'reply_message',None)) or (callable(supports_reply) and supports_reply(account_ref)):
+            operations.add('reply')
         self.operations=frozenset(operations)
 
     def supports_action(self, action, conversation):
-        if action!='edit': return True
         outbox=getattr(self.service,'telegram_outbox',None)
+        if action=='reply':
+            supports=getattr(outbox,'supports_reply',None)
+            if callable(supports):
+                return supports(self.account_ref,str(conversation.get('peer_id') or ''))
+            return callable(getattr(outbox,'reply_message',None))
+        if action!='edit': return True
         supports=getattr(outbox,'supports_edit',None)
         if callable(supports):
             return supports(self.account_ref,str(conversation.get('peer_id') or ''))

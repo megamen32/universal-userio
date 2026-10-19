@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import pytest
 
 from universal_userio.contracts import DeliveryNotSubmittedError, InboxMessage
+from universal_userio.messenger import Messenger
+from universal_userio.messenger_telegram_mirror import TelegramMirrorProvider
 from universal_userio.relay_account_bridge import RelayAccountBridge, DOMAIN, canonical_approval
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
@@ -119,6 +121,38 @@ def test_ordinary_telegram_edit_uses_qr_fallback_but_relay_pair_is_denied(case):
     with pytest.raises(DeliveryNotSubmittedError,match='exact relay-bound'):
         bridge.edit_message(**bound)
     assert fallback.edits==[kwargs]
+
+
+def test_relay_wrapper_exposes_fallback_reply_and_admin_except_bound_reply_chat(tmp_path):
+    store=SQLiteUserIOStore(tmp_path/'capabilities.sqlite3')
+    account='telegram:900000103'
+    store.register_account(account_id=account,provider='telegram',display_name='fixture',
+        can_read=True,can_reply=True,credential_ref='telegram-qr:fixture')
+    class Fallback:
+        def reply_message(self,**kwargs):return {'ok':True,'kwargs':kwargs}
+        def edit_message(self,**kwargs):return {'ok':True}
+        def react(self,**kwargs):return {'ok':True}
+        def telegram_admin_prepare(self,**kwargs):return {'ok':True,'operation':kwargs['operation']}
+        def telegram_admin_execute(self,**kwargs):return {'ok':True,'operation':kwargs['operation']}
+    fallback=Fallback(); token=tmp_path/'relay-token';token.write_text('fixture')
+    bridge=RelayAccountBridge(fallback=fallback,store=store,base_url='http://relay',token_file=str(token),
+        approval_key='fixture-key',account_id=account,peer_id='8634588930',guard_file=str(tmp_path/'guard'))
+    service=UserIOService(store,object(),object(),telegram_outbox=bridge)
+    provider=TelegramMirrorProvider(service,account,store.default_user_id)
+    capabilities=Messenger(store,service,store.owner()).capabilities(account)
+    assert capabilities['operations']['reply']['supported'] is True
+    assert capabilities['telegram_admin']['supported'] is True
+    assert provider.supports_action('reply',{'peer_id':'700000001'}) is True
+    assert provider.supports_action('reply',{'peer_id':bridge.peer_id}) is False
+    assert bridge.reply_message(account_ref=account,chat_id='700000001',message_id='77',
+        thread_id='',expected_text='source',text='reply',request_id='reply-request-1234')['ok']
+    with pytest.raises(DeliveryNotSubmittedError,match='relay-bound'):
+        bridge.reply_message(account_ref=account,chat_id=bridge.peer_id,message_id='77',
+            thread_id='',expected_text='source',text='reply',request_id='reply-request-1235')
+    assert bridge.telegram_admin_prepare(account_ref=account,operation='group_create',payload={'title':'fixture'})['ok']
+    assert bridge.telegram_admin_execute(account_ref=account,operation='group_create',
+        payload={'title':'fixture'},request_id='telegram-admin-request-1234')['ok']
+    store.close()
 
 
 def test_bare_draft_id_and_unclaimed_origin_cannot_send(case):
