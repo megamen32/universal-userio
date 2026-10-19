@@ -2597,6 +2597,23 @@ class SQLiteUserIOStore:
                 (user_id, row["source"], f"chat:{row['account_ref']}:{row['peer_id']}"
                  if row["source"] in {"max", "phone", "vk", "yandex"} and row["account_ref"] and row["peer_id"] else row["sender"]),
             ).fetchone()
+            profile_row = self._connection.execute(
+                "SELECT username,first_name,last_name,phone FROM search_profiles "
+                "WHERE user_id=? AND conversation_id=?",
+                (user_id, conversation_id),
+            ).fetchone() if row["source"] == "telegram" else None
+            profile_name = " ".join(
+                str(profile_row[key] or "").strip()
+                for key in ("first_name", "last_name")
+                if profile_row is not None and str(profile_row[key] or "").strip()
+            )
+            if not profile_name and profile_row is not None:
+                profile_name = str(profile_row["username"] or "").strip()
+                if profile_name:
+                    profile_name = "@" + profile_name.lstrip("@")
+                else:
+                    profile_name = str(profile_row["phone"] or "").strip()
+            display_name = (profile_name or (str(name_row["name"]) if name_row else ""))
             history_row = None
             if row["source"] == "telegram" and row["account_ref"] and row["peer_id"]:
                 history_row = self._connection.execute("""SELECT oldest_id,complete,fetched_count
@@ -2646,7 +2663,7 @@ class SQLiteUserIOStore:
             "account_ref": str(row["account_ref"] or ""),
             "peer_id": str(row["peer_id"] or ""),
             "conversation_kind": str(row['conversation_kind'] or 'unknown'),
-            "display_name": str(name_row["name"]) if name_row else "",
+            "display_name": display_name,
             "messages": message_records, "drafts": draft_records,
             **({'phone_history': self._phone_history_cursor(row['id'], message_records, user_id)} if row['source']=='phone' else {}),
             **({"history": {
@@ -4836,13 +4853,18 @@ class SQLiteUserIOStore:
                        trs.unread_observed_at AS unread_observed_at,
                        CASE WHEN c.source='telegram' AND c.account_ref LIKE 'telegram:%'
                                   AND c.peer_id=substr(c.account_ref,10) THEN 'Избранное'
+                         WHEN c.source='telegram' THEN COALESCE(
+                           NULLIF(trim(COALESCE(sp.first_name,'')||' '||COALESCE(sp.last_name,'')),''),
+                           NULLIF('@'||sp.username,'@'), NULLIF(sp.phone,''),
+                           NULLIF((SELECT name FROM contact_names WHERE user_id=c.user_id
+                            AND source=c.source AND sender=c.sender),''),
+                           NULLIF(linked.display_name,''), NULLIF(c.sender,''))
                          ELSE COALESCE(
                            NULLIF((SELECT name FROM contact_names WHERE user_id=c.user_id
                             AND source=c.source AND sender=
                               CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!='' THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END),''),
                            NULLIF(trim(COALESCE(sp.first_name,'')||' '||COALESCE(sp.last_name,'')),''),
                            NULLIF('@'||sp.username,'@'), NULLIF(sp.phone,''),
-                           CASE WHEN c.source='telegram' THEN NULLIF(linked.display_name,'') END,
                            NULLIF(c.sender,'')) END AS display_name,
                        activity.account_last_at AS account_last_at
                 FROM conversations c LEFT JOIN telegram_read_state trs
