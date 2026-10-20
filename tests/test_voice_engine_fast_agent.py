@@ -843,7 +843,7 @@ class CallPeerSnapshotTests(unittest.IsolatedAsyncioTestCase):
         class Broker:
             async def emit(self, event): events.append(event)
         async def pump(*args,**kwargs): await asyncio.Future()
-        async def capture(audio_queue, utterances, detector):
+        async def capture(audio_queue, utterances, detector, **_kwargs):
             await utterances.put(pcm)
             await utterances.put(None)
         async def ready(*args, **kwargs): return True

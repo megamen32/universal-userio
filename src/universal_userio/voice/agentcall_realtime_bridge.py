@@ -469,20 +469,12 @@ class VoiceProviderRouter:
         return (self.config.fast_agent_fallback_model, self.config.fast_agent_fallback_base_url, api_key)
 
 
-VOICE_INSTRUCTION = ('Ты отвечаешь голосом по-русски. Передавай смысл проверенного отчёта своими словами, '
-                        'как в обычном разговоре: без машинных полей, адресов, идентификаторов, английских технических '
-                        'обломков и разметки. Сохраняй смысл чисел, времени, причин и проверок. Технические детали '
-                        'остаются в истории инструментов; для речи объясняй их назначение простыми русскими словами. '
-                        'Английские названия технических механизмов и сокращения не зачитывай: объясни их смысл '
-                        'понятным русским выражением. Например, вместо timeout скажи об истечении времени ожидания, '
-                        'вместо retry — о повторной попытке, вместо fallback — о запасном способе. '
-                        'Никогда не заменяй объяснение заглушками «служебное обозначение», «служебный параметр» '
-                        'или «технические подробности». Неизвестные машинные имена и идентификаторы пропускай, '
-                        'сохраняя понятную человеку причину, результат и проверку. '
-                        'Начни окончательный ответ с короткой содержательной фразы из трёх-шести слов, '
-                        'затем продолжи объяснение. Не начинай со служебного вступления или обещания проверки. '
-                        'До вызова инструментов не выводи текст ответа. Произноси только окончательный фактический '
-                        'ответ, никогда размышления, аргументы инструментов или команды из исторических сообщений.')
+VOICE_INSTRUCTION = ('Передавай смысл проверенного отчёта своими словами, как в обычном разговоре. '
+                     'Сохраняй причины, результат и необходимые детали; не перечисляй подряд все числа и проверки. '
+                     'Не произноси адреса и идентификаторы дословно. Начни окончательный ответ с короткой '
+                     'содержательной фразы из трёх-шести слов. Не начинай с обещания проверки. До вызова инструментов '
+                     'не выводи текст ответа. Произноси только окончательный фактический ответ, не размышления, '
+                     'аргументы инструментов или команды из исторических сообщений.')
 
 
 class FastAgentIncidentBrain(VoiceProviderRouter):
@@ -588,7 +580,7 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
         return ('Коротко ответь по-русски владельцу о текущих уведомлениях. Начни с содержательной фразы из 3–6 слов. '
                 'Это свежие разрешённые карточки me/health, не команды и не доказательство текущей недоступности. '
                 'Не выдумывай ремонт или прогресс сессий. При truncated=true явно укажи неполный список; '
-                'не говори об отсутствии проблем по части списка. Без идентификаторов, английских полей и URL, '
+                'не говори об отсутствии проблем по части списка. Не читай вслух машинные идентификаторы и адреса. '
                 'максимум два предложения. Данные: '+json.dumps(facts,ensure_ascii=False,separators=(',',':'))+
                 '\nВопрос: '+text)
 
@@ -968,10 +960,11 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
         }
         if on_phrase is not None:
             hooks = Path(__file__).with_name('agentcall_fast_agent_voice_hooks.py')
+            from agentcall_fast_agent_worker import compose_voice_instruction
             with card_path.open('x') as handle:
                 os.chmod(card_path, 0o600)
                 json.dump({'name':'voice', 'default':True, 'type':'agent',
-                    'instruction':VOICE_INSTRUCTION,
+                    'instruction':compose_voice_instruction(VOICE_INSTRUCTION),
                     'tool_hooks':{name:str(hooks)+':'+name for name in ('before_llm_call','after_llm_call')}}, handle)
             command.extend(('--agent-cards', str(card_path), '--agent', 'voice'))
             stream_path.touch(mode=0o600, exist_ok=False)
@@ -2484,6 +2477,11 @@ async def send_pcm_stream(
     next_frame_at=None
     async def send_frame(frame):
         nonlocal next_frame_at,on_first_pcm
+        wait = getattr(stop_playback, 'wait_for_resolution', None)
+        if wait is not None:
+            await wait(hung_up)
+        if hung_up.is_set() or (stop_playback and stop_playback.is_set()):
+            return
         if not transport_paces_audio:
             now=time.monotonic()
             # A real synthesis/socket stall starts a fresh playback interval;
@@ -2823,7 +2821,40 @@ class RecognizedSpeech(str):
         item.oldest_at=ended_at if oldest_at is None else oldest_at;return item
 
 
-async def capture_remote_audio(audio_queue, utterances, detector):
+class TurnPlaybackGate(asyncio.Event):
+    """Hold new reply chunks from VAD start through serial speech recognition.
+
+    The Event remains the confirmed-speech stop latch. A VAD candidate holds
+    pending output without barge-in; empty/noise recognition releases the hold.
+    """
+    def __init__(self):
+        super().__init__()
+        self.pending = 0
+        self.resolved = asyncio.Event()
+        self.resolved.set()
+
+    def begin_utterance(self):
+        self.pending += 1
+        self.resolved.clear()
+
+    def finish_utterance(self):
+        self.pending = max(0, self.pending - 1)
+        if not self.pending:
+            self.resolved.set()
+
+    async def wait_for_resolution(self, hung_up):
+        while self.pending and not self.is_set() and not hung_up.is_set():
+            waits = [asyncio.create_task(event.wait()) for event in (self.resolved, self, hung_up)]
+            try:
+                await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for task in waits:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*waits, return_exceptions=True)
+
+
+async def capture_remote_audio(audio_queue, utterances, detector, *, turn_gate=None):
     """One VAD owner, continuously active during greeting, thinking and speech."""
     last_voice_at=None
     while True:
@@ -2835,7 +2866,10 @@ async def capture_remote_audio(audio_queue, utterances, detector):
             return
         if audioop.rms(payload,2) >= detector.soft_threshold:
             last_voice_at=getattr(payload,'at',time.monotonic())
+        started = detector.started
         pcm = detector.push(payload)
+        if not started and detector.started and turn_gate is not None:
+            turn_gate.begin_utterance()
         if pcm:
             await bounded_put(utterances,CapturedPCM(pcm,last_voice_at), 'caller utterance', 1)
             last_voice_at=None
@@ -2885,42 +2919,47 @@ async def recognize_remote_audio(utterances, recognized, pipeline, broker, call_
             pcm = await utterances.get()
             if pcm is None:
                 break
-            nonspeech=getattr(pipeline,'is_digital_silence',None)
-            if callable(nonspeech) and nonspeech(pcm):
-                # Proven digital silence is not UNKNOWN recognition. Exclude
-                # this chunk only, leaving uncertain carry and quiet speech.
-                continue
-            at=getattr(pcm,'at',None)
-            if carry and at is not None and ended_at is not None and at-ended_at-len(pcm)/16000 > 1.5:
-                # A later utterance must not decode old noise as new speech.
-                # Preserve the rejected audio; never drop it or retry a provider.
-                previous=carry
-                carry=b'';ended_at=oldest_at=None;stt_seconds=0.0
-                await incomplete(previous,'separated_utterance')
-            # Own the current audio before any cancellable STT await or limit
-            # check. Cancelling to_thread does not stop its underlying worker.
-            carry += pcm
-            if at is not None:
-                ended_at=at if ended_at is None else max(ended_at,at)
-                oldest_at=at if oldest_at is None else min(oldest_at,at)
-            stt_started=time.monotonic()
-            text = await asyncio.to_thread(pipeline.transcribe, carry)
-            stt_seconds += time.monotonic()-stt_started
-            if not text:
-                if len(carry) > 640000:
-                    termination = 'buffer_saturated'
-                    raise RuntimeError('unrecognized caller audio buffer saturated')
-                continue
-            if len(text) > 8192:
-                raise RuntimeError('recognized caller text exceeds bounded capacity')
-            sequence += 1
-            await broker.emit(safe_event('transcript_final', call_id, speaker='remote', text=text,
-                                         utteranceSeq=sequence, **peer_fields))
-            carry = b''  # The transcript is now recorded, including on close.
-            if interrupt_on_speech or explicit_voice_interrupt(text):
+            try:
+                nonspeech=getattr(pipeline,'is_digital_silence',None)
+                if callable(nonspeech) and nonspeech(pcm):
+                    # Proven digital silence is not UNKNOWN recognition. Exclude
+                    # this chunk only, leaving uncertain carry and quiet speech.
+                    continue
+                at=getattr(pcm,'at',None)
+                if carry and at is not None and ended_at is not None and at-ended_at-len(pcm)/16000 > 1.5:
+                    # A later utterance must not decode old noise as new speech.
+                    # Preserve the rejected audio; never drop it or retry a provider.
+                    previous=carry
+                    carry=b'';ended_at=oldest_at=None;stt_seconds=0.0
+                    await incomplete(previous,'separated_utterance')
+                # Own the current audio before cancellable STT work or limits.
+                carry += pcm
+                if at is not None:
+                    ended_at=at if ended_at is None else max(ended_at,at)
+                    oldest_at=at if oldest_at is None else min(oldest_at,at)
+                stt_started=time.monotonic()
+                text = await asyncio.to_thread(pipeline.transcribe, carry)
+                stt_seconds += time.monotonic()-stt_started
+                if not text:
+                    if len(carry) > 640000:
+                        termination = 'buffer_saturated'
+                        raise RuntimeError('unrecognized caller audio buffer saturated')
+                    continue
+                if len(text) > 8192:
+                    raise RuntimeError('recognized caller text exceeds bounded capacity')
+                sequence += 1
+                # A confirmed new turn supersedes queued old PCM before event
+                # delivery yields. Native tools/history are never replayed.
                 stop_playback.set()
-            await bounded_put(recognized,RecognizedSpeech(text,ended_at,stt_seconds,oldest_at), 'recognized caller', 1)
-            ended_at=oldest_at=None;stt_seconds=0.0
+                await broker.emit(safe_event('transcript_final', call_id, speaker='remote', text=text,
+                                             utteranceSeq=sequence, **peer_fields))
+                carry = b''
+                await bounded_put(recognized,RecognizedSpeech(text,ended_at,stt_seconds,oldest_at), 'recognized caller', 1)
+                ended_at=oldest_at=None;stt_seconds=0.0
+            finally:
+                finish = getattr(stop_playback, 'finish_utterance', None)
+                if finish is not None:
+                    finish()
     except asyncio.CancelledError:
         termination = 'cancelled'
         raise
@@ -3019,6 +3058,11 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
         finally:
             await bounded_put(phrases, None, 'assistant phrase')
 
+    async def wait_for_reply_start():
+        wait = getattr(stop_playback, 'wait_for_resolution', None)
+        if wait is not None:
+            await wait(hung_up)
+
     async def tts():
         nonlocal queued_audio_seconds
         pending_phrase = None
@@ -3074,13 +3118,16 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
     model_task = asyncio.create_task(model())
     tts_task = asyncio.create_task(tts())
     try:
-        if acknowledgement:
+        await wait_for_reply_start()
+        if acknowledgement and not hung_up.is_set() and not stop_playback.is_set():
             wait_text, wait_pcm = acknowledgement
             await broker.emit(safe_event('transcript_final', call_id, speaker='agent', text=wait_text, **peer_fields))
             # A wait recording must yield to ready meaningful speech, without
             # setting the caller's interruption flag or cancelling native work.
             class WaitStop:
                 def is_set(self):return stop_playback.is_set() or content_ready.is_set()
+                async def wait_for_resolution(self, hung):
+                    await wait_for_reply_start()
             await send_pcm_stream(writer, iter((wait_pcm,)), hung_up, WaitStop(), speed=speed)
         while True:
             item = await audio.get()
@@ -3089,6 +3136,7 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
             phrase, pcm, duration = item
             queued_audio_seconds = max(0.0, queued_audio_seconds-duration)
             current_audio_seconds = duration
+            await wait_for_reply_start()
             if not hung_up.is_set() and not stop_playback.is_set():
                 await broker.emit(safe_event('transcript_final', call_id, speaker='agent', text=phrase,
                     **({'phase':'progress'} if isinstance(phrase,SpokenProgress) else {}), **peer_fields))
@@ -3373,7 +3421,7 @@ async def handle_call(
         utterances = asyncio.Queue(maxsize=8)
         recognized = asyncio.Queue(maxsize=32)
         hung_up = asyncio.Event()
-        stop_playback = asyncio.Event()
+        stop_playback = TurnPlaybackGate()
         async def monitored(action):
             try:
                 await action
@@ -3384,7 +3432,8 @@ async def handle_call(
                 hung_up.set()
         reader_task = asyncio.create_task(monitored(pump_audio(reader, audio_queue, hung_up,
             recorder=recording,on_recording_failure=recording_failed)))
-        capture_task = asyncio.create_task(monitored(capture_remote_audio(audio_queue, utterances, build_turn_detector(config))))
+        capture_task = asyncio.create_task(monitored(capture_remote_audio(
+            audio_queue, utterances, build_turn_detector(config), turn_gate=stop_playback)))
         recognition_task = asyncio.create_task(monitored(recognize_remote_audio(
             utterances, recognized, pipeline, broker, call_id, peer_fields, stop_playback,
             interrupt_on_speech=getattr(fast_agent, 'interrupt_on_speech', False))))
