@@ -796,6 +796,47 @@ def test_http_mcp_legacy_client_header_is_not_treated_as_modern(tmp_path) -> Non
         thread.join(timeout=2)
 
 
+def test_http_mcp_hybrid_client_metadata_stays_on_the_legacy_path(tmp_path) -> None:
+    """Namespaced metadata with an older revision must not be treated as modern.
+
+    A client that echoes the revision it negotiated into the namespaced
+    per-request metadata is still a legacy client. The modern branch demands
+    the routing headers of the 2026-07-28 revision, so entering it on the
+    strength of the metadata alone rejected such a client with -32020.
+    """
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "mcp-hybrid-http.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/mcp"
+    headers = {
+        "Authorization": "Bearer test-token", "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-06-18",
+    }
+
+    def post(payload: dict) -> dict:
+        request = Request(url, data=json.dumps(payload).encode(), method="POST", headers=headers)
+        with urlopen(request) as response:
+            raw = response.read().decode()
+        if raw.startswith("event:"):
+            raw = raw.split("data: ", 1)[1].split("\n", 1)[0]
+        return json.loads(raw)
+
+    try:
+        listed = post({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+            "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2025-06-18"}},
+        })
+        assert "error" not in listed, listed
+        names = [tool["name"] for tool in listed["result"]["tools"]]
+        assert "userio.accounts.list" in names
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_http_mcp_exclusions_apply_only_to_the_requesting_consumer(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     hermes_conversation_id, _ = service.receive(

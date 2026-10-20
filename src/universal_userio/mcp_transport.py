@@ -12,6 +12,10 @@ from .mcp_surface import UserIOMcpSurface
 
 MODERN_PROTOCOL_VERSION = "2026-07-28"
 SUPPORTED_MODERN_PROTOCOL_VERSIONS = [MODERN_PROTOCOL_VERSION]
+# Revisions a legacy client may echo inside the modern per-request metadata
+# namespace. Such a client still speaks the legacy protocol and must be served
+# on the legacy path instead of being rejected as a modern client.
+LEGACY_PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"]
 _SERVER_INFO = {"name": "universal-userio", "version": "0.2.0"}
 
 
@@ -58,15 +62,21 @@ def json_rpc_response(
     if not isinstance(params, dict):
         return _error(request_id, -32602, "Invalid params")
     request_meta = params.get("_meta")
-    modern = isinstance(request_meta, dict) and "io.modelcontextprotocol/protocolVersion" in request_meta
+    # A client is modern when it asks for a revision this server implements
+    # in the modern dialect. The presence of the namespaced metadata key
+    # alone does not make a client modern: a legacy client may echo the
+    # revision it negotiated there, and rejecting it as modern would fail a
+    # client that is perfectly able to work on the legacy path.
+    namespaced = isinstance(request_meta, dict) and "io.modelcontextprotocol/protocolVersion" in request_meta
     requested_protocol = request_meta.get("io.modelcontextprotocol/protocolVersion") if isinstance(request_meta, dict) else None
-    if modern and not isinstance(request_meta.get("io.modelcontextprotocol/clientCapabilities"), dict):
-        return _error(request_id, -32600, "Modern MCP request requires clientCapabilities metadata")
-    if modern and requested_protocol not in SUPPORTED_MODERN_PROTOCOL_VERSIONS:
+    modern = requested_protocol in SUPPORTED_MODERN_PROTOCOL_VERSIONS
+    if namespaced and not modern and requested_protocol not in LEGACY_PROTOCOL_VERSIONS:
         return _error(request_id, -32022, "Unsupported protocol version", {
             "supported": SUPPORTED_MODERN_PROTOCOL_VERSIONS,
             "requested": requested_protocol,
         })
+    if modern and not isinstance(request_meta.get("io.modelcontextprotocol/clientCapabilities"), dict):
+        return _error(request_id, -32600, "Modern MCP request requires clientCapabilities metadata")
     if modern and method == "initialize":
         return _error(request_id, -32601, "Method not found")
     if method == "server/discover" and not modern:

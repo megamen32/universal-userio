@@ -34,9 +34,18 @@ PEM_BODY = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----[ \t]*\n[ \t]*[A-Za-z0-9+/]{40,}={0,2}",
 )
 SECRET_ASSIGNMENT = re.compile(
-    r"^[ \t]*(?:export[ \t]+)?([A-Z][A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|PASSWD|API_KEY|PRIVATE_KEY))"
-    r"[ \t]*=[ \t]*(.*)$",
+    r"^[ \t]*(?:export[ \t]+)?([A-Z][A-Z0-9_]*)[ \t]*=[ \t]*(.*)$",
     re.MULTILINE,
+)
+# A variable name is secret-bearing when its last word names a credential. The
+# separator matters: "SWEB_PASS" is a password, "USERIO_BYPASS" is not.
+SECRET_NAME = re.compile(
+    r"(?:^|_)(?:TOKEN|PASSWORD|PASSWD|PASS|PWD|SECRET|API_KEY|PRIVATE_KEY)$"
+)
+PASSWORD_NAME = re.compile(r"(?:^|_)(?:PASSWORD|PASSWD|PASS|PWD)$")
+# Credentials embedded in a connection string, for example a database URL.
+URL_CREDENTIALS = re.compile(
+    r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/@]+:([^\s:/@]+)@"
 )
 BEARER = re.compile(r"Authorization\"?\s*:\s*\"?Bearer\s+([A-Za-z0-9_\-.]+)", re.IGNORECASE)
 
@@ -89,19 +98,34 @@ def scan_text(path: Path, text: str, strict: bool = True) -> list[str]:
         findings.append(f"private key body in {path.name}")
     for match in SECRET_ASSIGNMENT.finditer(text):
         name, value = match.group(1), match.group(2).strip().strip("\"'")
+        if not SECRET_NAME.search(name):
+            continue
         if name in ALLOWED_ASSIGNMENT_NAMES or name.endswith(STRUCTURAL_SUFFIXES):
             continue
         if value.lower() in ALLOWED_VALUES or value.startswith(("${", "<", "{", "[", "…")):
             continue
         if any(marker in value.lower() for marker in PLACEHOLDER_MARKERS):
             continue
-        if len(value) < 20 or "${" in value:
+        if "${" in value:
             continue
-        if strict and not any(char.isdigit() for char in value):
+        # A short password is exactly as dangerous as a long token, so a
+        # password-bearing name is checked from eight characters upwards. Other
+        # secret names keep the twenty-character floor.
+        password_like = bool(PASSWORD_NAME.search(name))
+        if len(value) < (8 if password_like else 20):
+            continue
+        if strict and not password_like and not any(char.isdigit() for char in value):
             # A real credential virtually always mixes digits into the value;
             # a prose fixture such as "legacy-service-token" does not.
             continue
         findings.append(f"secret assignment {name} in {path.name}")
+    for match in URL_CREDENTIALS.finditer(text):
+        secret = match.group(1)
+        # A connection string is a leak when the password is long enough to be
+        # real and mixes digits; the fixtures use "pass" and "secret".
+        if len(secret) < 12 or not any(char.isdigit() for char in secret):
+            continue
+        findings.append(f"credentials in URL in {path.name}")
     for match in BEARER.finditer(text):
         value = match.group(1)
         if value.lower() in ALLOWED_VALUES or "${" in value or value.startswith("<"):

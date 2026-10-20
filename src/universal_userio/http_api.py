@@ -466,13 +466,15 @@ def handler(
                         request_version = http_version
                     # A client is "modern" only when it actually speaks the
                     # 2026-07-28 revision: either it advertised that version in
-                    # the HTTP header, or it sent the per-request metadata.
-                    # Legacy clients (2024-11-05 / 2025-xx) must send the
-                    # MCP-Protocol-Version header by spec, so its mere presence
-                    # cannot be the modern signal — otherwise every 2025-era
-                    # SDK (MiniMax Code included) is pushed into the modern
-                    # branch and rejected for missing per-request metadata.
-                    if request_version is not None or http_version == MODERN_PROTOCOL_VERSION:
+                    # the HTTP header, or it sent the matching per-request
+                    # metadata. Legacy clients (2024-11-05 / 2025-xx) must send
+                    # the MCP-Protocol-Version header by spec, so its mere
+                    # presence cannot be the modern signal — otherwise every
+                    # 2025-era SDK (MiniMax Code included) is pushed into the
+                    # modern branch and rejected for missing per-request
+                    # metadata. A client that namespaced its metadata but
+                    # negotiated an older revision stays on the legacy path.
+                    if request_version == MODERN_PROTOCOL_VERSION or http_version == MODERN_PROTOCOL_VERSION:
                         def header_mismatch(message: str) -> None:
                             self._reply(400, {
                                 "jsonrpc": "2.0", "id": request.get("id"),

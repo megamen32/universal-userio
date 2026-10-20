@@ -15,6 +15,8 @@ SAMPLE_USERIO_TOKEN_VALUE = "uio_" + "DS" + "fw" * 12 + "0123456789"
 SAMPLE_BEARER_VALUE = "8f31c0d9a7b6e5d4" * 2
 SAMPLE_PEM_BODY_VALUE = "MIIEowIBAAKCAQEA" + "y8Dbv8prpJ" * 3
 SAMPLE_SECRET_VALUE = "1234567890:AAH" + "abcdefghijklmnop"
+SAMPLE_SHORT_PASS_VALUE = "hunt" + "er" + "2" + "xyz"
+SAMPLE_URL_CREDENTIAL_VALUE = "Sup3r" + "Secret" + "Pa55"
 
 
 def scan(tmp_path: Path, name: str, body: str) -> list[str]:
@@ -73,3 +75,25 @@ def test_documented_placeholder_is_not_a_finding(tmp_path) -> None:
 def test_env_var_substitution_is_not_a_finding(tmp_path) -> None:
     body = '{"Authorization": "Bearer ${USERIO_MCP_TOKEN}"}'
     assert scan(tmp_path, "mcp.json", body) == []
+
+
+def test_short_password_assignment_is_reported(tmp_path) -> None:
+    body = f"SWEB_PASS={SAMPLE_SHORT_PASS_VALUE}\n"
+    findings = scan(tmp_path, "dns.env", body)
+    assert any("secret assignment" in item for item in findings)
+
+
+def test_variable_ending_in_bypass_is_not_a_finding(tmp_path) -> None:
+    body = "USERIO_BYPASS=true\n"
+    assert scan(tmp_path, "flags.env", body) == []
+
+
+def test_credentials_in_url_are_reported(tmp_path) -> None:
+    body = f"DATABASE_URL=postgres://user:{SAMPLE_URL_CREDENTIAL_VALUE}@db.internal/app\n"
+    findings = scan(tmp_path, "app.env", body)
+    assert any("credentials in URL" in item for item in findings)
+
+
+def test_example_url_credentials_are_not_a_finding(tmp_path) -> None:
+    body = "PROXY=socks5h://user:pass@proxy.local:9050\n"
+    assert scan(tmp_path, "proxy.env", body) == []
