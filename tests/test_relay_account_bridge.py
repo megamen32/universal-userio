@@ -123,6 +123,42 @@ def test_ordinary_telegram_edit_uses_qr_fallback_but_relay_pair_is_denied(case):
     assert fallback.edits==[kwargs]
 
 
+def test_relay_wrapper_exposes_the_attempt_journal_and_provider_history(tmp_path):
+    """A wrapped outbox still has to answer a delivery reconciliation."""
+    store = SQLiteUserIOStore(tmp_path / 'journal.sqlite3')
+    account = 'telegram:900000103'
+    store.register_account(account_id=account, provider='telegram', display_name='fixture',
+        can_read=True, can_reply=True, credential_ref='telegram-qr:fixture')
+    guard = tmp_path / 'guard.json'
+    guard.write_text(json.dumps({"source": "telegram", "account_ref": account,
+        "peer_id": "8634588930", "issued_at": time.time() - 1, "expires_at": time.time() + 3600,
+        "purpose": "Pilot9"}))
+    token = tmp_path / 'token'
+    token.write_text('fixture-relay-auth')
+
+    class Fallback:
+        def __init__(self):
+            self.calls = []
+
+        def send_attempt(self, attempt_id):
+            self.calls.append(('attempt', attempt_id))
+            return {'state': 'sent', 'message_id': '306'}
+
+        def reconcile_history(self, *, account_ref, peer_id, limit=200):
+            self.calls.append(('history', account_ref, peer_id, limit))
+            return {'mirrored': 3, 'fetched': 3}
+
+    fallback = Fallback()
+    bridge = RelayAccountBridge(fallback=fallback, store=store,
+        base_url='http://127.0.0.1:30192', token_file=str(token), approval_key='key',
+        account_id=account, peer_id='8634588930', guard_file=str(guard))
+    assert bridge.send_attempt('draft_1') == {'state': 'sent', 'message_id': '306'}
+    assert bridge.reconcile_history(account_ref=account, peer_id='-1003724214344') == {
+        'mirrored': 3, 'fetched': 3}
+    assert fallback.calls == [('attempt', 'draft_1'),
+                               ('history', account, '-1003724214344', 200)]
+
+
 def test_relay_wrapper_exposes_fallback_reply_and_admin_except_bound_reply_chat(tmp_path):
     store=SQLiteUserIOStore(tmp_path/'capabilities.sqlite3')
     account='telegram:900000103'

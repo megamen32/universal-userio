@@ -179,6 +179,20 @@ class RelayAccountBridge:
     def react(self, **kwargs):
         return self.fallback.react(**kwargs)
 
+    def send_attempt(self, attempt_id):
+        """Read the connector's durable record of one approved send attempt."""
+        method = getattr(self.fallback, "send_attempt", None)
+        if not callable(method):
+            raise DeliveryNotSubmittedError("Telegram send attempt lookup is unavailable")
+        return method(attempt_id)
+
+    def reconcile_history(self, *, account_ref, peer_id, limit=200):
+        """Read the provider's authoritative history for one peer."""
+        method = getattr(self.fallback, "reconcile_history", None)
+        if not callable(method):
+            raise DeliveryNotSubmittedError("Telegram history reconciliation is unavailable")
+        return method(account_ref=account_ref, peer_id=peer_id, limit=limit)
+
     def supports_reply(self, account_ref: str, chat_id: str | None = None) -> bool:
         if not callable(getattr(self.fallback, "reply_message", None)):
             return False
