@@ -9,6 +9,7 @@ from .account_connections import _vk_personal_client, vk_personal_message
 from .messenger_uploads import MessengerUploads
 from .channels.vk_personal import VKEditPreflightError
 from .contracts import DeliveryNotSubmittedError
+from .task_contact_qualification import ProviderContactIdentity
 
 
 class VKWeb:
@@ -134,3 +135,28 @@ class VKWeb:
                 (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at,account_ref,peer_id,conversation_kind)
                 VALUES(?,?,?,?,?,?,NULL,'approve',?,?,?,'direct')''',(self.user,cid,key,'vk-personal-read-only','vk',title,time.time(),account_ref,peer))
         return self.store.conversation(cid,user_id=self.user)
+
+    def resolve_catalog_contact(self,account_ref,locator_kind,locator):
+        """Resolve only a catalog-provided native VK ID/username; never send."""
+        account_ref=str(account_ref or '').strip()
+        locator=str(locator or '').strip()
+        if locator_kind=='vk_user_id':
+            if not re.fullmatch(r'[1-9][0-9]{0,19}',locator):
+                raise ValueError('catalog_vk_user_id_required')
+        elif locator_kind=='vk_username':
+            if not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}',locator):
+                raise ValueError('catalog_vk_username_required')
+        else:
+            raise ValueError('catalog_vk_native_reference_required')
+        client,_=_vk_personal_client(self.service,{'account_ref':account_ref},self.user,for_send=False)
+        rows=client.call('users.get',user_ids=locator,fields='can_write_private_message')
+        if not isinstance(rows,list) or len(rows)!=1 or type(rows[0].get('id')) is not int:
+            raise ValueError('VK catalog contact did not resolve uniquely')
+        person=rows[0]
+        if person.get('can_write_private_message') not in (1,True):
+            raise ValueError('VK catalog contact is not reply-capable')
+        title=' '.join(str(person.get(k) or '') for k in ('first_name','last_name')).strip()
+        return ProviderContactIdentity(
+            provider='vk',account_ref=account_ref,peer_id=str(person['id']),
+            peer_kind='direct',route_id='vk-personal-read-only',display_name=title,
+        )

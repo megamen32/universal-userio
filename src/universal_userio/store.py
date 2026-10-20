@@ -451,6 +451,61 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS task_mandate_operations_count_idx
                 ON task_mandate_operations(user_id,mandate_id);
+            CREATE TABLE IF NOT EXISTS task_contact_identity_bindings (
+                user_id TEXT NOT NULL,id TEXT NOT NULL,task_id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,project_id TEXT NOT NULL,
+                catalog_namespace TEXT NOT NULL,catalog_record_id TEXT NOT NULL,
+                catalog_contact_id TEXT NOT NULL,provider TEXT NOT NULL,
+                account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,peer_kind TEXT NOT NULL,
+                endpoint_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                identity_hash TEXT NOT NULL,created_at REAL NOT NULL,
+                PRIMARY KEY(user_id,id),
+                UNIQUE(user_id,task_id,actor_id,catalog_namespace,catalog_record_id,
+                       catalog_contact_id,account_ref,provider)
+            );
+            CREATE TABLE IF NOT EXISTS task_contact_qualifications (
+                user_id TEXT NOT NULL,id TEXT NOT NULL,task_id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,project_id TEXT NOT NULL,
+                catalog_namespace TEXT NOT NULL,catalog_record_id TEXT NOT NULL,
+                catalog_contact_id TEXT NOT NULL,catalog_revision TEXT NOT NULL,
+                contact_version TEXT NOT NULL,provider TEXT NOT NULL,
+                account_ref TEXT NOT NULL,peer_id TEXT NOT NULL,peer_kind TEXT NOT NULL,
+                endpoint_id TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                identity_binding_id TEXT NOT NULL,
+                binding_hash TEXT NOT NULL,
+                expires_at REAL NOT NULL,created_at REAL NOT NULL,
+                PRIMARY KEY(user_id,id),
+                UNIQUE(user_id,task_id,actor_id,catalog_namespace,catalog_record_id,
+                       catalog_contact_id,catalog_revision,account_ref,provider,peer_id),
+                FOREIGN KEY(user_id,identity_binding_id)
+                    REFERENCES task_contact_identity_bindings(user_id,id)
+            );
+            CREATE INDEX IF NOT EXISTS task_contact_qualification_identity_idx
+                ON task_contact_qualifications(user_id,account_ref,provider,peer_id);
+            CREATE TABLE IF NOT EXISTS task_mandate_qualifications (
+                user_id TEXT NOT NULL,mandate_id TEXT NOT NULL,
+                qualification_id TEXT NOT NULL,task_id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,account_ref TEXT NOT NULL,provider TEXT NOT NULL,
+                peer_id TEXT NOT NULL,binding_hash TEXT NOT NULL,
+                PRIMARY KEY(user_id,mandate_id,qualification_id),
+                UNIQUE(user_id,mandate_id,account_ref,provider,peer_id),
+                FOREIGN KEY(user_id,mandate_id) REFERENCES task_mandates(user_id,id),
+                FOREIGN KEY(user_id,qualification_id)
+                    REFERENCES task_contact_qualifications(user_id,id)
+            );
+            CREATE TABLE IF NOT EXISTS task_mandate_draft_claims (
+                user_id TEXT NOT NULL,draft_id TEXT NOT NULL,mandate_id TEXT NOT NULL,
+                operation_id TEXT NOT NULL,qualification_id TEXT NOT NULL,
+                operation_hash TEXT NOT NULL,binding_hash TEXT NOT NULL,created_at REAL NOT NULL,
+                PRIMARY KEY(user_id,draft_id),
+                UNIQUE(user_id,mandate_id,operation_id),
+                FOREIGN KEY(user_id,mandate_id,operation_id)
+                    REFERENCES task_mandate_operations(user_id,mandate_id,operation_id),
+                FOREIGN KEY(user_id,qualification_id)
+                    REFERENCES task_contact_qualifications(user_id,id)
+            );
+            CREATE INDEX IF NOT EXISTS task_mandate_draft_claim_operation_idx
+                ON task_mandate_draft_claims(user_id,mandate_id,operation_id);
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
             CREATE TABLE IF NOT EXISTS draft_context_snapshots (
@@ -551,6 +606,16 @@ class SQLiteUserIOStore:
         for statement in script.split(";"):
             if statement.strip():
                 self._connection.execute(statement)
+        for table in ("task_contact_identity_bindings", "task_contact_qualifications"):
+            columns = {str(row["name"]) for row in self._connection.execute(
+                f"PRAGMA table_info({table})",
+            )}
+            if "endpoint_id" not in columns:
+                # Rows produced by an earlier unshipped U52 draft cannot be
+                # authorized without their exact endpoint; empty is fail-closed.
+                self._connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN endpoint_id TEXT NOT NULL DEFAULT ''",
+                )
         self._connection.execute("""
             CREATE TRIGGER IF NOT EXISTS task_mandates_immutable_update
             BEFORE UPDATE ON task_mandates
@@ -582,6 +647,22 @@ class SQLiteUserIOStore:
             BEFORE DELETE ON task_mandate_operations
             BEGIN SELECT RAISE(ABORT,'task mandate reservations are durable'); END
         """)
+        for table, label in (
+            ("task_contact_identity_bindings", "task contact identity bindings"),
+            ("task_contact_qualifications", "task contact qualifications"),
+            ("task_mandate_qualifications", "task mandate qualification bindings"),
+            ("task_mandate_draft_claims", "task mandate draft bindings"),
+        ):
+            self._connection.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {table}_no_update
+                BEFORE UPDATE ON {table}
+                BEGIN SELECT RAISE(ABORT,'{label} are immutable'); END
+            """)
+            self._connection.execute(f"""
+                CREATE TRIGGER IF NOT EXISTS {table}_no_delete
+                BEFORE DELETE ON {table}
+                BEGIN SELECT RAISE(ABORT,'{label} are durable'); END
+            """)
         # Lightweight migration: conversations learn which connected account
         # owns them so replies always leave from the identity the user picked.
         try:
@@ -2161,6 +2242,210 @@ class SQLiteUserIOStore:
         record = self.conversation(conversation_id, user_id=user_id)
         assert record is not None
         return record
+
+    def create_task_contact_conversation(
+        self, *, user_id: str, qualification: dict[str, object],
+        route_id: str, display_name: str = "", authority_lease: object,
+        authority_binding: dict[str, object],
+    ) -> dict[str, object]:
+        """Persist one catalog-qualified provider identity without sending.
+
+        The caller must obtain ``qualification`` from the configured trusted
+        catalog resolver and provider lookup. This store boundary rechecks the
+        current account and atomically creates/reuses the canonical conversation
+        while recording the immutable provenance binding.
+        """
+        user_id = self._user(user_id)
+        required = (
+            "id", "task_id", "actor_id", "project_id", "catalog_namespace",
+            "catalog_record_id", "catalog_contact_id", "catalog_revision",
+            "contact_version", "provider", "account_ref", "peer_id", "peer_kind",
+            "endpoint_id", "binding_hash", "expires_at",
+        )
+        if not isinstance(qualification, dict) or any(
+            not isinstance(qualification.get(key), str) or not str(qualification[key]).strip()
+            for key in required if key not in {"expires_at"}
+        ):
+            raise ValueError("invalid_task_contact_qualification")
+        if (isinstance(qualification.get("expires_at"), bool)
+                or not isinstance(qualification.get("expires_at"), (int, float))):
+            raise ValueError("invalid_task_contact_qualification_expiry")
+        if (qualification["peer_kind"] != "direct"
+                or not re.fullmatch(r"[0-9a-f]{64}", str(qualification["binding_hash"]))):
+            raise ValueError("invalid_task_contact_identity")
+        provider = str(qualification["provider"]).strip().lower()
+        account_ref = str(qualification["account_ref"]).strip()
+        peer_id = str(qualification["peer_id"]).strip()
+        if float(qualification["expires_at"]) <= time.time():
+            raise ValueError("task_contact_qualification_expired")
+        if not route_id.strip():
+            raise ValueError("qualified_contact_route_required")
+        if route_id != str(qualification["endpoint_id"]):
+            raise ValueError("qualified_contact_endpoint_conflict")
+        assert_current = getattr(authority_lease, "assert_current", None)
+        if not callable(assert_current) or not isinstance(authority_binding, dict):
+            raise ValueError("catalog_authority_lease_required")
+        key = f"{provider}:{account_ref}:{peer_id}"
+        conversation_id = "conv_" + hashlib.sha256(
+            f"{user_id}\0{key}".encode("utf-8")
+        ).hexdigest()[:24]
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            account = self._connection.execute(
+                "SELECT provider,enabled,can_read,can_reply FROM provider_accounts "
+                "WHERE user_id=? AND id=?",
+                (user_id, account_ref),
+            ).fetchone()
+            if (account is None or not bool(account["enabled"])
+                    or not bool(account["can_read"]) or not bool(account["can_reply"])
+                    or str(account["provider"]).lower() != provider):
+                raise ValueError("qualified_contact_account_not_send_capable")
+            assert_current(authority_binding)
+            now = time.time()
+            if float(qualification["expires_at"]) <= now:
+                raise ValueError("task_contact_qualification_expired")
+
+            matches = self._connection.execute(
+                "SELECT id,conversation_key,route_id FROM conversations "
+                "WHERE user_id=? AND source=? AND account_ref=? AND peer_id=?",
+                (user_id, provider, account_ref, peer_id),
+            ).fetchall()
+            if len(matches) > 1:
+                raise ValueError("qualified_contact_conversation_ambiguous")
+            if matches:
+                row = matches[0]
+                conversation_id = str(row["id"])
+                if str(row["route_id"]) != route_id:
+                    raise ValueError("qualified_contact_route_conflict")
+            else:
+                key_row = self._connection.execute(
+                    "SELECT id,source,account_ref,peer_id FROM conversations "
+                    "WHERE user_id=? AND conversation_key=?",
+                    (user_id, key),
+                ).fetchone()
+                if key_row is not None and (
+                    str(key_row["source"]).lower(), str(key_row["account_ref"]),
+                    str(key_row["peer_id"]),
+                ) != (provider, account_ref, peer_id):
+                    raise ValueError("qualified_contact_identity_key_conflict")
+                self._connection.execute(
+                    "INSERT OR IGNORE INTO conversations "
+                    "(user_id,id,conversation_key,route_id,source,sender,identity_id,"
+                    "response_mode,updated_at,account_ref,peer_id,conversation_kind) "
+                    "VALUES (?,?,?,?,?,?,NULL,'approve',?,?,?,'direct')",
+                    (user_id, conversation_id, key, route_id, provider,
+                     display_name.strip() or peer_id, now, account_ref, peer_id),
+                )
+                row = self._connection.execute(
+                    "SELECT id,source,account_ref,peer_id,route_id FROM conversations "
+                    "WHERE user_id=? AND conversation_key=?",
+                    (user_id, key),
+                ).fetchone()
+                if (row is None or (str(row["source"]).lower(), str(row["account_ref"]),
+                                    str(row["peer_id"])) != (provider, account_ref, peer_id)
+                        or str(row["route_id"]) != route_id):
+                    raise ValueError("qualified_contact_conversation_conflict")
+                conversation_id = str(row["id"])
+
+            identity_binding_id = "identity_" + hashlib.sha256(
+                "\0".join((user_id, str(qualification["task_id"]),
+                           str(qualification["actor_id"]),
+                           str(qualification["catalog_namespace"]),
+                           str(qualification["catalog_record_id"]),
+                           str(qualification["catalog_contact_id"]),
+                           account_ref, provider)).encode("utf-8")
+            ).hexdigest()[:32]
+            identity_hash = hashlib.sha256(json.dumps({
+                "user_id": user_id,
+                "task_id": str(qualification["task_id"]),
+                "actor_id": str(qualification["actor_id"]),
+                "project_id": str(qualification["project_id"]),
+                "catalog_namespace": str(qualification["catalog_namespace"]),
+                "catalog_record_id": str(qualification["catalog_record_id"]),
+                "catalog_contact_id": str(qualification["catalog_contact_id"]),
+                "provider": provider, "account_ref": account_ref,
+                "peer_id": peer_id, "peer_kind": "direct",
+                "endpoint_id": route_id, "conversation_id": conversation_id,
+            }, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+            self._connection.execute(
+                "INSERT OR IGNORE INTO task_contact_identity_bindings "
+                "(user_id,id,task_id,actor_id,project_id,catalog_namespace,catalog_record_id,"
+                "catalog_contact_id,provider,account_ref,peer_id,peer_kind,conversation_id,"
+                "endpoint_id,identity_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (user_id, identity_binding_id, str(qualification["task_id"]),
+                 str(qualification["actor_id"]), str(qualification["project_id"]),
+                 str(qualification["catalog_namespace"]), str(qualification["catalog_record_id"]),
+                 str(qualification["catalog_contact_id"]), provider, account_ref,
+                 peer_id, "direct", conversation_id, route_id, identity_hash, now),
+            )
+            identity_binding = self._connection.execute(
+                "SELECT peer_id,conversation_id,endpoint_id,identity_hash FROM task_contact_identity_bindings "
+                "WHERE user_id=? AND id=?",
+                (user_id, identity_binding_id),
+            ).fetchone()
+            if (identity_binding is None or str(identity_binding["peer_id"]) != peer_id
+                    or str(identity_binding["conversation_id"]) != conversation_id
+                    or str(identity_binding["endpoint_id"]) != route_id
+                    or str(identity_binding["identity_hash"]) != identity_hash):
+                raise ValueError("catalog_contact_provider_identity_changed")
+
+            # The lease and proof are checked again at the durable qualification
+            # write. Any earlier conversation/identity inserts roll back with
+            # this transaction if the proof expired during the transaction.
+            assert_current(authority_binding)
+            qualification_now = time.time()
+            if float(qualification["expires_at"]) <= qualification_now:
+                raise ValueError("task_contact_qualification_expired")
+            values = {
+                "id": str(qualification["id"]), "task_id": str(qualification["task_id"]),
+                "actor_id": str(qualification["actor_id"]),
+                "project_id": str(qualification["project_id"]),
+                "catalog_namespace": str(qualification["catalog_namespace"]),
+                "catalog_record_id": str(qualification["catalog_record_id"]),
+                "catalog_contact_id": str(qualification["catalog_contact_id"]),
+                "catalog_revision": str(qualification["catalog_revision"]),
+                "contact_version": str(qualification["contact_version"]),
+                "provider": provider, "account_ref": account_ref, "peer_id": peer_id,
+                "peer_kind": "direct", "endpoint_id": route_id,
+                "conversation_id": conversation_id,
+                "identity_binding_id": identity_binding_id,
+                "binding_hash": str(qualification["binding_hash"]),
+                "expires_at": float(qualification["expires_at"]), "created_at": qualification_now,
+            }
+            self._connection.execute(
+                "INSERT OR IGNORE INTO task_contact_qualifications "
+                "(user_id,id,task_id,actor_id,project_id,catalog_namespace,catalog_record_id,"
+                "catalog_contact_id,catalog_revision,contact_version,provider,account_ref,peer_id,"
+                "peer_kind,endpoint_id,conversation_id,identity_binding_id,binding_hash,expires_at,created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (user_id, values["id"], values["task_id"], values["actor_id"],
+                 values["project_id"], values["catalog_namespace"], values["catalog_record_id"],
+                 values["catalog_contact_id"], values["catalog_revision"], values["contact_version"],
+                 values["provider"], values["account_ref"], values["peer_id"], values["peer_kind"],
+                 values["endpoint_id"], values["conversation_id"], values["identity_binding_id"], values["binding_hash"],
+                 values["expires_at"], values["created_at"]),
+            )
+            stored = self._connection.execute(
+                "SELECT * FROM task_contact_qualifications WHERE user_id=? AND id=?",
+                (user_id, values["id"]),
+            ).fetchone()
+            if (stored is None or str(stored["binding_hash"]) != values["binding_hash"]
+                    or str(stored["conversation_id"]) != conversation_id):
+                raise ValueError("qualified_contact_provenance_conflict")
+        record = self.conversation(conversation_id, user_id=user_id)
+        assert record is not None
+        return record
+
+    def task_contact_qualification(
+        self, qualification_id: str, *, user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM task_contact_qualifications WHERE user_id=? AND id=?",
+                (self._user(user_id), qualification_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     # ---- attachments ---------------------------------------------------------
     # Stored separately from messages: a message may carry multiple attachments
