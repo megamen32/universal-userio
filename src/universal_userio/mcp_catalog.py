@@ -71,7 +71,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.channels.read",
-        "Read one user-owned chat or message. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
+        "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
             {
                 "channel": CHANNEL_SCHEMA,
@@ -224,7 +224,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.inbox.list_new",
-        "Compatibility alias: list this user's unread messages.",
+        "Compatibility alias: list this user's unread messages. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority.",
         schema(
             {
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -235,7 +235,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.conversation.get",
-        "Compatibility alias: read a conversation.",
+        "Compatibility alias: read a conversation. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority.",
         schema(
             {
                 "conversation_id": {"type": "string"},
