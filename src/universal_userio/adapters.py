@@ -911,13 +911,15 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             raise ValueError("invalid_attachment_index")
         message = self._store.message(file_ref, source="telegram", user_id=self._user_id)
         if message is None:
-            raise KeyError("Telegram message not found")
+            raise AdapterNotSupported(f"Telegram message {file_ref!r} is not available locally")
         media = [item for item in self._store.attachments_for_message(
             source="telegram", message_id=file_ref, user_id=self._user_id)
             if str(item.get("kind") or "").lower() != "telegram_routing"]
         selected = next((item for item in media if item.get("idx") == attachment_index), None)
         if selected is None:
-            raise KeyError("Telegram attachment not found")
+            raise AdapterNotSupported(
+                f"Telegram attachment {attachment_index} for message {file_ref!r} is not available locally"
+            )
         return _download_via_bridge(
             channel="telegram",
             message=message,
@@ -1276,10 +1278,14 @@ def _download_via_bridge(
         if isinstance(payload_obj, dict) and payload_obj.get("error"):
             raise AdapterNotSupported(f"{channel} bridge returned error: {payload_obj['error']}")
     filename = str(filename_header).strip()
-    if not filename and disposition:
-        match = re.search(r'filename="?([^";]+)', disposition, flags=re.IGNORECASE)
-        if match:
-            filename = match.group(1).strip()
+    if disposition:
+        encoded_match = re.search(r"filename\*\s*=\s*UTF-8''([^;\s]+)", disposition, flags=re.IGNORECASE)
+        if encoded_match:
+            filename = urllib.parse.unquote(encoded_match.group(1), encoding="utf-8", errors="replace")
+        elif not filename:
+            match = re.search(r'filename="?([^";]+)', disposition, flags=re.IGNORECASE)
+            if match:
+                filename = match.group(1).strip()
     if not filename:
         filename = f"{channel}-{file_ref}"
     return ChannelFile(

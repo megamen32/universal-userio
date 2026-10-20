@@ -29,6 +29,7 @@ import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs"
 import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
 import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
 import { SendAttemptLedger, attemptState } from "./send-attempts.mjs";
+import { attachmentResponseHeaders } from "./attachment-response.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -1281,8 +1282,7 @@ http.createServer(async (req, res) => {
       res.writeHead(200, {
         "content-type": media.contentType || "application/octet-stream",
         "content-length": String(media.bytes.length),
-        "content-disposition": `attachment; filename="${filename}"`,
-        "x-filename": filename,
+        ...attachmentResponseHeaders(filename),
         "x-telegram-slot": media.slot,
       });
       return res.end(media.bytes);

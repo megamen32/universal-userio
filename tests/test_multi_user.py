@@ -164,13 +164,22 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
     service.receive(
         InboxMessage("telegram", "42", "@alice", "[Telegram document]", 1.0), route_id="telegram-reply",
     )
+    store.upsert_attachment(
+        source="telegram", message_id="42", user_id=store.default_user_id,
+        attachment={"kind": "document", "idx": 0, "filename": "from-tg.jpg",
+                    "content_type": "image/jpeg"},
+    )
 
     captured: dict[str, object] = {}
 
     class FakeResponse:
         def __init__(self) -> None:
             self.body = b"telegram-bytes"
-            self._headers = {"Content-Type": "image/jpeg", "X-Filename": "from-tg.jpg"}
+            self._headers = {
+                "Content-Type": "image/jpeg",
+                "X-Filename": "__________ _ 3.xlsx",
+                "Content-Disposition": "attachment; filename=\"__________ _ 3.xlsx\"; filename*=UTF-8''%D0%9F%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D0%B5%20%E2%84%96%203.xlsx",
+            }
 
         def read(self) -> bytes:
             return self.body
@@ -209,7 +218,7 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
     assert captured["body"] == {"chat": "@alice", "chat_id": "@alice", "message_id": "42"}
     assert captured["headers"]["Authorization"] == "Bearer test-token"
     assert file.content_type == "image/jpeg"
-    assert file.filename == "from-tg.jpg"
+    assert file.filename == "Приложение № 3.xlsx"
     assert file.data == b"telegram-bytes"
 
 
