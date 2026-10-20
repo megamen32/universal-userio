@@ -2442,7 +2442,7 @@ class SQLiteUserIOStore:
         """Read the durable delivery bookkeeping of one draft."""
         with self._lock:
             row = self._connection.execute(
-                "SELECT status,sending_at,delivery_state,outbox_receipt FROM drafts "
+                "SELECT status,sending_at,delivery_state,outbox_receipt,created_at FROM drafts "
                 "WHERE user_id=? AND id=?",
                 (self._user(user_id), draft_id),
             ).fetchone()
@@ -2453,6 +2453,7 @@ class SQLiteUserIOStore:
             "sending_at": float(row["sending_at"]) if row["sending_at"] is not None else None,
             "delivery_state": str(row["delivery_state"] or ""),
             "receipt": str(row["outbox_receipt"] or ""),
+            "created_at": float(row["created_at"]) if row["created_at"] is not None else None,
         }
 
     def mark_draft_delivery_state(self, draft_id: str, state: str, *,

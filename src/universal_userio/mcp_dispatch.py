@@ -495,6 +495,8 @@ class UserIOToolDispatcher:
             self._required(arguments, "draft_id"),
             user_id=principal.user_id,
             expected_snapshot=snapshot,
+            provider_history=arguments.get("provider_history") is True,
+            connector_available_since=float(arguments.get("connector_available_since") or 0.0),
         )
         return {"ok": True, **result}
 

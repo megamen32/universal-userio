@@ -1414,7 +1414,9 @@ def handler(
                         self._reply(409, {"error": "draft_snapshot_conflict"})
                         return
                     result = service.reconcile_draft_delivery(
-                        draft_id, user_id=user_id, expected_snapshot=snapshot)
+                        draft_id, user_id=user_id, expected_snapshot=snapshot,
+                        provider_history=payload.get("provider_history") is True,
+                        connector_available_since=float(payload.get("connector_available_since") or 0.0))
                     self._reply(200, {"ok": True, **result})
                     return
                 self._reply(404, {"error": "not found"})

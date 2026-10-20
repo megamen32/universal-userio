@@ -550,6 +550,15 @@ reads that journal and answers one of:
 | `absent` for a claim taken after the journal epoch | the connector never received the attempt | claim released to `proposed`, exact retry allowed |
 | `absent` for an older claim | the journal cannot speak about it | claim kept in `sending`, retry stays blocked |
 
+A claim older than the connector journal can still be resolved from the
+provider itself. The caller asks for `provider_history` and states when the
+connector became able to serve again. The service then reads the peer's
+authoritative provider history and resolves the draft only when both hold: the
+connector provably could not have accepted the request at the claimed time, and
+the provider holds no message at or after that time. A message the provider
+accepted and then deleted leaves no trace in the history, so the operator's
+attestation is what makes the conclusion sound; it is recorded with the draft.
+
 Both the MCP approve path and the reconcile path require the complete draft
 snapshot (`expected_text`, `expected_chat_id` and `expected_attachments`). A
 partial snapshot cannot prove the draft did not change since it was reviewed,

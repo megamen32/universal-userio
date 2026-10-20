@@ -186,6 +186,12 @@ TOOL_SPECS = (
         "expected_chat_id": {"type": "string", "description": "Exact stored draft conversation_id."},
         "expected_attachments": {"type": "array", "items": {"type": "string"},
                                  "description": "Must be empty for text-only drafts."},
+        "provider_history": {"type": "boolean",
+                             "description": "Read the provider's own history when the connector journal "
+                                            "cannot speak about an older attempt."},
+        "connector_available_since": {"type": "number",
+                                      "description": "Unix time from which the Telegram connector was able to "
+                                                     "serve again. Required for the provider-history resolution."},
     }, ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"])),
     ToolSpec("userio.conversation.delete_local", "Delete only the local conversation copy.", _schema({
         "conversation_id": {"type": "string"}, "confirm": {"type": "boolean"},
@@ -897,7 +903,9 @@ class UserIOMcpSurface:
             return {"ok": False, "error": "complete_draft_snapshot_required", "detail": problem}
         result = self._service.reconcile_draft_delivery(
             self._required(arguments, "draft_id"), user_id=principal.user_id,
-            expected_snapshot=snapshot)
+            expected_snapshot=snapshot,
+            provider_history=arguments.get("provider_history") is True,
+            connector_available_since=float(arguments.get("connector_available_since") or 0.0))
         return {"ok": True, **result}
 
     def _approve(self, arguments: dict[str, Any], principal: UserPrincipal) -> dict[str, Any]:

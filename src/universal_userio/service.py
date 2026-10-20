@@ -36,6 +36,12 @@ class DeliveryUnavailableError(ValueError):
         self.code = code
 
 
+# The provider stamps its own clock on a message; the claim time is the local
+# clock. The margin keeps a small skew from turning an absent message into a
+# false conclusion in either direction.
+_PROVIDER_CLOCK_TOLERANCE = 300.0
+
+
 class UserIOService:
     def __init__(
         self, store: SQLiteUserIOStore, generator: DraftGenerator, outbox: OutboxClient,
@@ -1432,7 +1438,9 @@ class UserIOService:
         return approved
 
     def reconcile_draft_delivery(self, draft_id: str, *, user_id: str | None = None,
-                                 expected_snapshot: dict[str, object] | None = None) -> dict[str, object]:
+                                 expected_snapshot: dict[str, object] | None = None,
+                                 provider_history: bool = False,
+                                 connector_available_since: float = 0.0) -> dict[str, object]:
         """Resolve one in-flight Telegram delivery without ever replaying it.
 
         The connector owns the Telegram session, so its durable journal of
@@ -1500,7 +1508,8 @@ class UserIOService:
         if state == "absent":
             # The connector never received this attempt. That proves
             # non-submission only for a claim taken after the connector could
-            # first record one; an older claim keeps its unknown outcome.
+            # first record one; an older claim keeps its unknown outcome
+            # unless the operator asks for the provider evidence.
             epoch = float(record.get("epoch") or 0)
             claimed = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)
             sending_at = claimed.get("sending_at")
@@ -1508,12 +1517,80 @@ class UserIOService:
                 self._store.release_draft_send(draft.id, user_id=resolved_user_id)
                 return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
                         "reason": "connector_never_received_attempt", "retry_allowed": True}
+            if provider_history:
+                history_reader = getattr(self.telegram_outbox, "reconcile_history", None)
+                if not callable(history_reader):
+                    raise DeliveryUnavailableError("Сверка доставки Telegram недоступна.")
+                return self._resolve_by_provider_history(
+                    draft, conversation=conversation, account_ref=account_ref, peer_id=peer_id,
+                    outbox=history_reader, resolved_user_id=resolved_user_id,
+                    connector_available_since=connector_available_since)
             self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
             return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
                     "reason": "attempt_predates_connector_journal", "retry_allowed": False}
         self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
         return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
                 "reason": "provider_outcome_undecided", "retry_allowed": False}
+
+    def _resolve_by_provider_history(self, draft: ReplyDraft, *, conversation: dict,
+                                     account_ref: str, peer_id: str, outbox: Any,
+                                     resolved_user_id: str,
+                                     connector_available_since: float = 0.0) -> dict[str, object]:
+        """Resolve a legacy claim from the provider's own history.
+
+        This path is only reachable for a claim the connector's journal cannot
+        speak about. It therefore needs two independent facts:
+
+        - the operator attests when the connector became able to serve again.
+          If that is after the claim, the connector provably could not have
+          accepted the request;
+        - the provider is asked for the peer's authoritative history. If the
+          peer holds no message at or after the attempt, the provider never
+          received the approved text.
+
+        A message that the provider accepted and then deleted leaves no trace
+        in the history, so the operator's attestation is what makes the
+        conclusion sound. The evidence is recorded with the draft.
+        """
+        claimed = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)
+        sending_at = claimed.get("sending_at")
+        attempt_at = float(sending_at) if sending_at is not None else None
+        if attempt_at is None:
+            # A legacy claim has no recorded claim time. The creation time is
+            # a lower bound of it, so the provider window stays wider.
+            attempt_at = float(claimed.get("created_at") or 0.0)
+        available_since = float(connector_available_since or 0.0)
+        if not available_since or available_since <= attempt_at:
+            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
+            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                    "reason": "connector_availability_not_attested", "retry_allowed": False}
+        history = outbox(account_ref=account_ref, peer_id=peer_id)
+        # The provider history is mirrored into UserIO by the connector, so the
+        # conversation must be read again after the provider answered.
+        fresh = self._store.conversation(draft.conversation_id, user_id=resolved_user_id) or {}
+        messages = list(fresh.get("messages") or [])
+        newest = max((float(m.get("received_at") or 0) for m in messages), default=0.0)
+        if newest and newest >= attempt_at - _PROVIDER_CLOCK_TOLERANCE:
+            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
+            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                    "reason": "provider_history_reaches_the_attempt", "retry_allowed": False,
+                    "provider_newest_at": newest}
+        matched = [m for m in messages
+                   if str(m.get("direction") or "") == "outgoing"
+                   and str(m.get("body") or "") == draft.body]
+        if matched:
+            self._store.mark_draft_delivery_state(draft.id, "provider_match_unverified",
+                                                  user_id=resolved_user_id)
+            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                    "reason": "provider_has_a_matching_message", "retry_allowed": False,
+                    "provider_message_id": str(matched[-1].get("message_id") or "")}
+        self._store.release_draft_send(draft.id, user_id=resolved_user_id)
+        self._store.mark_draft_delivery_state(
+            draft.id, "not_delivered_by_provider_history", user_id=resolved_user_id)
+        return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
+                "reason": "not_delivered_by_provider_history", "retry_allowed": True,
+                "provider_newest_at": newest, "connector_available_since": available_since,
+                "provider_mirrored": int(history.get("mirrored") or 0)}
 
     def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id)

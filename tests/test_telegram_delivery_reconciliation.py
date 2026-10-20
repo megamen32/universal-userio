@@ -90,9 +90,11 @@ def test_a_request_phase_failure_stays_uncertain(tmp_path):
 class _JournalOutbox:
     """A Telegram outbox whose connector journal answers with one record."""
 
-    def __init__(self, record: dict) -> None:
+    def __init__(self, record: dict, *, history: dict | None = None) -> None:
         self.record = record
+        self.history = history or {"mirrored": 0, "fetched": 0, "oldest_id": 0, "has_more": False}
         self.sent: list[dict] = []
+        self.history_reads: list[str] = []
 
     def send_reply(self, *, chat, body, draft_id, chat_id="", account_ref="", slot=""):
         self.sent.append({"draft_id": draft_id, "body": body})
@@ -102,6 +104,10 @@ class _JournalOutbox:
 
     def send_attempt(self, attempt_id: str) -> dict:
         return dict(self.record, attempt_id=attempt_id)
+
+    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200) -> dict:
+        self.history_reads.append(peer_id)
+        return dict(self.history)
 
 
 def _uncertain_draft(tmp_path, record: dict) -> tuple[UserIOService, str]:
@@ -230,6 +236,62 @@ def test_mcp_approve_reports_an_unknown_outcome_with_a_stable_code(tmp_path):
     assert result["code"] == "delivery_outcome_unknown"
     assert result["retry_allowed"] is False
     assert len(outbox.sent) == 1
+
+
+def test_provider_history_releases_a_legacy_claim_with_an_attested_connector(tmp_path):
+    """The provider holds no such message and the connector could not have served."""
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31})
+    service, draft_id = _telegram_service(tmp_path, outbox)
+    try:
+        service.approve(draft_id)
+    except RuntimeError:
+        pass
+    claimed = service._store.draft_delivery_state(draft_id)
+    result = service.reconcile_draft_delivery(
+        draft_id, provider_history=True,
+        connector_available_since=float(claimed["created_at"]) + 3600)
+    assert result["resolution"] == "not_submitted"
+    assert result["reason"] == "not_delivered_by_provider_history"
+    assert service._store.draft(draft_id).status == "proposed"
+    assert outbox.history_reads == ["-1003724214344"]
+
+
+def test_provider_history_needs_the_connector_availability_attestation(tmp_path):
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31})
+    service, draft_id = _telegram_service(tmp_path, outbox)
+    try:
+        service.approve(draft_id)
+    except RuntimeError:
+        pass
+    result = service.reconcile_draft_delivery(draft_id, provider_history=True)
+    assert result["resolution"] == "unknown"
+    assert result["reason"] == "connector_availability_not_attested"
+    assert service._store.draft(draft_id).status == "sending"
+    assert outbox.history_reads == []
+
+
+def test_provider_history_that_reaches_the_attempt_stays_unknown(tmp_path):
+    """The peer already holds a message newer than the attempt: not conclusive."""
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31})
+    service, draft_id = _telegram_service(tmp_path, outbox)
+    try:
+        service.approve(draft_id)
+    except RuntimeError:
+        pass
+    claimed = service._store.draft_delivery_state(draft_id)
+    service._store._connection.execute(
+        "INSERT INTO messages (user_id,source,message_id,conversation_id,sender,body,received_at,"
+        "direction) VALUES (?,?,?,?,?,?,?,?)",
+        (service._store.default_user_id, "telegram", "telegram:540308572|-1003724214344:999",
+         service._store.draft(draft_id).conversation_id, "Никита", "что-то новое",
+         float(claimed["created_at"]) + 60, "incoming"))
+    service._store._connection.commit()
+    result = service.reconcile_draft_delivery(
+        draft_id, provider_history=True,
+        connector_available_since=float(claimed["created_at"]) + 3600)
+    assert result["resolution"] == "unknown"
+    assert result["reason"] == "provider_history_reaches_the_attempt"
+    assert service._store.draft(draft_id).status == "sending"
 
 
 def test_send_attempt_reads_the_connector_journal(tmp_path):

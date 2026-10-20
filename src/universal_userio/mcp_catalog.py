@@ -314,6 +314,16 @@ TOOL_SPECS = (
                     "items": {"type": "string"},
                     "description": "Must be empty for text-only drafts.",
                 },
+                "provider_history": {
+                    "type": "boolean",
+                    "description": "Read the provider's own history when the connector journal "
+                                   "cannot speak about an older attempt.",
+                },
+                "connector_available_since": {
+                    "type": "number",
+                    "description": "Unix time from which the Telegram connector was able to "
+                                   "serve again. Required for the provider-history resolution.",
+                },
             },
             ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"],
         ),
