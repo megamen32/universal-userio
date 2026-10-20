@@ -5,6 +5,7 @@ import uuid
 from urllib.parse import urlsplit
 from ..account_connections import ConnectorSecrets
 from ..contracts import DeliveryNotSubmittedError
+from ..task_contact_qualification import ProviderContactIdentity
 from .sync import read,project
 
 class YandexWeb:
@@ -40,6 +41,27 @@ class YandexWeb:
                 (user_id,source,sender,name,updated_at) VALUES(?,'yandex',?,?,?)''',
                 (self.user,f'chat:{reference}:{peer}',title,time.time()))
         return self.store.conversation(identity,user_id=self.user)
+
+    def resolve_catalog_contact(self,reference,locator_kind,locator):
+        """Resolve a catalog-provided Yandex GUID without creating/sending a chat."""
+        if locator_kind!='yandex_user_guid':
+            raise ValueError('catalog_yandex_guid_required')
+        try:value=str(uuid.UUID(str(locator)))
+        except (ValueError,TypeError,AttributeError):
+            raise ValueError('catalog_yandex_guid_required') from None
+        if value!=str(locator):raise ValueError('catalog_yandex_guid_must_be_canonical')
+        secret=self.account(reference)
+        data=read(secret,operation='resolve',target_guid=value)
+        person=data.get('person') if isinstance(data,dict) else None
+        peer=str(data.get('peer_id') or '') if isinstance(data,dict) else ''
+        if (not isinstance(person,dict) or not peer
+                or peer!=('_'.join(sorted([str(secret.get('guid') or ''),value])))):
+            raise ValueError('Yandex catalog contact identity conflict')
+        title=str(person.get('display_name') or person.get('name') or '')
+        return ProviderContactIdentity(
+            provider='yandex',account_ref=reference,peer_id=peer,
+            peer_kind='direct',route_id='manual',display_name=title,
+        )
 
     def prepare(self,conversation,draft):
         secret=self.account(conversation['account_ref'],write=True)

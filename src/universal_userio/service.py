@@ -56,6 +56,8 @@ class UserIOService:
         draft_notifier: object | None = None,
         draft_notification_delay_seconds: float = 5.0,
         ai_image_loader: Callable[..., object | None] | None = None,
+        task_catalog_origin: object | None = None,
+        task_contact_provider_resolvers: dict[str, object] | None = None,
     ) -> None:
         self._store = store
         self._generator = generator
@@ -75,11 +77,39 @@ class UserIOService:
         self._inbound_listeners: list[object] = []
         self._manual_send_lock = threading.Lock()
         self.messenger_providers: dict[str, object] = {}
+        from .task_contact_qualification import TaskContactQualification
+        self._task_contact_qualification = TaskContactQualification(
+            store, self, catalog_origin=task_catalog_origin,
+            provider_resolvers=task_contact_provider_resolvers,
+        )
         self._max_owned_lock=threading.RLock()
         self._max_owned_clients={}
         if self.max_client is not None:
             from .messenger_max import MaxMessengerProvider
             self.messenger_providers['max'] = MaxMessengerProvider(self)
+
+    def qualify_task_contact(
+        self, *, issuer, task_id: str, actor_id: str,
+        contact_ref: str, account_ref: str,
+    ) -> dict[str, object]:
+        """Internal-only first-contact path; intentionally absent from MCP/HTTP."""
+        return self._task_contact_qualification.qualify(
+            issuer=issuer, task_id=task_id, actor_id=actor_id,
+            contact_ref=contact_ref, account_ref=account_ref,
+        )
+
+    def _approve_task_mandated_draft(
+        self, *, principal, operation_id: str, draft_id: str,
+    ) -> ReplyDraft:
+        """Internal mandate send through the existing claim/provider/receipt path.
+
+        This method is deliberately not registered on any public UserIO route.
+        Normal per-operation approval remains in ``approve`` unchanged.
+        """
+        from .task_mandate_outbox import TaskMandateOutbox
+        return TaskMandateOutbox(
+            self._store, self, self._task_contact_qualification,
+        ).approve(principal=principal, operation_id=operation_id, draft_id=draft_id)
 
     def _download_ai_image(
         self, *, source: str, message_id: str,
@@ -1398,28 +1428,32 @@ class UserIOService:
         except DeliveryNotSubmittedError:
             self._store.release_draft_send(draft_id, user_id=resolved_user_id)
             raise
-        approved = self._store.approve(draft_id, receipt, user_id=resolved_user_id)
+        return self._commit_accepted_draft(draft_id, receipt, user_id=resolved_user_id)
+
+    def _commit_accepted_draft(self, draft_id: str, receipt: str, *, user_id: str) -> ReplyDraft:
+        """Persist the existing outbox receipt and run its source mirrors."""
+        approved = self._store.approve(draft_id, receipt, user_id=user_id)
         # Persist acceptance first. A read-side outage must not invalidate a
         # real receipt or cause another outbound write. MAX's listener can be
         # delayed, so hydrate this exact sent message before the web refresh.
-        conversation = self._store.conversation(approved.conversation_id, user_id=resolved_user_id)
+        conversation = self._store.conversation(approved.conversation_id, user_id=user_id)
         if conversation and conversation['source']=='yandex':
             try:
                 from .yandex.web import YandexWeb
-                YandexWeb(self,resolved_user_id).archive_receipt(conversation,receipt)
+                YandexWeb(self,user_id).archive_receipt(conversation,receipt)
             except Exception as error:
                 _LOG.warning('Accepted Yandex receipt mirror is pending: %s',type(error).__name__)
         if conversation and conversation['source']=='vk' and str(conversation.get('account_ref') or '').startswith('vk:'):
             try:
                 from .account_connections import reconcile_vk_receipt
-                reconcile_vk_receipt(self,conversation,receipt,user_id=resolved_user_id)
+                reconcile_vk_receipt(self,conversation,receipt,user_id=user_id)
             except Exception as error:
                 _LOG.warning('Accepted VK receipt mirror is pending: %s',type(error).__name__)
         if conversation and conversation["source"] == "max":
             try:
                 from .max_ingress import message_envelope, _own_id
                 from .adapters import inbox_message_from_envelope
-                client=self.max_client_for(conversation,resolved_user_id)
+                client=self.max_client_for(conversation,user_id)
                 peer = str(conversation.get("peer_id") or conversation["sender"])
                 row = client.get_message(chat_id=peer, message_id=receipt)
                 if str(row.get("id")) != str(receipt) or str(row.get("sender")) != _own_id(client):
@@ -1431,7 +1465,7 @@ class UserIOService:
                     if str(conversation.get('account_ref') or '').startswith('max:'):
                         envelope['message_id']=str(conversation['account_ref'])+'|'+peer+':'+str(row['id'])
                     self.receive(inbox_message_from_envelope(envelope, received_at=float(envelope["received_at"])),
-                        route_id=str(conversation["route_id"]), user_id=resolved_user_id,
+                        route_id=str(conversation["route_id"]), user_id=user_id,
                         account_ref=str(conversation.get("account_ref") or "max"))
             except Exception as error:
                 _LOG.warning("Accepted MAX receipt mirror is pending: %s", type(error).__name__)
