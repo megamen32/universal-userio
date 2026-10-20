@@ -4,14 +4,22 @@
 
 **Free to use. Bring your own AI key or connect your MCP client.**
 
-Messages, email, SMS and call history in one inbox. Let your AI find agreements,
-explain what matters and prepare replies you can review.
+UserIO is the universal gateway for messages, chats, history, files, calls and
+meetings. Telegram, Matrix, Telemost and cellular/SIM are distinct transports,
+not separate notification products. Capabilities and consent remain account-specific.
+
+Notice Place owns agent notifications, questions and escalation policy; it uses
+UserIO for actual communications. UserIO Voice / AgentCall is an internal voice
+implementation, not a third public caller. See the canonical
+[communications architecture](docs/COMMUNICATIONS-ARCHITECTURE.md).
+
+Let your AI find agreements, explain what matters and prepare replies you can review.
 
 **[Open UserIO →](https://msg.bezrabotnyi.com/)** · **[Quick start](docs/guide/quickstart.md)** · **[All docs](docs/README.md)** · [Русское руководство](https://msg.bezrabotnyi.com/docs/)
 
 - **Your accounts, together.** Group authors and distinct account identities.
 - **Your text, sent immediately.** AI replies need approval; MAX messages stay editable.
-- **Your phone, connected.** Android SMS APK, separate native/root and call setup.
+- **Your calls and meetings, connected.** Telegram, MatrixRTC, Telemost and cellular/SIM have separate supported paths; Android SMS APK is not a universal voice gateway.
 - **Your AI, informed.** MCP, API, context, cached summaries and secretary processing.
 - **Find the source.** [Text and optional semantic history search](docs/history-search.md) with message links and your own Qdrant.
 

@@ -1,4 +1,9 @@
-# Подключение своего Android: SMS и звонки
+# Подключение своего Android: SMS и сотовые звонки
+
+Это инструкция Android/SIM-адаптера, не вся голосовая архитектура UserIO.
+Telegram, MatrixRTC и Телемост имеют свои каналы и не требуют GSM2SIP только
+ради принадлежности к UserIO. [Все звонки и встречи](guide/calls.md) ·
+[Границы UserIO и Notice Place](COMMUNICATIONS-ARCHITECTURE.md).
 
 Откройте [инструкцию и форму подключения](https://msg.bezrabotnyi.com/connect-phone).
 Она доступна без регистрации; для выдачи настроек войдите в **свой** личный кабинет.

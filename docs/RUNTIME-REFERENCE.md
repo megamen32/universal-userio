@@ -1,10 +1,18 @@
 # Runtime reference
 
-Universal UserIO is the canonical messaging runtime for human communications.
-It owns users, accounts, conversations, messages, attachments, source cursors,
-deduplication, per-user policy, AI drafts, approval and MCP `2026-07-28`.
-Provider libraries/sidecars own provider sessions and transport details.
-NoticePlace is intentionally separate and is reserved for system/agent alerts.
+Universal UserIO is the canonical communications gateway, not only a messaging
+inbox. It owns accounts, conversations, messages, attachments, history, calls,
+meetings, source cursors, transport receipts and account-scoped API/MCP access.
+Telegram voice, MatrixRTC, Telemost and cellular/SIM are separate capabilities.
+Provider libraries/sidecars and UserIO Voice / AgentCall implement those transports.
+
+Notice Place is the separate notification/question application: it owns contact
+policy, escalation, quiet hours and canonical human decisions, and uses UserIO
+for actual communications. Agent-initiated operator calls enter Notice Place's
+API/MCP; ordinary message clients continue to use UserIO directly. Asterisk and
+GSM2SIP are cellular transport components, not prerequisites for every channel.
+Read [the canonical ownership contract](COMMUNICATIONS-ARCHITECTURE.md) before
+adding a route, caller, service, phone adapter or documentation claim.
 
 [Short README](../README.md) · [User guide](README.md)
 
