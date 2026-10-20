@@ -48,3 +48,23 @@ inbound reply path through disposable SQLite data, then closes and reopens the
 Store before resolving. It passes against the frozen U52 outbox repair. This is
 local source-path evidence, not a live provider or full ExManager consumer
 acceptance.
+
+## Authenticated read projections (U54)
+
+The existing `UserIOService.task_reply_association_for_message` projects the
+U53 resolver over a canonical incoming message. The registered read-only
+`userio.inbox.list_new`, `userio.conversation.get`, and
+`userio.channels.read` tools include `task_reply_association` only when the
+stored message is an exact incoming reply candidate. `linked` carries the
+verified task/operation/contact/source and provider message ID; unresolved or
+denied records carry only their fail-closed status/reason. Ordinary messages
+without a provider-native reply target are unchanged.
+
+This is metadata on existing authenticated reads, not a new endpoint or
+authority. It performs no provider action or Store write, does not widen
+`read_only`, and cannot authorize sending. The reopened-Store MAX fake-provider
+regression exercises the outbox receipt, canonical outgoing message, inbound
+reply, and these three registered read tools; the fake records exactly one
+send, and the `read_only` principal is denied `userio.channels.send_draft`.
+Production catalog provenance and live provider receipt/readback remain
+unavailable and are not established by this local fixture.

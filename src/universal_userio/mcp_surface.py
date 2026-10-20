@@ -51,7 +51,7 @@ TOOL_SPECS = (
         "conversation_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100},
         "account_ref": {"type": "string", "maxLength": 128},
     })),
-    ToolSpec("userio.channels.read", "Read one user-owned chat or message. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
+    ToolSpec("userio.channels.read", "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
         "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
@@ -148,12 +148,12 @@ TOOL_SPECS = (
     ToolSpec("userio.users.create", "Owner only: create a user and return one token once.", _schema({
         "username": {"type": "string"}, "password": {"type": "string"},
     }, ["username", "password"])),
-    ToolSpec("userio.inbox.list_new", "Compatibility alias: list this user's unread messages.", _schema({
+    ToolSpec("userio.inbox.list_new", "Compatibility alias: list this user's unread messages. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority.", _schema({
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
-    ToolSpec("userio.conversation.get", "Compatibility alias: read a conversation.", _schema({
+    ToolSpec("userio.conversation.get", "Compatibility alias: read a conversation. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority.", _schema({
         "conversation_id": {"type": "string"},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     }, ["conversation_id"])),
@@ -320,6 +320,26 @@ class UserIOMcpSurface:
             },
         ]}
 
+    def _attach_task_reply_associations(
+        self, messages: list[Any], *, conversation_id: str, user_id: str,
+    ) -> None:
+        if not conversation_id:
+            return
+        for message in messages:
+            if (not isinstance(message, dict)
+                    or str(message.get("direction") or "incoming") != "incoming"):
+                continue
+            if "task_reply_association" in message:
+                continue
+            message_id = str(message.get("message_id") or "")
+            if not message_id:
+                continue
+            association = self._service.task_reply_association_for_message(
+                conversation_id=conversation_id, message_id=message_id, user_id=user_id,
+            )
+            if association is not None:
+                message["task_reply_association"] = association
+
     def _include_read_media(
         self, result: dict[str, Any], *, arguments: dict[str, Any], user_id: str,
     ) -> dict[str, Any]:
@@ -331,6 +351,12 @@ class UserIOMcpSurface:
         messages = record.get("messages") if isinstance(record, dict) else None
         if not isinstance(messages, list):
             messages = [record] if isinstance(record, dict) and record else []
+        conversation_id = str(
+            record.get("id") or record.get("conversation_id") or ""
+        ) if isinstance(record, dict) else ""
+        self._attach_task_reply_associations(
+            messages, conversation_id=conversation_id, user_id=user_id,
+        )
         media_delivery: list[dict[str, Any]] = []
         content_blocks: list[dict[str, Any]] = []
         total_bytes = 0
@@ -802,18 +828,28 @@ class UserIOMcpSurface:
                 messages = self._store.new_messages(
                     source=channel, limit=int(arguments.get("limit", 50)), user_id=user_id
                 )
-                return {"ok": True, "messages": [
+                messages = [
                     message for message in messages
                     if str(message["conversation_id"]) not in ignored_chats
-                ]}
+                ]
+                for message in messages:
+                    self._attach_task_reply_associations(
+                        [message], conversation_id=str(message["conversation_id"]),
+                        user_id=user_id,
+                    )
+                return {"ok": True, "messages": messages}
             if name == "userio.conversation.get":
                 ignored_chats = self._ignored_chats(arguments)
                 conversation_id = self._required(arguments, "conversation_id")
                 if conversation_id in ignored_chats:
                     return {"ok": True, "conversation": None}
-                return {"ok": True, "conversation": self._store.conversation(
-                    conversation_id, user_id=user_id
-                )}
+                conversation = self._store.conversation(conversation_id, user_id=user_id)
+                if conversation is not None:
+                    self._attach_task_reply_associations(
+                        conversation.get("messages", []),
+                        conversation_id=conversation_id, user_id=user_id,
+                    )
+                return {"ok": True, "conversation": conversation}
             if name == "userio.message.mark_seen":
                 return {"ok": True, "changed": self._store.mark_seen(
                     source=self._required(arguments, "source"),

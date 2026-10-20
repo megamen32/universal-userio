@@ -24,6 +24,32 @@ class UserIOToolDispatcher:
         self._store = store
         self._service = service
 
+    def _attach_task_reply_association(
+        self, message: object, *, conversation_id: str, user_id: str,
+    ) -> None:
+        if not isinstance(message, dict):
+            return
+        if str(message.get("direction") or "incoming") != "incoming":
+            return
+        message_id = str(message.get("message_id") or "")
+        if not message_id:
+            return
+        association = self._service.task_reply_association_for_message(
+            conversation_id=conversation_id, message_id=message_id, user_id=user_id,
+        )
+        if association is not None:
+            message["task_reply_association"] = association
+
+    def _attach_task_reply_associations(
+        self, messages: object, *, conversation_id: str, user_id: str,
+    ) -> None:
+        if not isinstance(messages, list):
+            return
+        for message in messages:
+            self._attach_task_reply_association(
+                message, conversation_id=conversation_id, user_id=user_id,
+            )
+
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
@@ -119,6 +145,15 @@ class UserIOToolDispatcher:
                 )
                 if conversation_id in ignored_chats:
                     raise KeyError("chat not found")
+                if conversation_id:
+                    self._attach_task_reply_associations(
+                        record.get("messages"),
+                        conversation_id=conversation_id, user_id=user_id,
+                    )
+                    self._attach_task_reply_association(
+                        result.get("message"),
+                        conversation_id=conversation_id, user_id=user_id,
+                    )
                 return {"ok": True, **result}
             if name.startswith('userio.meetings.telemost.'):
                 from .telemost.meetings import meetings_for
@@ -373,25 +408,30 @@ class UserIOToolDispatcher:
                 messages = self._store.new_messages(
                     source=channel, limit=int(arguments.get("limit", 50)), user_id=user_id
                 )
-                return {
-                    "ok": True,
-                    "messages": [
-                        message
-                        for message in messages
-                        if str(message["conversation_id"]) not in ignored_chats
-                    ],
-                }
+                messages = [
+                    message for message in messages
+                    if str(message["conversation_id"]) not in ignored_chats
+                ]
+                for message in messages:
+                    self._attach_task_reply_association(
+                        message, conversation_id=str(message["conversation_id"]),
+                        user_id=user_id,
+                    )
+                return {"ok": True, "messages": messages}
             if name == "userio.conversation.get":
                 ignored_chats = self._ignored_chats(arguments)
                 conversation_id = self._required(arguments, "conversation_id")
                 if conversation_id in ignored_chats:
                     return {"ok": True, "conversation": None}
-                return {
-                    "ok": True,
-                    "conversation": self._store.conversation(
-                        conversation_id, user_id=user_id
-                    ),
-                }
+                conversation = self._store.conversation(
+                    conversation_id, user_id=user_id,
+                )
+                if conversation is not None:
+                    self._attach_task_reply_associations(
+                        conversation.get("messages"),
+                        conversation_id=str(conversation["id"]), user_id=user_id,
+                    )
+                return {"ok": True, "conversation": conversation}
             if name == "userio.message.mark_seen":
                 return {
                     "ok": True,

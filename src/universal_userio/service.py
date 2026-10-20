@@ -292,6 +292,62 @@ class UserIOService:
                 listener(user_id, conversation_id, message)
         return conversation_id, accepted
 
+    def task_reply_association_for_message(
+        self, *, conversation_id: str, message_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, object] | None:
+        """Resolve only an exact canonical inbound reply for this UserIO user.
+
+        This read-side projection reuses the existing Store and U53 resolver;
+        it performs no provider I/O or write and does not change send authority.
+        """
+        user = user_id
+        rows = self._store.conversations(
+            conversation_ids=[conversation_id], limit=1, user_id=user,
+        )
+        if not rows:
+            return None
+        conversation = rows[0]
+        provider = str(conversation.get("source") or "").lower()
+        try:
+            current = self._store.message(
+                message_id, source=provider, user_id=user,
+            )
+        except ValueError:
+            return {"status": "denied", "reason": "canonical_message_ambiguous"}
+        if (current is None or str(current.get("conversation_id") or "") != str(conversation["id"])
+                or str(current.get("direction") or "") != "incoming"
+                or not str(current.get("provider_reply_to") or "").strip()):
+            return None
+
+        from .task_reply_association import (
+            InboundMessageKey, TaskReplyAssociation, UserIOStoreTaskReplyReaders,
+        )
+        key = InboundMessageKey(
+            provider=provider, account_ref=str(conversation.get("account_ref") or ""),
+            conversation_id=str(conversation["id"]), message_id=str(current["message_id"]),
+        )
+        try:
+            result = TaskReplyAssociation(UserIOStoreTaskReplyReaders(
+                self._store, user_id=user,
+            )).resolve(key)
+        except ValueError:
+            # Keep the ordinary message readable while treating inconsistent
+            # canonical provenance as a non-link. Never infer a nearby match.
+            return {"status": "denied", "reason": "canonical_store_conflict"}
+        return {
+            name: value for name, value in {
+                "status": result.status,
+                "reason": result.reason,
+                "task_id": result.task_id,
+                "operation_id": result.operation_id,
+                "contact_id": result.contact_id,
+                "source_namespace": result.source_namespace,
+                "source_id": result.source_id,
+                "provider_message_id": result.provider_message_id,
+            }.items() if value is not None
+        }
+
     def _chatgpt_agent_fallback(self, *, agent_id: str, text: str, chat_ref: str) -> dict:
         """Deliver through the user's real browser when the server POST is blocked."""
         from . import agent_channel

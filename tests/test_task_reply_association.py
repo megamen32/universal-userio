@@ -8,6 +8,8 @@ import pytest
 
 from universal_userio.adapters import inbox_message_from_envelope
 from universal_userio.contracts import ReplyDraft
+from universal_userio.mcp_surface import UserIOMcpSurface
+from universal_userio.personal_tokens import PersonalTokens
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
 from universal_userio.task_contact_qualification import (
@@ -334,6 +336,48 @@ def test_userio_max_outbox_receipt_message_and_reply_join_after_store_reopen(tmp
             "max", "max:other-account", conversation_id, inbound_message_id,
         ))
         assert cross_account.status == "denied"
+
+        readonly = PersonalTokens(reopened).create(
+            owner.user_id, "u53-readonly", scope="read_only",
+        )
+        principal = reopened.authenticate_token(readonly["token"])
+        assert principal is not None and principal.read_only
+        surface = UserIOMcpSurface(
+            reopened, UserIOService(reopened, object(), object()),
+        )
+
+        inbox = surface.dispatch(
+            "userio.inbox.list_new", {"limit": 50}, principal=principal,
+        )
+        unread = next(item for item in inbox["messages"]
+                      if item["message_id"] == inbound_message_id)
+        assert unread["task_reply_association"]["status"] == "linked"
+        assert unread["task_reply_association"]["task_id"] == TASK
+        assert unread["task_reply_association"]["operation_id"] == operation_id
+
+        history = surface.dispatch(
+            "userio.conversation.get", {"conversation_id": conversation_id},
+            principal=principal,
+        )
+        incoming = next(item for item in history["conversation"]["messages"]
+                        if item["message_id"] == inbound_message_id)
+        assert incoming["task_reply_association"]["provider_message_id"] == sent_id
+
+        channels = surface.dispatch(
+            "userio.channels.read", {"channel": "max", "chat_id": conversation_id},
+            principal=principal,
+        )
+        channel_incoming = next(item for item in channels["chat"]["messages"]
+                                if item["message_id"] == inbound_message_id)
+        assert channel_incoming["task_reply_association"]["contact_id"] == "contact-200"
+
+        denied_send = surface.dispatch(
+            "userio.channels.send_draft",
+            {"chat_id": conversation_id, "text": "not allowed"},
+            principal=principal,
+        )
+        assert denied_send == {"ok": False, "error": "read_only_token"}
+        assert max_client.sent == [("200", sent_id, MAX_BODY)]
     finally:
         reopened.close()
 
