@@ -909,16 +909,28 @@ class TelegramChannelAdapter(StoredChannelAdapter):
                  max_bytes: int | None = None) -> ChannelFile:
         if type(attachment_index) is not int or not 0 <= attachment_index < 8:
             raise ValueError("invalid_attachment_index")
-        message = self._store.message(file_ref, source="telegram", user_id=self._user_id)
+        original_file_ref = file_ref
+        if file_ref.startswith("telegram:"):
+            candidate_refs = [file_ref, file_ref.removeprefix("telegram:")]
+        else:
+            # The MCP surface removes its channel prefix. Prefer the exact
+            # account-scoped database key before considering a legacy raw id.
+            candidate_refs = ["telegram:" + file_ref, file_ref]
+        message = None
+        for candidate_ref in dict.fromkeys(candidate_refs):
+            message = self._store.message(candidate_ref, source="telegram", user_id=self._user_id)
+            if message is not None:
+                file_ref = candidate_ref
+                break
         if message is None:
-            raise AdapterNotSupported(f"Telegram message {file_ref!r} is not available locally")
+            raise AdapterNotSupported(f"Telegram message {original_file_ref!r} is not available locally")
         media = [item for item in self._store.attachments_for_message(
             source="telegram", message_id=file_ref, user_id=self._user_id)
             if str(item.get("kind") or "").lower() != "telegram_routing"]
         selected = next((item for item in media if item.get("idx") == attachment_index), None)
         if selected is None:
             raise AdapterNotSupported(
-                f"Telegram attachment {attachment_index} for message {file_ref!r} is not available locally"
+                f"Telegram attachment {attachment_index} for message {original_file_ref!r} is not available locally"
             )
         return _download_via_bridge(
             channel="telegram",

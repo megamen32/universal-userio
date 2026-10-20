@@ -161,16 +161,30 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
 
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     service = UserIOService(store, Generator(), Outbox())
+    account_ref = "telegram:540308572"
+    message_id = f"{account_ref}|-1003724214344:264"
     service.receive(
-        InboxMessage("telegram", "42", "@alice", "[Telegram document]", 1.0), route_id="telegram-reply",
+        InboxMessage("telegram", message_id, "@alice", "[Telegram document]", 1.0,
+                     peer_id="-1003724214344", conversation_kind="group"),
+        route_id="telegram-reply", account_ref=account_ref,
     )
     store.upsert_attachment(
-        source="telegram", message_id="42", user_id=store.default_user_id,
+        source="telegram", message_id=message_id, user_id=store.default_user_id,
         attachment={"kind": "document", "idx": 0, "filename": "from-tg.jpg",
                     "content_type": "image/jpeg"},
     )
+    raw_message_id = message_id.removeprefix("telegram:")
+    service.receive(
+        InboxMessage("telegram", raw_message_id, "@alice", "[Legacy Telegram document]", 2.0),
+        route_id="telegram-reply",
+    )
+    store.upsert_attachment(
+        source="telegram", message_id=raw_message_id, user_id=store.default_user_id,
+        attachment={"kind": "document", "idx": 0, "filename": "legacy-collision.jpg",
+                    "content_type": "image/jpeg"},
+    )
 
-    captured: dict[str, object] = {}
+    captured: list[dict[str, object]] = []
 
     class FakeResponse:
         def __init__(self) -> None:
@@ -181,8 +195,8 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
                 "Content-Disposition": "attachment; filename=\"__________ _ 3.xlsx\"; filename*=UTF-8''%D0%9F%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D0%B5%20%E2%84%96%203.xlsx",
             }
 
-        def read(self) -> bytes:
-            return self.body
+        def read(self, size: int = -1) -> bytes:
+            return self.body if size < 0 else self.body[:size]
 
         def __enter__(self):
             return self
@@ -196,10 +210,12 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
 
     def fake_runner(request, timeout):
         # request is the urllib.request.Request object the adapter built.
-        captured["url"] = request.full_url
-        captured["method"] = request.method
-        captured["headers"] = dict(request.headers)
-        captured["body"] = json.loads(request.data.decode())
+        captured.append({
+            "url": request.full_url,
+            "method": request.method,
+            "headers": dict(request.headers),
+            "body": json.loads(request.data.decode()),
+        })
         return FakeResponse()
 
     monkeypatch.setenv("USERIO_API_TOKEN", "test-token")
@@ -212,11 +228,19 @@ def test_telegram_channel_adapter_downloads_through_bridge(tmp_path, monkeypatch
         bridge_url="http://127.0.0.1:18095",
         runner=fake_runner,
     )
-    file = adapter.download(file_ref="42")
-    assert captured["url"].endswith("/download"), captured
-    assert captured["method"] == "POST"
-    assert captured["body"] == {"chat": "@alice", "chat_id": "@alice", "message_id": "42"}
-    assert captured["headers"]["Authorization"] == "Bearer test-token"
+    # The MCP channels.download route strips its channel prefix before calling
+    # download_for_ai; the adapter must still resolve the account-scoped row.
+    file = adapter.download_for_ai(file_ref=message_id.removeprefix("telegram:"),
+                                   max_bytes=4 * 1024 * 1024)
+    assert len(captured) == 1
+    request = captured[0]
+    assert request["url"].endswith("/download"), captured
+    assert request["method"] == "POST"
+    assert request["body"] == {
+        "chat": "@alice", "chat_id": "@alice", "message_id": message_id,
+        "max_bytes": 4 * 1024 * 1024,
+    }
+    assert request["headers"]["Authorization"] == "Bearer test-token"
     assert file.content_type == "image/jpeg"
     assert file.filename == "Приложение № 3.xlsx"
     assert file.data == b"telegram-bytes"
