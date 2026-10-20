@@ -1569,12 +1569,21 @@ class UserIOService:
         # conversation must be read again after the provider answered.
         fresh = self._store.conversation(draft.conversation_id, user_id=resolved_user_id) or {}
         messages = list(fresh.get("messages") or [])
-        newest = max((float(m.get("received_at") or 0) for m in messages), default=0.0)
-        if newest and newest >= attempt_at - _PROVIDER_CLOCK_TOLERANCE:
+        # The connector fetched the newest provider messages of that peer. The
+        # window covers the attempt only when its oldest message is older than
+        # the attempt: then every message the provider holds at or after the
+        # attempt is inside the window, and an absent body proves absence.
+        oldest_id = str(history.get("oldest_id") or "")
+        window_oldest = 0.0
+        for message in messages:
+            if str(message.get("message_id") or "").rsplit(":", 1)[-1] == oldest_id:
+                window_oldest = float(message.get("received_at") or 0.0)
+                break
+        if not window_oldest or window_oldest > attempt_at - _PROVIDER_CLOCK_TOLERANCE:
             self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
             return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                    "reason": "provider_history_reaches_the_attempt", "retry_allowed": False,
-                    "provider_newest_at": newest}
+                    "reason": "provider_history_does_not_cover_the_attempt", "retry_allowed": False,
+                    "provider_window_oldest_at": window_oldest}
         matched = [m for m in messages
                    if str(m.get("direction") or "") == "outgoing"
                    and str(m.get("body") or "") == draft.body]
@@ -1589,7 +1598,8 @@ class UserIOService:
             draft.id, "not_delivered_by_provider_history", user_id=resolved_user_id)
         return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
                 "reason": "not_delivered_by_provider_history", "retry_allowed": True,
-                "provider_newest_at": newest, "connector_available_since": available_since,
+                "provider_window_oldest_at": window_oldest,
+                "connector_available_since": available_since,
                 "provider_mirrored": int(history.get("mirrored") or 0)}
 
     def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):

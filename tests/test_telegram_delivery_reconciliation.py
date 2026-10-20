@@ -238,15 +238,29 @@ def test_mcp_approve_reports_an_unknown_outcome_with_a_stable_code(tmp_path):
     assert len(outbox.sent) == 1
 
 
+def _insert_provider_message(service, draft_id, native_id, received_at, direction="incoming",
+                             body="provider message"):
+    service._store._connection.execute(
+        "INSERT INTO messages (user_id,source,message_id,conversation_id,sender,body,received_at,"
+        "direction) VALUES (?,?,?,?,?,?,?,?)",
+        (service._store.default_user_id, "telegram",
+         f"telegram:540308572|-1003724214344:{native_id}",
+         service._store.draft(draft_id).conversation_id, "Никита", body, float(received_at), direction))
+    service._store._connection.commit()
+
+
 def test_provider_history_releases_a_legacy_claim_with_an_attested_connector(tmp_path):
     """The provider holds no such message and the connector could not have served."""
-    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31})
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31},
+                             history={"mirrored": 200, "fetched": 200, "oldest_id": "100"})
     service, draft_id = _telegram_service(tmp_path, outbox)
     try:
         service.approve(draft_id)
     except RuntimeError:
         pass
     claimed = service._store.draft_delivery_state(draft_id)
+    # The fetched window starts before the attempt, so it covers it.
+    _insert_provider_message(service, draft_id, "100", float(claimed["created_at"]) - 3600)
     result = service.reconcile_draft_delivery(
         draft_id, provider_history=True,
         connector_available_since=float(claimed["created_at"]) + 3600)
@@ -257,7 +271,8 @@ def test_provider_history_releases_a_legacy_claim_with_an_attested_connector(tmp
 
 
 def test_provider_history_needs_the_connector_availability_attestation(tmp_path):
-    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31})
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31},
+                             history={"mirrored": 200, "fetched": 200, "oldest_id": "100"})
     service, draft_id = _telegram_service(tmp_path, outbox)
     try:
         service.approve(draft_id)
@@ -270,27 +285,44 @@ def test_provider_history_needs_the_connector_availability_attestation(tmp_path)
     assert outbox.history_reads == []
 
 
-def test_provider_history_that_reaches_the_attempt_stays_unknown(tmp_path):
-    """The peer already holds a message newer than the attempt: not conclusive."""
-    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31})
+def test_provider_history_that_does_not_cover_the_attempt_stays_unknown(tmp_path):
+    """The fetched window starts after the attempt: the absence proves nothing."""
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31},
+                             history={"mirrored": 200, "fetched": 200, "oldest_id": "100"})
     service, draft_id = _telegram_service(tmp_path, outbox)
     try:
         service.approve(draft_id)
     except RuntimeError:
         pass
     claimed = service._store.draft_delivery_state(draft_id)
-    service._store._connection.execute(
-        "INSERT INTO messages (user_id,source,message_id,conversation_id,sender,body,received_at,"
-        "direction) VALUES (?,?,?,?,?,?,?,?)",
-        (service._store.default_user_id, "telegram", "telegram:540308572|-1003724214344:999",
-         service._store.draft(draft_id).conversation_id, "Никита", "что-то новое",
-         float(claimed["created_at"]) + 60, "incoming"))
-    service._store._connection.commit()
+    _insert_provider_message(service, draft_id, "100", float(claimed["created_at"]) + 60)
     result = service.reconcile_draft_delivery(
         draft_id, provider_history=True,
         connector_available_since=float(claimed["created_at"]) + 3600)
     assert result["resolution"] == "unknown"
-    assert result["reason"] == "provider_history_reaches_the_attempt"
+    assert result["reason"] == "provider_history_does_not_cover_the_attempt"
+    assert service._store.draft(draft_id).status == "sending"
+
+
+def test_provider_history_with_a_matching_message_stays_unknown(tmp_path):
+    """The provider still holds a message with this exact body."""
+    outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31},
+                             history={"mirrored": 200, "fetched": 200, "oldest_id": "100"})
+    service, draft_id = _telegram_service(tmp_path, outbox)
+    try:
+        service.approve(draft_id)
+    except RuntimeError:
+        pass
+    claimed = service._store.draft_delivery_state(draft_id)
+    body = service._store.draft(draft_id).body
+    _insert_provider_message(service, draft_id, "100", float(claimed["created_at"]) - 3600)
+    _insert_provider_message(service, draft_id, "101", float(claimed["created_at"]) + 60,
+                              direction="outgoing", body=body)
+    result = service.reconcile_draft_delivery(
+        draft_id, provider_history=True,
+        connector_available_since=float(claimed["created_at"]) + 3600)
+    assert result["resolution"] == "unknown"
+    assert result["reason"] == "provider_has_a_matching_message"
     assert service._store.draft(draft_id).status == "sending"
 
 
