@@ -4,6 +4,6 @@ description: Use Universal UserIO to inspect the owner's unified communications 
 ---
 # Universal UserIO
 
-Use the `UserIO` MCP server for the owner's connected communication channels.
+Use the active UserIO MCP server for the owner's connected communication channels. If both the plugin connection and a workspace connection are present, prefer the workspace connection named `userio-authenticated` when it has a valid token; do not call a connection that reports an authorization error.
 
 Prefer resource reads/subscriptions for inbox monitoring and tools for bounded queries/actions. Preserve source provenance when summarizing or extracting tasks. Never send, approve a draft, mark read, delete, or otherwise mutate communication state unless the current UserIO user's capabilities expose that operation and the user explicitly asked for it.
