@@ -165,7 +165,8 @@ class SQLiteUserIOStore:
                 password_iterations INTEGER NOT NULL,
                 role TEXT NOT NULL,
                 created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
+                updated_at REAL NOT NULL,
+                auth_kind TEXT NOT NULL DEFAULT 'password'
             );
             CREATE TABLE IF NOT EXISTS api_tokens (
                 id TEXT PRIMARY KEY,
@@ -203,8 +204,44 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,
                 expires_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS login_challenges (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                code_hash BLOB NOT NULL,
+                salt BLOB NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                consumed_at REAL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                request_ip TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS login_challenges_destination_idx
+                ON login_challenges(channel,destination,created_at);
+            CREATE INDEX IF NOT EXISTS login_challenges_ip_idx
+                ON login_challenges(request_ip,created_at);
+            CREATE TABLE IF NOT EXISTS login_identities (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                identifier TEXT NOT NULL,
+                display_name TEXT NOT NULL DEFAULT '',
+                verified_at REAL NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(channel,identifier)
+            );
+            CREATE INDEX IF NOT EXISTS login_identities_user_idx ON login_identities(user_id);
             """
         )
+        # Users registered with a one-time code never own a usable password,
+        # so their row records the authentication kind explicitly.
+        user_columns = {
+            str(row["name"]) for row in self._connection.execute("PRAGMA table_info(users)")
+        }
+        if "auth_kind" not in user_columns:
+            self._connection.execute(
+                "ALTER TABLE users ADD COLUMN auth_kind TEXT NOT NULL DEFAULT 'password'"
+            )
         # Existing v1 databases have the original, smaller api_tokens table.
         columns = {
             str(row["name"]) for row in self._connection.execute("PRAGMA table_info(api_tokens)")
@@ -244,7 +281,11 @@ class SQLiteUserIOStore:
             salt, digest = self._digest(secrets.token_urlsafe(32))
             owner_id, now = "user_owner", time.time()
             self._connection.execute(
-                "INSERT INTO users VALUES (?,?,?,?,?,?,?,?)",
+                """
+                INSERT INTO users
+                (id,username,password_salt,password_hash,password_iterations,role,created_at,updated_at,auth_kind)
+                VALUES (?,?,?,?,?,?,?,?,'password')
+                """,
                 (owner_id, "owner", salt, digest, _ITERATIONS, "owner", now, now),
             )
         else:
@@ -993,7 +1034,11 @@ class SQLiteUserIOStore:
         try:
             with self._lock, self._connection:
                 self._connection.execute(
-                    "INSERT INTO users VALUES (?,?,?,?,?,?,?,?)",
+                    """
+                    INSERT INTO users
+                    (id,username,password_salt,password_hash,password_iterations,role,created_at,updated_at,auth_kind)
+                    VALUES (?,?,?,?,?,?,?,?,'password')
+                    """,
                     (user_id, username, salt, digest, _ITERATIONS, role, now, now),
                 )
                 token = self._issue_token(user_id) if issue_token else None
@@ -1033,7 +1078,138 @@ class SQLiteUserIOStore:
             expected = bytes(32) if row is None else bytes(row["password_hash"])
             if row is None or not hmac.compare_digest(digest, expected):
                 return None
+            if str(row["auth_kind"] or "password") != "password":
+                # Users registered with a one-time code own no usable
+                # password; they authenticate with a code only.
+                return None
         return UserPrincipal(str(row["id"]), str(row["username"]), str(row["role"]))
+
+    # -- passwordless login ------------------------------------------------
+    # Challenges and identities are durable state: a code is stored only as a
+    # hash, and a verified channel identity is bound to exactly one user.
+
+    def create_login_challenge(self, *, channel: str, destination: str, code_hash: bytes,
+                               salt: bytes, ttl_seconds: int, request_ip: str = "") -> str:
+        challenge_id = "login_" + uuid.uuid4().hex
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO login_challenges
+                (id,channel,destination,code_hash,salt,created_at,expires_at,consumed_at,attempts,request_ip)
+                VALUES (?,?,?,?,?,?,?,NULL,0,?)
+                """,
+                (challenge_id, channel, destination, code_hash, salt, now,
+                 now + max(1, int(ttl_seconds)), request_ip),
+            )
+        return challenge_id
+
+    def login_challenge_count(self, *, channel: str, destination: str, since: float) -> int:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS total FROM login_challenges"
+                " WHERE channel=? AND destination=? AND created_at>=?",
+                (channel, destination, since),
+            ).fetchone()
+        return int(row["total"])
+
+    def login_challenge_count_from_ip(self, *, request_ip: str, since: float) -> int:
+        if not request_ip:
+            return 0
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS total FROM login_challenges"
+                " WHERE request_ip=? AND created_at>=?",
+                (request_ip, since),
+            ).fetchone()
+        return int(row["total"])
+
+    def login_challenge_candidates(self, *, channel: str, destination: str, now: float) -> list[dict[str, object]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT id,code_hash,salt,expires_at,attempts FROM login_challenges
+                WHERE channel=? AND destination=? AND consumed_at IS NULL AND expires_at>=?
+                ORDER BY created_at DESC LIMIT 5
+                """,
+                (channel, destination, now),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def consume_login_challenge(self, challenge_id: str) -> bool:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "UPDATE login_challenges SET consumed_at=? WHERE id=? AND consumed_at IS NULL",
+                (time.time(), challenge_id),
+            )
+        return cursor.rowcount == 1
+
+    def bump_login_challenge_attempts(self, challenge_ids: list[str]) -> None:
+        if not challenge_ids:
+            return
+        with self._lock, self._connection:
+            self._connection.executemany(
+                "UPDATE login_challenges SET attempts=attempts+1 WHERE id=?",
+                [(challenge_id,) for challenge_id in challenge_ids],
+            )
+
+    def login_identity(self, *, channel: str, identifier: str) -> dict[str, object] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT id,user_id,channel,identifier,display_name,verified_at"
+                " FROM login_identities WHERE channel=? AND identifier=?",
+                (channel, identifier),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def login_identity_user(self, *, channel: str, identifier: str) -> UserPrincipal | None:
+        identity = self.login_identity(channel=channel, identifier=identifier)
+        if identity is None:
+            return None
+        return self.user(str(identity["user_id"]))
+
+    def create_login_user(self, *, channel: str, identifier: str,
+                          display_name: str = "") -> tuple[UserPrincipal, str]:
+        """Register a passwordless user for a verified channel identity.
+
+        The generated password is random and never disclosed, so the account
+        can only be entered with a one-time code.
+        """
+        username = "u" + hashlib.sha256((channel + "\0" + identifier).encode()).hexdigest()[:16]
+        salt, digest = self._digest(secrets.token_urlsafe(32))
+        user_id, now = "user_" + uuid.uuid4().hex, time.time()
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT id FROM users WHERE username=? COLLATE NOCASE", (username,)
+            ).fetchone()
+            if row is None:
+                self._connection.execute(
+                    """
+                    INSERT INTO users
+                    (id,username,password_salt,password_hash,password_iterations,role,created_at,updated_at,auth_kind)
+                    VALUES (?,?,?,?,?,'user',?,?,'code')
+                    """,
+                    (user_id, username, salt, digest, _ITERATIONS, now, now),
+                )
+            else:
+                user_id = str(row["id"])
+            self._connection.execute(
+                """
+                INSERT INTO login_identities
+                (id,user_id,channel,identifier,display_name,verified_at,created_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(channel,identifier) DO UPDATE SET
+                    user_id=excluded.user_id, display_name=excluded.display_name,
+                    verified_at=excluded.verified_at
+                """,
+                ("identity_" + uuid.uuid4().hex, user_id, channel, identifier, display_name, now, now),
+            )
+            token = self._issue_token(user_id)
+        return UserPrincipal(user_id, username, "user"), token
+
+    def issue_access_token(self, user_id: str) -> str:
+        with self._lock, self._connection:
+            return self._issue_token(user_id)
 
     def _issue_token(self, user_id: str) -> str:
         token = "uio_" + secrets.token_urlsafe(32)

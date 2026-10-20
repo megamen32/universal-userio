@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import hashlib
+import html
 import imaplib
 import json
 import mimetypes
@@ -19,7 +20,7 @@ from email.utils import parseaddr
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Type
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -32,6 +33,7 @@ from .account_connections import (
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
+from .login_codes import LoginCodeService, LoginCodeSettings
 from .mcp_surface import UserIOMcpSurface
 from .mcp_transport import MODERN_PROTOCOL_VERSION, ResourceSubscriptionHub, json_rpc_response, sse_message
 from .oauth import OAuthError, OAuthProvider
@@ -132,11 +134,14 @@ def _disconnect_telegram_qr(*, token: str, user_id: str, account_id: str,
 def handler(
     service: UserIOService, *, token: str, vkid_app_id: str = "",
     trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
+    login_service: LoginCodeService | None = None,
 ) -> Type[BaseHTTPRequestHandler]:
     surface = UserIOMcpSurface(service._store, service)
     oauth = OAuthProvider(service._store)
     personal_tokens = PersonalTokens(service._store)
     subscriptions = ResourceSubscriptionHub()
+    login_codes = login_service or LoginCodeService(
+        service._store, settings=LoginCodeSettings.from_env())
     from .max_accounts import MaxAccounts
     max_accounts = MaxAccounts(service)
     supplied_identity = runtime_identity or {}
@@ -243,11 +248,62 @@ def handler(
             raw = self.rfile.read(length).decode("utf-8")
             return {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
 
+        def _values(self) -> dict[str, str]:
+            """Read one request body as JSON or as a form, whichever it is."""
+
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type == "application/json":
+                try:
+                    payload = json.loads(raw or b"{}")
+                except json.JSONDecodeError:
+                    return {}
+                if not isinstance(payload, dict):
+                    return {}
+                return {str(key): str(value) for key, value in payload.items() if value is not None}
+            decoded = raw.decode("utf-8", "replace")
+            return {key: values[-1] for key, values in parse_qs(decoded, keep_blank_values=True).items()}
+
+        def _query_value(self, name: str) -> str:
+            values = parse_qs(urlparse(self.path).query)
+            entries = values.get(name) or []
+            return entries[-1] if entries else ""
+
+        def _client_ip(self) -> str:
+            """Best-effort client address for rate limiting.
+
+            The public ingress forwards the real address, so a loopback peer
+            means the request came through the proxy and the forwarded value
+            is the one that counts.
+            """
+
+            peer = self.client_address[0] if self.client_address else ""
+            if peer and peer not in {"127.0.0.1", "::1"}:
+                return peer
+            forwarded = self.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            if forwarded:
+                return forwarded
+            return self.headers.get("X-Real-IP", "").strip() or peer
+
         def _base_url(self) -> str:
             scheme = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip()
             if scheme not in {"http", "https"}:
                 scheme = "https" if self.headers.get("Forwarded", "").startswith("proto=https") else "http"
             return f"{scheme}://{self.headers.get('Host', 'localhost')}"
+
+        def _login_options(self, next_path: str) -> dict[str, object]:
+            """Describe the passwordless login options for the rendered page."""
+
+            settings = login_codes.settings
+            target = _safe_next(next_path)
+            return {
+                "email_enabled": settings.email_enabled,
+                "telegram_bot_id": settings.telegram_bot_id,
+                "telegram_auth_url": (
+                    self._base_url() + "/auth/telegram?next=" + quote(target, safe="")),
+                "next": target,
+            }
 
         def _mcp_origin_allowed(self) -> bool:
             origin = self.headers.get("Origin")
@@ -345,6 +401,65 @@ def handler(
                     principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
                 )
                 self._redirect("/", cookie=self._session_cookie(
+                    "userio_web_session", session,
+                    max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
+                ))
+                return
+            if path == "/auth/challenge":
+                values = self._values()
+                login_codes.request_email_code(
+                    str(values.get("destination") or values.get("email") or ""),
+                    request_ip=self._client_ip())
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() == "application/json":
+                    # The answer is the same for every address, so the
+                    # endpoint cannot be used to discover who has an account.
+                    self._reply(202, {"status": "accepted"})
+                    return
+                self._redirect(_with_notice(
+                    _safe_next(values.get("next") or self._query_value("next")), "code_sent=1"))
+                return
+            if path == "/auth/session/code":
+                values = self._values()
+                principal = login_codes.verify_email_code(
+                    str(values.get("destination") or values.get("email") or ""),
+                    str(values.get("code") or ""))
+                if principal is None:
+                    self._html(401, _dashboard_login_page(
+                        invalid=True, code=True, login_options=self._login_options("/login")).encode())
+                    return
+                session = service._store.create_oauth_session(
+                    principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME)
+                self._redirect(_safe_next(values.get("next") or self._query_value("next")),
+                               cookie=self._session_cookie(
+                    "userio_web_session", session,
+                    max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
+                ))
+                return
+            if path == "/auth/login/code":
+                values = self._values()
+                principal = login_codes.verify_email_code(
+                    str(values.get("destination") or values.get("email") or ""),
+                    str(values.get("code") or ""))
+                if principal is None:
+                    self._reply(401, {"error": "invalid code"})
+                    return
+                issued_token = service._store.issue_access_token(principal.user_id)
+                self._reply(200, {
+                    "token": issued_token, "token_type": "Bearer",
+                    "user": {"id": principal.user_id, "username": principal.username, "role": principal.role},
+                })
+                return
+            if path == "/auth/telegram":
+                values = self._values()
+                principal = login_codes.verify_telegram_login(values)
+                if principal is None:
+                    self._html(401, _dashboard_login_page(
+                        invalid=True, code=True, login_options=self._login_options("/login")).encode())
+                    return
+                session = service._store.create_oauth_session(
+                    principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME)
+                self._redirect(_safe_next(values.get("next") or self._query_value("next")),
+                               cookie=self._session_cookie(
                     "userio_web_session", session,
                     max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
                 ))
@@ -1506,8 +1621,10 @@ def handler(
             if requested_path == "/authorize":
                 try:
                     values = {key: value[-1] for key, value in query.items()}
+                    next_path = "/authorize?" + urlencode(values) if values else "/authorize"
                     self._html(200, oauth.authorization_form(
-                        oauth.authorize_request(values), self._oauth_session()
+                        oauth.authorize_request(values), self._oauth_session(),
+                        login_html=_login_code_html(self._login_options(next_path)),
                     ))
                 except OAuthError as error:
                     self._oauth_error(error)
@@ -1542,7 +1659,9 @@ def handler(
                 if self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
                     return
-                self._html(200, _dashboard_login_page().encode())
+                self._html(200, _dashboard_login_page(
+                    login_options=self._login_options("/login"),
+                    notice=self._query_value("code_sent")).encode())
                 return
             if requested_path == "/signup":
                 if self._cookie_principal("userio_web_session") is not None:
@@ -2499,9 +2618,64 @@ def _download_page() -> str:
 </html>"""
 
 
-def _dashboard_login_page(*, invalid: bool = False) -> str:
+def _safe_next(value: str) -> str:
+    """Only same-site relative paths survive as a redirect target."""
+
+    candidate = str(value or "").strip()
+    if not candidate.startswith("/") or candidate.startswith("//") or "\\" in candidate:
+        return "/"
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    return candidate
+
+
+def _with_notice(path: str, notice: str) -> str:
+    separator = "&" if "?" in path else "?"
+    return f"{path}{separator}{notice}"
+
+
+def _login_code_html(options: Mapping[str, object] | None) -> str:
+    """Render the code and Telegram login options shared by the entry pages."""
+
+    if not options:
+        return ""
+    next_path = str(options.get("next") or "/")
+    parts: list[str] = []
+    if options.get("email_enabled"):
+        parts.append(f"""
+    <form method="post" action="/auth/session/code">
+      <input type="hidden" name="next" value="{html.escape(next_path, quote=True)}">
+      <label>Email<input name="destination" type="email" autocomplete="email" required></label>
+      <label>Код<input name="code" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" autocomplete="one-time-code"></label>
+      <button type="submit" formaction="/auth/challenge" formmethod="post">Получить код</button>
+      <button type="submit">Войти по коду</button>
+    </form>""")
+    bot_id = str(options.get("telegram_bot_id") or "")
+    if bot_id:
+        parts.append(f"""
+    <div class="userio-telegram-login">
+      <script async src="https://telegram.org/js/telegram-widget.js?22"
+        data-telegram-login="{html.escape(bot_id, quote=True)}"
+        data-auth-url="{html.escape(str(options.get('telegram_auth_url') or ''), quote=True)}"
+        data-size="large"></script>
+    </div>""")
+    if not parts:
+        return ""
+    return '<div class="userio-code-login"><h2>Войти по коду</h2>' + "".join(parts) + "</div>"
+
+
+def _dashboard_login_page(*, invalid: bool = False, code: bool = False,
+                           login_options: Mapping[str, object] | None = None,
+                           notice: str = "") -> str:
     error = (
-        '<p class="userio-error" role="alert">Неверный логин или пароль.</p>' if invalid else ""
+        '<p class="userio-error" role="alert">Неверный логин или пароль.</p>' if invalid and not code else
+        ('<p class="userio-error" role="alert">Код не подошёл. Запросите новый и попробуйте снова.</p>'
+         if code else "")
+    )
+    sent = (
+        '<p class="userio-notice" role="status">Код отправлен. Проверьте почту и введите его.</p>'
+        if notice == "code_sent" else ""
     )
     return f"""<!doctype html>
 <html lang="ru">
@@ -2523,11 +2697,13 @@ def _dashboard_login_page(*, invalid: bool = False) -> str:
         <h1 class="userio-setup-title">Universal UserIO</h1>
         <p class="userio-setup-lead">Войдите, чтобы открыть свои каналы и аккаунты.</p>
         {error}
+        {sent}
         <form method="post" action="/auth/session">
           <label>Логин<input name="username" autocomplete="username" required autofocus></label>
           <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
           <button type="submit">Войти</button>
         </form>
+        {_login_code_html(login_options)}
         <p>Нет аккаунта? <a href="/signup">Зарегистрироваться</a></p>
       </section>
     </div>

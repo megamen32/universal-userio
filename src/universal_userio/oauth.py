@@ -99,7 +99,8 @@ class OAuthProvider:
             "username": values.get("username", ""),
         }
 
-    def authorization_form(self, request: dict[str, object], principal: UserPrincipal | None) -> bytes:
+    def authorization_form(self, request: dict[str, object], principal: UserPrincipal | None,
+                           *, login_html: str = "") -> bytes:
         hidden = "".join(
             f'<input type="hidden" name="{html.escape(key)}" value="{html.escape(str(value or ""))}">'
             for key, value in request.items()
@@ -114,11 +115,13 @@ class OAuthProvider:
             '<label>Логин <input name="username" autocomplete="username" required></label>'
             '<label>Пароль <input type="password" name="password" autocomplete="current-password" required></label>'
         )
+        extra = "" if principal else login_html
         return f"""<!doctype html><html lang="ru"><meta charset="utf-8">
 <title>Разрешить доступ UserIO</title>
 <style>body{{font:16px system-ui;max-width:420px;margin:8vh auto;padding:20px}}label,input,button{{display:block;width:100%;box-sizing:border-box;margin:10px 0;padding:9px}}</style>
 <h1>Подключение UserIO</h1><p>Приложение получит полный доступ к вашим каналам UserIO (<code>userio</code>).</p>
 <form method="post" action="/authorize">{hidden}{who}<button name="consent" value="allow">Войти и разрешить</button></form>
+{extra}
 </html>""".encode()
 
     def authorize(self, values: dict[str, str], session_user: UserPrincipal | None) -> tuple[str, UserPrincipal | None]:
