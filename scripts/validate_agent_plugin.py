@@ -78,6 +78,17 @@ if fields.get("name") != skill_dir.name:
 description = fields.get("description", "")
 if not description or len(description) > 1024:
     raise ValueError("skills/userio/SKILL.md: description must be 1..1024 characters")
+required_auth_boundaries = (
+    "## Authentication boundary (fail closed)",
+    "returns 401",
+    "Do not retry against another connection, identity, or credential.",
+    "Never obtain, read, or reuse a UserIO token",
+    "Never call the UserIO backend directly over HTTP",
+    "Never present results obtained under a different identity",
+)
+for boundary in required_auth_boundaries:
+    if boundary not in skill_text:
+        raise ValueError(f"skills/userio/SKILL.md: missing auth boundary: {boundary}")
 
 for relative_path in ("plugin.json", "mcp.json", "skills/userio/SKILL.md"):
     require_copy(relative_path)
