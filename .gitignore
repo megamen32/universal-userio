@@ -5,6 +5,13 @@ __pycache__/
 *.sqlite3
 *.sqlite3-*
 
+# Local virtual environments: they carry their own copies of configuration
+# and must never enter the public repository.
+.venv/
+.venv-*/
+venv/
+env/
+
 .env.owner-seed
 .userio-release.json
 .agents/shared-session/
