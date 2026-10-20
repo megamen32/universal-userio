@@ -739,6 +739,63 @@ def test_http_mcp_modern_version_header_fills_omitted_empty_client_metadata(tmp_
         thread.join(timeout=2)
 
 
+def test_http_mcp_legacy_client_header_is_not_treated_as_modern(tmp_path) -> None:
+    """A 2025-era SDK must be served on the legacy path, not rejected.
+
+    The MCP spec of that era requires every HTTP client to send
+    `MCP-Protocol-Version`, so the header alone cannot mean "modern client".
+    Treating it as such pushed MiniMax Code and other 2025-era clients into
+    the 2026-07-28 branch and failed them with -32020 for missing per-request
+    metadata. Such a client must get the legacy handshake (2024-11-05) and
+    working tools.
+    """
+    service = UserIOService(SQLiteUserIOStore(tmp_path / "mcp-legacy-http.sqlite3"), Generator(), Outbox())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}/mcp"
+    legacy_headers = {
+        "Authorization": "Bearer test-token", "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2024-11-05",
+    }
+
+    def post(payload: dict) -> dict:
+        request = Request(url, data=json.dumps(payload).encode(), method="POST", headers=legacy_headers)
+        with urlopen(request) as response:
+            raw = response.read().decode()
+        if raw.startswith("event:"):
+            raw = raw.split("data: ", 1)[1].split("\n", 1)[0]
+        return json.loads(raw)
+
+    try:
+        initialized = post({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05", "capabilities": {},
+                "clientInfo": {"name": "legacy-sdk", "version": "1"},
+            },
+        })
+        assert initialized["result"]["protocolVersion"] == "2024-11-05"
+
+        listed = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        names = [tool["name"] for tool in listed["result"]["tools"]]
+        assert "userio.channels.list" in names
+        assert "userio.accounts.list" in names
+
+        called = post({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": {"name": "userio.channels.list", "arguments": {"channel": "telegram"}},
+        })
+        assert called["result"]["structuredContent"]["ok"] is True
+        assert called["result"]["isError"] is False
+        assert json.loads(called["result"]["content"][0]["text"])["ok"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_http_mcp_exclusions_apply_only_to_the_requesting_consumer(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     hermes_conversation_id, _ = service.receive(
