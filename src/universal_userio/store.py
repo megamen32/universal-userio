@@ -1162,11 +1162,58 @@ class SQLiteUserIOStore:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def login_identities(self) -> list[dict[str, object]]:
+        """List every bound identity with the user it opens."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT i.id,i.user_id,i.channel,i.identifier,i.display_name,i.verified_at,"
+                " u.username,u.role FROM login_identities i"
+                " LEFT JOIN users u ON u.id=i.user_id"
+                " ORDER BY i.channel,i.identifier"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def login_identity_user(self, *, channel: str, identifier: str) -> UserPrincipal | None:
         identity = self.login_identity(channel=channel, identifier=identifier)
         if identity is None:
             return None
         return self.user(str(identity["user_id"]))
+
+    def register_login_identity(self, *, user_id: str, channel: str, identifier: str,
+                                display_name: str = "") -> dict[str, object]:
+        """Bind a verified channel identity to an existing user.
+
+        An owner who already owns a user binds their own verified address or
+        Telegram account to it, so a one-time code opens that user instead of
+        registering a second one.
+        """
+        if self.user(user_id) is None:
+            raise ValueError("unknown user")
+        now = time.time()
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO login_identities
+                (id,user_id,channel,identifier,display_name,verified_at,created_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(channel,identifier) DO UPDATE SET
+                    user_id=excluded.user_id, display_name=excluded.display_name,
+                    verified_at=excluded.verified_at
+                """,
+                ("identity_" + uuid.uuid4().hex, user_id, channel, identifier, display_name, now, now),
+            )
+        identity = self.login_identity(channel=channel, identifier=identifier)
+        assert identity is not None
+        return identity
+
+    def remove_login_identity(self, *, channel: str, identifier: str) -> bool:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM login_identities WHERE channel=? AND identifier=?",
+                (channel, identifier),
+            )
+        return cursor.rowcount > 0
 
     def create_login_user(self, *, channel: str, identifier: str,
                           display_name: str = "") -> tuple[UserPrincipal, str]:

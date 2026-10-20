@@ -213,6 +213,24 @@ def test_http_challenge_and_code_login_issue_a_working_token(tmp_path):
         server.server_close()
 
 
+def test_an_owner_can_bind_an_identity_to_an_existing_user(tmp_path):
+    service, login, sent = _service(tmp_path)
+    owner = service._store.owner()
+    identity = service._store.register_login_identity(
+        user_id=owner.user_id, channel=CHANNEL_EMAIL, identifier="owner@example.com",
+        display_name="Owner")
+    assert identity["user_id"] == owner.user_id
+    assert service._store.login_identity_user(
+        channel=CHANNEL_EMAIL, identifier="owner@example.com").user_id == owner.user_id
+    assert len(service._store.login_identities()) == 1
+
+    # The bound identity now opens the owner instead of registering a user.
+    principal = login.verify_email_code("owner@example.com", "not-a-code")
+    assert principal is None
+    service._store.remove_login_identity(channel=CHANNEL_EMAIL, identifier="owner@example.com")
+    assert service._store.login_identities() == []
+
+
 def test_login_page_offers_the_code_and_telegram_options(tmp_path):
     service, login, sent = _service(tmp_path)
     server, base = _server(service, login)
