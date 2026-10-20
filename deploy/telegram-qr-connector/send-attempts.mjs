@@ -28,6 +28,10 @@ export class SendAttemptLedger {
     // the absence of an entry.
     this.startedAt = now();
     this.load();
+    // Persist the epoch immediately. It must survive every restart of the
+    // connector: it is the boundary that decides whether the absence of an
+    // entry proves anything about an older attempt.
+    this.save();
   }
 
   load() {

@@ -70,6 +70,17 @@ test("the journal is bounded", () => {
   assert.ok(ledger.get("draft_5"));
 });
 
+test("the journal epoch survives a connector restart", () => {
+  const path = ledgerPath();
+  const first = new SendAttemptLedger(path);
+  const epoch = first.startedAt;
+  const second = new SendAttemptLedger(path);
+  assert.equal(second.startedAt, epoch);
+  // The epoch is the boundary for "was this attempt ever recorded", so it
+  // must not move when the connector restarts.
+  assert.ok(readFileSync(path, "utf8").includes(String(epoch)));
+});
+
 test("an attempt without an id is never journalled", () => {
   const ledger = new SendAttemptLedger(ledgerPath());
   assert.equal(ledger.record("", { state: "sent" }), null);
