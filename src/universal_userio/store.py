@@ -216,9 +216,14 @@ class SQLiteUserIOStore:
             ("oauth_client_id", "TEXT"),
             ("scope", "TEXT"),
             ("account_refs", "TEXT"),
+            ("mandate_id", "TEXT"),
         ):
             if name not in columns:
                 self._connection.execute(f"ALTER TABLE api_tokens ADD COLUMN {name} {definition}")
+        self._connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS api_tokens_task_mandate_idx "
+            "ON api_tokens(mandate_id) WHERE kind='task_mandate' AND mandate_id IS NOT NULL"
+        )
 
     def _contact_names_migration(self) -> None:
         columns = {str(row["name"]) for row in self._connection.execute("PRAGMA table_info(contact_names)")}
@@ -427,6 +432,25 @@ class SQLiteUserIOStore:
                 sending_at REAL,delivery_state TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY(user_id,id)
             );
+            CREATE TABLE IF NOT EXISTS task_mandates (
+                user_id TEXT NOT NULL,id TEXT NOT NULL,issuer_user_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,actor_id TEXT NOT NULL,account_ref TEXT NOT NULL,
+                channel TEXT NOT NULL,recipient_ids_json TEXT NOT NULL,purpose TEXT NOT NULL,
+                max_sends INTEGER NOT NULL,version INTEGER NOT NULL,
+                policy_hash TEXT NOT NULL,created_at REAL NOT NULL,expires_at REAL NOT NULL,
+                revoked_at REAL,PRIMARY KEY(user_id,id)
+            );
+            CREATE INDEX IF NOT EXISTS task_mandates_active_idx
+                ON task_mandates(user_id,revoked_at,expires_at);
+            CREATE TABLE IF NOT EXISTS task_mandate_operations (
+                user_id TEXT NOT NULL,mandate_id TEXT NOT NULL,operation_id TEXT NOT NULL,
+                mandate_version INTEGER NOT NULL,operation_hash TEXT NOT NULL,
+                operation_json TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,
+                PRIMARY KEY(user_id,mandate_id,operation_id),
+                FOREIGN KEY(user_id,mandate_id) REFERENCES task_mandates(user_id,id)
+            );
+            CREATE INDEX IF NOT EXISTS task_mandate_operations_count_idx
+                ON task_mandate_operations(user_id,mandate_id);
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
             CREATE TABLE IF NOT EXISTS draft_context_snapshots (
@@ -527,6 +551,37 @@ class SQLiteUserIOStore:
         for statement in script.split(";"):
             if statement.strip():
                 self._connection.execute(statement)
+        self._connection.execute("""
+            CREATE TRIGGER IF NOT EXISTS task_mandates_immutable_update
+            BEFORE UPDATE ON task_mandates
+            WHEN NEW.user_id IS NOT OLD.user_id OR NEW.id IS NOT OLD.id
+              OR NEW.issuer_user_id IS NOT OLD.issuer_user_id
+              OR NEW.task_id IS NOT OLD.task_id OR NEW.actor_id IS NOT OLD.actor_id
+              OR NEW.account_ref IS NOT OLD.account_ref OR NEW.channel IS NOT OLD.channel
+              OR NEW.recipient_ids_json IS NOT OLD.recipient_ids_json
+              OR NEW.purpose IS NOT OLD.purpose OR NEW.max_sends IS NOT OLD.max_sends
+              OR NEW.policy_hash IS NOT OLD.policy_hash OR NEW.created_at IS NOT OLD.created_at
+              OR NEW.expires_at IS NOT OLD.expires_at
+              OR NOT ((NEW.revoked_at IS OLD.revoked_at AND NEW.version=OLD.version)
+                      OR (OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+                          AND NEW.version=OLD.version+1))
+            BEGIN SELECT RAISE(ABORT,'task mandate policy is immutable'); END
+        """)
+        self._connection.execute("""
+            CREATE TRIGGER IF NOT EXISTS task_mandates_no_delete
+            BEFORE DELETE ON task_mandates
+            BEGIN SELECT RAISE(ABORT,'task mandates are durable'); END
+        """)
+        self._connection.execute("""
+            CREATE TRIGGER IF NOT EXISTS task_mandate_operations_no_update
+            BEFORE UPDATE ON task_mandate_operations
+            BEGIN SELECT RAISE(ABORT,'task mandate reservations are immutable'); END
+        """)
+        self._connection.execute("""
+            CREATE TRIGGER IF NOT EXISTS task_mandate_operations_no_delete
+            BEFORE DELETE ON task_mandate_operations
+            BEGIN SELECT RAISE(ABORT,'task mandate reservations are durable'); END
+        """)
         # Lightweight migration: conversations learn which connected account
         # owns them so replies always leave from the identity the user picked.
         try:
@@ -917,6 +972,7 @@ class SQLiteUserIOStore:
                 """
                 SELECT u.id,u.username,u.role,t.kind,t.scope,t.account_refs FROM api_tokens t JOIN users u ON u.id=t.user_id
                 WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.token_type='access'
+                  AND t.kind<>'task_mandate'
                   AND (t.expires_at IS NULL OR t.expires_at>?)
                 """,
                 (self._token_hash(token), time.time()),
