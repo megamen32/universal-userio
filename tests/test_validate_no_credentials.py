@@ -8,6 +8,14 @@ spec = importlib.util.spec_from_file_location("validate_no_credentials", SCRIPT)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+# The sensitive-looking strings are assembled at run time on purpose: a literal
+# token or key body committed here would be a real finding for the repository
+# scanner, and this file is scanned by that same check.
+SAMPLE_USERIO_TOKEN_VALUE = "uio_" + "DS" + "fw" * 12 + "0123456789"
+SAMPLE_BEARER_VALUE = "8f31c0d9a7b6e5d4" * 2
+SAMPLE_PEM_BODY_VALUE = "MIIEowIBAAKCAQEA" + "y8Dbv8prpJ" * 3
+SAMPLE_SECRET_VALUE = "1234567890:AAH" + "abcdefghijklmnop"
+
 
 def scan(tmp_path: Path, name: str, body: str) -> list[str]:
     target = tmp_path / name
@@ -16,14 +24,14 @@ def scan(tmp_path: Path, name: str, body: str) -> list[str]:
 
 
 def test_userio_token_is_reported(tmp_path) -> None:
-    findings = scan(tmp_path, "leak.py", 'token = "uio_DSfwabcdefghijklmnopqrstuvwxyz0123456789"\n')
+    findings = scan(tmp_path, "leak.py", f'token = "{SAMPLE_USERIO_TOKEN_VALUE}"\n')
     assert any("UserIO bearer token" in item for item in findings)
 
 
 def test_private_key_body_is_reported(tmp_path) -> None:
     body = (
         "-----BEGIN RSA PRIVATE KEY-----\n"
-        "MIIEowIBAAKCAQEAy8Dbv8prpJ/0kKhlGeJYozo2t60EG8L0561g13R29LvMR5hy\n"
+        f"{SAMPLE_PEM_BODY_VALUE}\n"
         "-----END RSA PRIVATE KEY-----\n"
     )
     findings = scan(tmp_path, "key.txt", body)
@@ -31,9 +39,15 @@ def test_private_key_body_is_reported(tmp_path) -> None:
 
 
 def test_bearer_credential_is_reported(tmp_path) -> None:
-    body = 'headers = {"Authorization": "Bearer 8f31c0d9a7b6e5d4c3b2a1908f7e6d5c"}\n'
+    body = f'headers = {{"Authorization": "Bearer {SAMPLE_BEARER_VALUE}"}}\n'
     findings = scan(tmp_path, "headers.py", body)
     assert any("bearer credential" in item for item in findings)
+
+
+def test_secret_assignment_is_reported(tmp_path) -> None:
+    body = f"NOTICEPLACE_TELEGRAM_TOKEN={SAMPLE_SECRET_VALUE}\n"
+    findings = scan(tmp_path, "telegram.env", body)
+    assert any("secret assignment" in item for item in findings)
 
 
 def test_redaction_regex_is_not_a_finding(tmp_path) -> None:
