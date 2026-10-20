@@ -165,6 +165,16 @@
       ]
     },
     {
+      "slug": "minimax-code",
+      "title": "MiniMax Code и UserIO",
+      "group": "ИИ и автоматизация",
+      "summary": "Импортируйте UserIO как отдельный Agent Plugin на macOS.",
+      "sources": [
+        "userio",
+        "mcp-spec"
+      ]
+    },
+    {
       "slug": "incoming-webhooks",
       "title": "Передача новых сообщений",
       "group": "ИИ и автоматизация",

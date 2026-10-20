@@ -32,6 +32,7 @@
 ## ИИ и автоматизация
 
 - [Подключите свой ИИ](guide/connect-ai.md) — Один MCP-адрес для работы с подключёнными переписками.
+- [MiniMax Code и UserIO](guide/minimax-code.md) — Импортируйте UserIO как отдельный Agent Plugin на macOS.
 - [Передача новых сообщений](guide/incoming-webhooks.md) — Пошаговый путь к HTTPS webhook для Agent Herder.
 - [Webhook для новых входящих](incoming-webhooks.md) — Подписанные HTTPS-события для Agent Herder и других обработчиков.
 - [Секретарь на новых входящих](guide/secretary.md) — Обычная оценка Fast Agent и отдельный подробный анализ.

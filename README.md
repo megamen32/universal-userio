@@ -15,7 +15,7 @@ implementation, not a third public caller. See the canonical
 
 Let your AI find agreements, explain what matters and prepare replies you can review.
 
-**[Open UserIO →](https://msg.bezrabotnyi.com/)** · **[Quick start](docs/guide/quickstart.md)** · **[All docs](docs/README.md)** · [Русское руководство](https://msg.bezrabotnyi.com/docs/)
+**[Open UserIO →](https://msg.bezrabotnyi.com/)** · **[Quick start](docs/guide/quickstart.md)** · **[MiniMax Code plugin](plugins/universal-userio/README.md)** · **[Install in MiniMax Code](docs/guide/minimax-code.md)** · **[All docs](docs/README.md)** · [Русское руководство](https://msg.bezrabotnyi.com/docs/)
 
 - **Your accounts, together.** Group authors and distinct account identities.
 - **Your text, sent immediately.** AI replies need approval; MAX messages stay editable.
