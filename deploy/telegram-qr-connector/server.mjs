@@ -28,6 +28,7 @@ import { logoutTelegramClient } from './account-disconnect.mjs';
 import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs";
 import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
 import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
+import { SendAttemptLedger, attemptState } from "./send-attempts.mjs";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -70,6 +71,10 @@ const agentDeliverIgnoredChats = String(process.env.USERIO_AGENT_IGNORED_CHATS |
   .split(",").map((value) => value.trim()).filter(Boolean);
 const agentDeliverCallbackSecret = String(process.env.USERIO_AGENT_DELIVER_CALLBACK_HMAC_SECRET || "").trim();
 const agentDeliverReceiptPath = `${stateDir}/agent-deliver-callbacks.jsonl`;
+// Durable journal of approved send attempts. It binds each attempt id to the
+// provider message id, to a refusal before provider IO, or to the honest
+// in-flight state, so an uncertain outcome is resolvable without a resend.
+const sendAttempts = new SendAttemptLedger(`${stateDir}/send-attempts.json`);
 const telegramAdminJournal = new TelegramAdminJournal(`${stateDir}/admin-actions.jsonl`);
 const agentDeliverDebouncePath = `${stateDir}/agent-deliver-debounce.json`;
 const agentDeliverDebounce = new Map();
@@ -1302,6 +1307,27 @@ http.createServer(async (req, res) => {
         const chatId = String(payload.chat_id || "").trim();
         const wantAccount = String(payload.account_id || "").trim();
         const wantSlot = String(payload.slot || "").trim();
+        const attemptId = String(payload.attempt_id || payload.request_id || "").trim();
+        // An approved send is idempotent per attempt id. A recorded delivery
+        // returns its receipt without sending again, and an attempt that may
+        // already be on the wire is never replayed. The unknown answer is a
+        // 502 on purpose: UserIO treats 4xx as a refusal that releases the
+        // claim, and a release here could duplicate a delivered message.
+        if (attemptId) {
+          const recorded = sendAttempts.get(attemptId);
+          const state = attemptState(recorded);
+          if (state === "sent") {
+            res.writeHead(200, { "content-type": "application/json" });
+            return res.end(JSON.stringify({ ok: true, duplicate: true, slot: recorded.slot,
+              account_id: recorded.account_id, peer_id: recorded.peer_id,
+              message_id: String(recorded.message_id), date: recorded.date }));
+          }
+          if (state === "pending" || state === "unknown") {
+            res.writeHead(502, { "content-type": "application/json" });
+            return res.end(JSON.stringify({ error: "this approved send may already be on the wire",
+              code: "send_outcome_unknown", submitted: "unknown" }));
+          }
+        }
         const rawText = String(payload.body || "");
         const replyToId = String(payload.reply_to_id || "").trim();
         const threadId = String(payload.thread_id || "").trim();
@@ -1335,24 +1361,35 @@ http.createServer(async (req, res) => {
             ? peers.idPeers.get(chatId)
             : (chat && peers.labelPeers.get(chat)) || (chatId && peers.idPeers.get(chatId)) || null;
           if (!peer || !item.client) return false;
+          const peerId = chatId || String(await item.client.getPeerId(peer, true));
           if (replyToId) {
             const sent = await sendTelegramReply({ client: item.client, peer, messageId: replyToId,
               threadId, expectedText, text });
             console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
+            sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
+              peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply" });
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id: chatId,
               message_id: sent.messageId, reply_to_id: sent.replyToId, thread_id: sent.threadId,
               text: sent.text, date: sent.date, out: sent.out }));
             return true;
           }
+          // Record the attempt before the provider call, so an outcome that
+          // never comes back stays honestly in flight instead of unknown.
+          sendAttempts.record(attemptId, { state: "pending", slot, account_id: item.accountId,
+            peer_id: peerId, kind: "send" });
           const sent = await item.client.sendMessage(peer, { message: text });
           console.log(`send ${slot}: "${chat || chatId}" msg ${sent && sent.id}`);
+          sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
+            peer_id: peerId, message_id: String(sent && sent.id), date: sent && sent.date });
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, message_id: String(sent && sent.id) }));
           return true;
         };
         if (chosen) {
           if (await trySend(chosen[0], chosen[1])) return;
+          sendAttempts.record(attemptId, { state: "refused", code: "chat_not_known",
+            account_id: wantAccount, peer_id: chatId });
           res.writeHead(404, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: `account ${wantAccount} does not know chat "${chat || chatId}"`,
             code: "chat_not_known", submitted: false }));
@@ -1366,6 +1403,9 @@ http.createServer(async (req, res) => {
             : [...slots.entries()].find(([, item]) => String(item.accountId || "") === wantAccount);
           const sync = pinned ? syncs.get(pinned) : null;
           const relogin = Boolean(sync && (sync.status === "relogin-required" || sync.authCode));
+          sendAttempts.record(attemptId, { state: "refused",
+            code: relogin ? "account_relogin_required" : "account_not_connected",
+            account_id: wantAccount, peer_id: chatId });
           res.writeHead(404, { "content-type": "application/json" });
           return res.end(JSON.stringify({
             error: `account ${wantAccount || wantSlot} is not connected`, submitted: false,
@@ -1375,16 +1415,21 @@ http.createServer(async (req, res) => {
         for (const [slot, item] of candidates) {
           if (await trySend(slot, item)) return;
         }
+        sendAttempts.record(attemptId, { state: "refused", code: "chat_not_known", peer_id: chatId });
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: `no connected account knows chat "${chat || chatId}"`,
           code: "chat_not_known", submitted: false }));
       } catch (error) {
         if (error instanceof TelegramReplyRefused || error?.submitted === false) {
+          sendAttempts.record(attemptId, { state: "refused", code: error.code || "reply_refused",
+            account_id: wantAccount, peer_id: chatId });
           res.writeHead(409, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: error.message || "Telegram reply refused before send",
             code: error.code || "reply_refused", submitted: false }));
         }
         console.error("send error:", (error && error.message) || error);
+        sendAttempts.record(attemptId, { state: "unknown", code: "send_outcome_unknown",
+          account_id: wantAccount, peer_id: chatId });
         res.writeHead(502, { "content-type": "application/json" });
         // An exception can arrive with a message already on the wire, so the
         // caller must keep its durable claim instead of assuming non-delivery.
@@ -1393,6 +1438,41 @@ http.createServer(async (req, res) => {
       }
     });
     return;
+  }
+  if (url.pathname === "/send-attempt" && req.method === "POST") {
+    // Read-only reconciliation of one approved send attempt. It never sends
+    // anything: it only reports what the connector durably recorded for that
+    // exact attempt id.
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const attemptId = String(payload.attempt_id || "").trim();
+      if (!attemptId) {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "attempt_id is required" }));
+      }
+      const entry = sendAttempts.get(attemptId);
+      if (!entry) {
+        res.writeHead(404, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ state: "absent", attempt_id: attemptId,
+          epoch: sendAttempts.startedAt }));
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({
+        state: attemptState(entry), attempt_id: attemptId, epoch: sendAttempts.startedAt,
+        slot: entry.slot || "", account_id: entry.account_id || "", peer_id: entry.peer_id || "",
+        message_id: entry.message_id ? String(entry.message_id) : "",
+        date: entry.date || 0, code: entry.code || "", kind: entry.kind || "send",
+        recorded_at: entry.updated_at || 0,
+      }));
+    } catch (error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: String(error.message || error) }));
+    }
   }
   if (url.pathname === "/edit" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;

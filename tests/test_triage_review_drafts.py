@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pytest
 
+from connector_probe import reachable_probe
 from universal_userio.adapters import TelegramQrHttpOutbox
 from universal_userio.ai import OpenAICompatibleDraftGenerator
 from universal_userio.contracts import InboxMessage
@@ -334,7 +335,7 @@ def test_telegram_outbox_react_posts_connector_contract() -> None:
         requests.append(request)
         return _Response({"ok": True, "slot": "slot-1", "reacted": True})
 
-    outbox = TelegramQrHttpOutbox("https://connector.example", "secret", runner=runner)
+    outbox = TelegramQrHttpOutbox("https://connector.example", "secret", runner=runner, probe=reachable_probe)
 
     receipt = outbox.react(
         chat="Печкин", chat_id="c1", account_ref="telegram:1",

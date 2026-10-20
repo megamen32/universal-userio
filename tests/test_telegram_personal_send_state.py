@@ -12,6 +12,7 @@ import io
 import json
 import urllib.error
 
+from connector_probe import reachable_probe
 from universal_userio.adapters import TelegramConnectorRefused, TelegramQrHttpOutbox
 from universal_userio.contracts import InboxMessage
 from universal_userio.service import UserIOService
@@ -36,7 +37,7 @@ def _http_error(status: int, body: dict):
     def runner(request, **_kwargs):
         raise urllib.error.HTTPError(request.full_url, status, "refused", {},
                                      io.BytesIO(json.dumps(body).encode()))
-    return TelegramQrHttpOutbox("http://127.0.0.1:18095", "token", runner=runner)
+    return TelegramQrHttpOutbox("http://127.0.0.1:18095", "token", runner=runner, probe=reachable_probe)
 
 
 def _service(tmp_path, outbox) -> tuple[UserIOService, str]:
@@ -77,7 +78,9 @@ def test_uncertain_provider_error_keeps_the_claim(tmp_path):
     try:
         service.approve(draft_id)
     except Exception as error:
-        assert "уточняется" in str(error)
+        assert "неизвестен" in str(error)
+        # A consumer must be able to branch on the stable reason.
+        assert getattr(error, "code", "") == "delivery_outcome_unknown"
     else:
         raise AssertionError("an uncertain draft must not be sent twice")
 

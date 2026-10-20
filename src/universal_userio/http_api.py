@@ -1398,9 +1398,29 @@ def handler(
                     draft = service.approve(draft_id, user_id=user_id)
                     self._reply(202, {"id": draft.id, "status": draft.status})
                     return
+                if path.startswith("/v1/drafts/") and path.endswith("/reconcile-delivery"):
+                    draft_id = path.removeprefix("/v1/drafts/").removesuffix("/reconcile-delivery").strip("/")
+                    payload = self._json()
+                    if payload.get("confirm") is not True:
+                        self._reply(400, {"error": "exact_confirmation_required"})
+                        return
+                    draft = service._store.draft(draft_id, user_id=user_id)
+                    snapshot = {
+                        "expected_text": str(payload.get("expected_text", "")),
+                        "expected_chat_id": str(payload.get("expected_chat_id", "")),
+                        "expected_attachments": list(payload.get("expected_attachments") or []),
+                    }
+                    if snapshot["expected_text"] != draft.body or snapshot["expected_chat_id"] != draft.conversation_id:
+                        self._reply(409, {"error": "draft_snapshot_conflict"})
+                        return
+                    result = service.reconcile_draft_delivery(
+                        draft_id, user_id=user_id, expected_snapshot=snapshot)
+                    self._reply(200, {"ok": True, **result})
+                    return
                 self._reply(404, {"error": "not found"})
             except DeliveryUnavailableError as error:
-                self._reply(409, {"error": str(error), "code": "delivery_unavailable"})
+                self._reply(409, {"error": str(error), "code": getattr(error, "code", "delivery_unavailable"),
+                                  "retry_allowed": False})
             except (KeyError, ValueError) as error:
                 self._reply(400, {"error": str(error)})
             except PermissionError as error:

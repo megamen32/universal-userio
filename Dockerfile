@@ -33,6 +33,17 @@ RUN printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/userio-migration-deps/asterisk-libs 
     && chmod 755 /usr/sbin/asterisk /opt/userio-migration-deps/asterisk \
     && ln -sf /usr/local/bin/python3 /usr/bin/python3 \
     && ln -s /usr/local /opt/universal-userio/.venv
+# A build context produced under a private umask carries 0600 files and 0700
+# directories. Every non-root worker (uid 1000) then cannot read its own
+# program and dies on start with EACCES: the telegram-qr connector never
+# listens, so an approved Telegram send fails as "connector unreachable" and
+# the draft claim is never released. The frontend stage already normalizes its
+# own tree for the same reason. Normalize every program tree after the last
+# copy and after npm ci, and before the package is installed. Give the workers
+# read and traverse rights; never execute the tree.
+RUN chmod -R a+rX /opt/universal-userio/src /opt/userio-telegram-qr \
+        /opt/userio-whatsapp-qr /opt/userio-matrix-bridge /opt/userio-migration-deps \
+    && chmod a+r /opt/universal-userio/pyproject.toml /opt/universal-userio/.userio-release.json
 RUN pip install --no-deps --no-cache-dir . \
     && mkdir -p /home/roomhacker/.cargo/bin \
     && ln -s /opt/userio-migration-deps/himalaya /home/roomhacker/.cargo/bin/himalaya \

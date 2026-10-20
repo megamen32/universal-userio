@@ -1,6 +1,7 @@
 import io
 import json
 
+from connector_probe import reachable_probe
 from universal_userio.adapters import TelegramQrHttpOutbox
 
 
@@ -25,7 +26,7 @@ def test_reply_posts_exact_account_peer_source_and_thread_and_checks_receipt():
             "thread_id": payload["thread_id"], "text": payload["body"], "date": 123, "out": True,
         }).encode())
 
-    outbox = TelegramQrHttpOutbox("http://telegram.invalid", "token-1", runner=runner)
+    outbox = TelegramQrHttpOutbox("http://telegram.invalid", "token-1", runner=runner, probe=reachable_probe)
     result = outbox.reply_message(chat_id="900000300", account_ref="telegram:900000101",
         message_id="77", thread_id="70", expected_text="source", text="answer", request_id="action-1")
     assert captured["request"].full_url == "http://telegram.invalid/send"
@@ -45,7 +46,7 @@ def test_reply_refuses_bad_native_ids_before_http():
         called = True
         raise AssertionError("invalid reply must not reach connector")
 
-    outbox = TelegramQrHttpOutbox("http://telegram.invalid", "token-1", runner=runner)
+    outbox = TelegramQrHttpOutbox("http://telegram.invalid", "token-1", runner=runner, probe=reachable_probe)
     try:
         outbox.reply_message(chat_id="900000300", account_ref="telegram:900000101",
             message_id="99999999999", thread_id="", expected_text="source", text="answer", request_id="a")

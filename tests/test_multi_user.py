@@ -76,11 +76,15 @@ def test_users_with_same_provider_ids_are_isolated_and_approval_is_scoped(tmp_pa
     draft = surface.dispatch(
         "userio.channels.send_draft", {"chat_id": chat_a, "text": "answer"}, principal=user_a
     )["draft"]
+    snapshot = {"expected_text": draft["body"], "expected_chat_id": chat_a,
+                "expected_attachments": []}
     denied = surface.dispatch(
-        "userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True}, principal=user_b
+        "userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True, **snapshot},
+        principal=user_b
     )
     sent = surface.dispatch(
-        "userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True}, principal=user_a
+        "userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True, **snapshot},
+        principal=user_a
     )
 
     assert denied == {"ok": False, "error": "draft not found"}

@@ -25,7 +25,15 @@ _AI_IMAGE_MAX_COUNT = 4
 
 
 class DeliveryUnavailableError(ValueError):
-    """The configured source intentionally has no outbound delivery capability."""
+    """The configured source intentionally has no outbound delivery capability.
+
+    ``code`` is the stable machine-readable reason. A consumer must branch on
+    it instead of on the localized message text.
+    """
+
+    def __init__(self, message: str, *, code: str = "delivery_unavailable") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class UserIOService:
@@ -1357,14 +1365,18 @@ class UserIOService:
         if not self._store.send_enabled(user_id=resolved_user_id):
             raise DeliveryUnavailableError("outbound delivery is disabled by user policy")
         if self._store.draft(draft_id, user_id=resolved_user_id).status == "sending":
-            raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте сообщение повторно.")
+            raise DeliveryUnavailableError(
+                "Результат отправки неизвестен. Повтор заблокирован.",
+                code="delivery_outcome_unknown")
         try:
             draft = self._store.claim_draft_send(
                 draft_id, user_id=resolved_user_id, expected_snapshot=expected_snapshot,
             )
         except ValueError:
             if self._store.draft(draft_id, user_id=resolved_user_id).status == "sending":
-                raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте сообщение повторно.") from None
+                raise DeliveryUnavailableError(
+                    "Результат отправки неизвестен. Повтор заблокирован.",
+                    code="delivery_outcome_unknown") from None
             raise
         if draft.status == "approved":
             return draft
@@ -1418,6 +1430,90 @@ class UserIOService:
             except Exception as error:
                 _LOG.warning("Accepted MAX receipt mirror is pending: %s", type(error).__name__)
         return approved
+
+    def reconcile_draft_delivery(self, draft_id: str, *, user_id: str | None = None,
+                                 expected_snapshot: dict[str, object] | None = None) -> dict[str, object]:
+        """Resolve one in-flight Telegram delivery without ever replaying it.
+
+        The connector owns the Telegram session, so its durable journal of
+        approved attempts is the only authority on what happened. The journal
+        binds the exact attempt to the provider message id, to a refusal that
+        happened before any provider IO, or to the honest in-flight state.
+
+        The result is one of:
+        ``delivered``   - the provider message id is known, the draft is approved
+        ``not_submitted`` - the connector provably never submitted it, the
+                            claim is released and the exact retry is possible
+        ``unknown``     - the outcome is still undecided; the claim is kept and
+                            a repeat send stays blocked
+        """
+        resolved_user_id = self._store._user(user_id)
+        draft = self._store.draft(draft_id, user_id=resolved_user_id)
+        if draft.status == "approved":
+            return {"resolution": "delivered", "draft_id": draft.id, "status": draft.status,
+                    "receipt": draft.receipt, "retry_allowed": False}
+        if draft.status != "sending":
+            raise DeliveryUnavailableError("Этот черновик не находится в отправке.")
+        if expected_snapshot is not None and expected_snapshot != {
+            "expected_text": draft.body, "expected_chat_id": draft.conversation_id,
+            "expected_attachments": [],
+        }:
+            raise ValueError("draft_snapshot_conflict")
+        conversation = self._store.conversation(draft.conversation_id, user_id=resolved_user_id)
+        if conversation is None:
+            raise KeyError("conversation not found")
+        if str(conversation.get("source")) != "telegram":
+            raise DeliveryUnavailableError("Сверка доставки доступна только для Telegram.")
+        outbox = getattr(self.telegram_outbox, "send_attempt", None)
+        if not callable(outbox):
+            raise DeliveryUnavailableError("Сверка доставки Telegram недоступна.")
+        account_ref = str(conversation.get("account_ref") or "")
+        peer_id = str(conversation.get("peer_id") or "")
+        record = outbox(draft.id)
+        state = str(record.get("state") or "unknown")
+        if state == "sent":
+            slot = str(record.get("slot") or "?")
+            message_id = str(record.get("message_id") or "")
+            if not message_id.isdigit():
+                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                        "reason": "provider_receipt_incomplete", "retry_allowed": False}
+            if account_ref and str(record.get("account_id") or "") not in ("", account_ref):
+                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                        "reason": "provider_account_mismatch", "retry_allowed": False}
+            if peer_id and str(record.get("peer_id") or "") not in ("", peer_id):
+                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                        "reason": "provider_peer_mismatch", "retry_allowed": False}
+            receipt = f"telegram-qr:{slot}:{message_id}:{draft.id}"
+            approved = self._store.approve(draft.id, receipt, user_id=resolved_user_id)
+            return {"resolution": "delivered", "draft_id": approved.id, "status": approved.status,
+                    "receipt": receipt, "retry_allowed": False}
+        if state == "refused":
+            # The connector refused before any provider call, so nothing was
+            # submitted and the exact retry stays possible.
+            self._store.release_draft_send(draft.id, user_id=resolved_user_id)
+            return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
+                    "reason": str(record.get("code") or "refused_before_submission"),
+                    "retry_allowed": True}
+        if state == "absent":
+            # The connector never received this attempt. That proves
+            # non-submission only for a claim taken after the connector could
+            # first record one; an older claim keeps its unknown outcome.
+            epoch = float(record.get("epoch") or 0)
+            claimed = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)
+            sending_at = claimed.get("sending_at")
+            if epoch and sending_at is not None and float(sending_at) >= epoch:
+                self._store.release_draft_send(draft.id, user_id=resolved_user_id)
+                return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
+                        "reason": "connector_never_received_attempt", "retry_allowed": True}
+            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
+            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                    "reason": "attempt_predates_connector_journal", "retry_allowed": False}
+        self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+        return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
+                "reason": "provider_outcome_undecided", "retry_allowed": False}
 
     def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id)

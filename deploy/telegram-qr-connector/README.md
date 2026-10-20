@@ -85,6 +85,32 @@ Message/event/draft/receipt identities remain retained. No inferred deletion
 is made outside that range. Runtime Node budget224/256MiB (measured soft adjustment2026-10-09), CPU1, tasks64 and
 existing20-dialog/5-minute reconciliation cadence are unchanged.
 
+## Approved send attempt journal
+
+The connector owns every Telegram session, so it is the only process that can
+say whether an approved message reached the provider. `POST /send` accepts an
+optional `attempt_id` (UserIO sends its draft id) and journals the attempt in
+`/var/lib/universal-userio/telegram-qr/send-attempts.json`:
+
+| state | meaning |
+|---|---|
+| `pending` | the attempt was recorded before the provider call and the answer never came back |
+| `sent` | the provider accepted it; the journal keeps the provider message id |
+| `refused` | the connector refused before any provider call, so nothing was submitted |
+| `unknown` | the send failed in a way that may already be on the wire |
+
+The journal stores ids and timestamps only, never a message body. It also makes
+an approved send idempotent: a repeated attempt id returns the recorded receipt
+without sending again, and an attempt in `pending` or `unknown` is never
+replayed. The "may already be on the wire" answer is a `502` on purpose —
+UserIO treats `4xx` as a refusal that releases the claim, and a release there
+could duplicate a delivered message.
+
+`POST /send-attempt` with an exact `attempt_id` is the read-only reconciliation
+route. It answers `sent`, `refused`, `pending`, `unknown` or `absent`, plus the
+journal epoch. It never sends anything. `absent` proves non-submission only for
+an attempt claimed after the epoch; an older claim keeps its unknown outcome.
+
 ## Human web read receipts
 
 Authenticated `POST /read` takes exact `account_id`, numeric `peer_id` and a positive

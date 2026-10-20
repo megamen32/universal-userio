@@ -300,11 +300,18 @@ def test_mcp_reads_edits_and_sends_only_after_exact_confirmation(tmp_path) -> No
     draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation_id, "body": "manual reply"})["draft"]
     edited = surface.dispatch("userio.draft.update", {"draft_id": draft["id"], "body": "edited reply"})
     denied = surface.dispatch("userio.draft.approve_send", {"draft_id": draft["id"], "confirm": False})
-    sent = surface.dispatch("userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True})
+    # An approved send carries the exact reviewed draft. A partial snapshot
+    # cannot prove the draft did not change since it was reviewed.
+    incomplete = surface.dispatch("userio.draft.approve_send", {
+        "draft_id": draft["id"], "confirm": True, "expected_text": "edited reply"})
+    sent = surface.dispatch("userio.draft.approve_send", {
+        "draft_id": draft["id"], "confirm": True, "expected_text": "edited reply",
+        "expected_chat_id": conversation_id, "expected_attachments": []})
 
     assert listed["messages"][0]["sender"] == "anna"
     assert edited["draft"]["body"] == "edited reply"
     assert denied["error"] == "exact_confirmation_required"
+    assert incomplete["error"] == "complete_draft_snapshot_required"
     assert sent["draft"]["status"] == "approved"
     assert outbox.calls[0]["body"] == "edited reply"
 
@@ -595,6 +602,8 @@ def test_mcp_send_draft_states_approval_need_and_approve_returns_receipt(tmp_pat
 
     sent = surface.dispatch("userio.draft.approve_send", {
         "draft_id": queued["draft"]["id"], "confirm": True,
+        "expected_text": queued["draft"]["body"], "expected_chat_id": conversation_id,
+        "expected_attachments": [],
     })
     assert sent["sent"] is True
     assert sent["receipt"] == "sms-receipt-1"

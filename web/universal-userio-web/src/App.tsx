@@ -1130,6 +1130,22 @@ export function App() {
       notify(`Не удалось отправить: ${(error as Error).message}`)
     } finally { approvalInFlight.current = false; setApprovingDraft("") }
   }
+  const reconcileDelivery = async (id: string, body: string) => {
+    if (!conversation || approvalInFlight.current) return
+    approvalInFlight.current = true
+    setApprovingDraft(id)
+    try {
+      const result = await api<{ resolution?: string; receipt?: string; reason?: string }>(
+        `/v1/drafts/${encodeURIComponent(id)}/reconcile-delivery`,
+        { method: "POST", body: JSON.stringify({ confirm: true, expected_text: body, expected_chat_id: conversation.id, expected_attachments: [] }) })
+      if (result.resolution === "delivered") notify("Сообщение доставлено в Telegram")
+      else if (result.resolution === "not_submitted") notify("Telegram не принял сообщение — черновик снова можно отправить")
+      else notify("Результат доставки пока неизвестен — сообщение не отправляйте повторно")
+      await loadConversation(conversation.id)
+    } catch (error) {
+      notify(`Не удалось уточнить доставку: ${(error as Error).message}`)
+    } finally { approvalInFlight.current = false; setApprovingDraft("") }
+  }
   const markSeen = async () => {
     const message = conversation?.messages.filter(m => m.direction !== 'outgoing').at(-1)
     if (!message || !conversation) return
@@ -1400,7 +1416,7 @@ export function App() {
                 {item.context_status === "stale" && item.status === "proposed" && <p className="mb-2 text-xs font-medium">Переписка изменилась после создания: проверьте актуальность ответа.</p>}
                 {editing
                   ? <div className="space-y-2"><textarea className="min-h-16 w-full rounded-lg bg-primary-foreground/10 p-2 text-foreground" value={editDraftBody} onChange={(event) => setEditDraftBody(event.target.value)} rows={3} /><div className="flex justify-end gap-2"><Button size="sm" variant="secondary" onClick={() => { setEditDraftId(""); setEditDraftBody("") }}>Отмена</Button><Button size="sm" onClick={() => void saveDraftEdit(item.id)}>Сохранить</Button></div></div>
-                  : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? (item.id.startsWith("draft_web_") ? "Не отправлено" : "Черновик") : item.status === "sending" ? "Результат отправки уточняется — не отправляйте повторно" : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply || !!approvingDraft} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}</div></>}
+                  : <><p className="whitespace-pre-wrap">{item.body}</p><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[11px] opacity-75">{item.status === "proposed" ? (item.id.startsWith("draft_web_") ? "Не отправлено" : "Черновик") : item.status === "sending" ? "Результат отправки неизвестен. Повтор заблокирован." : item.status}</span>{item.status === "proposed" && <span className="flex items-center gap-1"><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Изменить текст черновика" onClick={() => { setEditDraftId(item.id); setEditDraftBody(item.body) }}>Изменить</Button><Button size="sm" variant="ghost" className="h-7 px-2 text-current/80 hover:text-current" title="Удалить черновик" onClick={() => void deleteDraft(item.id)}><X className="size-3.5" /></Button><Button size="sm" variant="secondary" disabled={!canReply || !!approvingDraft} title={canReply ? "Отправить это сообщение" : "Этот аккаунт только для чтения"} onClick={() => approve(item.id)}>Отправить</Button></span>}{item.status === "sending" && <span className="flex items-center gap-1"><Button size="sm" variant="secondary" disabled={!!approvingDraft} title="Уточнить результат доставки у Telegram" onClick={() => void reconcileDelivery(item.id, item.body)}>Проверить доставку</Button></span>}</div></>}
               </div>
             }
             const message = entry.item

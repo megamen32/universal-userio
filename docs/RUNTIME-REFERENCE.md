@@ -507,12 +507,20 @@ an approved personal reply becomes `POST /send` with the exact `account_id` and
 the `slot` the store pins for that account (`telegram-qr:<slot>`). The connector
 never falls back to another account.
 
+Before the request, UserIO proves in the **connection phase** that the connector
+is accepting connections. A refused connection or a failed name resolution
+means the connector accepted nothing, so the request was never submitted and
+the durable claim is released for an exact retry. Every later transport failure
+stays uncertain: the connector may have accepted the request and died before it
+answered.
+
 Its answer decides the state of the draft claim:
 
 | Connector answer | Meaning | UserIO state |
 |---|---|---|
 | `4xx` + `submitted:false` (`account_relogin_required`, `account_not_connected`, `chat_not_known`) | refused before any provider call; delivery is impossible | claim released back to `proposed`, owner gets an actionable message, exact retry allowed |
-| `5xx` / `408` / `429` / socket error (`submitted:"unknown"`) | may arrive with the message already on the wire | claim kept in `sending`, never replayed, further approval refused |
+| connection refused / name resolution failed before the request | the connector accepted nothing; delivery is impossible | claim released back to `proposed`, exact retry allowed |
+| `5xx` / `408` / `429` / request-phase socket error (`submitted:"unknown"`) | may arrive with the message already on the wire | claim kept in `sending`, never replayed, further approval refused with the stable code `delivery_outcome_unknown` |
 
 An empty or missing `slot` still routes by `account_id` alone. A live GramJS
 `isUserAuthorized()` collapses every provider error to `false`, so the connector
@@ -520,6 +528,32 @@ asks `updates.getState` directly (`deploy/telegram-qr-connector/session-auth.mjs
 and marks a revoked session `relogin-required` with a 15 minute backoff instead
 of reconnecting every 30 seconds. A revoked session needs a fresh owner login;
 no code path can restore it, and no send can pass through it meanwhile.
+
+### Resolving an uncertain Telegram delivery
+
+An uncertain attempt is never resolved from a message body. The connector
+journals every approved attempt (`deploy/telegram-qr-connector/send-attempts.mjs`)
+and binds the attempt id — UserIO's draft id — to the provider message id, to a
+refusal before provider IO, or to the honest in-flight state. It also makes an
+approved send idempotent: a repeated attempt id returns the recorded receipt
+instead of sending again, and an attempt that may already be on the wire is
+never replayed.
+
+`userio.draft.reconcile_delivery` (and `POST /v1/drafts/<id>/reconcile-delivery`)
+reads that journal and answers one of:
+
+| Journal state | Meaning | UserIO state |
+|---|---|---|
+| `sent` | the provider message id is known for this exact attempt | draft `approved` with the durable provider receipt |
+| `refused` | the connector refused before any provider call | claim released to `proposed`, exact retry allowed |
+| `pending` / `unknown` | the outcome is still undecided | claim kept in `sending`, retry stays blocked |
+| `absent` for a claim taken after the journal epoch | the connector never received the attempt | claim released to `proposed`, exact retry allowed |
+| `absent` for an older claim | the journal cannot speak about it | claim kept in `sending`, retry stays blocked |
+
+Both the MCP approve path and the reconcile path require the complete draft
+snapshot (`expected_text`, `expected_chat_id` and `expected_attachments`). A
+partial snapshot cannot prove the draft did not change since it was reviewed,
+and an absent snapshot would approve whatever the draft says at that moment.
 
 ## Current web behaviours
 

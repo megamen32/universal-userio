@@ -423,7 +423,9 @@ class SQLiteUserIOStore:
             CREATE TABLE IF NOT EXISTS drafts (
                 user_id TEXT NOT NULL,id TEXT NOT NULL,conversation_id TEXT NOT NULL,
                 body TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,
-                approved_at REAL,outbox_receipt TEXT,browser_notified_at REAL,PRIMARY KEY(user_id,id)
+                approved_at REAL,outbox_receipt TEXT,browser_notified_at REAL,
+                sending_at REAL,delivery_state TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(user_id,id)
             );
             CREATE INDEX IF NOT EXISTS drafts_conversation_idx
                 ON drafts(user_id,conversation_id,created_at);
@@ -561,6 +563,16 @@ class SQLiteUserIOStore:
             self._connection.execute("ALTER TABLE drafts ADD COLUMN browser_notified_at REAL")
         except sqlite3.OperationalError:  # column already exists
             pass
+        # When the send claim was taken, and how its outcome was resolved.
+        # A claim without a timestamp cannot be reconciled against a provider
+        # record, so the column is added idempotently next to the old ones.
+        for column, definition in (("sending_at", "REAL"), ("delivery_state", "TEXT NOT NULL DEFAULT ''")):
+            columns = {row['name'] for row in self._connection.execute('PRAGMA table_info(drafts)')}
+            if column not in columns:
+                try:
+                    self._connection.execute(f"ALTER TABLE drafts ADD COLUMN {column} {definition}")
+                except sqlite3.OperationalError:  # column already exists
+                    pass
         for column in (
             "source TEXT NOT NULL DEFAULT ''",
             "account_ref TEXT NOT NULL DEFAULT ''",
@@ -2412,16 +2424,44 @@ class SQLiteUserIOStore:
             if draft.status != "proposed":
                 raise ValueError("draft is not approvable")
             self._connection.execute(
-                "UPDATE drafts SET status='sending' WHERE user_id=? AND id=?",
-                (user_id, draft_id),
+                "UPDATE drafts SET status='sending',sending_at=?,delivery_state='claimed' "
+                "WHERE user_id=? AND id=?",
+                (time.time(), user_id, draft_id),
             )
             return draft
 
     def release_draft_send(self, draft_id: str, *, user_id: str) -> None:
         with self._lock, self._connection:
             self._connection.execute(
-                "UPDATE drafts SET status='proposed' WHERE user_id=? AND id=? AND status='sending'",
+                "UPDATE drafts SET status='proposed',sending_at=NULL,delivery_state='not_submitted' "
+                "WHERE user_id=? AND id=? AND status='sending'",
                 (user_id, draft_id),
+            )
+
+    def draft_delivery_state(self, draft_id: str, *, user_id: str | None = None) -> dict[str, object]:
+        """Read the durable delivery bookkeeping of one draft."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT status,sending_at,delivery_state,outbox_receipt FROM drafts "
+                "WHERE user_id=? AND id=?",
+                (self._user(user_id), draft_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("draft not found")
+        return {
+            "status": str(row["status"]),
+            "sending_at": float(row["sending_at"]) if row["sending_at"] is not None else None,
+            "delivery_state": str(row["delivery_state"] or ""),
+            "receipt": str(row["outbox_receipt"] or ""),
+        }
+
+    def mark_draft_delivery_state(self, draft_id: str, state: str, *,
+                                  user_id: str | None = None) -> None:
+        """Record how an in-flight delivery attempt was resolved."""
+        with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE drafts SET delivery_state=? WHERE user_id=? AND id=? AND status='sending'",
+                (state, self._user(user_id), draft_id),
             )
 
     def approve(self, draft_id: str, receipt: str, *, user_id: str | None = None) -> ReplyDraft:
@@ -2441,7 +2481,8 @@ class SQLiteUserIOStore:
                 raise ValueError("draft is not approvable")
             self._connection.execute(
                 """
-                UPDATE drafts SET status='approved',approved_at=?,outbox_receipt=?
+                UPDATE drafts SET status='approved',approved_at=?,outbox_receipt=?,
+                    sending_at=NULL,delivery_state='delivered'
                 WHERE user_id=? AND id=?
                 """,
                 (time.time(), receipt, user_id, draft_id),

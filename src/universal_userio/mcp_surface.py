@@ -179,7 +179,14 @@ TOOL_SPECS = (
         "expected_chat_id": {"type": "string", "description": "Exact stored draft conversation_id."},
         "expected_attachments": {"type": "array", "items": {"type": "string"},
                                  "description": "Must be empty for text-only drafts."},
-    }, ["draft_id", "confirm"])),
+    }, ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"])),
+    ToolSpec("userio.draft.reconcile_delivery", "Resolve one in-flight Telegram delivery against the provider record.", _schema({
+        "draft_id": {"type": "string"}, "confirm": {"type": "boolean"},
+        "expected_text": {"type": "string"},
+        "expected_chat_id": {"type": "string", "description": "Exact stored draft conversation_id."},
+        "expected_attachments": {"type": "array", "items": {"type": "string"},
+                                 "description": "Must be empty for text-only drafts."},
+    }, ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"])),
     ToolSpec("userio.conversation.delete_local", "Delete only the local conversation copy.", _schema({
         "conversation_id": {"type": "string"}, "confirm": {"type": "boolean"},
     }, ["conversation_id", "confirm"])),
@@ -237,6 +244,7 @@ TOOL_CAPABILITIES = {
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
     "userio.draft.approve_send": "send",
+    "userio.draft.reconcile_delivery": "send",
     "userio.conversation.delete_local": "read",
     "userio.accounts.list": "read",
     "userio.ai.propose": "send",
@@ -834,6 +842,8 @@ class UserIOMcpSurface:
                 if not self._store.send_enabled(user_id=principal.user_id):
                     return {"ok": False, "error": "outbound_delivery_disabled"}
                 return self._approve(arguments, principal)
+            if name == "userio.draft.reconcile_delivery":
+                return self._reconcile_delivery(arguments, principal)
             if name == "userio.conversation.delete_local":
                 return self._delete_conversation(arguments, principal)
             if name == "userio.accounts.list":
@@ -850,22 +860,55 @@ class UserIOMcpSurface:
         except RuntimeError as error:
             return {"ok": False, "error": str(error)}
         except (KeyError, TypeError, ValueError) as error:
-            return {"ok": False, "error": str(error).strip("'") or "invalid_arguments"}
+            payload = {"ok": False, "error": str(error).strip("'") or "invalid_arguments"}
+            code = getattr(error, "code", "")
+            if code:
+                # A stable machine-readable reason. A consumer must branch on
+                # the code, never on the localized message text.
+                payload["code"] = str(code)
+                payload["retry_allowed"] = False
+            return payload
         return {"ok": False, "error": "unknown_tool"}
+
+    @staticmethod
+    def _snapshot(arguments: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+        """The exact draft the consumer reviewed before approving it.
+
+        The whole snapshot is mandatory. A partial snapshot cannot prove the
+        draft did not change since it was reviewed, and an absent snapshot
+        would approve whatever the draft says at that moment.
+        """
+        keys = ("expected_text", "expected_chat_id", "expected_attachments")
+        if (not all(key in arguments for key in keys)
+                or not isinstance(arguments["expected_text"], str)
+                or not isinstance(arguments["expected_chat_id"], str)
+                or not isinstance(arguments["expected_attachments"], list)
+                or not all(isinstance(item, str) for item in arguments["expected_attachments"])):
+            return None, "expected_text, expected_chat_id and expected_attachments are all required"
+        return {key: arguments[key] for key in keys}, ""
+
+    def _reconcile_delivery(self, arguments: dict[str, Any], principal: UserPrincipal) -> dict[str, Any]:
+        if arguments.get("confirm") is not True:
+            return {"ok": False, "error": "exact_confirmation_required"}
+        # Ownership first, exactly as on the approve path.
+        self._store.draft(self._required(arguments, "draft_id"), user_id=principal.user_id)
+        snapshot, problem = self._snapshot(arguments)
+        if snapshot is None:
+            return {"ok": False, "error": "complete_draft_snapshot_required", "detail": problem}
+        result = self._service.reconcile_draft_delivery(
+            self._required(arguments, "draft_id"), user_id=principal.user_id,
+            expected_snapshot=snapshot)
+        return {"ok": True, **result}
 
     def _approve(self, arguments: dict[str, Any], principal: UserPrincipal) -> dict[str, Any]:
         if arguments.get("confirm") is not True:
             return {"ok": False, "error": "exact_confirmation_required"}
-        keys = ("expected_text", "expected_chat_id", "expected_attachments")
-        snapshot = None
-        if any(key in arguments for key in keys):
-            if (not all(key in arguments for key in keys)
-                    or not isinstance(arguments["expected_text"], str)
-                    or not isinstance(arguments["expected_chat_id"], str)
-                    or not isinstance(arguments["expected_attachments"], list)
-                    or not all(isinstance(item, str) for item in arguments["expected_attachments"])):
-                raise ValueError("complete_draft_snapshot_required")
-            snapshot = {key: arguments[key] for key in keys}
+        # Ownership first: a principal that does not own the draft must not
+        # learn anything about it, not even which arguments are missing.
+        self._store.draft(self._required(arguments, "draft_id"), user_id=principal.user_id)
+        snapshot, problem = self._snapshot(arguments)
+        if snapshot is None:
+            return {"ok": False, "error": "complete_draft_snapshot_required", "detail": problem}
         draft = self._service.approve(
             self._required(arguments, "draft_id"), user_id=principal.user_id,
             expected_snapshot=snapshot,

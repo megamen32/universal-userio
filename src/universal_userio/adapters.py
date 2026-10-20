@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shlex
+import socket
 import subprocess
 import threading
 import time
@@ -267,6 +268,27 @@ def _connector_code(detail: str) -> str:
         return ""
 
 
+def _connector_unreachable_message() -> str:
+    return ("Коннектор Telegram недоступен: соединение не установлено, "
+            "сообщение не отправлено, черновик можно отправить снова.")
+
+
+def _default_connector_probe(base_url: str, timeout: int) -> None:
+    """Open and immediately close a TCP connection to the connector.
+
+    The probe never carries the approved message. It exists only to prove
+    that the connector was not accepting connections, which is the single
+    transport fact that proves a request was never submitted.
+    """
+    parts = urllib.parse.urlsplit(base_url)
+    host = parts.hostname
+    if not host:
+        raise ValueError("Telegram connector URL has no host")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    with socket.create_connection((host, port), timeout=timeout):
+        return
+
+
 def _connector_refusal_message(status: int, detail: str) -> str:
     """Owner-facing text for a refusal that happened before provider IO."""
     code = _connector_code(detail)
@@ -290,8 +312,29 @@ class TelegramQrHttpOutbox:
     chat label and body to its ``POST /send`` endpoint.
     """
 
-    def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen, timeout: int = 20) -> None:
+    def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen,
+                 timeout: int = 20, probe: Any = None) -> None:
         self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
+        self._probe = probe or _default_connector_probe
+
+    def _assert_connector_accepts(self) -> None:
+        """Refuse to send when the connector is provably not accepting connections.
+
+        The check runs in the connection phase, before a single request byte
+        exists. A refused connection or a failed name resolution proves the
+        connector accepted nothing, so the durable claim may be released and
+        the exact retry stays possible.
+
+        Every other outcome stays uncertain and the request continues: the
+        connector may have accepted an earlier attempt and died before it
+        answered, so a request-phase failure must never release a claim.
+        """
+        try:
+            self._probe(self._base_url, self._timeout)
+        except (ConnectionRefusedError, socket.gaierror) as error:
+            raise DeliveryNotSubmittedError(_connector_unreachable_message()) from error
+        except (OSError, urllib.error.URLError):
+            return
 
     def _telegram_admin_call(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
         request=urllib.request.Request(f"{self._base_url}/{endpoint}",data=json.dumps(payload).encode(),method="POST",
@@ -334,12 +377,16 @@ class TelegramQrHttpOutbox:
     def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "", slot: str = "") -> str:
         if not chat or not body:
             raise ValueError("Telegram delivery requires chat and body")
+        # The attempt id binds this exact approval to the provider receipt the
+        # connector records, so an uncertain outcome can be resolved later
+        # without ever replaying the message.
         payload = json.dumps({"chat": chat, "chat_id": chat_id, "account_id": account_ref,
-                              "slot": slot, "body": body}).encode()
+                              "slot": slot, "body": body, "attempt_id": draft_id}).encode()
         request = urllib.request.Request(  # noqa: S310
             f"{self._base_url}/send", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
         )
+        self._assert_connector_accepts()
         try:
             with self._runner(request, timeout=self._timeout) as response:
                 data = json.loads(response.read().decode() or "{}")
@@ -354,6 +401,35 @@ class TelegramQrHttpOutbox:
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         return f"telegram-qr:{data.get('slot', '?')}:{data.get('message_id', 'sent')}:{draft_id}"
+
+    def send_attempt(self, attempt_id: str) -> dict[str, object]:
+        """Read the connector's durable record of one approved send attempt.
+
+        The connector records every attempt before it touches Telegram, so its
+        answer binds this exact approval to a provider message id, to a refusal
+        that happened before provider IO, or to the honest "still unknown"
+        state. Nothing here can send a message.
+        """
+        if not attempt_id:
+            raise ValueError("Telegram send attempt requires an attempt id")
+        request = urllib.request.Request(  # noqa: S310
+            f"{self._base_url}/send-attempt",
+            data=json.dumps({"attempt_id": attempt_id}).encode(), method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                result = json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return {"state": "absent"}
+            detail = error.read().decode(errors="replace")[:200]
+            raise RuntimeError(f"telegram-qr send attempt lookup failed: HTTP {error.code} {detail}") from error
+        except (OSError, urllib.error.URLError) as error:
+            raise RuntimeError("telegram-qr connector is unreachable") from error
+        if not isinstance(result, dict) or not isinstance(result.get("state"), str):
+            raise RuntimeError("telegram-qr send attempt answer is invalid")
+        return result
 
     def reply_message(self, *, chat_id: str, account_ref: str, message_id: str,
                       thread_id: str, expected_text: str, text: str, request_id: str) -> dict[str, object]:
@@ -372,6 +448,7 @@ class TelegramQrHttpOutbox:
             f"{self._base_url}/send", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
         )
+        self._assert_connector_accepts()
         try:
             with self._runner(request, timeout=self._timeout) as response:
                 result = json.loads(response.read().decode() or "{}")

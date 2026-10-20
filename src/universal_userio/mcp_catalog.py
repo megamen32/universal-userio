@@ -294,7 +294,28 @@ TOOL_SPECS = (
                     "description": "Must be empty for text-only drafts.",
                 },
             },
-            ["draft_id", "confirm"],
+            ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"],
+        ),
+    ),
+    ToolSpec(
+        "userio.draft.reconcile_delivery",
+        "Resolve one in-flight Telegram delivery against the provider record.",
+        schema(
+            {
+                "draft_id": {"type": "string"},
+                "confirm": {"type": "boolean"},
+                "expected_text": {"type": "string"},
+                "expected_chat_id": {
+                    "type": "string",
+                    "description": "Exact stored draft conversation_id.",
+                },
+                "expected_attachments": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Must be empty for text-only drafts.",
+                },
+            },
+            ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"],
         ),
     ),
     ToolSpec(
@@ -480,6 +501,7 @@ TOOL_CAPABILITIES = {
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
     "userio.draft.approve_send": "send",
+    "userio.draft.reconcile_delivery": "send",
     "userio.conversation.delete_local": "read",
     "userio.accounts.list": "read",
     "userio.ai.propose": "send",
