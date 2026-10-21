@@ -281,12 +281,29 @@ def assert_idle():
             raise RuntimeError('cannot read Asterisk active-call count; telephone-call idle state unknown')
         if counts[0] != 0:
             raise RuntimeError('active telephone call prevents cutover')
-    for path in Path('/proc').iterdir():
-        if not path.name.isdigit(): continue
-        try: argv = (path / 'cmdline').read_bytes().split(b'\0')
-        except (OSError, PermissionError): continue
-        if any(v in {b'universal_userio.matrix_call_worker', b'universal_userio.telegram_call_worker'} for v in argv):
-            raise RuntimeError('active RTC call prevents cutover')
+    # Call workers are long-lived backend processes, so their presence alone
+    # does not mean a call is active. They persist a durable call receipt before
+    # starting the worker. Refuse calls within their actual wall bound, including
+    # the max_seconds + 240s transport deadline and 70s consumer shutdown grace.
+    call_statuses = {'accepted', 'ringing', 'active', 'unknown'}
+    now = time.time()
+    for name in ('telegram-calls', 'matrix-calls'):
+        for path in (Path('/var/lib/universal-userio') / name).glob('*/call.json'):
+            try:
+                record = json.loads(path.read_text())
+                status = record.get('status')
+                if status not in call_statuses:
+                    continue
+                started_at = float(record['started_at'])
+                max_seconds = int(record['max_seconds'])
+                if not 30 <= max_seconds <= 600 or now < started_at:
+                    raise ValueError('call deadline is invalid')
+                if now - started_at <= max_seconds + 310:
+                    raise RuntimeError('active or unresolved RTC call prevents cutover')
+            except RuntimeError:
+                raise
+            except Exception as error:
+                raise RuntimeError('cannot establish RTC call idle state') from error
     remote_check = "python3 -c \"import pathlib,json; assert not any(json.loads(p.read_text())['status'] in {'accepted','waiting','recording','finalizing'} for p in pathlib.Path('" + TELEMOST_ROOT + "').glob('*/meeting.json')), 'active meeting prevents cutover'\""
     command(ssh_args(remote_check))
 
