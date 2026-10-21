@@ -36,9 +36,10 @@ export const isImageAttachment = (attachment: Attachment) =>
 export const attachmentMediaPath = (conversationId: string, messageId: string, index: number, raw = false) =>
   `/v1/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(messageId)}${raw ? '/raw' : ''}?attachment_index=${index}`
 
-export const uploadValidationError = (size: number) => size <= 0
+export const uploadValidationError = (size: number, maxBytes: number | null = MAX_UPLOAD_BYTES) => size <= 0
   ? 'Файл пустой. Выберите другой файл.'
-  : size > MAX_UPLOAD_BYTES ? 'Файл слишком большой. Можно прикрепить до 2 МБ.' : ''
+  : maxBytes !== null && size > maxBytes ? 'Файл превышает лимит этого аккаунта или хранилища.' : ''
 
 export const supportsFileUpload = (source: string, accountRef: string) =>
+  (source === 'telegram' && /^telegram:[1-9]\d*$/.test(accountRef)) ||
   (source === 'max' && /^max(?::.*)?$/.test(accountRef)) || (source === 'vk' && /^vk:\d+$/.test(accountRef))

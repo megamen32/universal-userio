@@ -1299,15 +1299,45 @@ def handler(
                 if path.startswith('/v1/conversations/') and path.endswith('/uploads'):
                     if principal.service_account or not service._store.capability_enabled('send',user_id=user_id):
                         self._reply(403,{'error':'send_capability_disabled'});return
-                    if int(self.headers.get('Content-Length','0'))>3*1024*1024:
-                        self._reply(413,{'error':'Вложение должно быть не больше 2 МБ'});return
                     from .vk_web import VKWeb
                     cid=unquote(path.removeprefix('/v1/conversations/').removesuffix('/uploads').strip('/'))
                     conv=service._store.conversation(cid,user_id=user_id)
-                    if conv and conv['source']=='max':
+                    if not conv:
+                        self._reply(404,{'error':'conversation_not_found'});return
+                    if conv['source']=='telegram':
+                        from .messenger import Messenger
+                        api=Messenger(service._store,service,principal)
+                        caps=api.capabilities(str(conv.get('account_ref') or ''))
+                        limit=caps.get('upload_limits',{}).get('max_bytes')
+                        if type(limit) is not int or limit<1:limit=caps['upload_limits']['storage_max_bytes']
+                        max_body=4*((limit+2)//3)+65536
+                        if int(self.headers.get('Content-Length','0'))>max_body:
+                            self._reply(413,{'error':'upload_exceeds_account_or_storage_limit'});return
+                        if self.headers.get('Content-Type','').split(';',1)[0].strip()!='application/json':
+                            length=int(self.headers.get('Content-Length','0'))
+                            data=self.rfile.read(length)
+                            if len(data)!=length:
+                                self._reply(400,{'error':'incomplete_upload'});return
+                            result=api.upload_bytes(str(conv.get('account_ref') or ''),cid,
+                                unquote(self.headers.get('X-UserIO-Source-Message-Id','')),
+                                filename=unquote(self.headers.get('X-UserIO-Filename','')),
+                                mime_type=self.headers.get('X-UserIO-Mime-Type','application/octet-stream'),
+                                data=data,request_id=self.headers.get('X-UserIO-Request-Id',''))
+                        else:
+                            payload=self._json()
+                            result=api.upload(str(conv.get('account_ref') or ''),cid,
+                                str(payload.get('source_message_id') or ''),filename=payload.get('filename'),
+                                mime_type=payload.get('mime_type'),data_base64=payload.get('data_base64'),
+                                sha256=payload.get('sha256'),request_id=payload.get('request_id'))
+                        self._reply(201,result);return
+                    if int(self.headers.get('Content-Length','0'))>3*1024*1024:
+                        self._reply(413,{'error':'Вложение должно быть не больше 2 МБ'});return
+                    if conv['source']=='max':
                         from .max_web import MaxWeb
                         self._reply(201,MaxWeb(service,user_id).stage(cid,self._json()));return
-                    self._reply(201,VKWeb(service,user_id).stage(cid,self._json()));return
+                    if conv['source']=='vk':
+                        self._reply(201,VKWeb(service,user_id).stage(cid,self._json()));return
+                    self._reply(403,{'error':'file_upload_not_supported'});return
                 if path.startswith("/v1/conversations/") and path.endswith("/send"):
                     if principal.service_account:
                         self._reply(403, {"error": "Используйте явное подтверждение черновика для автоматической отправки"})
@@ -1317,9 +1347,25 @@ def handler(
                         return
                     conversation_id = unquote(path.removeprefix("/v1/conversations/").removesuffix("/send").strip("/"))
                     payload = self._json()
+                    upload_id=str(payload.get('upload_id') or '')
+                    if upload_id:
+                        conv=service._store.conversation(conversation_id,user_id=user_id)
+                        if conv and conv.get('source')=='telegram':
+                            from .messenger import Messenger
+                            api=Messenger(service._store,service,principal)
+                            account_ref=str(conv.get('account_ref') or '')
+                            proposed=api.propose(account_ref,conversation_id,
+                                str(payload.get('source_message_id') or ''),'file',
+                                {'upload_id':upload_id,'caption':str(payload.get('body') or '')},
+                                str(payload.get('request_id') or ''))
+                            result=api.approve(proposed['id'],proposed['hash'],True)
+                            if result.get('status')!='accepted':
+                                self._reply(409,{'error':'delivery_uncertain_do_not_retry'});return
+                            self._reply(200,{'id':result['id'],'status':result['status'],'receipt':result.get('receipt')})
+                            return
                     draft = service.send_manual_message(conversation_id, body=str(payload.get("body") or ""),
                         request_id=str(payload.get("request_id") or ""), user_id=user_id,
-                        upload_id=str(payload.get('upload_id') or ''))
+                        upload_id=upload_id)
                     self._reply(200, {"id": draft.id, "status": draft.status, "receipt": draft.receipt})
                     return
                 if path.startswith("/v1/conversations/") and path.endswith("/drafts"):
@@ -1959,6 +2005,15 @@ def handler(
                         {'conversation_id': query.get('conversation_id', [''])[0]}))
                 except (PermissionError, KeyError, ValueError) as error:
                     self._reply(403 if isinstance(error, PermissionError) else 404, {'error': str(error)})
+                return
+            if path == "/v1/messenger/capabilities":
+                account_ref=query.get('account_ref',[''])[0]
+                if not account_ref:
+                    self._reply(400,{'error':'account_ref_required'});return
+                from .messenger import Messenger
+                try:self._reply(200,Messenger(service._store,service,principal).capabilities(account_ref),{'Cache-Control':'no-store'})
+                except (PermissionError,KeyError,ValueError) as error:
+                    self._reply(403 if isinstance(error,PermissionError) else 404,{'error':str(error)})
                 return
             if path == "/v1/preferences/capabilities":
                 self._reply(200, {"capabilities": service._store.user_capabilities(user_id=user_id)})

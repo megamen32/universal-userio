@@ -29,6 +29,7 @@ type Conversation = { id: string; source: string; sender: string; identity_id?: 
 type Message = { source: string; message_id: string; sender: string; sender_name?: string; body: string; direction?: "incoming" | "outgoing" | "system"; can_edit?: boolean; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string; call_audio?: CallRecording }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string; created_at?: number; context_status?: "unknown" | "current" | "stale"; reply_to?: { source: string; message_id: string; body: string; received_at: number } | null }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
+type MessengerUploadCapabilities = { upload_limits?: { max_bytes: number | null } }
 type SecretaryTriage = { event_seq: number; status: string; request_id: string; triage?: { decision?: string; importance?: number; urgency?: string; confidence?: number; reason_ru?: string; action_summary?: string; action_required?: boolean } }
 type SecretaryDeep = { job_id: string; event_seq: number; status: "accepted" | "running" | "completed" | "failed"; session_id?: string; session_url?: string; result?: string; error?: string }
 type Secretary = { conversation: { id: string; event_seq?: number; message_id?: string; source: string; account_ref: string; peer_id: string }; triage: SecretaryTriage | null; summary: string; deep: SecretaryDeep | null; owner_messages_after_current?: {message_id: string; received_at: number}[] }
@@ -37,7 +38,7 @@ import { defineByokRunsView, defineByokRunDetails, type ByokLedgerRecord, type B
 import { beginContextSettingsLoad, completeContextSettingsLoad, confirmContextSettingsSave, contextSettingsPayload, contextSettingsValidationError, createContextSettingsSession, failContextSettingsLoad } from "./context-settings"
 import { LatestRequest } from "./latest-request"
 import { SecretaryRequests } from "./secretary-requests"
-import { attachmentMediaPath, isImageAttachment, messageAttachments, supportsFileUpload, uploadValidationError } from './message-attachments'
+import { attachmentMediaPath, isImageAttachment, messageAttachments, MAX_UPLOAD_BYTES, supportsFileUpload, uploadValidationError } from './message-attachments'
 import { outgoingMessageStatus } from './message-status'
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -260,6 +261,7 @@ export function App() {
   const [draft, setDraft] = useState("")
   const [selectedUpload,setSelectedUpload] = useState<{upload_id:string;filename:string;size:number;previewUrl?:string}|null>(null)
   const [uploadBusy,setUploadBusy] = useState(false)
+  const [telegramUploadLimit,setTelegramUploadLimit] = useState<number|null>(null)
   const filePicker=useRef<HTMLInputElement>(null)
   useEffect(()=>{setSelectedUpload(null)},[selectedChat])
   useEffect(() => () => { if (selectedUpload?.previewUrl) URL.revokeObjectURL(selectedUpload.previewUrl) }, [selectedUpload])
@@ -394,7 +396,21 @@ export function App() {
   const canDownload = userCapabilities.download
   const canVkRich = !!conversation && conversation.source === "vk" && /^vk:\d+$/.test(conversation.account_ref || "") && canReply
   const canReact = !!conversation && ["telegram", "max", "vk"].includes(conversation.source) && canReply
+  const latestTelegramSourceId = conversation?.source === "telegram" ? conversation.messages[conversation.messages.length - 1]?.message_id || "" : ""
   const canAttach = !!conversation && supportsFileUpload(conversation.source, conversation.account_ref || '') && canReply
+    && (conversation.source !== "telegram" || !!latestTelegramSourceId)
+  const uploadLimit = conversation?.source === "telegram" ? telegramUploadLimit : MAX_UPLOAD_BYTES
+  const uploadLimitLabel = uploadLimit === null ? "по лимиту аккаунта" : `до ${humanSize(uploadLimit)}`
+  useEffect(() => {
+    const accountRef = conversation?.source === "telegram" ? conversation.account_ref || "" : ""
+    if (!accountRef) { setTelegramUploadLimit(null); return }
+    let current = true
+    setTelegramUploadLimit(null)
+    api<MessengerUploadCapabilities>(`/v1/messenger/capabilities?account_ref=${encodeURIComponent(accountRef)}`)
+      .then(data => { if (current) setTelegramUploadLimit(data.upload_limits?.max_bytes ?? null) })
+      .catch(() => { if (current) setTelegramUploadLimit(null) })
+    return () => { current = false }
+  }, [conversation?.id, conversation?.account_ref, conversation?.source])
   const activeChannel = selectedChannel !== "all" ? providerForSource(selectedChannel) : account ? providerForSource(account.provider) : undefined
   const platforms = useMemo(() => Array.from(new Set(["gmail", "telegram", "vk", "whatsapp", ...accounts.map((item) => providerForSource(item.provider)), ...chats.map((item) => providerForSource(item.source))].map(source => source === "telemost" ? "yandex" : source))).sort((a, b) => {
     const order = ["telegram", "whatsapp", "gmail", "max", "vk", "matrix", "sms", "phone", "yandex", "chatgpt"]
@@ -842,20 +858,33 @@ export function App() {
   const selectFile = async (file?:File) => {
     if (!file || !conversation || !canAttach || uploadBusy || sendBusy) return
     const cid=conversation.id
-    const validationError = uploadValidationError(file.size)
+    const validationError = uploadValidationError(file.size, uploadLimit)
     if (validationError) {notify(validationError);if(filePicker.current)filePicker.current.value='';return}
     setUploadBusy(true)
     try {
-      const data=new Uint8Array(await file.arrayBuffer())
-      const sha=[...new Uint8Array(await crypto.subtle.digest('SHA-256',data))].map(x=>x.toString(16).padStart(2,'0')).join('')
-      let raw='';for(let i=0;i<data.length;i+=8192)raw+=String.fromCharCode(...data.subarray(i,i+8192))
-      const uploaded=await api<{upload_id:string;filename:string}>(`/v1/conversations/${cid}/uploads`,{method:'POST',body:JSON.stringify({filename:file.name,mime_type:file.type||'application/octet-stream',sha256:sha,data_base64:btoa(raw),request_id:crypto.randomUUID()})})
+      const uploadPath=`/v1/conversations/${cid}/uploads`
+      const requestId=crypto.randomUUID()
+      let uploaded:{upload_id:string;filename:string}
+      if(conversation.source==='telegram'){
+        uploaded=await api<{upload_id:string;filename:string}>(uploadPath,{method:'POST',headers:{
+          'Content-Type':file.type||'application/octet-stream',
+          'X-UserIO-Mime-Type':file.type||'application/octet-stream',
+          'X-UserIO-Filename':encodeURIComponent(file.name),
+          'X-UserIO-Request-Id':requestId,
+          'X-UserIO-Source-Message-Id':encodeURIComponent(latestTelegramSourceId),
+        },body:file})
+      }else{
+        const data=new Uint8Array(await file.arrayBuffer())
+        const sha=[...new Uint8Array(await crypto.subtle.digest('SHA-256',data))].map(x=>x.toString(16).padStart(2,'0')).join('')
+        let raw='';for(let i=0;i<data.length;i+=8192)raw+=String.fromCharCode(...data.subarray(i,i+8192))
+        uploaded=await api<{upload_id:string;filename:string}>(uploadPath,{method:'POST',body:JSON.stringify({filename:file.name,mime_type:file.type||'application/octet-stream',sha256:sha,data_base64:btoa(raw),request_id:requestId})})
+      }
       if(activeConversation.current===cid)setSelectedUpload({...uploaded,size:file.size,...(file.type.startsWith('image/') ? {previewUrl:URL.createObjectURL(file)} : {})})
     } catch(error){
       const reason = (error as Error).message
       notify(/upload_expired|upload_staging_limit/.test(reason)
         ? 'Не удалось добавить файл. Уберите старое вложение или попробуйте позже.'
-        : /upload_exceeds/.test(reason) ? 'Файл слишком большой. Можно прикрепить до 2 МБ.'
+        : /upload_exceeds/.test(reason) ? `Файл превышает лимит ${uploadLimitLabel}.`
         : 'Не удалось добавить файл. Проверьте подключение и попробуйте снова.')
     }
     finally{setUploadBusy(false);if(filePicker.current)filePicker.current.value=''}
@@ -868,7 +897,7 @@ export function App() {
     sendInFlight.current = true
     setSendBusy(true)
     try {
-      await api(`/v1/conversations/${id}/send`, { method: "POST", body: JSON.stringify({ body: text, request_id: sendIntent.current.id, upload_id:selectedUpload?.upload_id }) })
+      await api(`/v1/conversations/${id}/send`, { method: "POST", body: JSON.stringify({ body: text, request_id: sendIntent.current.id, upload_id:selectedUpload?.upload_id, ...(conversation.source==='telegram'?{source_message_id:latestTelegramSourceId}:{}) }) })
       if (activeConversation.current === id) {
         setDraft(current => current.trim() === text ? "" : current)
         setSelectedUpload(null)
@@ -1454,12 +1483,12 @@ export function App() {
           {uploadBusy && <p role="status" className="mb-2 px-2 text-xs text-muted-foreground">Загружаю вложение…</p>}
           <div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-lg shadow-black/5">
             <input ref={filePicker} type="file" className="hidden" aria-label="Выбрать файл или картинку" onChange={event => void selectFile(event.target.files?.[0])} />
-            <Button variant="ghost" size="icon" aria-label="Прикрепить файл или картинку" title={canAttach ? "Прикрепить файл или картинку до 2 МБ" : "Для этого аккаунта отправка вложений недоступна"} disabled={!canAttach || sendBusy || uploadBusy} onClick={() => filePicker.current?.click()}><Paperclip className="size-4" /></Button>
+            <Button variant="ghost" size="icon" aria-label="Прикрепить файл или картинку" title={canAttach ? `Прикрепить файл или картинку ${uploadLimitLabel}` : "Для этого аккаунта отправка вложений недоступна"} disabled={!canAttach || sendBusy || uploadBusy} onClick={() => filePicker.current?.click()}><Paperclip className="size-4" /></Button>
             <Input className="border-0 bg-transparent shadow-none focus-visible:ring-0" value={draft} disabled={!canReply || sendBusy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void sendManual() } }} placeholder={canReply ? "Сообщение…" : "Ответы недоступны для этого аккаунта"} />
             <Button disabled={!canReply} variant="ghost" size="icon" onClick={() => void askAi()} title="Предложить ответ"><Sparkles className="size-4" /></Button>
             <Button className="rounded-xl bg-[#2f80ed] text-white hover:bg-[#2774d8]" disabled={!canReply || sendBusy || uploadBusy || (!draft.trim() && !selectedUpload)} onClick={() => void sendManual()} size="icon" title="Отправить сообщение"><Send /></Button>
           </div>
-          <p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? `Ваш текст отправляется сразу. Предложения ИИ — после вашего подтверждения. ${canAttach ? "Файлы и картинки — до 2 МБ." : "Вложения для этого аккаунта пока недоступны."}` : "Только чтение."}</p>
+          <p className="mt-1.5 px-2 text-[10px] text-muted-foreground">{canReply ? `Ваш текст отправляется сразу. Предложения ИИ — после вашего подтверждения. ${canAttach ? `Файлы и картинки ${uploadLimitLabel}.` : "Вложения для этого аккаунта пока недоступны."}` : "Только чтение."}</p>
         </div></footer>
       </> : <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Открываю диалог…</div>}
       {toast && <div className="fixed inset-x-0 bottom-20 z-50 mx-auto w-fit max-w-[90%] rounded-full bg-foreground px-4 py-2 text-center text-sm text-background shadow-lg md:bottom-8">{toast}</div>}

@@ -429,6 +429,21 @@ class Messenger:
             data_base64=data_base64,sha256=sha256,request_id=request_id,
             max_bytes=self._upload_limit(provider))
 
+    def upload_bytes(self,account_ref,conversation_id,source_message_id,*,filename,mime_type,data,request_id):
+        self._allow(account_ref,'file_upload')
+        self._allow(account_ref,'file')
+        conv=self._conversation(account_ref,conversation_id)
+        if not self.store.route_allowed(user_id=self.user,source=conv['source'],route_id=conv['route_id']):
+            raise PermissionError('route_disabled')
+        projected,source_hash=self._binding(conv,source_message_id)
+        binding={'account_ref':account_ref,'conversation_id':conv['id'],'source_message_id':source_message_id,
+                 'source_hash':source_hash,'source_binding':projected['binding'],'thread_id':projected['source']['thread_id']}
+        provider=self._provider(account_ref)
+        from .messenger_uploads import MessengerUploads
+        return MessengerUploads(self.store,self.user).stage_bytes(binding,filename=filename,mime_type=mime_type,
+            data=data,sha256=hashlib.sha256(data).hexdigest(),request_id=request_id,
+            max_bytes=self._upload_limit(provider))
+
     @staticmethod
     def _media_hash(projected, index):
         attachment=next((a for a in projected['media'] if a['attachment_index']==index),None)

@@ -32,8 +32,14 @@ class MessengerUploads:
                 data BLOB,expires_at REAL NOT NULL,action_id TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY(user_id,id),UNIQUE(user_id,request_id))''')
 
-    def stage(self, binding, *, filename, mime_type, data_base64, sha256, request_id,
-              max_bytes=None):
+    def _byte_limit(self, max_bytes):
+        getlimit=getattr(self.store._connection,'getlimit',None)
+        sqlite_limit=getlimit(getattr(sqlite3,'SQLITE_LIMIT_LENGTH',0)) if callable(getlimit) else MAX_STORAGE_BYTES
+        storage_limit=min(MAX_STORAGE_BYTES,sqlite_limit)
+        return min(storage_limit,max_bytes) if type(max_bytes) is int and max_bytes>0 else storage_limit
+
+    @staticmethod
+    def _validate_metadata(filename,mime_type,request_id):
         if (not isinstance(filename,str) or not 1<=len(filename)<=128
                 or filename in {'.','..'} or any(c in filename for c in '/\\')
                 or any(ord(c)<32 or ord(c)==127 for c in filename)):
@@ -42,28 +48,34 @@ class MessengerUploads:
             raise ValueError('mime_type_required')
         if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}',request_id):
             raise ValueError('request_id_required')
-        getlimit=getattr(self.store._connection,'getlimit',None)
-        sqlite_limit=getlimit(getattr(sqlite3,'SQLITE_LIMIT_LENGTH',0)) if callable(getlimit) else MAX_STORAGE_BYTES
-        storage_limit = min(MAX_STORAGE_BYTES, sqlite_limit)
-        byte_limit = min(storage_limit, max_bytes) if type(max_bytes) is int and max_bytes > 0 else storage_limit
-        if not isinstance(data_base64,str) or len(data_base64)>4*((byte_limit+2)//3):
+
+    def stage(self,binding,*,filename,mime_type,data_base64,sha256,request_id,max_bytes=None):
+        limit=self._byte_limit(max_bytes)
+        if not isinstance(data_base64,str) or len(data_base64)>4*((limit+2)//3):
             raise ValueError('upload_exceeds_account_or_storage_limit')
-        try: data=base64.b64decode(data_base64,validate=True)
-        except (ValueError,UnicodeError): raise ValueError('invalid_upload_base64') from None
-        if len(data)>byte_limit: raise ValueError('upload_exceeds_account_or_storage_limit')
-        if not data: raise ValueError('upload_must_not_be_empty')
+        try:data=base64.b64decode(data_base64,validate=True)
+        except (ValueError,UnicodeError):raise ValueError('invalid_upload_base64') from None
+        return self.stage_bytes(binding,filename=filename,mime_type=mime_type,data=data,
+            sha256=sha256,request_id=request_id,max_bytes=max_bytes)
+
+    def stage_bytes(self,binding,*,filename,mime_type,data,sha256,request_id,max_bytes=None):
+        self._validate_metadata(filename,mime_type,request_id)
+        if not isinstance(data,bytes):raise ValueError('invalid_upload_bytes')
+        limit=self._byte_limit(max_bytes)
+        if len(data)>limit:raise ValueError('upload_exceeds_account_or_storage_limit')
+        if not data:raise ValueError('upload_must_not_be_empty')
         actual=hashlib.sha256(data).hexdigest()
-        if sha256!=actual: raise ValueError('upload_sha256_conflict')
+        if sha256!=actual:raise ValueError('upload_sha256_conflict')
         uid='upload_'+hashlib.sha256((self.user+'\0'+request_id).encode()).hexdigest()
         metadata={'upload_id':uid,'filename':filename,'mime_type':mime_type,'size':len(data),'sha256':actual}
         identity=digest({'binding':binding,'metadata':metadata})
         now=time.time()
-        with self.store._lock, self.store._connection:
+        with self.store._lock,self.store._connection:
             self.store._connection.execute('UPDATE messenger_uploads SET data=NULL WHERE expires_at<=? AND data IS NOT NULL',(now,))
             row=self.store._connection.execute('SELECT * FROM messenger_uploads WHERE user_id=? AND id=?',(self.user,uid)).fetchone()
             if row:
-                if row['hash']!=identity: raise ValueError('upload_idempotency_conflict')
-                if row['expires_at']<=now or row['data'] is None: raise ValueError('upload_expired_or_consumed')
+                if row['hash']!=identity:raise ValueError('upload_idempotency_conflict')
+                if row['expires_at']<=now or row['data'] is None:raise ValueError('upload_expired_or_consumed')
                 self._verify(row)
                 return {**metadata,'expires_at':row['expires_at']}
             expiry=now+TTL_SECONDS
