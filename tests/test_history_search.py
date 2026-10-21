@@ -15,7 +15,7 @@ import pytest
 from universal_userio.contracts import InboxMessage
 from universal_userio.search import search_coverage, search_messages
 from universal_userio.semantic_index import (
-    SemanticSettings, SemanticUnavailable, backfill_step, chunk_text, initialize,
+    SemanticSettings, SemanticUnavailable, backfill_step, chunk_text, embed, initialize,
     point_id, resolve_settings, status,
 )
 from universal_userio.service import UserIOService
@@ -132,6 +132,47 @@ def test_semantic_settings_never_expose_keys(tmp_path):
     assert settings.enabled and settings.configured()
     assert "super-secret" not in json.dumps(settings.public())
     assert status(store)["indexed_messages"] == 0
+
+
+def test_embedding_timeout_defaults_high_and_follows_the_deployment_knob(tmp_path, monkeypatch):
+    service, store = _service(tmp_path)
+    store.set_user_search_settings({
+        "enabled": True, "qdrant_url": "https://qdrant.example", "qdrant_collection": "userio_history",
+        "embedding_url": "https://embed.example", "embedding_model": "qwen3-embedding:4b",
+    })
+    monkeypatch.delenv("USERIO_SEARCH_EMBEDDING_TIMEOUT", raising=False)
+    settings = resolve_settings(store, environment={})
+    assert settings.embedding_timeout == 180
+    assert settings.public()["embedding_timeout"] == 180
+    assert resolve_settings(store, environment={"USERIO_SEARCH_EMBEDDING_TIMEOUT": "300"}).embedding_timeout == 300
+    assert resolve_settings(store, environment={"USERIO_SEARCH_EMBEDDING_TIMEOUT": "nonsense"}).embedding_timeout == 180
+    assert resolve_settings(store, environment={"USERIO_SEARCH_EMBEDDING_TIMEOUT": "0"}).embedding_timeout == 180
+
+
+def test_embed_sends_the_configured_timeout(monkeypatch):
+    captured = {}
+
+    class _Response:
+        def read(self, *_args):
+            return json.dumps({"data": [{"index": 0, "embedding": [0.5, 0.5]}]}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _urlopen(_request, timeout=None):
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr("universal_userio.semantic_index.urllib.request.urlopen", _urlopen)
+    settings = SemanticSettings(
+        enabled=True, qdrant_url="https://qdrant.example", qdrant_collection="userio_history",
+        embedding_url="https://embed.example", embedding_model="qwen3-embedding:4b",
+        dimensions=2, embedding_timeout=321)
+    embed(settings, ["текст"])
+    assert captured["timeout"] == 321
 
 
 def test_incomplete_configuration_is_treated_as_disabled(tmp_path):

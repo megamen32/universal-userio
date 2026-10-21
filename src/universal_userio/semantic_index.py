@@ -27,6 +27,11 @@ CHUNK_CHARS = 1200
 CHUNKS_PER_REQUEST = 8
 POINT_HASH = 2048
 MAX_CHUNK_ROWS = 400
+# A CPU embedding backend answers a batch of eight ~1200-character chunks in
+# roughly 50 seconds, which is close to the 60-second timeout this client used
+# to hardcode. The timeout is a deployment knob so a slower embedding backend
+# cannot abort the request and leave the indexer with a broken pipe.
+EMBEDDING_TIMEOUT_SECONDS = 180
 
 
 class SemanticUnavailable(RuntimeError):
@@ -48,6 +53,7 @@ class SemanticSettings:
     embedding_model: str = ""
     embedding_token: str = ""
     dimensions: int = POINT_HASH
+    embedding_timeout: int = EMBEDDING_TIMEOUT_SECONDS
 
     def configured(self) -> bool:
         return bool(self.qdrant_url and self.qdrant_collection
@@ -60,6 +66,7 @@ class SemanticSettings:
             "qdrant_collection": self.qdrant_collection,
             "embedding_url": self.embedding_url, "embedding_model": self.embedding_model,
             "dimensions": self.dimensions if self.enabled else 0,
+            "embedding_timeout": self.embedding_timeout,
             "has_qdrant_key": bool(self.qdrant_token),
             "has_embedding_key": bool(self.embedding_token),
         }
@@ -93,6 +100,17 @@ def resolve_settings(store: Any, *, user_id: str | None = None,
         dimensions = POINT_HASH
     enabled = _truthy(saved.get("enabled")) if "enabled" in saved else _truthy(
         environment.get("USERIO_SEARCH_SEMANTIC_ENABLED"))
+    # The timeout is not a credential, so it stays readable from the deployment
+    # environment even for a user that inherits no other deployment value.
+    try:
+        embedding_timeout = int(
+            environment.get("USERIO_SEARCH_EMBEDDING_TIMEOUT")
+            or os.environ.get("USERIO_SEARCH_EMBEDDING_TIMEOUT")
+            or EMBEDDING_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        embedding_timeout = EMBEDDING_TIMEOUT_SECONDS
+    if embedding_timeout <= 0:
+        embedding_timeout = EMBEDDING_TIMEOUT_SECONDS
     settings = SemanticSettings(
         enabled=enabled,
         qdrant_url=pick("qdrant_url", "USERIO_SEARCH_QDRANT_URL"),
@@ -103,6 +121,7 @@ def resolve_settings(store: Any, *, user_id: str | None = None,
         embedding_model=pick("embedding_model", "USERIO_SEARCH_EMBEDDING_MODEL"),
         embedding_token=pick("embedding_token", "USERIO_SEARCH_EMBEDDING_TOKEN"),
         dimensions=dimensions if dimensions > 0 else POINT_HASH,
+        embedding_timeout=embedding_timeout,
     )
     return settings if settings.configured() else replace(settings, enabled=False)
 
@@ -205,9 +224,10 @@ def embeddings_endpoint(base_url: str) -> str:
     return base + "/v1/embeddings"
 
 
-def embed(settings: SemanticSettings, texts: Sequence[str], *, timeout: int = 60) -> list[list[float]]:
+def embed(settings: SemanticSettings, texts: Sequence[str], *, timeout: int | None = None) -> list[list[float]]:
     if not texts:
         return []
+    request_timeout = settings.embedding_timeout if timeout is None else timeout
     url = embeddings_endpoint(settings.embedding_url)
     payload = {"model": settings.embedding_model, "input": list(texts)}
     request = urllib.request.Request(
@@ -215,7 +235,7 @@ def embed(settings: SemanticSettings, texts: Sequence[str], *, timeout: int = 60
         headers={"Content-Type": "application/json",
                  **({"Authorization": "Bearer " + settings.embedding_token} if settings.embedding_token else {})})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+        with urllib.request.urlopen(request, timeout=request_timeout) as response:  # noqa: S310
             data = json.loads(response.read(32_000_001))
     except urllib.error.HTTPError as error:
         error.read()
