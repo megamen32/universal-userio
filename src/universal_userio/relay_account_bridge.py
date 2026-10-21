@@ -179,6 +179,22 @@ class RelayAccountBridge:
     def react(self, **kwargs):
         return self.fallback.react(**kwargs)
 
+    def upload_limit(self, *, account_ref: str) -> int:
+        """Expose the connected account's native limit through this decorator."""
+        method = getattr(self.fallback, "upload_limit", None)
+        if not callable(method):
+            raise ValueError("Telegram upload capability is unavailable")
+        return method(account_ref=account_ref)
+
+    def send_file(self, *, account_ref: str, chat_id: str, **kwargs):
+        """Use the same QR session owner for uploads outside the protected relay pair."""
+        if self.source_bound_pair(account_ref, chat_id):
+            raise DeliveryNotSubmittedError("relay-bound Telegram chat uses its approved relay route")
+        method = getattr(self.fallback, "send_file", None)
+        if not callable(method):
+            raise DeliveryNotSubmittedError("Telegram file upload is unavailable")
+        return method(account_ref=account_ref, chat_id=chat_id, **kwargs)
+
     def send_attempt(self, attempt_id):
         """Read the connector's durable record of one approved send attempt."""
         method = getattr(self.fallback, "send_attempt", None)
