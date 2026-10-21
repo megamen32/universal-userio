@@ -69,12 +69,14 @@ class RelayMessengerProvider:
     def sender_id(self): return str(self._caps.get('sender_id') or '')
 
     def upload_limit(self):
-        """Use the registered Telegram session owner's current native limit."""
+        """Prefer the central session limit; retain the relay's documented 2 MiB bound if offline."""
         outbox=getattr(self.service,'telegram_outbox',None)
         getter=getattr(outbox,'upload_limit',None)
-        if not callable(getter):
-            raise ValueError('Telegram upload limit is unavailable')
-        return getter(account_ref=self.account_ref)
+        if callable(getter):
+            try:return getter(account_ref=self.account_ref)
+            except Exception:pass
+        from .messenger_uploads import MAX_BYTES
+        return MAX_BYTES
 
     def message(self, *, peer_id, provider_message_id, conversation_id, read_media=False, attachment_index=0):
         result=self._request('POST','/userio/messenger/message',{'account_ref':self.account_ref,
