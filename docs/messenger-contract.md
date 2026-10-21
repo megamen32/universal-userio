@@ -126,51 +126,18 @@ New-file actions use the separately bounded `file_upload` capability and opaque
 metadata/bytes SHA replaces the media-reference branch; `media_hash` is empty.
 See [staging and provider packet](contracts/messenger-upload-v1.md).
 
-## Current sender and protected provider route
+## Telegram account sessions
 
-The Secretary Telegram sender is **900000103**, owned by the existing relay
-client. The private owner<owner-telegram-id> is a separate account. The UserIO QR connector
-does not currently have an881 slot; never send via540 as fallback. The original
-private read-only Airlock `userio` resource remains unchanged.
+All Telegram accounts use the shared UserIO GramJS connector and the same
+account-owned session lifecycle. QR login, phone login, and `tg-convert`
+session import save a GramJS session there; UserIO operations use that session
+by the account's `telegram-qr:account-N` reference. Separate messenger HTTP
+relay providers and the old exact-chat relay wrapper are no longer selected by
+the runtime. Accounts with a missing or revoked session must be connected again
+from the Telegram accounts page before live operations are available.
 
-Generic account adapter configuration uses the existing protected
-`/etc/universal-userio.env`, with nonsecret metadata:
-
-```ini
-USERIO_MESSENGER_RELAY_URL=http://127.0.0.1:30192
-USERIO_MESSENGER_RELAY_ACCOUNT=telegram:900000103
-USERIO_MESSENGER_RELAY_USER_ID=user_owner
-USERIO_MESSENGER_RELAY_TOKEN_FILE=/home/roomhacker/agents-projects/exmanager/var/airlock-relay.token
-```
-
-The account must already be assigned/enabled/reply-capable for this UserIO user.
-The existing relay Bearer remains in its protected file; the existing
-`USERIO_API_TOKEN` is read in memory. Neither value belongs in this document,
-logs, messages, a new session file or a copied credential.
-
-Relay30192 supports GET`/userio/messenger/capabilities` and POST
-`/userio/messenger/history`, `/message`, `/execute`. Message/history take exact
-account, peer and canonical conversation ID; message also takes the raw
-provider ID and optional`read_media`. Read responses retain actual native source.
-Execute receives `{envelope, approval, proof}`. Provider callbacks use the current
-connected client, re-read actual source/author/thread and own-edit rights, and
-retain their own durable no-replay receipt journal.
-
-Approval flat fields are schema`userio.messenger.approved-action.v1`, `action_id`,
-`account_ref`, `peer_id`, `user_id`, `conversation_id`,
-`source_provider_message_id`, `thread_id`, `action`, `payload_sha256`,
-`source_sha256`, `envelope_sha256`, `idempotency_key`, `approved_by`, `issued_at`,
-`expires_at`. Payload/envelope digests use canonical JSON above; source digest is
-the provider binding. Idempotency is`userio:<user_id>:<action_id>`, approved_by is
-the authoritative UserIO user. TTL is at most300s.
-`proof=HMAC-SHA256(existing USERIO_API_TOKEN, schema + '\n' + canonical(approval))`
-as lowercase hex. UserIO signs only an exact durable `sending` action claim;
-a Boolean from a model, bare draft ID or relay Bearer is not approval.
-
-Receipt is `{account_ref,peer_id,provider_message_id:string,receipt:string}`.
-Edit receipt must have the same raw provider ID. Acceptance is persisted before
-mirror hydration. A timeout/invalid receipt retains `sending`; it is not safe
-to retry a fresh intent. Only proved pre-submission failures release the claim.
+The old relay protocol was retired from runtime configuration; it is retained
+in Git history only.
 
 ## Separate native sender credential
 

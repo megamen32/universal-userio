@@ -129,22 +129,7 @@ def telegram_outbox_from_env(environment: Mapping[str, str], *, store=None):
         from .adapters import TelegramQrHttpOutbox
 
         token = environment.get("USERIO_TELEGRAM_QR_TOKEN", "").strip() or environment.get("USERIO_API_TOKEN", "")
-        fallback = TelegramQrHttpOutbox(qr_url, token)
-        relay_url = environment.get("USERIO_TELEGRAM_RELAY_URL", "").strip()
-        if relay_url:
-            if store is None:
-                raise ValueError("account relay requires the durable UserIO store")
-            from .relay_account_bridge import RelayAccountBridge
-            return RelayAccountBridge(fallback=fallback, store=store, base_url=relay_url,
-                token_file=_required(environment, "USERIO_TELEGRAM_RELAY_TOKEN_FILE"),
-                approval_key=_required(environment, "USERIO_API_TOKEN"),
-                account_id=_required(environment, "USERIO_TELEGRAM_RELAY_ACCOUNT"),
-                peer_id=_required(environment, "USERIO_TELEGRAM_RELAY_PEER"),
-                guard_file=environment.get("USERIO_TELEGRAM_RELAY_GUARD_FILE",
-                    "/var/lib/hermes-userio-dispatcher/pilot-pair-guard.json"))
-        return fallback
-    if environment.get("USERIO_TELEGRAM_RELAY_URL", "").strip():
-        raise ValueError("account relay requires retaining the existing QR fallback")
+        return TelegramQrHttpOutbox(qr_url, token)
     return live_telegram_outbox_from_env(environment)
 
 
@@ -224,17 +209,9 @@ def build_service(environment: Mapping[str, str] | None = None) -> UserIOService
         alias=account['credential_ref'].removeprefix('himalaya:')
         if addresses.get(alias) and parseaddr(account['display_name'])[1]==addresses[alias]:
             service.messenger_providers[account['id']]=GmailMessengerProvider(service,account,store.default_user_id)
-    messenger_url = environment.get('USERIO_MESSENGER_RELAY_URL','').strip()
-    if messenger_url:
-        from .messenger_relay import RelayMessengerProvider
-        account_ref = _required(environment,'USERIO_MESSENGER_RELAY_ACCOUNT')
-        user_id = environment.get('USERIO_MESSENGER_RELAY_USER_ID',store.default_user_id)
-        account = next((a for a in store.accounts(user_id=user_id) if a['id']==account_ref
-                        and a['enabled'] and a['provider']=='telegram' and 'reply' in a['capabilities']),None)
-        if account is None: raise ValueError('generic relay account must already be assigned to this UserIO user')
-        service.messenger_providers[account_ref] = RelayMessengerProvider(service=service,
-            base_url=messenger_url,token_file=_required(environment,'USERIO_MESSENGER_RELAY_TOKEN_FILE'),
-            approval_key=_required(environment,'USERIO_API_TOKEN'),account_ref=account_ref,authorized_user=user_id)
+    # Telegram accounts always resolve through their telegram-qr credential_ref
+    # and the shared GramJS session owner. A second provider must not silently
+    # replace an account's direct session with an HTTP relay.
     return service
 
 
