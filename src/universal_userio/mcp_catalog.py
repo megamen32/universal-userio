@@ -360,10 +360,10 @@ TOOL_SPECS = (
 
 MESSENGER_SPECS = (
     ToolSpec('userio.messenger.upload',
-        'Stage a new private file for one source-bound approved file action. Max 2MiB, TTL 900s. No send, URLs or local paths. Returns opaque upload_id and metadata only.',
+        'Stage a private file for one source-bound approved send. Telegram uses the selected account upload limit; other providers use their published limit. Bytes expire after 900s. No send, URLs or local paths. Returns upload_id and metadata only.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},
                 'filename':{'type':'string','maxLength':128},'mime_type':{'type':'string','maxLength':128},
-                'data_base64':{'type':'string','maxLength':2796204},'sha256':{'type':'string','pattern':'^[0-9a-f]{64}$'},
+                'data_base64':{'type':'string'},'sha256':{'type':'string','pattern':'^[0-9a-f]{64}$'},
                 'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','conversation_id','source_message_id','filename','mime_type','data_base64','sha256','request_id'])),
     ToolSpec('userio.messenger.events',

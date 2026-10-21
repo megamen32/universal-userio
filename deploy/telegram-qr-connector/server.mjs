@@ -1,7 +1,7 @@
 import http from "node:http";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
@@ -30,6 +30,9 @@ import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from
 import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
 import { SendAttemptLedger, attemptState } from "./send-attempts.mjs";
 import { attachmentResponseHeaders } from "./attachment-response.mjs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+import { Transform, pipeline } from "node:stream";
 
 const port = Number(process.env.PORT || 18095);
 const publicPrefix = (process.env.PUBLIC_PREFIX || "").replace(/\/$/, "");
@@ -903,6 +906,33 @@ function readJsonBody(req, maxBytes = 64 * 1024) {
   });
 }
 
+function appConfigNumber(node, key) {
+  if (!node || typeof node !== "object") return null;
+  if (node.key === key && node.value && node.value.className === "JsonNumber") {
+    const value = Number(node.value.value);
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  const values = Array.isArray(node.value) ? node.value : [];
+  for (const item of values) {
+    const found = appConfigNumber(item, key);
+    if (found) return found;
+  }
+  if (node.config) return appConfigNumber(node.config, key);
+  return null;
+}
+
+async function telegramUploadLimit(client) {
+  const [me, result] = await Promise.all([
+    client.getMe(), client.invoke(new Api.help.GetAppConfig({ hash: 0 })),
+  ]);
+  const key = me && me.premium ? "upload_max_fileparts_premium" : "upload_max_fileparts_default";
+  const parts = appConfigNumber(result && result.config, key);
+  const captionKey = me && me.premium ? "caption_length_limit_premium" : "caption_length_limit_default";
+  const captionLength = appConfigNumber(result && result.config, captionKey);
+  if (!parts || !captionLength) throw new Error("Telegram account media limits are unavailable");
+  return { maxBytes: parts * 524288, captionLength };
+}
+
 function telegramMessageLocator(payload) {
   const ref = String((payload && payload.message_id) || "").trim();
   let chatKey = "";
@@ -973,7 +1003,7 @@ function clearSlot(slotId) {
   return live;
 }
 
-const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Подключённые аккаунты и сохранённые входы. Старые сеансы без имени отмечены отдельно.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p></section><div id=cards aria-live="polite"></div></main></div><script type="module">
+const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Подключённые аккаунты и сохранённые входы. Старые сеансы без имени отмечены отдельно.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p><details><summary>Импортировать существующий сеанс</summary><p class="userio-note">Локально преобразуйте файл через <code>tg-convert путь-к-файлу --to gramjs-string --print</code> и вставьте результат. Остановите другие клиенты этого аккаунта перед импортом: одну Telegram-сессию должен обслуживать один живой владелец.</p><form id="import-session-form"><textarea name="session" required autocomplete="off" spellcheck="false" aria-label="GramJS session string" rows="4"></textarea><button class="userio-setup-button" type="submit">Проверить и сохранить</button><p class="userio-note" id="import-session-status" aria-live="polite"></p></form></details></section><div id=cards aria-live="polite"></div></main></div><script type="module">
 import { telegramAccountCard } from "__PREFIX__/account-card.mjs";
 var prefix = location.pathname.replace(/\\/$/, "");
 var seen = new Map();
@@ -1027,6 +1057,17 @@ document.addEventListener("submit", function(e){
   e.preventDefault();
   fetch(f.getAttribute("action"), {method:"POST", body:new URLSearchParams(new FormData(f))}).catch(function(){}).then(poll);
 });
+document.getElementById('import-session-form').addEventListener('submit',async function(event){
+  event.preventDefault();var form=event.currentTarget,field=form.elements.session,status=document.getElementById('import-session-status');
+  var session=String(field.value||'').trim();if(!session)return;status.textContent='Проверяю сеанс…';
+  try{
+    var response=await fetch(prefix+'/import-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session:session})});
+    var result=await response.json().catch(function(){return {};});
+    if(!response.ok)throw Error(result.error||'Сеанс не подключён.');
+    status.textContent='Сеанс проверен и сохранён. Аккаунт: '+result.account_id;
+    field.value='';await poll();
+  }catch(error){status.textContent=error.message||'Сеанс не подключён.';field.value='';}
+});
 document.addEventListener('click',async function(event){
   var button=event.target.closest('[data-account-action]');if(!button)return;
   var kind=button.dataset.accountAction,label=button.dataset.label||'этот аккаунт';
@@ -1051,7 +1092,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1076,6 +1117,47 @@ http.createServer(async (req, res) => {
   if (url.pathname === "/state") {
     res.setHeader("content-type", "application/json");
     return res.end(JSON.stringify(enrollmentOwners.filter(publicState(),browserOwner.principal.user_id)));
+  }
+  if (url.pathname === "/import-session" && req.method === "POST") {
+    let importedClient=null;
+    try {
+      const payload=await readJsonBody(req,16*1024);
+      const session=String(payload.session||"").trim();
+      if (session.length<100 || session.length>8192 || /[\r\n\0]/.test(session)) {
+        throw new Error("GramJS session string is invalid");
+      }
+      importedClient=newSyncClient(session);
+      await importedClient.connect();
+      const auth=await probeAuthorization(importedClient,Api);
+      if (!auth.authorized) throw new Error("Telegram session is not authorized");
+      const user=await importedClient.getMe();
+      const accountId=`telegram:${user.id}`;
+      const existing=[...liveSlots.values()].some(value=>value.accountId===accountId)
+        || [...slots.values()].some(value=>value.accountId===accountId);
+      const savedSession=importedClient.session.save();
+      const sameSession=readdirSync(sessionsDir).some(file=>/^account-\d+\.session$/.test(file)
+        && readFileSync(`${sessionsDir}/${file}`,"utf8").trim()===savedSession);
+      if (existing || sameSession) throw new Error("Telegram account or session is already connected in UserIO");
+      await importedClient.disconnect();
+      const slotId=`account-${nextSlot++}`;
+      enrollmentOwners.bind(slotId,browserOwner.principal,browserOwner.headers);
+      slots.set(slotId,{status:"connected",mode:"imported"});
+      await finishLogin(slotId,importedClient,user);
+      importedClient=null;
+      const state=slots.get(slotId)||{};
+      if (state.status==="connected-unregistered") {
+        res.writeHead(502,{"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"Сеанс сохранён, но UserIO не подтвердил регистрацию аккаунта. Перепроверьте список аккаунтов."}));
+      }
+      res.writeHead(201,{"content-type":"application/json"});
+      return res.end(JSON.stringify({ok:true,account_id:state.accountId||accountId,slot:slotId}));
+    } catch (error) {
+      if (importedClient) await importedClient.disconnect().catch(()=>{});
+      const message=String(error&&error.message||"");
+      const duplicate=message.includes("already connected in UserIO");
+      res.writeHead(duplicate?409:400,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:duplicate?"Этот Telegram-аккаунт или сеанс уже подключён в UserIO.":"Не удалось проверить сеанс Telegram. Проверьте, что он авторизован и преобразован в формат GramJS."}));
+    }
   }
   if (url.pathname === "/account-card.mjs" && req.method === "GET") {
     res.setHeader("content-type", "text/javascript; charset=utf-8");
@@ -1438,6 +1520,159 @@ http.createServer(async (req, res) => {
       }
     });
     return;
+  }
+  if (url.pathname === "/upload-limit" && req.method === "GET") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const accountId=String(url.searchParams.get("account_id")||"");
+      const liveEntry=[...liveSlots.entries()].find(([,value])=>value.accountId===accountId);
+      const item=liveEntry&&liveEntry[1];
+      if (!item) {
+        res.writeHead(409,{"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"account_not_connected",submitted:false}));
+      }
+      const limits=await telegramUploadLimit(item.client);
+      res.writeHead(200,{"content-type":"application/json"});
+      return res.end(JSON.stringify({account_id:accountId,max_bytes:limits.maxBytes,
+        caption_max_bytes:limits.captionLength}));
+    } catch (error) {
+      res.writeHead(503,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"account_upload_limits_unavailable"}));
+    }
+  }
+  if (url.pathname === "/send-file" && req.method === "POST") {
+    const expected=`Bearer ${process.env.USERIO_API_TOKEN||""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization!==expected) {
+      res.writeHead(401,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"unauthorized",submitted:false}));
+    }
+    let metadata;
+    try {
+      const encoded=String(req.headers["x-userio-file-metadata"]||"");
+      if (!encoded || encoded.length>12000) throw new Error("invalid file metadata");
+      const normalized=encoded.replace(/-/g,"+").replace(/_/g,"/");
+      metadata=JSON.parse(Buffer.from(normalized,"base64").toString("utf8"));
+      if (!metadata || !/^telegram:[1-9][0-9]*$/.test(String(metadata.account_id||""))
+          || !/^-?[1-9][0-9]*$/.test(String(metadata.peer_id||""))
+          || !/^action_[a-f0-9]{64}$/.test(String(metadata.attempt_id||""))
+          || typeof metadata.filename!=="string" || metadata.filename.length<1 || metadata.filename.length>128
+          || metadata.filename==="." || metadata.filename===".."
+          || /[\\/\r\n\0\x00-\x1f\x7f]/.test(metadata.filename)
+          || typeof metadata.mime_type!=="string"
+          || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(metadata.mime_type)
+          || typeof metadata.caption!=="string" || typeof metadata.force_document!=="boolean"
+          || !Number.isSafeInteger(metadata.size) || metadata.size<1
+          || !/^[a-f0-9]{64}$/.test(String(metadata.sha256||""))) throw new Error("invalid file metadata");
+      const declared=Number(req.headers["content-length"]||0);
+      if (declared!==metadata.size) throw new Error("file size declaration mismatch");
+    } catch (error) {
+      res.writeHead(400,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"invalid_file_upload",submitted:false}));
+    }
+    const prior=sendAttempts.get(metadata.attempt_id);
+    const state=attemptState(prior);
+    if (state==="sent") {
+      if (prior.kind!=="file" || prior.account_id!==metadata.account_id
+          || prior.peer_id!==metadata.peer_id || prior.sha256!==metadata.sha256
+          || prior.size!==metadata.size || prior.force_document!==metadata.force_document) {
+        res.writeHead(409,{"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"send_attempt_identity_conflict",submitted:false}));
+      }
+      res.writeHead(200,{"content-type":"application/json"});
+      return res.end(JSON.stringify({ok:true,duplicate:true,slot:prior.slot,account_id:prior.account_id,
+        peer_id:prior.peer_id,message_id:prior.message_id,date:prior.date,size:prior.size,
+        sha256:prior.sha256,filename:prior.filename,mime_type:prior.mime_type}));
+    }
+    if (state==="pending" || state==="unknown") {
+      res.writeHead(502,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"this approved file upload may already be on the wire",
+        code:"send_outcome_unknown",submitted:"unknown"}));
+    }
+    if (state==="refused") {
+      res.writeHead(409,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"this approved file upload was already refused",
+        code:"send_was_refused",submitted:false}));
+    }
+    const liveEntry=[...liveSlots.entries()].find(([,value])=>value.accountId===metadata.account_id);
+    const item=liveEntry&&liveEntry[1];
+    if (!item) {
+      res.writeHead(409,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"account_not_connected",submitted:false}));
+    }
+    let limits;
+    try { limits=await telegramUploadLimit(item.client); }
+    catch {
+      res.writeHead(503,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"account_upload_limits_unavailable",submitted:false}));
+    }
+    if (metadata.size>limits.maxBytes
+        || Buffer.byteLength(metadata.caption,"utf8")>limits.captionLength) {
+      res.writeHead(413,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"telegram_account_file_or_caption_limit",submitted:false}));
+    }
+    let peer=item.labelPeers.idPeers.get(metadata.peer_id);
+    if (!peer) {
+      try { peer=await item.client.getEntity(metadata.peer_id); }
+      catch { peer=null; }
+    }
+    if (!peer) {
+      res.writeHead(409,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"chat_not_known",submitted:false}));
+    }
+    const directory=mkdtempSync(joinPath(tmpdir(),"userio-telegram-upload-"));
+    const filePath=joinPath(directory,metadata.filename);
+    const hasher=createHash("sha256");
+    let received=0;
+    const meter=new Transform({transform(chunk,encoding,callback){
+      received+=chunk.length;
+      if (received>metadata.size || received>limits.maxBytes) return callback(new Error("upload size exceeded"));
+      hasher.update(chunk);callback(null,chunk);
+    }});
+    try {
+      await new Promise((resolve,reject)=>pipeline(req,meter,
+        createWriteStream(filePath,{flags:"wx",mode:0o600}),error=>error?reject(error):resolve()));
+      const digest=hasher.digest("hex");
+      if (received!==metadata.size || digest!==metadata.sha256 || statSync(filePath).size!==metadata.size) {
+        throw new Error("uploaded file digest or size conflict");
+      }
+      sendAttempts.record(metadata.attempt_id,{state:"pending",kind:"file",account_id:metadata.account_id,
+        peer_id:metadata.peer_id,size:metadata.size,sha256:metadata.sha256,filename:metadata.filename,
+        mime_type:metadata.mime_type,force_document:metadata.force_document});
+      const sendOptions={file:filePath,caption:metadata.caption,fileSize:metadata.size};
+      if (metadata.force_document) sendOptions.forceDocument=true;
+      const sent=await item.client.sendFile(peer,sendOptions);
+      const messageId=String(sent&&sent.id||"");
+      const date=Number(sent&&sent.date||0);
+      if (!/^[1-9][0-9]*$/.test(messageId) || Number(messageId)>0x7fffffff || !sent.out || !date) {
+        throw new Error("Telegram file response has no confirmed message id");
+      }
+      sendAttempts.record(metadata.attempt_id,{state:"sent",kind:"file",slot:liveEntry[0],
+        account_id:metadata.account_id,peer_id:metadata.peer_id,message_id:messageId,date,
+        size:metadata.size,sha256:metadata.sha256,filename:metadata.filename,mime_type:metadata.mime_type,
+        force_document:metadata.force_document});
+      res.writeHead(200,{"content-type":"application/json"});
+      return res.end(JSON.stringify({ok:true,slot:liveEntry[0],account_id:metadata.account_id,
+        peer_id:metadata.peer_id,message_id:messageId,date,size:metadata.size,sha256:metadata.sha256,
+        filename:metadata.filename,mime_type:metadata.mime_type,out:true}));
+    } catch (error) {
+      const priorState=attemptState(sendAttempts.get(metadata.attempt_id));
+      if (priorState==="pending") sendAttempts.record(metadata.attempt_id,{state:"unknown",code:"send_outcome_unknown"});
+      console.error("Telegram file upload error:",error&&error.message||"unknown");
+      if (priorState==="absent") {
+        res.writeHead(400,{"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"Telegram file upload refused before submission",submitted:false}));
+      }
+      res.writeHead(502,{"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"Telegram file upload outcome is unknown",
+        code:"send_outcome_unknown",submitted:"unknown"}));
+    } finally {
+      try { if (existsSync(filePath)) unlinkSync(filePath); } catch {}
+      try { rmdirSync(directory); } catch {}
+    }
   }
   if (url.pathname === "/send-attempt" && req.method === "POST") {
     // Read-only reconciliation of one approved send attempt. It never sends

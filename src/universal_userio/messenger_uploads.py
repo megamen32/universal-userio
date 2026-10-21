@@ -9,13 +9,17 @@ import base64
 import hashlib
 import json
 import re
+import sqlite3
 import time
 
 from .messenger import canonical, digest
 
+# Legacy providers without a published upload capability retain their existing
+# conservative bound. Telegram uses the account's live MTProto upload ceiling,
+# with SQLite's configured BLOB limit as the storage backstop.
 MAX_BYTES = 2 * 1024 * 1024
+MAX_STORAGE_BYTES = 1_000_000_000
 TTL_SECONDS = 900
-MAX_STAGED = 4
 
 
 class MessengerUploads:
@@ -28,7 +32,8 @@ class MessengerUploads:
                 data BLOB,expires_at REAL NOT NULL,action_id TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY(user_id,id),UNIQUE(user_id,request_id))''')
 
-    def stage(self, binding, *, filename, mime_type, data_base64, sha256, request_id):
+    def stage(self, binding, *, filename, mime_type, data_base64, sha256, request_id,
+              max_bytes=None):
         if (not isinstance(filename,str) or not 1<=len(filename)<=128
                 or filename in {'.','..'} or any(c in filename for c in '/\\')
                 or any(ord(c)<32 or ord(c)==127 for c in filename)):
@@ -37,11 +42,15 @@ class MessengerUploads:
             raise ValueError('mime_type_required')
         if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}',request_id):
             raise ValueError('request_id_required')
-        if not isinstance(data_base64,str) or len(data_base64)>4*((MAX_BYTES+2)//3):
-            raise ValueError('upload_exceeds_2MiB')
+        getlimit=getattr(self.store._connection,'getlimit',None)
+        sqlite_limit=getlimit(getattr(sqlite3,'SQLITE_LIMIT_LENGTH',0)) if callable(getlimit) else MAX_STORAGE_BYTES
+        storage_limit = min(MAX_STORAGE_BYTES, sqlite_limit)
+        byte_limit = min(storage_limit, max_bytes) if type(max_bytes) is int and max_bytes > 0 else storage_limit
+        if not isinstance(data_base64,str) or len(data_base64)>4*((byte_limit+2)//3):
+            raise ValueError('upload_exceeds_account_or_storage_limit')
         try: data=base64.b64decode(data_base64,validate=True)
         except (ValueError,UnicodeError): raise ValueError('invalid_upload_base64') from None
-        if len(data)>MAX_BYTES: raise ValueError('upload_exceeds_2MiB')
+        if len(data)>byte_limit: raise ValueError('upload_exceeds_account_or_storage_limit')
         if not data: raise ValueError('upload_must_not_be_empty')
         actual=hashlib.sha256(data).hexdigest()
         if sha256!=actual: raise ValueError('upload_sha256_conflict')
@@ -57,8 +66,6 @@ class MessengerUploads:
                 if row['expires_at']<=now or row['data'] is None: raise ValueError('upload_expired_or_consumed')
                 self._verify(row)
                 return {**metadata,'expires_at':row['expires_at']}
-            count=self.store._connection.execute('SELECT COUNT(*) FROM messenger_uploads WHERE user_id=? AND data IS NOT NULL',(self.user,)).fetchone()[0]
-            if count>=MAX_STAGED: raise ValueError('upload_staging_limit')
             expiry=now+TTL_SECONDS
             self.store._connection.execute('INSERT INTO messenger_uploads (user_id,id,request_id,binding,metadata,hash,data,expires_at) VALUES (?,?,?,?,?,?,?,?)',
                 (self.user,uid,request_id,canonical(binding).decode(),canonical(metadata).decode(),identity,data,expiry))

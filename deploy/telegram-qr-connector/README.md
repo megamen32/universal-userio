@@ -42,15 +42,37 @@ through an independent authorized client:
 - `POST /login/code` with `{ "slot": "account-N", "code": "12345" }`
   completes the Telegram-delivered code prompt.
 
-These endpoints never import or copy another client's auth key. The resulting
-GramJS session is independently minted and stored with mode `0600` under the
-ingress state directory. The browser QR and phone forms remain as a human
-fallback.
+The phone/code endpoints never import or copy another client's auth key; they
+mint an independent GramJS session stored with mode `0600` under the ingress
+state directory. The browser QR and phone forms remain available alongside the
+separate authenticated import form below.
+
+## One UserIO session owner
+
+QR login, phone login and the authenticated **Import existing session** form all
+end with one stored GramJS session in this connector. To import another format,
+convert it locally with the owner's [`tg-convert`](https://github.com/megamen32/tg-convert)
+CLI (`tg-convert input.session --to gramjs-string --print`) and paste the result
+into the protected UserIO account page. The converter runs locally; UserIO never
+uploads the source file to a conversion service. The connector authenticates the
+converted session, rejects duplicate accounts already present in UserIO, closes
+the validation client, then stores and reconnects that same session under its
+existing private session directory.
+
+All UserIO Telegram operations must call this session owner over its existing
+account-scoped API. Do not export session strings to other running clients or
+start a second live client on the imported auth key; Telegram updates can be
+stolen between clients. Stop any old Telethon/Pyrogram client before importing
+its session. Library-specific adapters may remain available for standalone
+consumers, but UserIO account operations share the connector-owned session.
 
 ## Constraints worth remembering
 
-- Systemd runs `/usr/bin/node` = **v12**: no `??`, no `?.`, no
-  `replaceAll` in this file.
+- Runtime check on 2026-10-21: the active connector was a child of
+  `python -m universal_userio.container_runtime` using `/usr/local/bin/node`
+  v22.23.3; the standalone `userio-telegram-ingress.service` was inactive.
+  Recheck the actual process/supervisor before a future deployment; the old
+  Node 12 compatibility note applied to a retired launch path.
 - GramJS 2.26: `client.getPeerId(peer, true)` is **async** and returns the
   same marked id as `dialog.id` (`-100…` channels, `-…` groups, plain users).
   There is no `runUntilDisconnected`.
@@ -110,6 +132,18 @@ could duplicate a delivered message.
 route. It answers `sent`, `refused`, `pending`, `unknown` or `absent`, plus the
 journal epoch. It never sends anything. `absent` proves non-submission only for
 an attempt claimed after the epoch; an older claim keeps its unknown outcome.
+
+## Approved document upload
+
+`GET /upload-limit?account_id=telegram:<id>` returns the selected session's
+current MTProto file-part and caption ceilings from Telegram app configuration.
+`POST /send-file` receives approved bytes as an octet stream and small base64url
+metadata in `X-UserIO-File-Metadata`. It streams bytes to a private temporary
+file, checks exact length and SHA-256, sends through the same session with
+GramJS `sendFile` (using Telegram's media classification by filename unless
+the action forces a document), and records the provider message ID in the
+existing send-attempt journal. Unknown outcomes are never replayed. Temporary
+files are removed after each request.
 
 ## Human web read receipts
 

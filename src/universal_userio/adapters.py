@@ -500,6 +500,66 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("Telegram reply receipt could not be verified")
         return result
 
+    def upload_capabilities(self, *, account_ref: str) -> dict[str,int]:
+        if not re.fullmatch(r"telegram:[1-9][0-9]*", account_ref):
+            raise ValueError("Telegram upload limit requires an exact account")
+        request=urllib.request.Request(
+            f"{self._base_url}/upload-limit?account_id={urllib.parse.quote(account_ref)}",
+            headers={"Authorization":f"Bearer {self._token}"})
+        try:
+            with self._runner(request,timeout=self._timeout) as response:
+                result=json.loads(response.read().decode() or "{}")
+        except (OSError,urllib.error.URLError) as error:
+            raise RuntimeError("Telegram upload capability is unavailable") from error
+        if (not isinstance(result,dict) or result.get("account_id")!=account_ref
+                or type(result.get("max_bytes")) is not int or result["max_bytes"]<1
+                or type(result.get("caption_max_bytes")) is not int or result["caption_max_bytes"]<1):
+            raise RuntimeError("Telegram upload capability receipt is invalid")
+        return {"max_bytes":result["max_bytes"],"caption_max_bytes":result["caption_max_bytes"]}
+
+    def upload_limit(self, *, account_ref: str) -> int:
+        return self.upload_capabilities(account_ref=account_ref)["max_bytes"]
+
+    def send_file(self, *, account_ref: str, chat_id: str, filename: str, mime_type: str,
+                  caption: str, data: bytes, sha256: str, request_id: str,
+                  force_document: bool = False) -> dict[str, object]:
+        if (not re.fullmatch(r"telegram:[1-9][0-9]*",account_ref)
+                or not re.fullmatch(r"-?[1-9][0-9]*",chat_id)
+                or not isinstance(data,bytes) or not data
+                or type(force_document) is not bool
+                or hashlib.sha256(data).hexdigest()!=sha256):
+            raise ValueError("Telegram file scope or digest is invalid")
+        try:
+            limits=self.upload_capabilities(account_ref=account_ref)
+        except Exception as error:
+            raise DeliveryNotSubmittedError("Telegram upload preflight is unavailable") from error
+        if len(data)>limits["max_bytes"] or len(caption.encode("utf-8"))>limits["caption_max_bytes"]:
+            raise TelegramConnectorRefused("Telegram account upload limit refused the file before submission",
+                connector_code="file_upload_limit",http_status=413)
+        metadata={"account_id":account_ref,"peer_id":chat_id,"attempt_id":request_id,
+            "filename":filename,"mime_type":mime_type,"caption":caption,
+            "size":len(data),"sha256":sha256,"force_document":force_document}
+        encoded=base64.urlsafe_b64encode(json.dumps(metadata,ensure_ascii=False,
+            separators=(",",":")).encode()).decode().rstrip("=")
+        request=urllib.request.Request(f"{self._base_url}/send-file",data=data,method="POST",
+            headers={"Content-Type":"application/octet-stream","Authorization":f"Bearer {self._token}",
+                "Content-Length":str(len(data)),"X-UserIO-File-Metadata":encoded})
+        self._assert_connector_accepts()
+        try:
+            with self._runner(request,timeout=max(self._timeout,900)) as response:
+                result=json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail=error.read().decode(errors="replace")[:200]
+            try: refused=json.loads(detail).get("submitted") is False
+            except (ValueError,AttributeError): refused=False
+            if refused or error.code in _CONNECTOR_REFUSED_HTTP:
+                raise TelegramConnectorRefused("Telegram file upload was refused before submission",
+                    connector_code="file_upload_refused",http_status=error.code) from error
+            raise RuntimeError("Telegram file upload outcome is unknown") from error
+        except (OSError,urllib.error.URLError) as error:
+            raise RuntimeError("Telegram file upload outcome is unknown") from error
+        return result
+
     def acknowledge(self, *, account_ref: str, chat_id: str, message_id: str) -> dict[str, object]:
         if not account_ref or not chat_id or not message_id.isdigit(): raise ValueError('exact account/peer/read cursor required')
         request = urllib.request.Request(f'{self._base_url}/read',data=json.dumps({'account_id':account_ref,'peer_id':chat_id,'max_id':int(message_id)}).encode(),method='POST',headers={'Content-Type':'application/json','Authorization':f'Bearer {self._token}'})

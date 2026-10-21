@@ -1,8 +1,9 @@
-"""Live Telegram delivery for the sync UserIO service (spec Phase 2).
+"""Legacy single-account Telegram delivery for standalone UserIO embeddings.
 
-Enabled with ``USERIO_LIVE_TELEGRAM=1`` plus adapter credentials from
-``telegram_env_config``; approved drafts are then delivered in-process through
-the universal Telegram channel adapter instead of a NoticePlace route.
+Enabled only when ``USERIO_LIVE_TELEGRAM=1`` explicitly selects the legacy
+single-account Telethon client. Registered UserIO Telegram accounts should use
+the QR connector session owner instead. Never run this client with an auth key
+already active in that connector.
 """
 
 from __future__ import annotations

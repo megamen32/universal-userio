@@ -53,11 +53,18 @@ an answered call, audible speech or a completed decision round trip.
 
 ## Separate channel capabilities
 
-- **Telegram:** the existing account-bound implementation is
-  [`telegram_calls.py`](../src/universal_userio/telegram_calls.py) and its worker/
-  relay transport. Message reading is not voice-call authorization. The current
-  call implementation has owner/account restrictions; do not promise arbitrary
-  accounts or group calls.
+- **Telegram:** registered UserIO account sessions are owned by the Telegram QR
+  connector. QR, phone and imported sessions converge on its stored GramJS
+  session; account operations use that account-scoped connector. The explicit
+  standalone `USERIO_LIVE_TELEGRAM` fallback remains a legacy single-account
+  embedding path, not a second client for a registered account. Do not run
+  another live client with a copied auth key, because it can steal that
+  session's updates.
+  The existing account-bound voice implementation is
+  [`telegram_calls.py`](../src/universal_userio/telegram_calls.py) and its
+  worker/relay transport. Message reading is not voice-call authorization. The
+  current call implementation has owner/account restrictions; do not promise
+  arbitrary accounts or group calls.
 - **Matrix:** [`matrix_calls.py`](../src/universal_userio/matrix_calls.py) implements
   separate MatrixRTC calls and durable receipts. Linking a read-only Matrix inbox
   does not automatically provision the RTC backend, joined room or call consent.

@@ -106,6 +106,10 @@ class Messenger:
         elif self.principal.read_only: admin_reason='read_only_token'
         elif 'reply' not in account['capabilities']: admin_reason='account_capability_disabled'
         elif not self.store.capability_enabled('send',user_id=self.user): admin_reason='user_capability_disabled'
+        provider_upload_limit=self._upload_limit(provider)
+        storage_upload_limit=self._storage_upload_limit()
+        effective_upload_limit=(min(provider_upload_limit,storage_upload_limit)
+            if type(provider_upload_limit) is int else None)
         return {'schema':SCHEMA, 'account_ref':account_ref, 'channel':account['provider'],
                 'sender_id':getattr(provider, 'sender_id', ''),
                 'history_mode':'provider' if 'history' in ops and not authentication_required else 'stored',
@@ -117,7 +121,29 @@ class Messenger:
                 'telegram_admin':{'supported':admin_supported,'allowed':admin_supported and not admin_reason,
                     'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS)},
                 **({'reaction_options':provider.reaction_options} if hasattr(provider,'reaction_options') else {}),
-                'upload_limits':{'max_bytes':2*1024*1024,'ttl_seconds':900,'max_staged':4}}
+                'upload_limits':{'max_bytes':effective_upload_limit,
+                    'provider_max_bytes':provider_upload_limit,
+                    'storage_max_bytes':storage_upload_limit,'ttl_seconds':900}}
+
+    def _storage_upload_limit(self):
+        from .messenger_uploads import MAX_STORAGE_BYTES
+        import sqlite3
+        getlimit=getattr(self.store._connection,'getlimit',None)
+        sqlite_limit=getlimit(getattr(sqlite3,'SQLITE_LIMIT_LENGTH',0)) if callable(getlimit) else MAX_STORAGE_BYTES
+        return min(MAX_STORAGE_BYTES,sqlite_limit)
+
+    @staticmethod
+    def _upload_limit(provider):
+        from .messenger_uploads import MAX_BYTES
+        get_limit=getattr(provider,'upload_limit',None)
+        if callable(get_limit):
+            try:
+                value=get_limit()
+                if type(value) is int and value>0:return value
+            except Exception:
+                return None
+            return None
+        return MAX_BYTES
 
     def _allow(self, account_ref, operation):
         capability = self.capabilities(account_ref)['operations'][operation]
@@ -329,10 +355,12 @@ class Messenger:
                 'sticker':{'media_message_id','attachment_index'},'file':{'media_message_id','attachment_index','caption'},
                 'typing':{'active'}}
         if action=='file' and 'upload_id' in payload:
-            if set(payload)-{'upload_id','caption'} or not isinstance(payload['upload_id'],str) or not re.fullmatch(r'upload_[0-9a-f]{64}',payload['upload_id']):
+            if set(payload)-{'upload_id','caption','force_document'} or not isinstance(payload['upload_id'],str) or not re.fullmatch(r'upload_[0-9a-f]{64}',payload['upload_id']):
                 raise ValueError('invalid_upload_payload')
-            if 'caption' in payload and (not isinstance(payload['caption'],str) or len(payload['caption'])>1024):
+            if 'caption' in payload and (not isinstance(payload['caption'],str) or len(payload['caption'])>4096):
                 raise ValueError('invalid_caption')
+            if 'force_document' in payload and type(payload['force_document']) is not bool:
+                raise ValueError('invalid_force_document')
             return dict(payload)
         if action not in keys or set(payload)-keys[action]: raise ValueError('invalid_action_payload')
         if action in {'reply','edit'}:
@@ -396,8 +424,10 @@ class Messenger:
         from .messenger_uploads import MessengerUploads
         binding={'account_ref':account_ref,'conversation_id':conv['id'],'source_message_id':source_message_id,
                  'source_hash':source_hash,'source_binding':projected['binding'],'thread_id':projected['source']['thread_id']}
+        provider=self._provider(account_ref)
         return MessengerUploads(self.store,self.user).stage(binding,filename=filename,mime_type=mime_type,
-            data_base64=data_base64,sha256=sha256,request_id=request_id)
+            data_base64=data_base64,sha256=sha256,request_id=request_id,
+            max_bytes=self._upload_limit(provider))
 
     @staticmethod
     def _media_hash(projected, index):

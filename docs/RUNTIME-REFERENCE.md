@@ -180,6 +180,16 @@ session file is written with owner-only permissions and reused via
 sessions from one authorized client via `auth.acceptLoginToken` — no camera,
 no SMS, no reCAPTCHA wall, no `AUTH_KEY_DUPLICATED`.
 
+For a Telegram account registered in UserIO, connect through the UserIO Telegram
+account page. QR, phone and imported sessions converge on the QR connector's
+single stored GramJS session. To migrate another format, run the local
+[`tg-convert`](https://github.com/megamen32/tg-convert) CLI with
+`--to gramjs-string --print`, then paste that output into the protected import
+form. Stop the old client before importing: a copied auth key must not be active
+in two clients. `TelegramAPI.from_env()` and `LiveTelegramOutbox` remain useful
+for standalone single-account adapters, but must not run the same auth key as a
+registered UserIO account.
+
 Environment (all optional, read one step from env/`.env`, never stored in
 routes or code):
 

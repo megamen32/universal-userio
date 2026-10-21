@@ -546,9 +546,11 @@ def handler(
                 return
             try:
                 if path == "/mcp":
-                    # Bounded new-file staging uses at most 2MiB of bytes
-                    # plus base64/JSON overhead; reject before reading a body.
-                    if not 0<int(self.headers.get('Content-Length','0'))<=3_000_000:
+                    # Match the SQLite-backed new-file staging ceiling plus
+                    # base64/JSON framing; provider limits are checked per account.
+                    from .messenger_uploads import MAX_STORAGE_BYTES
+                    max_body=4*((MAX_STORAGE_BYTES+2)//3)+1_000_000
+                    if not 0<int(self.headers.get('Content-Length','0'))<=max_body:
                         self._reply(413,{'error':'mcp_body_exceeds_limit'})
                         self.close_connection=True
                         return

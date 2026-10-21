@@ -49,7 +49,7 @@ def test_new_bytes_are_private_bound_and_approved_once(case):
     ({'mime_type':'text/plain\r\nBad: value'},'mime_type_required'),
     ({'data_base64':'?bad'},'invalid_upload_base64'),
     ({'sha256':'0'*64},'upload_sha256_conflict'),
-    ({'data_base64':base64.b64encode(b'x'*(MAX_BYTES+1)).decode()},'upload_exceeds_2MiB'),
+    ({'data_base64':base64.b64encode(b'x'*(MAX_BYTES+1)).decode()},'upload_exceeds_account_or_storage_limit'),
 ])
 def test_invalid_content_does_not_stage_or_send(case,change,error):
     api,args,_=staged(case,**change)
@@ -76,11 +76,12 @@ def test_scope_source_and_single_action_binding(case):
     assert api.get(a['id'])['status']=='proposed' and not case[2].calls
 
 
-def test_expiry_quota_and_immutable_bytes(case):
+def test_expiry_and_immutable_bytes(case):
     api,args,_=staged(case)
     first=api.upload(**args)
     for n in range(3):api.upload(**{**args,'request_id':f'another-staged-file-1234-{n}'})
-    with pytest.raises(ValueError,match='upload_staging_limit'):api.upload(**{**args,'request_id':'fifth-staged-file-123456'})
+    api.upload(**{**args,'request_id':'fifth-staged-file-123456'})
+    assert case[0]._connection.execute('SELECT COUNT(*) FROM messenger_uploads WHERE data IS NOT NULL').fetchone()[0]==5
     a=api.propose(args['account_ref'],args['conversation_id'],args['source_message_id'],'file',{'upload_id':first['upload_id']},'tampered-file-action-123456')
     with case[0]._connection:case[0]._connection.execute('UPDATE messenger_uploads SET data=? WHERE id=?',(b'tampered',first['upload_id']))
     with pytest.raises(ValueError,match='upload_bytes_conflict'):api.approve(a['id'],a['hash'],True)

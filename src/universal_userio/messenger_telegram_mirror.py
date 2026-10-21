@@ -29,10 +29,19 @@ class TelegramMirrorProvider:
         supports_reply=getattr(outbox,'supports_reply',None)
         if callable(getattr(outbox,'reply_message',None)) or (callable(supports_reply) and supports_reply(account_ref)):
             operations.add('reply')
+        if callable(getattr(outbox,'send_file',None)):
+            operations.update({'file','file_upload'})
         self.operations=frozenset(operations)
+
+    def upload_limit(self):
+        outbox=getattr(self.service,'telegram_outbox',None)
+        getter=getattr(outbox,'upload_limit',None)
+        if not callable(getter):return None
+        return getter(account_ref=self.account_ref)
 
     def supports_action(self, action, conversation):
         outbox=getattr(self.service,'telegram_outbox',None)
+        if action=='file':return callable(getattr(outbox,'send_file',None))
         if action=='reply':
             supports=getattr(outbox,'supports_reply',None)
             if callable(supports):
@@ -143,7 +152,7 @@ class TelegramMirrorProvider:
     def execute(self, envelope):
         action=envelope.get('action')
         if (envelope.get('account_ref'), envelope.get('user_id')) != (
-                self.account_ref, self.authorized_user) or action not in {'react','edit','reply'}:
+                self.account_ref, self.authorized_user) or action not in {'react','edit','reply','file'}:
             raise DeliveryNotSubmittedError('Telegram account operation conflict')
         conversation = self.service._store.conversation(
             envelope['conversation_id'], user_id=self.authorized_user)
@@ -156,6 +165,32 @@ class TelegramMirrorProvider:
         projected, source_hash=messenger._binding(conversation,envelope['source_message_id'])
         if source_hash != envelope['source_hash']:
             raise DeliveryNotSubmittedError('Telegram source changed before provider action')
+        if action=='file':
+            send_file=getattr(outbox,'send_file',None)
+            if not callable(send_file):
+                raise DeliveryNotSubmittedError('Telegram file upload route unavailable')
+            from .messenger_uploads import MessengerUploads
+            metadata=envelope['payload']
+            data=MessengerUploads(self.service._store,self.authorized_user).data(envelope)
+            result=send_file(account_ref=self.account_ref,chat_id=str(envelope['peer_id']),
+                filename=str(metadata['filename']),mime_type=str(metadata['mime_type']),
+                caption=str(metadata.get('caption') or ''),data=data,
+                sha256=str(metadata['sha256']),request_id=str(envelope['action_id']),
+                force_document=metadata.get('force_document',False))
+            if (not isinstance(result,dict) or result.get('ok') is not True
+                    or result.get('account_id')!=self.account_ref
+                    or str(result.get('peer_id'))!=str(envelope['peer_id'])
+                    or not str(result.get('message_id') or '').isdigit()
+                    or not 0<int(result.get('message_id') or '0')<=0x7FFFFFFF
+                    or result.get('size')!=len(data)
+                    or result.get('sha256')!=metadata['sha256']
+                    or type(result.get('date')) not in (int,float) or result['date']<=0):
+                raise RuntimeError('Telegram file upload receipt identity conflict')
+            return {'account_ref':self.account_ref,'peer_id':str(envelope['peer_id']),
+                'provider_message_id':str(result['message_id']),
+                'receipt':f"telegram-qr-file:{result.get('slot','?')}:{result['message_id']}:{envelope['action_id']}",
+                'filename':metadata['filename'],'mime_type':metadata['mime_type'],
+                'size':len(data),'sha256':metadata['sha256'],'provider_at':float(result['date'])}
         if action=='react':
             send = getattr(outbox, 'react', None)
             if not callable(send):
