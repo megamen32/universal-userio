@@ -387,6 +387,37 @@ def test_index_resumes_from_its_checkpoint(tmp_path, monkeypatch):
     assert fake.count() == points_before
 
 
+def test_a_message_too_long_for_one_slice_continues_instead_of_restarting(tmp_path, monkeypatch):
+    service, store = _service(tmp_path)
+    body = " ".join(f"токен-{index}" for index in range(2000))
+    _receive(service, "Менеджер", body)
+    fake = _FakeVectorService()
+    settings = _wire(monkeypatch, service, fake)
+    total_chunks = len(chunk_text(body))
+    assert total_chunks > 8
+    # The wall budget of a slice stops it after the first batch of eight.
+    ticks = {"n": 0}
+
+    def _monotonic():
+        ticks["n"] += 1
+        return 0.0 if ticks["n"] <= 1 else 10 ** 9
+
+    monkeypatch.setattr("universal_userio.semantic_index.time.monotonic", _monotonic)
+    first = backfill_step(store, settings, limit=50, deadline=1.0)
+    assert first["chunks"] == 8
+    assert first["indexed"] == 0
+    assert status(store)["partial"] == 1
+    assert len(fake.embedded) == 8
+    # The next slice continues with the remaining chunks instead of
+    # embedding the same eight chunks again.
+    second = backfill_step(store, settings, limit=50)
+    assert second["chunks"] == total_chunks - 8
+    assert len(fake.embedded) == total_chunks
+    assert status(store)["indexed_messages"] == 1
+    assert status(store)["partial"] == 0
+    assert status(store)["complete"] is True
+
+
 def test_queue_drains_edits_and_deletions(tmp_path, monkeypatch):
     from universal_userio.semantic_index import drain_queue
     service, store = _service(tmp_path)

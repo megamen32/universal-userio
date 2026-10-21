@@ -382,13 +382,32 @@ def index_rows(store: Any, settings: SemanticSettings, rows: Sequence[Any], *, u
     """
     db = store._connection
     plan: list[tuple[Any, int, str, str, int]] = []
+    already_written: dict[int, int] = {}
     for row in rows:
         chunks = chunk_text(row["body"])
         digest = body_hash(row["body"])
-        plan.extend((row, index, chunk, digest, len(chunks)) for index, chunk in enumerate(chunks))
-    if not plan:
+        total = len(chunks)
+        if not total:
+            continue
+        rowid = int(row["rowid"])
+        # A message that did not fit into an earlier slice keeps its place:
+        # the chunks already written are not embedded a second time, so a
+        # message larger than one slice still finishes instead of restarting
+        # from its first chunk on every slice. An edited body starts over,
+        # because its stored digest no longer matches.
+        already = 0
+        prior = db.execute(
+            "SELECT chunks, body_sha256, state FROM search_vector_state WHERE message_rowid=?",
+            (rowid,)).fetchone()
+        if (prior is not None and str(prior["state"]) == "partial"
+                and str(prior["body_sha256"] or "") == digest):
+            already = max(0, min(int(prior["chunks"] or 0), total))
+        already_written[rowid] = already
+        plan.extend((row, index, chunk, digest, total)
+                    for index, chunk in enumerate(chunks) if index >= already)
+    if not plan and not already_written:
         return {"indexed": 0, "chunks": 0, "failed": 0, "partial": 0, "complete_through": 0, "stopped": 0}
-    written: dict[int, int] = {}
+    written: dict[int, int] = dict(already_written)
     totals: dict[int, int] = {}
     failing: dict[int, str] = {}
     indexed = chunk_count = partial = 0
