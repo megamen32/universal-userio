@@ -15,7 +15,7 @@ from pathlib import Path
 import signal
 import sys
 import time
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import uuid
 
 from .matrix_calls import MEMBER, RING, fresh_answer, request_json
@@ -33,6 +33,30 @@ def server_voice_config(config):
         return replace(config, tts_provider='qwen-warm', tts_engine='silero',
             tts_url=os.environ.get('AGENTCALL_TTS_SILERO_URL','http://127.0.0.1:30802/synthesize'))
     return config
+
+
+def voice_config_for_record(config, record):
+    """Apply only the caller-owned model alias to the shared voice config."""
+    model = str(record.get('voice_model') or '').strip()
+    return replace(config, fast_agent_model=model) if model else config
+
+
+def voice_config_for_request(config, voice_ai):
+    """Apply an authenticated user's ephemeral AI settings to this worker."""
+    if not isinstance(voice_ai, dict):
+        return config
+    endpoint = str(voice_ai.get('endpoint') or '').strip()
+    model = str(voice_ai.get('model') or '').strip()
+    token = str(voice_ai.get('token') or '').strip()
+    parsed = urlsplit(endpoint)
+    local_http = parsed.scheme == 'http' and parsed.hostname in {'localhost', '127.0.0.1', '::1'}
+    if (parsed.scheme != 'https' and not local_http) or not parsed.hostname or parsed.username or parsed.password \
+            or parsed.query or parsed.fragment or not model or not token:
+        raise ValueError('invalid per-user voice AI settings')
+    return replace(config, fast_agent_base_url=endpoint,
+                   llm_url=endpoint.rstrip('/') + '/chat/completions',
+                   llm_api_key=token, llm_model=model, llm_provider='openai-compatible', fast_agent_model=model,
+                   fast_agent_fallback_enabled=False)
 
 
 async def finish_rtc_audio(source, should_stop=None, *, interrupted=False):
@@ -60,7 +84,9 @@ async def run(request):
     sys.path.insert(0,str(Path(__file__).with_name('voice')))
     import agentcall_realtime_bridge as voice
     record, account, identity = request['call'],request['account'],request['identity']
-    config = server_voice_config(voice.BackendConfig.from_environment())
+    config = voice_config_for_request(
+        voice_config_for_record(server_voice_config(voice.BackendConfig.from_environment()), record),
+        request.get('voice_ai'))
     os.environ['AGENTCALL_TTS_PHONE_FALLBACK']='0'
     rtc_url = os.environ['USERIO_MATRIX_RTC_AUTH_URL'].rstrip('/')
     server, token = account['homeserver'],account['access_token']

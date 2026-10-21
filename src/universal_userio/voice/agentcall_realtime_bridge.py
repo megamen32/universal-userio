@@ -105,6 +105,9 @@ def resample_pcm16(
     return audioop.ratecv(pcm, 2, 1, source_rate, target_rate, state)
 
 
+STT_WAV_SAMPLE_RATE = 48_000
+
+
 def _log(message: str) -> None:
     print(f"[agentcall] {message}", file=sys.stderr, flush=True)
 
@@ -1387,6 +1390,7 @@ class LocalSpeechPipeline:
         # Do not use a volume threshold: quiet varying caller speech is kept.
         if self.is_digital_silence(pcm):
             return ''
+        stt_pcm, _ = resample_pcm16(pcm, 8_000, STT_WAV_SAMPLE_RATE, None)
         body, content_type = _multipart(
             {
                 "model": "whisper-1",
@@ -1397,7 +1401,7 @@ class LocalSpeechPipeline:
             },
             "file",
             "call.wav",
-            pcm_to_wav(pcm),
+            pcm_to_wav(stt_pcm, STT_WAV_SAMPLE_RATE),
         )
         headers = {"Content-Type": content_type}
         if self.config.stt_api_key:
@@ -2665,6 +2669,7 @@ async def pump_audio(
     _peak = 0
     input_resample = None
     archive_resample = None
+    close_published = False
     def partial_audio(pcm):
         if recorder is not None:
             if len(pcm)>=2:recorder.incoming(pcm[:len(pcm)//2*2])
@@ -2674,6 +2679,11 @@ async def pump_audio(
         while True:
             kind, payload = await read_audiosocket_frame(reader,partial_audio if recorder is not None else None)
             if kind == HANGUP_KIND:
+                # Publish closure immediately so capture/STT can flush packets
+                # already queued; waiting for handle_call's finalizer can lose
+                # the last recognized turn behind the idle timeout.
+                await bounded_put(queue, None, 'caller audio close', 1)
+                close_published = True
                 break
             rate = AUDIO_RATES.get(kind)
             if rate is None:
@@ -2707,10 +2717,11 @@ async def pump_audio(
         pass
     finally:
         hung_up.set()
-        try:
-            await asyncio.wait_for(queue.put(None), timeout=1)
-        except asyncio.TimeoutError:
-            _log('caller audio buffer saturated at close')
+        if not close_published:
+            try:
+                await asyncio.wait_for(queue.put(None), timeout=1)
+            except asyncio.TimeoutError:
+                _log('caller audio buffer saturated at close')
 
 
 async def request_asterisk_hangup(call_id: str) -> None:
@@ -3122,13 +3133,10 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
         if acknowledgement and not hung_up.is_set() and not stop_playback.is_set():
             wait_text, wait_pcm = acknowledgement
             await broker.emit(safe_event('transcript_final', call_id, speaker='agent', text=wait_text, **peer_fields))
-            # A wait recording must yield to ready meaningful speech, without
-            # setting the caller's interruption flag or cancelling native work.
-            class WaitStop:
-                def is_set(self):return stop_playback.is_set() or content_ready.is_set()
-                async def wait_for_resolution(self, hung):
-                    await wait_for_reply_start()
-            await send_pcm_stream(writer, iter((wait_pcm,)), hung_up, WaitStop(), speed=speed)
+            # This phrase is the guaranteed audible acknowledgement for the
+            # caller's completed turn. A fast model/TTS result must not erase
+            # it; only new confirmed caller speech may interrupt playback.
+            await send_pcm_stream(writer, iter((wait_pcm,)), hung_up, stop_playback, speed=speed)
         while True:
             item = await audio.get()
             if item is None:

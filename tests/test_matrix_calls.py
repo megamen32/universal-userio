@@ -27,6 +27,32 @@ def test_late_barge_in_clears_the_rtc_tail_while_playout_is_waiting():
     asyncio.run(check())
 
 
+def test_noticeplace_call_stops_escalation_once_the_user_answers(monkeypatch):
+    call_id=str(uuid.uuid4())
+    record={'call_id':call_id,'target':'@owner:hs','channel':'matrix','status':'active',
+        'answered':True,'acknowledged':False}
+    class Calls:
+        active={call_id:object()}
+        lookups=0
+        def get(self,_call_id,_user_id):
+            self.lookups+=1
+            if self.lookups==1: raise KeyError('call not found')
+            return dict(record)
+        def start(self,**_): return dict(record)
+    calls=Calls()
+    monkeypatch.setattr(matrix_calls,'calls_for',lambda _service:calls)
+    monkeypatch.setenv('USERIO_MATRIX_NOTICE_ACCOUNT','matrix:owner')
+    monkeypatch.setenv('USERIO_MATRIX_NOTICE_ROOM','!room:hs')
+    monkeypatch.setenv('USERIO_MATRIX_NOTICE_TARGET','@owner:hs')
+    result=matrix_calls.noticeplace_call(None,'owner',{'incident_id':'incident-test',
+        'title':'Проверка','body':'Состояние сервиса'})
+    assert calls.lookups==1
+    assert result['answered'] is True
+    assert result['acknowledged'] is False
+    assert result['ended'] is False
+    assert result['safe_to_fallback'] is False
+
+
 def test_rtc_tail_accepts_the_previous_gateway_during_rolling_deployment():
     import asyncio
     from universal_userio.matrix_call_worker import finish_rtc_audio
@@ -107,6 +133,107 @@ def test_restart_never_replays_an_admitted_call(tmp_path, monkeypatch):
     with pytest.raises(ValueError,match='conflict'):after_restart.start(**dict(args,purpose='Другой звонок'))
     with pytest.raises(KeyError):after_restart.get(first['call_id'],'another-user')
     with pytest.raises(ValueError,match='confirmation'):after_restart.start(**dict(args,confirm=False))
+
+
+def test_non_owner_uses_its_owned_matrix_account_and_model_alias(tmp_path, monkeypatch):
+    service=Mock();service._store.default_user_id='owner'
+    service._store.capability_enabled.return_value=True
+    service._store.accounts.return_value=[{'id':'matrix:other','provider':'matrix','enabled':True,
+        'display_name':'@other:hs','credential_ref':'connector:other'}]
+    sentinel='sentinel-token-only-in-ephemeral-request'
+    service._store.ai_settings.return_value={'endpoint':'https://api','model':'omniroute/minimax-combo-m3.1','token':sentinel}
+    monkeypatch.setattr(matrix_calls.ConnectorSecrets,'load',lambda *a,**k:
+        {'homeserver':'https://hs','access_token':'private','matrix_user_id':'@other:hs'})
+    monkeypatch.setattr(matrix_calls,'request_json',lambda *a,**k:{'user_id':'@other:hs'})
+    created=[]
+    monkeypatch.setattr(matrix_calls.threading.Thread,'start',lambda self:created.append(self))
+    record=MatrixCalls(service,tmp_path).start(user_id='other',account_ref='matrix:other',room_id='!r:hs',
+        target='@b:hs',purpose='Проверить голос',request_id='other-unique-request',confirm=True)
+    assert record['user_id']=='other'
+    assert record['voice_model']=='omniroute/minimax-combo-m3.1'
+    durable=json.loads((tmp_path/record['call_id']/'call.json').read_text())
+    assert sentinel not in json.dumps(record)
+    assert sentinel not in json.dumps(durable)
+    assert len(created)==1 and created[0]._args[-1]['token']==sentinel
+
+
+def test_non_owner_cannot_inject_owner_secretary_or_agent_session_context(tmp_path):
+    service=Mock();service._store.default_user_id='owner'
+    service._store.capability_enabled.return_value=True
+    calls=MatrixCalls(service,tmp_path)
+    with pytest.raises(PermissionError,match='server-controlled'):
+        calls.start(user_id='other',account_ref='matrix:other',room_id='!r:hs',target='@b:hs',
+            purpose='Test',request_id='non-owner-injected-context',confirm=True,
+            agent_context={'call_mode':'incoming','session_id':'owner-private-session'})
+    assert service._store.accounts.call_count == 0
+
+
+def test_voice_config_for_record_applies_only_model_alias():
+    from dataclasses import dataclass
+    from universal_userio.matrix_call_worker import voice_config_for_record
+    @dataclass(frozen=True)
+    class Config:
+        fast_agent_model: str='server-default'
+    config=Config()
+    assert voice_config_for_record(config, {'voice_model':'omniroute/minimax-combo-m3.1'}).fast_agent_model == 'omniroute/minimax-combo-m3.1'
+    assert voice_config_for_record(config, {}).fast_agent_model == 'server-default'
+
+
+def test_voice_config_for_request_applies_endpoint_model_and_key_without_persisting_secret(monkeypatch):
+    from dataclasses import dataclass
+    from universal_userio.matrix_call_worker import voice_config_for_request
+    @dataclass(frozen=True)
+    class Config:
+        fast_agent_model: str='server-default'; fast_agent_base_url: str='server-url'
+        llm_url: str='llm-url'; llm_api_key: str='server-key'; llm_model: str='server-model'
+        llm_provider: str='ollama'; llm_max_completion_tokens: int=256; llm_reasoning_effort: str='low'
+        request_timeout: int=10
+        system_prompt: str='Тестовый звонок'
+        tts_provider: str='qwen-warm'; tts_url: str='http://tts.server'
+        fast_agent_fallback_enabled: bool=True
+    config=Config()
+    settings={'endpoint':'https://omni.example/v1','model':'omniroute/minimax-combo-m3.1','token':'private-test-token'}
+    bound=voice_config_for_request(config, settings)
+    assert (bound.fast_agent_base_url,bound.llm_url,bound.llm_model,bound.fast_agent_model)==(
+        'https://omni.example/v1','https://omni.example/v1/chat/completions','omniroute/minimax-combo-m3.1','omniroute/minimax-combo-m3.1')
+    assert bound.llm_api_key == 'private-test-token'
+    assert bound.llm_provider == 'openai-compatible'
+    assert (bound.tts_provider, bound.tts_url) == ('qwen-warm', 'http://tts.server')
+    assert bound.fast_agent_fallback_enabled is False
+    from types import SimpleNamespace
+    from universal_userio.voice import agentcall_realtime_bridge as voice
+    pipeline=voice.LocalSpeechPipeline(bound)
+    requests=[]
+    def respond(url, **kwargs):
+        requests.append((url,kwargs))
+        return ('{"choices":[{"message":{"content":"Ответ модели"}}]}'.encode(), 'application/json')
+    monkeypatch.setattr(voice, '_request', respond)
+    assert pipeline.reply('Вопрос тестового звонка') == 'Ответ модели'
+    request_url, request_kwargs=requests[0]
+    assert request_url == 'https://omni.example/v1/chat/completions'
+    assert request_kwargs['headers']['Authorization'] == 'Bearer private-test-token'
+    assert json.loads(request_kwargs['data'])['model'] == 'omniroute/minimax-combo-m3.1'
+    from universal_userio.voice.agentcall_realtime_bridge import VoiceProviderRouter
+    router=VoiceProviderRouter(SimpleNamespace(
+        fast_agent_model=bound.fast_agent_model, fast_agent_base_url=bound.fast_agent_base_url,
+        llm_api_key=bound.llm_api_key, fast_agent_fallback_enabled=bound.fast_agent_fallback_enabled))
+    router._probe_primary=lambda: (_ for _ in ()).throw(AssertionError('per-user route must not probe MiniMax origin'))
+    route=router._provider_route()
+    assert route == ('omniroute/minimax-combo-m3.1','https://omni.example/v1','private-test-token')
+
+
+@pytest.mark.parametrize('endpoint', ['http://api.example/v1', 'https://user:pass@api.example/v1',
+                                      'https://api.example/v1?token=bad'])
+def test_voice_config_for_request_rejects_unsafe_endpoints(endpoint):
+    from dataclasses import dataclass
+    from universal_userio.matrix_call_worker import voice_config_for_request
+    @dataclass(frozen=True)
+    class Config:
+        fast_agent_model: str='server-default'; fast_agent_base_url: str='server-url'
+        llm_url: str='llm-url'; llm_api_key: str='server-key'; llm_model: str='server-model'
+        llm_provider: str='ollama'; fast_agent_fallback_enabled: bool=True
+    with pytest.raises(ValueError,match='invalid per-user'):
+        voice_config_for_request(Config(), {'endpoint':endpoint,'model':'model','token':'secret'})
 
 
 @pytest.mark.parametrize('rate',[8000,48000])

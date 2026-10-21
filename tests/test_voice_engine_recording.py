@@ -99,6 +99,26 @@ class RecordingTests(unittest.TestCase):
         finally:os.close(fd)
 
 
+class SpeechPipelineTests(unittest.TestCase):
+    def test_stt_upload_resamples_live_8khz_pcm_for_whisper(self):
+        from dataclasses import replace
+        pcm=struct.pack('<160h',*([1200,-1200]*80))
+        captured={}
+        original=bridge.pcm_to_wav
+        def inspect_wav(samples,sample_rate=8000):
+            captured.update(samples=samples,sample_rate=sample_rate)
+            return original(samples,sample_rate)
+        config=replace(bridge.BackendConfig.from_environment(),
+            stt_url='https://stt.example/v1/audio/transcriptions',stt_api_key='test-stt-key')
+        with patch.object(bridge,'pcm_to_wav',side_effect=inspect_wav), \
+             patch.object(bridge,'_request',return_value=('{"text":"проверка"}'.encode(),'application/json')) as request:
+            result=bridge.LocalSpeechPipeline(config).transcribe(pcm)
+        self.assertEqual('проверка',result)
+        self.assertEqual(48000,captured['sample_rate'])
+        self.assertGreater(len(captured['samples']),5*len(pcm))
+        self.assertEqual('Bearer test-stt-key',request.call_args.kwargs['headers']['Authorization'])
+
+
 class WireTests(unittest.IsolatedAsyncioTestCase):
     async def test_recording_bootstrap_failure_does_not_lose_caller_or_close_early(self):
         from dataclasses import replace
@@ -151,6 +171,26 @@ class WireTests(unittest.IsolatedAsyncioTestCase):
         sink=type('Sink',(),{'incoming':lambda self,pcm:seen.append(pcm)})()
         await bridge.pump_audio(reader,queue,closed,recorder=sink)
         self.assertEqual([quiet,speech],seen);self.assertEqual(quiet,await queue.get())
+
+    async def test_hangup_queues_close_before_unblocking_finalizer(self):
+        class ObservedQueue(asyncio.Queue):
+            def __init__(self):
+                super().__init__(maxsize=1)
+                self.close_attempted=asyncio.Event()
+            async def put(self,item):
+                if item is None:self.close_attempted.set()
+                await super().put(item)
+        reader=asyncio.StreamReader();queue=ObservedQueue();closed=asyncio.Event()
+        speech=b'\x01\x01'*320
+        queue.put_nowait(speech)
+        reader.feed_data(bridge.pack_audiosocket_frame(bridge.HANGUP_KIND))
+        task=asyncio.create_task(bridge.pump_audio(reader,queue,closed))
+        await asyncio.wait_for(queue.close_attempted.wait(),timeout=.2)
+        self.assertFalse(closed.is_set())
+        self.assertEqual(speech,queue.get_nowait())
+        await task
+        self.assertTrue(closed.is_set())
+        self.assertIsNone(queue.get_nowait())
     async def test_writer_records_only_accepted_pcm_after_tempo(self):
         seen=[];sent=[]
         class Sink:

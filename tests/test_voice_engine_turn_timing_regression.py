@@ -111,6 +111,40 @@ class Broker:
         self.events.append(event)
 
 
+def test_prepared_acknowledgement_is_sent_even_when_answer_is_ready(monkeypatch):
+    async def scenario():
+        stop, hung_up = asyncio.Event(), asyncio.Event()
+        acknowledgement = bridge.SpeechPCM(VOICE * 2, 8000, applied_speed=1.0)
+        answer_pcm = bridge.SpeechPCM(b'\x02\x00' * 320, 8000, applied_speed=1.0)
+        frames, broker = [], Broker()
+
+        class Brain:
+            config = SimpleNamespace(fast_agent_timeout=1)
+
+            def reply_stream(self, _text, on_phrase):
+                on_phrase('Ответ готов сразу.')
+                return 'Ответ готов сразу.'
+
+        class Speech:
+            config = SimpleNamespace(speech_speed=1.0)
+
+            async def _synthesize_with_fallback(self, _phrase):
+                return answer_pcm
+
+        class Writer:
+            def write(self, frame): frames.append(frame[3:])
+            async def drain(self): pass
+
+        await asyncio.wait_for(bridge.stream_voice_turn(
+            Writer(), broker, 'ack-regression', 'Вопрос', Brain(), Speech(),
+            hung_up, stop, peer_fields={}, acknowledgement=('Сейчас отвечу.', acknowledgement)), 2)
+        assert frames[:2] == [VOICE, VOICE], 'ready model output suppressed the prepared acknowledgement'
+        spoken = [event.get('text') for event in broker.events if event.get('speaker') == 'agent']
+        assert spoken[0] == 'Сейчас отвечу.'
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize('stage', ['model', 'synthesis', 'playback'])
 def test_confirmed_followup_suppresses_older_turn_and_settles_history(monkeypatch, stage):
     """A confirmed follow-up invalidates an older pending answer."""

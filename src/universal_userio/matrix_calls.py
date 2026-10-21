@@ -71,10 +71,10 @@ class MatrixCalls:
     def start(self, *, user_id, account_ref, room_id, target, purpose, request_id,
               greeting='', max_seconds=120, confirm=False, agent_context=None):
         if confirm is not True: raise ValueError('explicit call confirmation required')
-        if user_id != self.service._store.default_user_id:
-            raise PermissionError('existing voice gateway is bound to its owner')
         if not self.service._store.capability_enabled('send', user_id=user_id):
             raise PermissionError('send capability disabled')
+        if user_id != self.service._store.default_user_id and agent_context:
+            raise PermissionError('Matrix voice context is server-controlled')
         if not (room_id.startswith('!') and target.startswith('@') and purpose.strip()):
             raise ValueError('Matrix room, recipient and call purpose required')
         if not (16 <= len(request_id) <= 128 and len(purpose) <= 12000 and len(greeting) <= 1000
@@ -88,8 +88,10 @@ class MatrixCalls:
         if identity.get('user_id') != secret['matrix_user_id']: raise ValueError('Matrix identity changed')
         display_account = next((a['id'] for a in self.service._store.accounts(user_id=user_id)
                                 if a['provider']=='matrix' and a['enabled'] and a['display_name']==target), account_ref)
+        ai_settings = self.service._store.ai_settings(user_id=user_id)
         config = {'user_id': user_id, 'account_ref': account_ref, 'history_account_ref':display_account, 'room_id': room_id,
                   'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
+                  **({'voice_model': ai_settings['model']} if isinstance(ai_settings, dict) and ai_settings.get('model') else {}),
                   **({'agent_context':dict(agent_context)} if agent_context else {})}
         call_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id+'\0'+request_id))
         fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
@@ -108,7 +110,9 @@ class MatrixCalls:
             self._save(record)
             stop = threading.Event()
             self.active[call_id] = stop
-            threading.Thread(target=self._run, args=(record, secret, identity, stop), daemon=True).start()
+            voice_ai = ({'endpoint': ai_settings['endpoint'], 'model': ai_settings['model'],
+                         'token': ai_settings['token']} if isinstance(ai_settings, dict) else None)
+            threading.Thread(target=self._run, args=(record, secret, identity, stop, voice_ai), daemon=True).start()
         return record.copy()
 
     def _save(self, record):
@@ -128,8 +132,8 @@ class MatrixCalls:
             sender_name=label, conversation_kind='direct', direction=direction, reconciliation=True),
             route_id='matrix-read-only', user_id=record['user_id'], account_ref=record['history_account_ref'])
 
-    def _run(self, record, secret, identity, stop):
-        try: asyncio.run(self._call(record, secret, identity, stop))
+    def _run(self, record, secret, identity, stop, voice_ai=None):
+        try: asyncio.run(self._call(record, secret, identity, stop, voice_ai))
         except Exception as error:
             # Provider responses may contain credentials; retain only the error class.
             record.update(status='failed', error=record.get('error') or type(error).__name__)
@@ -138,12 +142,14 @@ class MatrixCalls:
             self._save(record)
             with self.lock: self.active.pop(record['call_id'], None)
 
-    async def _call(self, record, secret, identity, stop):
+    async def _call(self, record, secret, identity, stop, voice_ai=None):
         # The existing voice service launches the fixed worker in its own
         # finite budget and effective environment. No voice settings live here.
         reader, writer = await asyncio.open_unix_connection('/run/agentcall/control.sock', limit=65536)
         request = {'action':'matrix_transport','call':record,'account':secret,'identity':identity,
                    'rtc_auth_url':os.environ['USERIO_MATRIX_RTC_AUTH_URL']}
+        if voice_ai is not None:
+            request['voice_ai'] = voice_ai
         writer.write(json.dumps(request,ensure_ascii=False).encode()+b'\n')
         await writer.drain()
         try:
