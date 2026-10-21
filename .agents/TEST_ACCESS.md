@@ -50,8 +50,11 @@
 - The BotFather source fix for the MAS/Synapse registration-order defect is published on `main`; the running service was not restarted or updated. The two fixtures were issued through the corrected source handler, so do not treat this as a production BotFather repair.
 - The original owner-call canary remains pending and was not replaced by these fixtures.
 
-## MatrixRTC call attempt — 2026-10-21
+## MatrixRTC test calls — 2026-10-21
 
-- One explicitly authorized UserIO test call from `@aiadmin` to peer B was accepted, then ended `unanswered` with `TimeoutError`. `answered=false`, `acknowledged=false`, and `received_audio_bytes=0`; no audio or transcript was produced.
-- UserIO call receipt: `b53e1228-4401-5658-8296-081db97c0d34`; underlying voice call: `f2082907-e335-4523-9964-8cfec16b3874`.
-- This confirms the call request reached the MatrixRTC wait path, but does not prove an answered call or TTS playback. No retry was made. The original owner-call canary remains pending and separate.
+- Attempt 1 (`b53e1228-4401-5658-8296-081db97c0d34`, voice `f2082907-e335-4523-9964-8cfec16b3874`): accepted then `unanswered` / `TimeoutError`; no receiver client was online.
+- Attempt 2 (`0040a758-8fc5-5394-8e18-599e8e46f3c8`, voice `3332210d-f3a7-4f21-9f06-64aec0ac0c5c`): the Element incoming-call card appeared, but joining was disabled by room state-event permissions. It ended failed; no audio was received.
+- Root cause in the isolated room: `state_default=50` and no override for UserIO's MatrixRTC member event `org.matrix.msc3401.call.member`. Set only that event's permission to 0; readback confirmed, other room permissions were preserved. Element then enabled Join.
+- Attempt 3 (`dab6de44-6bb5-5787-a499-a6c2f32a09cf`, voice `94de7cc0-bb81-4145-bacb-d384d2a2c8de`): completed with `answered=true`. The completed 48 kHz recording has 287 sent assistant frames and 0 received caller frames. Transcript: “Тест. Ты меня слышишь?” followed by “Пока не могу разобрать вашу речь. Повторите, пожалуйста.” No caller speech was sent; the test browser microphone was disabled. Receipt carries a recoverable `voice_transport_error` warning, so this proves the answered path and sent TTS track, not a two-way speech exchange or what a human listener perceived.
+- To load Element in the isolated server-88 Chromium, a temporary browser-only polyfill was needed for missing `Set.prototype.symmetricDifference`; no application source or deployed runtime was changed. Evidence screenshot of the initial Element failure: `/tmp/mxpeer-e2e-room-failed.png` on server-88. The temporary receiver browser session was closed.
+- The original owner-call canary remains pending and separate.
