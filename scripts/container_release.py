@@ -294,7 +294,7 @@ def assert_idle():
                 status = record.get('status')
                 if status not in call_statuses:
                     continue
-                started_at = float(record['started_at'])
+                started_at = float(record.get('started_at', record.get('created_at')))
                 max_seconds = int(record['max_seconds'])
                 if not 30 <= max_seconds <= 600 or now < started_at:
                     raise ValueError('call deadline is invalid')
