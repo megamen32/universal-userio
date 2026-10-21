@@ -17,7 +17,7 @@ from .messenger import canonical, digest
 # Legacy providers without a published upload capability retain their existing
 # conservative bound. Telegram uses the account's live MTProto upload ceiling,
 # with SQLite's configured BLOB limit as the storage backstop.
-MAX_BYTES = 2 * 1024 * 1024
+MAX_BYTES = 20 * 1024 * 1024
 MAX_STORAGE_BYTES = 1_000_000_000
 TTL_SECONDS = 900
 

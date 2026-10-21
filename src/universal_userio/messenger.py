@@ -139,10 +139,9 @@ class Messenger:
         if callable(get_limit):
             try:
                 value=get_limit()
-                if type(value) is int and value>0:return value
+                if type(value) is int and value>0:return min(value,MAX_BYTES)
             except Exception:
-                return None
-            return None
+                pass
         return MAX_BYTES
 
     def _allow(self, account_ref, operation):
