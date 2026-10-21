@@ -23,6 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = Path('/etc/userio-containers')
 BACKUP = Path('/var/backups/universal-userio/containers-20261015')
 REMOTE = 'roomhacker@192.168.2.5'
+ASTERISK_HOSTS = (
+    ('roomhacker@192.168.2.75', 'roomhacker-server-88'),
+    ('roomhacker@192.168.2.5', 'server-44'),
+)
 TELEMOST_ROOT = '/home/roomhacker/.local/state/userio-telemost'
 WORKERS = {
     'universal-userio.service': ('core', ['python', '-m', 'universal_userio.runtime']),
@@ -259,8 +263,24 @@ def prepare_voice():
 
 
 def assert_idle():
-    if output(['asterisk', '-rx', 'core show channels concise']).strip():
-        raise RuntimeError('active telephone call prevents cutover')
+    for target, expected_hostname in ASTERISK_HOSTS:
+        args = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', target,
+                "hostname -s; sudo -n asterisk -rx 'core show channels count'"]
+        if os.getuid() == 0:
+            args = ['runuser', '-u', 'roomhacker', '--', *args]
+        lines = output(args).splitlines()
+        if not lines or lines[0].strip() != expected_hostname:
+            raise RuntimeError('Asterisk host identity changed; telephone-call idle state unknown')
+        counts = []
+        for line in lines[1:]:
+            fields = line.strip().split()
+            if len(fields) >= 3 and fields[1].lower() == 'active' and fields[2].lower().startswith('channel'):
+                try: counts.append(int(fields[0]))
+                except ValueError: pass
+        if len(counts) != 1:
+            raise RuntimeError('cannot read Asterisk active-call count; telephone-call idle state unknown')
+        if counts[0] != 0:
+            raise RuntimeError('active telephone call prevents cutover')
     for path in Path('/proc').iterdir():
         if not path.name.isdigit(): continue
         try: argv = (path / 'cmdline').read_bytes().split(b'\0')
