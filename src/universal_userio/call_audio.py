@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import re
+import stat
 import uuid
 import wave
 from urllib.parse import quote
@@ -12,6 +13,32 @@ TRACKS = {'caller': 'Собеседник', 'assistant': 'Телефон'}
 
 def archive_for(conversation):
     return ARCHIVE
+
+
+def recorded_track_bytes(call_id, track='caller', root=None):
+    """Return validated raw PCM bytes for one archived track, or zero."""
+    if track not in TRACKS:
+        return 0
+    try:
+        call_id = str(uuid.UUID(str(call_id)))
+        folder = (root or ARCHIVE) / call_id
+        path = folder / (track + '.wav')
+        if folder.is_symlink() or path.is_symlink():
+            return 0
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode) or not 44 <= metadata.st_size <= 44 + 48000 * 2 * 7200:
+            return 0
+        with wave.open(str(path)) as audio:
+            rate = audio.getframerate()
+            if ((audio.getnchannels(), audio.getsampwidth()) != (1, 2)
+                    or rate not in (8000, 12000, 16000, 24000, 32000, 44100, 48000)):
+                return 0
+            frames = audio.getnframes()
+        if metadata.st_size != 44 + frames * 2:
+            return 0
+        return frames * 2
+    except (OSError, ValueError, TypeError, wave.Error):
+        return 0
 
 
 def recording(conversation, message, root=None):

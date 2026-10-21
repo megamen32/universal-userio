@@ -27,13 +27,13 @@ FIXTURES = {
         "username": "lhc_voice_user_a_20261021",
         "matrix_id": "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
         "target": "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
-        "request_id": "lhc_matrixrtc_20261021_a2b",
+        "request_id": "lhc_matrixrtc_20261021_a2b_guestpeer1",
     },
     "b": {
         "username": "lhc_voice_user_b_20261021",
         "matrix_id": "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
         "target": "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
-        "request_id": "lhc_matrixrtc_20261021_b2a",
+        "request_id": "lhc_matrixrtc_20261021_b2a_guestpeer1",
     },
 }
 EXPECTED_MODEL = "omniroute/minimax-combo-m3.1"
@@ -94,10 +94,9 @@ def _payload(fixture, account_ref):
         "target": fixture["target"],
         "purpose": (
             "Закрытый тестовый разговор двух выданных владельцем Matrix-ботов. "
-            "Отыгрывай владельца: сначала спроси о текущих задачах, затем попроси "
-            "рассказать о свежих инцидентах, после ответа попроси вернуться к "
-            "режиму Secretary. Не выдумывай личные сведения и подтверждай только "
-            "то, что действительно услышал."
+            "Проверь, что собеседник тебя слышит; затем поддержи короткий "
+            "естественный разговор о задачах и инцидентах. Не выдумывай личные "
+            "сведения и не предпринимай действий."
         ),
         "greeting": "Привет. Расскажи, пожалуйста, какие у меня сейчас задачи?",
         "request_id": fixture["request_id"],

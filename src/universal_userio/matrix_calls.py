@@ -194,8 +194,10 @@ class MatrixCalls:
             if record['status'] in {'accepted','ringing','active'}:
                 raise RuntimeError('voice transport outcome unknown; do not replay')
             if record.get('voice_call_id'):
+                from .call_audio import recorded_track_bytes
                 from .call_audio import ARCHIVE
                 folder = ARCHIVE/record['voice_call_id']
+                record['received_audio_bytes'] = recorded_track_bytes(record['voice_call_id'], 'caller')
                 path = folder/'live-transcript.json'
                 if folder.is_dir():
                     path.write_text(json.dumps({k:'\n'.join(v) for k,v in transcripts.items()},ensure_ascii=False))

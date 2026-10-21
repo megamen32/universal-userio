@@ -83,6 +83,17 @@ def test_incomplete_recording_stays_honest_and_invalid_call_has_no_audio(tmp_pat
     assert call_audio.recording(conv, message, tmp_path) is None
 
 
+def test_recorded_track_bytes_counts_only_validated_caller_pcm(tmp_path):
+    call_id = str(uuid.uuid4())
+    archive(tmp_path, call_id)
+    assert call_audio.recorded_track_bytes(call_id, 'caller', tmp_path) == 16000
+    assert call_audio.recorded_track_bytes(call_id, 'assistant', tmp_path) == 16000
+    assert call_audio.recorded_track_bytes(call_id, 'unknown', tmp_path) == 0
+    assert call_audio.recorded_track_bytes('../private', 'caller', tmp_path) == 0
+    (tmp_path / call_id / 'caller.wav').unlink()
+    assert call_audio.recorded_track_bytes(call_id, 'caller', tmp_path) == 0
+
+
 @pytest.mark.parametrize('value,expected', [('', (0,99,200)), ('bytes=10-',(10,99,206)),
     ('bytes=-10',(90,99,206)), ('bytes=0-999',(0,99,206))])
 def test_single_range(value, expected):

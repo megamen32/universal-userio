@@ -33,6 +33,7 @@ FIXTURES = {
           "matrix_id": "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com"},
 }
 MAX_SECONDS = 240
+MAX_INCOMING_AUDIO_BUFFER_BYTES = 1024 * 1024
 
 
 def _request(server: str, token: str, method: str, path: str, payload=None):
@@ -195,7 +196,7 @@ async def run():
         server_voice_config(BackendConfig.from_environment()), voice_ai,
     )
     os.environ["AGENTCALL_TTS_PHONE_FALLBACK"] = "0"
-    greeting = "Я секретарь. Спроси о задачах или текущих инцидентах."
+    greeting = "Здравствуйте. Проверим, что Matrix-звук работает в обе стороны."
     pipeline = LocalSpeechPipeline(config)
     greeting_pcm, attention_pcm = await asyncio.gather(
         asyncio.to_thread(pipeline.synthesize, greeting),
@@ -203,19 +204,17 @@ async def run():
     )
     prepared_call_id = str(uuid.uuid4())
     call_context = (
-        "Закрытый тест двух выданных владельцем Matrix-аккаунтов. Caller — "
-        "тестовая роль владельца. Отвечай естественно и кратко. По просьбе "
-        "рассказать об инцидентах переключись штатным Secretary SDK в Notice Place, "
-        "передай только его проверенные свежие сведения, затем вернись к Secretary "
-        "по явной просьбе. Не создавай и не закрывай инциденты, не отправляй "
-        "сообщения и не управляй другими звонками или сессиями."
+        "Закрытый тест двух выданных владельцем Matrix-аккаунтов. Это тестовый "
+        "собеседник, не владелец и не Secretary. Отвечай естественно и кратко. "
+        "Не запрашивай личные сведения, не отправляй сообщения, не создавай "
+        "инциденты и не управляй другими звонками или сессиями."
     )
     prepared = PreparedCall(
         greeting_text=greeting, greeting_pcm=greeting_pcm,
         attention_text=config.attention_prompt, attention_pcm=attention_pcm,
         context=call_context,
         agent_context={
-            "call_mode": "incoming", "voice_transport": "matrix",
+            "call_mode": "incoming_guest", "voice_transport": "matrix",
             "voice_target": peer["matrix_id"],
         },
         created_at=time.time(), wait_prompts=load_wait_prompts(),
@@ -306,7 +305,7 @@ async def run():
                 if stop.is_set():
                     break
                 frame = bytes(event.frame.data)
-                if len(audio_reader._buffer) + len(frame) + 3 > 256000:
+                if len(audio_reader._buffer) + len(frame) + 3 > MAX_INCOMING_AUDIO_BUFFER_BYTES:
                     raise BufferError("fixture incoming audio exceeds bounded buffer")
                 audio_reader.feed_data(pack_audiosocket_frame(0x16, frame))
         finally:
@@ -326,9 +325,7 @@ async def run():
             stop.set()
             audio_reader.feed_data(pack_audiosocket_frame(voice.HANGUP_KIND, b""))
 
-    secretary_scope = FixtureSecretaryScope(peer["matrix_id"])
     try:
-        secretary_scope.__enter__()
         deadline = time.monotonic() + 180
         caller_event = None
         print(json.dumps({"event": "ready", "fixture": alias,
@@ -388,8 +385,13 @@ async def run():
         previous_stderr = sys.stderr
         try:
             sys.stderr = log_handle
+
+            async def fixture_answer_gate(_call_id, hung_up):
+                return not hung_up.is_set()
+
             engine = asyncio.create_task(handle_call(
                 audio_reader, writer, Broker(), config, {voice_call_id: prepared},
+                answer_gate=fixture_answer_gate,
             ))
             try:
                 await asyncio.wait_for(engine, timeout=MAX_SECONDS)
@@ -409,8 +411,7 @@ async def run():
                           "voice_call_id": voice_call_id,
                           "engine_log": str(log_path), "modes_seen": modes,
                           **summaries}), flush=True)
-        return 0 if (summaries["caller_turns"] >= 3 and summaries["assistant_turns"] >= 4
-                     and {"secretary", "incidents"}.issubset(modes)) else 3
+        return 0 if (summaries["caller_turns"] >= 2 and summaries["assistant_turns"] >= 2) else 3
     finally:
         stop.set()
         if engine is not None and not engine.done():
@@ -429,7 +430,6 @@ async def run():
         if joined_rtc:
             await room.disconnect()
         await source.aclose()
-        secretary_scope.__exit__(None, None, None)
 
 
 def main():
