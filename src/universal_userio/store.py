@@ -3116,15 +3116,44 @@ class SQLiteUserIOStore:
                 (user_id, draft_id),
             )
 
+    def telegram_delivery_history_context(self, draft_id: str, *, user_id: str,
+                                         account_ref: str, peer_id: str, after: float) -> dict[str, object]:
+        """Choose a local pagination hint, never local proof of delivery."""
+        with self._lock:
+            draft = self._connection.execute(
+                'SELECT conversation_id,body FROM drafts WHERE user_id=? AND id=?',
+                (self._user(user_id), draft_id),
+            ).fetchone()
+            if draft is None:
+                raise KeyError('draft not found')
+            competing = self._connection.execute(
+                "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND body=? "
+                "AND id<>? AND status IN ('sending','delivery_unknown','approved') LIMIT 1",
+                (self._user(user_id), draft['conversation_id'], draft['body'], draft_id),
+            ).fetchone()
+            row = self._connection.execute(
+                "SELECT message_id FROM messages WHERE user_id=? AND conversation_id=? "
+                "AND source='telegram' AND received_at>? AND deleted_at IS NULL "
+                "ORDER BY received_at,message_id LIMIT 1",
+                (self._user(user_id), draft['conversation_id'], after),
+            ).fetchone()
+        prefix = f'{account_ref}|{peer_id}:'
+        suffix = str(row['message_id'])[len(prefix):] if row and str(row['message_id']).startswith(prefix) else ''
+        anchor = int(suffix) + 1 if suffix.isascii() and suffix.isdigit() else 0
+        return {'before_id': anchor if 0 < anchor <= 2147483647 else 0,
+                'competing_draft': bool(competing)}
+
     def approve_reconciled_delivery(self, draft_id: str, receipt: str, *, user_id: str,
                                    expected_generation: int,
-                                   expected_lease_owner: str | None = None) -> dict[str, object]:
-        """Apply only an exact journal receipt to the still-current claimed attempt."""
+                                   expected_lease_owner: str | None = None,
+                                   expected_text: str | None = None,
+                                   expected_conversation_id: str | None = None) -> dict[str, object]:
+        """Apply reviewed journal/history evidence to the still-current payload."""
         user = self._user(user_id)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
-                "SELECT status,outbox_receipt,delivery_attempt_generation FROM drafts WHERE user_id=? AND id=?",
+                "SELECT status,outbox_receipt,delivery_attempt_generation,body,conversation_id FROM drafts WHERE user_id=? AND id=?",
                 (user, draft_id),
             ).fetchone()
             if row is None:
@@ -3136,7 +3165,15 @@ class SQLiteUserIOStore:
             lease_matches = expected_lease_owner is None or bool(
                 lease and lease["worker_id"] == expected_lease_owner and float(lease["lease_until"]) > time.time())
             applied = False
-            if (lease_matches and int(row["delivery_attempt_generation"] or 0) == int(expected_generation)
+            payload_matches = (expected_text is None or row['body'] == expected_text) and (
+                expected_conversation_id is None or row['conversation_id'] == expected_conversation_id)
+            if expected_text is not None:
+                payload_matches = payload_matches and not self._connection.execute(
+                    "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND body=? "
+                    "AND id<>? AND status IN ('sending','delivery_unknown','approved') LIMIT 1",
+                    (user, row['conversation_id'], row['body'], draft_id),
+                ).fetchone()
+            if (payload_matches and lease_matches and int(row["delivery_attempt_generation"] or 0) == int(expected_generation)
                     and row["status"] in ("sending", "delivery_unknown")):
                 self._connection.execute(
                     """UPDATE drafts SET status='approved',approved_at=?,outbox_receipt=?,

@@ -1648,10 +1648,9 @@ class UserIOService:
                                        expected_lease_owner: str | None) -> dict[str, object]:
         """Resolve one in-flight Telegram delivery without ever replaying it.
 
-        The connector owns the Telegram session, so its durable journal of
-        approved attempts is the only authority on what happened. The journal
-        binds the exact attempt to the provider message id, to a refusal that
-        happened before any provider IO, or to the honest in-flight state.
+        The connector journal binds an attempt to a provider ID or an explicit
+        refusal. When inconclusive, fresh account-scoped provider history may
+        confirm the exact outgoing payload. History absence never permits retry.
 
         The result is one of:
         ``delivered``   - the provider message id is known, the draft is approved
@@ -1734,22 +1733,23 @@ class UserIOService:
                     "reason": str(record.get("code") or "refused_before_submission"),
                     "retry_allowed": bool(released["applied"]),
                     "evidence": self._delivery_evidence(record, draft.id)}
+        if provider_history and state in {'absent', 'pending', 'unknown'}:
+            history_reader = getattr(self.telegram_outbox, 'reconcile_history', None)
+            if not callable(history_reader):
+                raise DeliveryUnavailableError('Сверка истории Telegram недоступна.')
+            result = self._resolve_by_provider_history(
+                draft, conversation=conversation, account_ref=account_ref, peer_id=peer_id,
+                outbox=history_reader, resolved_user_id=resolved_user_id,
+                connector_available_since=connector_available_since,
+                expected_generation=expected_generation,
+                expected_lease_owner=expected_lease_owner)
+            result['evidence'] = {**self._delivery_evidence(record, draft.id),
+                                  **result.get('evidence', {})}
+            return result
         if state == "absent":
             # Absence is only a point-in-time observation: the original request
             # may still be queued or in flight and journal later. It never
             # releases this claim; only an explicit refused receipt can do so.
-            if provider_history:
-                history_reader = getattr(self.telegram_outbox, "reconcile_history", None)
-                if not callable(history_reader):
-                    raise DeliveryUnavailableError("Сверка доставки Telegram недоступна.")
-                result = self._resolve_by_provider_history(
-                    draft, conversation=conversation, account_ref=account_ref, peer_id=peer_id,
-                    outbox=history_reader, resolved_user_id=resolved_user_id,
-                    connector_available_since=connector_available_since,
-                    expected_generation=expected_generation,
-                    expected_lease_owner=expected_lease_owner)
-                result["evidence"] = self._delivery_evidence(record, draft.id)
-                return result
             prior_state = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)["delivery_state"]
             if prior_state not in {"legacy_unknown", "provider_match_unverified"}:
                 self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id,
@@ -1777,62 +1777,12 @@ class UserIOService:
                                      connector_available_since: float = 0.0,
                                      expected_generation: int,
                                      expected_lease_owner: str | None) -> dict[str, object]:
-        """Resolve a legacy claim from the provider's own history.
-
-        History is a diagnostic cross-check only. No-match is not final proof:
-        history can be incomplete and the original request can still be in
-        flight. This path therefore never releases a draft for retry.
-        """
-        claimed = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)
-        sending_at = claimed.get("sending_at")
-        attempt_at = float(sending_at) if sending_at is not None else None
-        if attempt_at is None:
-            # A legacy claim has no recorded claim time. The creation time is
-            # a lower bound of it, so the provider window stays wider.
-            attempt_at = float(claimed.get("created_at") or 0.0)
-        available_since = float(connector_available_since or 0.0)
-        if not available_since or available_since <= attempt_at:
-            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id,
-                                                 expected_generation=expected_generation,
-                                                 expected_lease_owner=expected_lease_owner)
-            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                    "reason": "connector_availability_not_attested", "retry_allowed": False}
-        history = outbox(account_ref=account_ref, peer_id=peer_id)
-        # The provider history is mirrored into UserIO by the connector, so the
-        # conversation must be read again after the provider answered.
-        fresh = self._store.conversation(draft.conversation_id, user_id=resolved_user_id) or {}
-        messages = list(fresh.get("messages") or [])
-        # Record whether the bounded mirror includes the attempt's time, but
-        # do not use an empty window as permission to replay the original send.
-        oldest_id = str(history.get("oldest_id") or "")
-        window_oldest = 0.0
-        for message in messages:
-            if str(message.get("message_id") or "").rsplit(":", 1)[-1] == oldest_id:
-                window_oldest = float(message.get("received_at") or 0.0)
-                break
-        if not window_oldest or window_oldest > attempt_at - _PROVIDER_CLOCK_TOLERANCE:
-            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id,
-                                                 expected_generation=expected_generation,
-                                                 expected_lease_owner=expected_lease_owner)
-            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                    "reason": "provider_history_does_not_cover_the_attempt", "retry_allowed": False,
-                    "provider_window_oldest_at": window_oldest}
-        matched = [m for m in messages
-                   if str(m.get("direction") or "") == "outgoing"
-                   and str(m.get("body") or "") == draft.body]
-        if matched:
-            self._store.mark_draft_delivery_state(draft.id, "provider_match_unverified",
-                                                  user_id=resolved_user_id,
-                                                  expected_generation=expected_generation,
-                                                  expected_lease_owner=expected_lease_owner)
-            return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                    "reason": "provider_has_a_matching_message", "retry_allowed": False,
-                    "provider_message_id": str(matched[-1].get("message_id") or "")}
-        return {"resolution": "unknown", "draft_id": draft.id, "status": draft.status,
-                "reason": "provider_history_no_match_is_not_final_submission_evidence", "retry_allowed": False,
-                "provider_window_oldest_at": window_oldest,
-                "connector_available_since": available_since,
-                "provider_mirrored": int(history.get("mirrored") or 0)}
+        """Accept exact fresh positive evidence; absence never releases a claim."""
+        from .telegram_delivery_history import resolve_history
+        return resolve_history(
+            self._store, draft, conversation=conversation, account_ref=account_ref,
+            peer_id=peer_id, reader=outbox, user_id=resolved_user_id,
+            expected_generation=expected_generation, expected_lease_owner=expected_lease_owner)
 
     def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id)

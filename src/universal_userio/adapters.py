@@ -491,7 +491,8 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         return f"telegram-qr:{data.get('slot', '?')}:{data.get('message_id', 'sent')}:{draft_id}"
 
-    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200) -> dict[str, object]:
+    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200,
+                          before_id: int = 0) -> dict[str, object]:
         """Read the provider's authoritative history for one peer.
 
         The connector fetches the peer's history from Telegram and mirrors it
@@ -499,21 +500,24 @@ class TelegramQrHttpOutbox:
         """
         if not account_ref or not re.fullmatch(r"-?[1-9][0-9]*", peer_id):
             raise ValueError("Telegram history reconciliation requires an exact account and peer")
+        if type(before_id) is not int or not 0 <= before_id <= 2147483647:
+            raise ValueError('Telegram history cursor is invalid')
         payload = json.dumps({"account_id": account_ref, "peer_id": peer_id,
-                              "limit": max(1, min(200, int(limit)))}).encode()
+                              "limit": max(1, min(200, int(limit))), "before_id": before_id}).encode()
         request = urllib.request.Request(  # noqa: S310
             f"{self._base_url}/reconcile", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
         )
         try:
-            with self._runner(request, timeout=max(self._timeout, 60)) as response:
+            with self._runner(request, timeout=20) as response:
                 result = json.loads(response.read().decode() or "{}")
         except urllib.error.HTTPError as error:
-            detail = error.read().decode(errors="replace")[:200]
-            raise RuntimeError(f"telegram-qr history reconciliation failed: HTTP {error.code} {detail}") from error
+            retry_after = _telegram_retry_after(error.headers) if error.code == 429 else None
+            raise TelegramQrHttpError(error.code, retry_after) from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
-        if not isinstance(result, dict) or str(result.get("account_id") or "") != account_ref:
+        if (not isinstance(result, dict) or str(result.get("account_id") or "") != account_ref
+                or str(result.get('peer_id') or '') != peer_id):
             raise RuntimeError("telegram-qr history reconciliation identity mismatch")
         return result
 
