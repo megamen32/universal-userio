@@ -1,7 +1,7 @@
 import http from "node:http";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
@@ -63,6 +63,7 @@ const liveSlots = new Map();
 const disconnectedSlots = new Set();
 let nextSlot = 1;
 let promptSeq = 0;
+const accountRegistrations = new Map();
 const agentDeliverUrl = String(process.env.USERIO_AGENT_DELIVER_URL || "").trim();
 const agentDeliverSecret = String(process.env.USERIO_AGENT_DELIVER_HMAC_SECRET || "").trim();
 const agentDeliverChatId = String(process.env.USERIO_AGENT_DELIVER_CHAT_ID || "").trim();
@@ -139,8 +140,28 @@ function registerAccount(slot, user) {
       response.resume();
       response.on("end", () => response.statusCode === 202 ? resolve(displayName) : reject(new Error(`UserIO returned HTTP ${response.statusCode}`)));
     });
+    request.setTimeout(10000, () => request.destroy(new Error("Account registration timeout; reconcile before retry")));
     request.once("error", reject);
     request.end(body);
+  });
+}
+
+// Read through the same owner-scoped API used by the browser. Never infer
+// ownership from a Telegram identity observed in another user's live slot.
+function registeredAccounts(headers) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(new URL("/v1/accounts", userIoUrl), { headers }, response => {
+      let body = "";
+      response.on("data", chunk => { body += chunk; if (body.length > 1024 * 1024) request.destroy(new Error("Account list too large")); });
+      response.on("end", () => {
+        try {
+          if (response.statusCode !== 200) throw new Error(`UserIO returned HTTP ${response.statusCode}`);
+          resolve(JSON.parse(body).accounts || []);
+        } catch (error) { reject(error); }
+      });
+    });
+    request.setTimeout(5000, () => request.destroy(new Error("Account lookup timeout")));
+    request.on("error", reject);
   });
 }
 
@@ -378,21 +399,57 @@ function errorLogger() {
 }
 
 async function finishLogin(slot, client, user) {
-  const session = client.session.save();
-  const file = `${sessionsDir}/${slot}.session`;
-  writeFileSync(file, session, { mode: 0o600 });
-  chmodSync(file, 0o600);
-  const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || String(user.id);
-  try {
-    await registerAccount(slot, user);
-    enrollmentOwners.registered(slot);
-    slots.set(slot, { status: "connected", name: displayName });
-  } catch (error) {
-    console.error("Telegram account registration error:", (error && error.message) || "unknown");
-    slots.set(slot, { status: "connected-unregistered", name: displayName });
-    return;
-  }
-  void syncAccount(slot);
+  const accountId = `telegram:${user.id}`;
+  const owner = enrollmentOwners.owner(slot);
+  const key = `${owner}:${accountId}`;
+  const previousRegistration = accountRegistrations.get(key) || Promise.resolve();
+  const pending = previousRegistration.catch(() => {}).then(async () => {
+    const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || accountId;
+    const file = `${sessionsDir}/${slot}.session`;
+    // Publish complete bytes before the account reference can point here.
+    const temporary = `${file}.next`;
+    writeFileSync(temporary, client.session.save(), { mode: 0o600 });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, file);
+    try {
+      const headers = enrollmentOwners.registrationHeaders(slot)
+        || { Authorization: `Bearer ${process.env.USERIO_API_TOKEN || ""}` };
+      const accounts = await registeredAccounts(headers);
+      const previous = accounts.find(account => account.provider === "telegram" && account.id === accountId);
+      const oldSlot = /^telegram-qr:(account-\d+)$/.exec(String(previous?.credential_ref || ""))?.[1];
+      const retire = new Set();
+      if (oldSlot && oldSlot !== slot && enrollmentOwners.allowed(oldSlot, owner)) retire.add(oldSlot);
+      for (const [id, state] of slots) {
+        if (id !== slot && enrollmentOwners.allowed(id, owner)
+            && (liveSlots.get(id)?.accountId || state.accountId) === accountId) retire.add(id);
+      }
+      await registerAccount(slot, user);
+      enrollmentOwners.registered(slot);
+      slots.set(slot, { status: "connected", name: displayName, accountId });
+      // Registration is the commit point. A failed/unknown request keeps both
+      // sessions and the previous binding available for reconciliation.
+      for (const id of retire) {
+        try {
+          const oldFile = `${sessionsDir}/${id}.session`;
+          if (existsSync(oldFile)) renameSync(oldFile, `${oldFile}.replaced-${Date.now()}`);
+          const old = clearSlot(id);
+          if (old?.client) await old.client.disconnect().catch(() => {});
+        } catch (error) {
+          console.error(`Telegram old session retirement failed for ${id}:`, error.message || "unknown");
+        }
+      }
+    } catch (error) {
+      console.error("Telegram account registration error:", error?.message || "unknown");
+      slots.set(slot, { status: "connected-unregistered", name: displayName, accountId });
+      return;
+    }
+    // The login client releases the key before ingestion takes ownership.
+    await client.disconnect();
+    void syncAccount(slot);
+  });
+  accountRegistrations.set(key, pending);
+  try { await pending; }
+  finally { if (accountRegistrations.get(key) === pending) accountRegistrations.delete(key); }
 }
 
 function failSlot(slot, error) {
@@ -795,6 +852,7 @@ async function syncAccount(slot) {
         throw failure;
       }
       const me = await client.getMe();
+      if (disconnectedSlots.has(slot)) break;
       const accountId = `telegram:${me.id}`;
       const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
       const dialogLabels = new Map();
@@ -821,6 +879,7 @@ async function syncAccount(slot) {
           const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
           await refreshUnreadSnapshot(client, accountId).catch(error =>
             console.error(`unread snapshot startup: ${error.message || error}`));
+      if (disconnectedSlots.has(slot)) break;
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
       // GramJS 2.26 has no runUntilDisconnected; the client keeps itself
@@ -841,6 +900,7 @@ async function syncAccount(slot) {
         setSync(slot, { status: "live", lastError: "", lastSyncAt: Date.now() });
       }
     } catch (error) {
+      if (disconnectedSlots.has(slot)) break;
       setSync(slot, { status: authTerminal ? "relogin-required" : "retrying",
         lastError: String((error && error.message) || error),
         authCode: (error && error.authCode) || "" });
@@ -1017,6 +1077,7 @@ function card(s){
   var html = '<section class="userio-setup-panel" id="card-'+esc(s.id)+'"><h2>'+esc(view.title)+'</h2><p class="userio-status" role="status">'+esc(view.status)+'</p>';
   if (view.sessionLabel) html += '<p class="userio-note">'+esc(view.sessionLabel)+'</p>';
   if (view.note) html += '<p class="userio-note">'+esc(view.note)+'</p>';
+  if (view.reconnect) html += '<a class="userio-setup-button" href="'+a('/new')+'">Переподключить Telegram</a>';
   if (view.action) html += '<div class="userio-setup-actions"><button class="userio-setup-button userio-setup-secondary" type="button" data-account-action="'+esc(view.action.kind)+'" data-account-id="'+esc(view.action.accountId||'')+'" data-slot="'+esc(view.action.slot||'')+'" data-label="'+esc(view.title)+'">'+esc(view.action.label)+'</button><p class="userio-note" data-action-status aria-live="polite"></p></div>';
   if (s.qr) html += '<img class="userio-qr" src="'+s.qr+'" alt="QR-код входа в Telegram"><p class="userio-note">Telegram \\u2192 Настройки → Устройства → Подключить устройство</p>';
   if (s.status === "code-required") html += '<form method=post action="'+a('/code?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Введите код входа'+(s.codeViaApp?" (пришёл в Telegram)":" (SMS)")+'</p><input name=code inputmode=numeric autocomplete=one-time-code autofocus><button class="userio-setup-button" type=submit>Подтвердить код</button></form>';
@@ -1033,13 +1094,19 @@ async function refreshAccounts(force){
 }
 function render(list){
   var box = document.getElementById("cards");
+  accounts.forEach(function(account){
+    var slot=String(account.credential_ref||'').replace(/^telegram-qr:/,'');
+    var session=list.find(function(s){return s.id===slot;});
+    if(session){session.accountId=account.id;return;}
+    list.push({id:'missing-'+account.id.replace(/[^a-zA-Z0-9]/g,'-'),accountId:account.id,status:'reconnect-required',sync:'missing-session',qr:''});
+  });
   var connected = list.filter(function(s){return s.status==='connected'&&s.sync!=='relogin-required';}).length;
-  var revoked = list.filter(function(s){return s.sync==='relogin-required';}).length;
-  document.getElementById('account-summary').textContent='Подключено аккаунтов: '+connected+' · отозванные сеансы: '+revoked;
+  var revoked = list.filter(function(s){return s.sync==='relogin-required'||s.status==='reconnect-required';}).length;
+  document.getElementById('account-summary').textContent='Подключено аккаунтов: '+connected+' · требуют переподключения: '+revoked;
   var live = new Set(list.map(function(s){return s.id;}));
   list.forEach(function(s){
     var account=accounts.get(s.accountId)||{};
-    var sig = [s.status,s.name,s.accountId,account.display_name,account.can_disconnect,s.qr.slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
+    var sig = [s.status,s.name,s.accountId,account.display_name,account.can_disconnect,(s.qr||" ").slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
     if (seen.get(s.id) === sig) return;
     seen.set(s.id, sig);
     var el = document.getElementById("card-"+s.id);
@@ -1133,12 +1200,10 @@ http.createServer(async (req, res) => {
       if (!auth.authorized) throw new Error("Telegram session is not authorized");
       const user=await importedClient.getMe();
       const accountId=`telegram:${user.id}`;
-      const existing=[...liveSlots.values()].some(value=>value.accountId===accountId)
-        || [...slots.values()].some(value=>value.accountId===accountId);
       const savedSession=importedClient.session.save();
       const sameSession=readdirSync(sessionsDir).some(file=>/^account-\d+\.session$/.test(file)
         && readFileSync(`${sessionsDir}/${file}`,"utf8").trim()===savedSession);
-      if (existing || sameSession) throw new Error("Telegram account or session is already connected in UserIO");
+      if (sameSession) throw new Error("Telegram account or session is already connected in UserIO");
       await importedClient.disconnect();
       const slotId=`account-${nextSlot++}`;
       enrollmentOwners.bind(slotId,browserOwner.principal,browserOwner.headers);
