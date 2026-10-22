@@ -72,6 +72,16 @@ TOOL_SPECS = (
         "until": {"type": "number"},
         "max_messages": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 20000},
     })),
+    ToolSpec("userio.contacts.resolve", "Resolve a contact that is not in the history yet into a peer the account can write to: a Telegram username or phone number, a phone number for SMS or WhatsApp, a mail address, a VK profile or link, or a Yandex user id. The answer names the account, the channel and the provider-native peer, so the next call can write to it. Nothing is sent to the contact here.", _schema({
+        "account_ref": {"type": "string", "maxLength": 128},
+        "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+    }, ["account_ref", "identifier"])),
+    ToolSpec("userio.contacts.start", "Start a conversation with a contact that is not in the history yet and send the first message. The identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is delivered through the same durable path as every other outbound message. The request_id makes a retry reuse the same message instead of sending it twice.", _schema({
+        "account_ref": {"type": "string", "maxLength": 128},
+        "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+        "text": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "request_id": {"type": "string", "minLength": 16, "maxLength": 80},
+    }, ["account_ref", "identifier", "text", "request_id"])),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
@@ -244,6 +254,8 @@ TOOL_CAPABILITIES = {
     "userio.channels.list": "read",
     "userio.channels.search": "read",
     "userio.channels.export": "read",
+    "userio.contacts.resolve": "read",
+    "userio.contacts.start": "send",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
@@ -312,7 +324,7 @@ class UserIOMcpSurface:
                  or principal.messenger_grants is not None and spec.name in {
                     'userio.accounts.list','userio.channels.list','userio.channels.search',
                     'userio.channels.export','userio.channels.read','userio.channels.download',
-                    'userio.channels.send_draft'}
+                    'userio.channels.send_draft','userio.contacts.resolve','userio.contacts.start'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -558,6 +570,8 @@ class UserIOMcpSurface:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name.startswith('userio.contacts.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
                 return {'ok':False,'error':str(error).strip("'")}
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
@@ -617,6 +631,36 @@ class UserIOMcpSurface:
                 if len(markdown.encode("utf-8")) <= 32768:
                     result["content"] = markdown
                 return result
+            if name == "userio.contacts.resolve":
+                from .contact_start import ContactStartError
+                account_ref = str(arguments.get("account_ref") or "").strip()
+                identifier = str(arguments.get("identifier") or "").strip()
+                if not account_ref or not identifier:
+                    raise ValueError("account_ref and identifier are required")
+                try:
+                    resolved = self._service.contact_starter.resolve(
+                        user_id=user_id, account_ref=account_ref, identifier=identifier,
+                        need_send=False,
+                    )
+                except ContactStartError as error:
+                    return {"ok": False, "error": str(error)}
+                return {"ok": True, "peer": resolved.as_dict()}
+            if name == "userio.contacts.start":
+                from .contact_start import ContactStartError
+                account_ref = str(arguments.get("account_ref") or "").strip()
+                identifier = str(arguments.get("identifier") or "").strip()
+                text = str(arguments.get("text") or "").strip()
+                request_id = str(arguments.get("request_id") or "").strip()
+                if not account_ref or not identifier or not text or not request_id:
+                    raise ValueError(
+                        "account_ref, identifier, text and request_id are required")
+                try:
+                    return self._service.contact_starter.start(
+                        user_id=user_id, account_ref=account_ref, identifier=identifier,
+                        text=text, request_id=request_id,
+                    )
+                except ContactStartError as error:
+                    return {"ok": False, "error": str(error)}
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()

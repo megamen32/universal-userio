@@ -111,6 +111,37 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
+        "userio.contacts.resolve",
+        "Resolve a contact that is not in the history yet into a peer the account can write to: a Telegram username "
+        "or phone number, a phone number for SMS or WhatsApp, a mail address, a VK profile or link, or a Yandex "
+        "user id. The answer names the account, the channel and the provider-native peer, so the next call can write "
+        "to it. Nothing is sent to the contact here.",
+        schema(
+            {
+                "account_ref": {"type": "string", "maxLength": 128},
+                "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+            },
+            ["account_ref", "identifier"],
+        ),
+    ),
+    ToolSpec(
+        "userio.contacts.start",
+        "Start a conversation with a contact that is not in the history yet and send the first message. The "
+        "identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS "
+        "or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is "
+        "delivered through the same durable path as every other outbound message. The request_id makes a retry "
+        "reuse the same message instead of sending it twice.",
+        schema(
+            {
+                "account_ref": {"type": "string", "maxLength": 128},
+                "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+                "text": {"type": "string", "minLength": 1, "maxLength": 65536},
+                "request_id": {"type": "string", "minLength": 16, "maxLength": 80},
+            },
+            ["account_ref", "identifier", "text", "request_id"],
+        ),
+    ),
+    ToolSpec(
         "userio.channels.read",
         "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
@@ -526,6 +557,8 @@ TOOL_CAPABILITIES = {
     "userio.channels.list": "read",
     "userio.channels.search": "read",
     "userio.channels.export": "read",
+    "userio.contacts.resolve": "read",
+    "userio.contacts.start": "send",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",

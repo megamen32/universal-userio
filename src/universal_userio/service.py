@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from functools import partial
 
+from .contact_keys import is_email_source, mail_address, peer_conversation_key
 from .contracts import DeliveryNotSubmittedError, DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
 
@@ -77,6 +78,8 @@ class UserIOService:
         self._inbound_listeners: list[object] = []
         self._manual_send_lock = threading.Lock()
         self.messenger_providers: dict[str, object] = {}
+        from .contact_start import ContactStarter
+        self.contact_starter = ContactStarter(store, self)
         from .task_contact_qualification import TaskContactQualification
         self._task_contact_qualification = TaskContactQualification(
             store, self, catalog_origin=task_catalog_origin,
@@ -231,34 +234,18 @@ class UserIOService:
     def receive(self, message: InboxMessage, *, route_id: str, user_id: str | None = None,
                 account_ref: str = "") -> tuple[str, bool]:
         user_id = self._store.default_user_id if user_id is None else user_id
-        conversation_key = message.conversation_key
-        if message.source == "yandex" and account_ref.startswith("yandex:") and message.peer_id:
-            conversation_key = f"yandex:{account_ref}:{message.peer_id}"
-        if message.source == "max" and account_ref and message.peer_id:
-            # Group participants and our own messages belong to the same provider
-            # chat. Sender identity must never become the destination of a reply.
-            conversation_key = f"max:{account_ref}:{message.peer_id}"
-        if message.source == "vk" and account_ref.startswith("vk:") and message.peer_id:
-            # One UserIO user may have several independent VK identities.
-            conversation_key = f"vk:{account_ref}:{message.peer_id}"
         native_sms = message.source=='sms' and any(a['id']==account_ref and a.get('credential_ref')=='sms-native:default' for a in self._store.accounts(user_id=user_id))
         if native_sms:
             from .channels.sms_gateway import sms_address
             message=replace(message,sender=sms_address(message.sender))
-            conversation_key=message.conversation_key
         if message.outbox_receipt:
             # Keep the native candidate through an in-flight approval race.
             # The stored view exposes it only after exact approval validation.
             if not native_sms or message.direction!='outgoing':
                 message=replace(message,outbox_receipt='')
         if message.source == 'sms' and account_ref.startswith('sms:') and not native_sms:
-            conversation_key = f"sms:{account_ref}:{message.peer_id or message.sender}"
             if not message.message_id.startswith(account_ref+'|'):
                 message = replace(message,message_id=account_ref+'|'+message.message_id)
-        if message.source == "phone" and account_ref:
-            conversation_key = (f"phone:{account_ref}:{message.peer_id}"
-                if re.fullmatch(r"phone:v1:[0-9a-f]{64}", message.peer_id)
-                else f"phone:{account_ref}:call:{message.sender}")
         if message.source == "telegram":
             raw_ref = message.message_id.rsplit("|", 1)[-1]
             peer_id = message.peer_id or raw_ref.split(":", 1)[0]
@@ -267,12 +254,22 @@ class UserIOService:
                     message = replace(message, message_id=f"{account_ref}|{message.message_id}")
                 if not message.peer_id:
                     message = replace(message, peer_id=peer_id)
-            if peer_id.lstrip("-").isdigit() and account_ref:
-                conversation_key = f"telegram:{account_ref}:{peer_id}"
+        if message.source == "phone" and account_ref:
+            conversation_key = (f"phone:{account_ref}:{message.peer_id}"
+                if re.fullmatch(r"phone:v1:[0-9a-f]{64}", message.peer_id)
+                else f"phone:{account_ref}:call:{message.sender}")
+        else:
+            conversation_key = peer_conversation_key(
+                message.source, account_ref, message.peer_id, message.sender, native_sms=native_sms)
         conversation_id = self._store.conversation_id_for_key(
             conversation_key, user_id=user_id,
             account_ref=account_ref if message.source == 'phone' and account_ref else None,
         )
+        if conversation_id is None and is_email_source(message.source):
+            # A contact we wrote to first answers under the whole From header,
+            # so the bare address keeps that reply inside the chat we opened.
+            conversation_id = self._store.conversation_id_for_contact_address(
+                mail_address(message.sender), user_id=user_id)
         if conversation_id is None and message.source == 'phone' and account_ref and not message.peer_id:
             conversation_id = self._store.conversation_id_for_key(
                 message.conversation_key, user_id=user_id, account_ref=account_ref)
@@ -1241,6 +1238,13 @@ class UserIOService:
             "expected_text": text, "expected_chat_id": conversation_id, "expected_attachments": [],
         })
 
+    @staticmethod
+    def _first_contact_subject(body: str) -> str:
+        """Subject of a mail that opens a new conversation."""
+        text = str(body or "").strip()
+        first = text.splitlines()[0].strip() if text else ""
+        return first[:120] or "Сообщение из UserIO"
+
     def max_client_for(self,conversation,user_id):
         from .max_accounts import owned_client
         return owned_client(self,user_id,str(conversation.get('account_ref') or 'max'))
@@ -1723,11 +1727,20 @@ class UserIOService:
                 raise DeliveryUnavailableError("Gmail account is not configured")
             if account_ref and account_ref not in {account_alias, str(account['id'])}:
                 raise DeliveryUnavailableError("Gmail conversation account does not match source")
-            latest = list(conversation["messages"])[-1]
-            send = partial(self.gmail_outbox.send_reply,
-                account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),
-                message_id=str(latest["message_id"]), body=draft.body, draft_id=draft.id,
-            )
+            messages = list(conversation["messages"])
+            if messages:
+                send = partial(self.gmail_outbox.send_reply,
+                    account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),
+                    message_id=str(messages[-1]["message_id"]), body=draft.body, draft_id=draft.id,
+                )
+            else:
+                # A contact we wrote to first has no message to reply to, so the
+                # mail goes out as a new letter without an In-Reply-To reference.
+                send = partial(self.gmail_outbox.send_message,
+                    account=account_alias, sender=str(account["display_name"]), recipient=str(conversation["sender"]),
+                    message_id="", body=draft.body, draft_id=draft.id,
+                    subject=self._first_contact_subject(draft.body), in_reply_to="",
+                )
         elif str(conversation["source"]).startswith("chatgpt"):
             # chatgpt:<slug> sources carry the account; account_ref is the fallback.
             account_ref = str(conversation["source"]).partition(":")[2] or str(conversation.get("account_ref") or "")

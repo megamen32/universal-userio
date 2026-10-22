@@ -457,6 +457,46 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("telegram-qr send attempt answer is invalid")
         return result
 
+    def resolve_contact(self, identifier: str, *, account_ref: str) -> dict[str, object]:
+        """Resolve a Telegram username or phone number into a native peer.
+
+        The connector owns the Telegram session, so only it can turn a
+        username into the peer id the approved send addresses. Nothing is
+        written to Telegram here.
+        """
+        value = str(identifier or "").strip().lstrip("@")
+        if not account_ref or not value or len(value) > 64:
+            raise ValueError("Telegram contact resolution requires an account and an identifier")
+        payload = json.dumps({"account_id": account_ref, "identifier": value}).encode()
+        request = urllib.request.Request(
+            f"{self._base_url}/resolve", data=payload, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                result = json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:200]
+            if error.code in _CONNECTOR_REFUSED_HTTP:
+                raise TelegramConnectorRefused(
+                    _connector_refusal_message(error.code, detail),
+                    connector_code=_connector_code(detail), http_status=error.code,
+                ) from error
+            raise ValueError(f"telegram-qr contact resolution failed: HTTP {error.code}") from error
+        except (OSError, urllib.error.URLError) as error:
+            raise ValueError("telegram-qr connector is unreachable") from error
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise ValueError(str(result.get("error") or "telegram-qr contact resolution failed"))
+        peer_id = str(result.get("peer_id") or "")
+        if not peer_id.lstrip("-").isdigit():
+            raise ValueError("telegram-qr contact resolution returned no peer")
+        return {
+            "peer_id": peer_id,
+            "name": str(result.get("name") or ""),
+            "username": str(result.get("username") or ""),
+            "phone": str(result.get("phone") or ""),
+        }
+
     def reply_message(self, *, chat_id: str, account_ref: str, message_id: str,
                       thread_id: str, expected_text: str, text: str, request_id: str) -> dict[str, object]:
         if (not re.fullmatch(r"telegram:[1-9][0-9]*", account_ref)
@@ -647,16 +687,19 @@ class HimalayaGmailOutbox:
         return hashlib.sha256((account+'\0'+draft_id).encode()).hexdigest()+'@userio.local'
 
     def send_message(self, *, account: str, sender: str, recipient: str, message_id: str,
-                     body: str, draft_id: str, subject: str) -> str:
+                     body: str, draft_id: str, subject: str, in_reply_to: str | None = None) -> str:
         address = parseaddr(recipient)[1]
         from_address = parseaddr(sender)[1]
-        if not account or not from_address or not address or not message_id:
-            raise ValueError("Gmail reply requires account, sender, recipient, and message id")
-        reference = message_id.strip("<>")
+        if not account or not from_address or not address:
+            raise ValueError("Gmail delivery requires account, sender and recipient")
+        # A first message to a new contact has no message to answer, so it goes
+        # out without an In-Reply-To reference.
+        reference = (message_id if in_reply_to is None else in_reply_to).strip("<>")
         mail = EmailMessage()
         mail['From'], mail['To'], mail['Subject'] = from_address, address, subject
         mail['Message-ID'] = '<'+self.outgoing_message_id(account, draft_id)+'>'
-        mail['In-Reply-To'], mail['References'] = '<'+reference+'>', '<'+reference+'>'
+        if reference:
+            mail['In-Reply-To'], mail['References'] = '<'+reference+'>', '<'+reference+'>'
         mail.set_content(body)
         raw = mail.as_string()
         try:

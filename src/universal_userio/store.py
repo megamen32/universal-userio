@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .contact_keys import peer_conversation_id, peer_conversation_key
 from .contracts import ConversationPolicy, InboxMessage, ReplyDraft, UserPrincipal
 
 
@@ -371,6 +372,10 @@ class SQLiteUserIOStore:
             CREATE TABLE IF NOT EXISTS phone_conversation_aliases (
                 user_id TEXT NOT NULL,old_id TEXT NOT NULL,canonical_id TEXT NOT NULL,
                 PRIMARY KEY(user_id,old_id)
+            );
+            CREATE TABLE IF NOT EXISTS contact_address_aliases (
+                user_id TEXT NOT NULL,address TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                PRIMARY KEY(user_id,address)
             );
             CREATE TABLE IF NOT EXISTS messages (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
@@ -2466,6 +2471,80 @@ class SQLiteUserIOStore:
         record = self.conversation(conversation_id, user_id=user_id)
         assert record is not None
         return record
+
+    def ensure_contact_conversation(
+        self, source: str, sender: str, *, user_id: str | None = None,
+        account_ref: str = "", peer_id: str = "", conversation_kind: str = "direct",
+        route_id: str | None = None, native_sms: bool = False,
+    ) -> dict[str, object]:
+        """Create (or reuse) the conversation of a peer that has no history yet.
+
+        The conversation key is the one the ingress will compute for the same
+        peer, so the contact's first inbound message lands in this very chat
+        instead of a second one.
+        """
+        user_id = self._user(user_id)
+        source, sender = source.strip(), sender.strip()
+        if not source or not sender:
+            raise ValueError("source and sender are required")
+        message_key = peer_conversation_key(
+            source, account_ref, peer_id, sender, native_sms=native_sms)
+        existing = self.conversation_id_for_key(message_key, user_id=user_id)
+        conversation_id = existing or peer_conversation_id(user_id, message_key)
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO conversations
+                (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at)
+                VALUES (?,?,?,?,?,?,NULL,'approve',?)
+                """,
+                (user_id, conversation_id, message_key, route_id or source, source, sender, time.time()),
+            )
+            self._connection.execute(
+                "UPDATE conversations SET "
+                "account_ref=CASE WHEN ?<>'' THEN ? ELSE account_ref END, "
+                "peer_id=CASE WHEN ?<>'' THEN ? ELSE peer_id END, "
+                "conversation_kind=CASE WHEN conversation_kind IS NULL OR conversation_kind='' "
+                "OR conversation_kind='unknown' THEN ? ELSE conversation_kind END, "
+                "route_id=CASE WHEN route_id IS NULL OR route_id='' THEN ? ELSE route_id END "
+                "WHERE user_id=? AND id=?",
+                (account_ref, account_ref, peer_id, peer_id, conversation_kind,
+                 route_id or source, user_id, conversation_id),
+            )
+        record = self.conversation(conversation_id, user_id=user_id)
+        assert record is not None
+        return record
+
+    def bind_contact_address(self, *, user_id: str | None = None,
+                             address: str, conversation_id: str) -> None:
+        """Remember which conversation belongs to a bare mail address.
+
+        A mail thread is keyed by the whole ``From`` header, so the reply of a
+        contact we wrote to first arrives under a different key. The alias
+        maps the bare address back to the chat we created for it.
+        """
+        address = (address or "").strip().casefold()
+        if not address:
+            raise ValueError("address is required")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO contact_address_aliases VALUES (?,?,?)",
+                (self._user(user_id), address, conversation_id),
+            )
+
+    def conversation_id_for_contact_address(self, address: str, *, user_id: str | None = None) -> str | None:
+        """Return the conversation bound to a bare mail address, if any."""
+        address = (address or "").strip().casefold()
+        if not address:
+            return None
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT conversation_id FROM contact_address_aliases WHERE user_id=? AND address=?",
+                (self._user(user_id), address),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.resolve_conversation_id(str(row[0]), user_id=user_id)
 
     def create_task_contact_conversation(
         self, *, user_id: str, qualification: dict[str, object],
