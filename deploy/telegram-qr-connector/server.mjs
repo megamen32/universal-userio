@@ -441,7 +441,7 @@ async function finishLogin(slot, client, user) {
         try {
           const oldFile = `${sessionsDir}/${id}.session`;
           if (existsSync(oldFile)) renameSync(oldFile, `${oldFile}.replaced-${Date.now()}`);
-          const old = clearSlot(id);
+          const old = clearSlot(id, { preserveProfile: true });
           if (old?.client) await old.client.disconnect().catch(() => {});
         } catch (error) {
           console.error(`Telegram old session retirement failed for ${id}:`, error.message || "unknown");
@@ -1059,7 +1059,7 @@ function publicState() {
   return publicIngressState(slots, syncs, liveSlots);
 }
 
-function clearSlot(slotId) {
+function clearSlot(slotId, { preserveProfile = false } = {}) {
   disconnectedSlots.add(slotId);
   const timer = unreadRefreshTimers.get(slotId);
   if (timer) clearTimeout(timer);
@@ -1068,8 +1068,10 @@ function clearSlot(slotId) {
   liveSlots.delete(slotId);
   slots.delete(slotId);
   syncs.delete(slotId);
-  enrollmentOwners.remove(slotId);
-  saveSlotProfile(slotId, "");
+  if (!preserveProfile) {
+    enrollmentOwners.remove(slotId);
+    saveSlotProfile(slotId, "");
+  }
   try { unlinkSync(`${sessionsDir}/${slotId}.session`); }
   catch (error) { if (error?.code !== "ENOENT") throw error; }
   return live;
