@@ -1728,8 +1728,9 @@ http.createServer(async (req, res) => {
           // a revoked saved session needs a fresh login, an offline one is
           // worth retrying. Both answers happen before any provider call, so
           // nothing was submitted either way.
-          const pinned = wantSlot ? wantSlot
-            : [...slots.entries()].find(([, item]) => String(item.accountId || "") === wantAccount);
+          const pinned = wantAccount
+            ? [...slots.entries()].find(([, item]) => String(item.accountId || "") === wantAccount)?.[0] || wantSlot
+            : wantSlot;
           const sync = pinned ? syncs.get(pinned) : null;
           const relogin = Boolean(sync && (sync.status === "relogin-required" || sync.authCode));
           sendAttempts.record(attemptId, { state: "refused",
