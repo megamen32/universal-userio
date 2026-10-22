@@ -15,6 +15,7 @@ import { telegramConversationKind, telegramGroupRoutingAttachment } from "./grou
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
 import { syncContactProfiles } from "./contact-index.mjs";
+import { resolveTelegramContact, peerProfile } from "./contact-resolve.mjs";
 import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
@@ -1373,6 +1374,55 @@ http.createServer(async (req, res) => {
       res.writeHead(404, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: (error && error.message) || "download failed" }));
     }
+  }
+  if (url.pathname === "/resolve" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(raw || "{}");
+        const accountId = String(payload.account_id || "").trim();
+        const identifier = String(payload.identifier || "").trim();
+        if (!accountId || !identifier || identifier.length > 64) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "account and identifier are required",
+            code: "invalid_contact_scope" }));
+        }
+        const chosen = [...liveSlots].find(([, item]) => item.accountId === accountId);
+        if (!chosen) {
+          res.writeHead(404, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "Telegram account is not connected",
+            code: "account_not_connected" }));
+        }
+        const [slot, item] = chosen;
+        const entity = await resolveTelegramContact(item.client, identifier, Api);
+        if (!entity) {
+          res.writeHead(404, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: `Telegram did not resolve "${identifier}"`,
+            code: "contact_not_found" }));
+        }
+        const peerId = String(await item.client.getPeerId(entity, true));
+        const profile = peerProfile(entity);
+        // Register the peer so the approved send can address it by its id.
+        item.labelPeers.idPeers.set(peerId, entity);
+        if (profile.username) item.labelPeers.labelPeers.set(profile.username, entity);
+        if (profile.name) item.labelPeers.labelPeers.set(profile.name, entity);
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ ok: true, slot, account_id: accountId, peer_id: peerId,
+          username: profile.username, name: profile.name, phone: profile.phone }));
+      } catch (error) {
+        console.error("resolve error:", (error && error.message) || error);
+        res.writeHead(502, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: (error && error.message) || "resolve failed",
+          code: "resolve_failed" }));
+      }
+    });
+    return;
   }
   if (url.pathname === "/send" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
