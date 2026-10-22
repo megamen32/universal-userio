@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from . import chatgpt_sessions
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
-from .contracts import ChannelFile, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
+from .contracts import ChannelFile, ContactResolutionUnavailable, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
 
 if TYPE_CHECKING:
     from .service import UserIOService
@@ -313,9 +313,70 @@ class TelegramQrHttpOutbox:
     """
 
     def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen,
-                 timeout: int = 20, probe: Any = None) -> None:
+                 timeout: int = 20, probe: Any = None, status_ttl: float = 30.0,
+                 status_timeout: float = 3.0) -> None:
         self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
         self._probe = probe or _default_connector_probe
+        self._status_ttl = status_ttl
+        # Capabilities are read on every messenger operation, so the
+        # availability probe must answer fast even when the connector is
+        # unreachable.
+        self._status_timeout = max(0.5, min(float(status_timeout), float(timeout)))
+        self._resolution_status: dict[str, tuple[float, dict[str, object]]] = {}
+
+    def contact_resolution_status(self, account_ref: str) -> dict[str, object]:
+        """Report whether this account can resolve a new peer right now.
+
+        Turning a username into a peer id needs the connector's own live
+        Telegram session, so it can be impossible while the account itself
+        looks healthy. The verdict is cached briefly, because capabilities
+        are read on every messenger operation.
+
+        The answer is one of:
+
+        ``resolvable`` True  - the connector holds a live session for the account.
+        ``resolvable`` False - it does not; ``reason`` says why.
+        ``resolvable`` None  - the connector's own state could not be read;
+                               ``reason`` says why.
+        """
+        account = str(account_ref or "")
+        cached = self._resolution_status.get(account)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < self._status_ttl:
+            return dict(cached[1])
+        status = self._read_contact_resolution_status(account)
+        self._resolution_status[account] = (now, status)
+        return dict(status)
+
+    def _read_contact_resolution_status(self, account_ref: str) -> dict[str, object]:
+        # Transport first: a refused connection proves the connector is down,
+        # which is exactly what makes a first contact impossible.
+        try:
+            self._probe(self._base_url, self._status_timeout)
+        except (ConnectionRefusedError, socket.gaierror):
+            return {"resolvable": False, "reason": "connector_unreachable"}
+        except (OSError, urllib.error.URLError):
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        request = urllib.request.Request(  # noqa: S310
+            f"{self._base_url}/state", headers={"Authorization": f"Bearer {self._token}"})
+        try:
+            with self._runner(request, timeout=self._status_timeout) as response:
+                rows = json.loads(response.read().decode() or "[]")
+        except urllib.error.HTTPError:
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        except (OSError, urllib.error.URLError):
+            return {"resolvable": False, "reason": "connector_unreachable"}
+        except (TypeError, ValueError):
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        if not isinstance(rows, list):
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("accountId") or "") != account_ref:
+                continue
+            connected = str(row.get("status") or "").startswith("connected")
+            return {"resolvable": bool(connected),
+                    "reason": "" if connected else "account_not_connected"}
+        return {"resolvable": False, "reason": "account_not_connected"}
 
     def _assert_connector_accepts(self) -> None:
         """Refuse to send when the connector is provably not accepting connections.
@@ -484,7 +545,15 @@ class TelegramQrHttpOutbox:
                 ) from error
             raise ValueError(f"telegram-qr contact resolution failed: HTTP {error.code}") from error
         except (OSError, urllib.error.URLError) as error:
-            raise ValueError("telegram-qr connector is unreachable") from error
+            # Nothing was sent and nothing was resolved. The connector was
+            # not reachable, so the reason is named instead of leaking a
+            # transport string into the consumer's answer.
+            raise ContactResolutionUnavailable("connector_unreachable") from error
+        except (TypeError, ValueError) as error:
+            raise ContactResolutionUnavailable(
+                "connector_answer_invalid",
+                message=f"telegram-qr contact resolution answered invalidly: {error}",
+            ) from None
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise ValueError(str(result.get("error") or "telegram-qr contact resolution failed"))
         peer_id = str(result.get("peer_id") or "")
@@ -669,14 +738,27 @@ class TelegramQrHttpOutbox:
         return result
 
 
+_GMAIL_PREFIX = "himalaya:"
+
+
 class HimalayaGmailOutbox:
-    """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""
+    """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account.
+
+    SMTP accepts a message; it never confirms that the recipient received
+    it. The receipt therefore states ``smtp_accepted`` and carries the RFC
+    Message-ID the transport accepted, so a consumer can tell an accepted
+    letter from a confirmed one. A copy of the very same message is appended
+    to the account's Sent mailbox, so the mailbox itself keeps the evidence;
+    when that append fails the receipt names the reason instead of pretending
+    the copy exists.
+    """
 
     def __init__(
         self, *, binary: str = "/home/roomhacker/.cargo/bin/himalaya", config: str = "/home/roomhacker/.config/himalaya/config.toml",
-        runner: Any = subprocess.run,
+        runner: Any = subprocess.run, sent_mailbox: str = "sent",
     ) -> None:
         self._binary, self._config, self._runner = binary, config, runner
+        self._sent_mailbox = sent_mailbox
 
     def send_reply(self, *, account: str, sender: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
         return self.send_message(account=account, sender=sender, recipient=recipient,
@@ -685,6 +767,25 @@ class HimalayaGmailOutbox:
     @staticmethod
     def outgoing_message_id(account: str, draft_id: str) -> str:
         return hashlib.sha256((account+'\0'+draft_id).encode()).hexdigest()+'@userio.local'
+
+    def _save_sent_copy(self, *, account: str, raw: str) -> str:
+        """Append the sent message to the account's Sent mailbox.
+
+        The append happens after SMTP already accepted the letter, so a
+        failure here cannot undo the send. It is reported as an explicit
+        reason so no consumer believes a Sent copy exists when it does not.
+        """
+        try:
+            completed = self._runner(
+                [self._binary, "--config", self._config, "--account", account,
+                 "message", "add", "--mailbox", self._sent_mailbox],
+                input=raw, text=True, capture_output=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "not_saved_command_failed"
+        if completed.returncode != 0:
+            return "not_saved_rejected"
+        return "saved"
 
     def send_message(self, *, account: str, sender: str, recipient: str, message_id: str,
                      body: str, draft_id: str, subject: str, in_reply_to: str | None = None) -> str:
@@ -695,9 +796,10 @@ class HimalayaGmailOutbox:
         # A first message to a new contact has no message to answer, so it goes
         # out without an In-Reply-To reference.
         reference = (message_id if in_reply_to is None else in_reply_to).strip("<>")
+        outgoing_id = self.outgoing_message_id(account, draft_id)
         mail = EmailMessage()
         mail['From'], mail['To'], mail['Subject'] = from_address, address, subject
-        mail['Message-ID'] = '<'+self.outgoing_message_id(account, draft_id)+'>'
+        mail['Message-ID'] = '<'+outgoing_id+'>'
         if reference:
             mail['In-Reply-To'], mail['References'] = '<'+reference+'>', '<'+reference+'>'
         mail.set_content(body)
@@ -712,7 +814,10 @@ class HimalayaGmailOutbox:
         if completed.returncode != 0:
             detail = completed.stderr.strip().splitlines()[-1] if completed.stderr else "unknown Himalaya error"
             raise RuntimeError(f"Himalaya Gmail delivery failed: {detail[:240]}")
-        return f"himalaya:{account}:{draft_id}"
+        # SMTP accepted the letter. Keep the evidence in the mailbox and say
+        # exactly how far the delivery is proven.
+        copy_state = self._save_sent_copy(account=account, raw=raw)
+        return f"{_GMAIL_PREFIX}{account}:{draft_id}:{outgoing_id}:{copy_state}"
 
 
 class StoredChannelAdapter:

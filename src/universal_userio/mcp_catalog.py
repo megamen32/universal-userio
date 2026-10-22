@@ -115,7 +115,9 @@ TOOL_SPECS = (
         "Resolve a contact that is not in the history yet into a peer the account can write to: a Telegram username "
         "or phone number, a phone number for SMS or WhatsApp, a mail address, a VK profile or link, or a Yandex "
         "user id. The answer names the account, the channel and the provider-native peer, so the next call can write "
-        "to it. Nothing is sent to the contact here.",
+        "to it. Nothing is sent to the contact here. A Telegram identifier needs the connector's own live session: "
+        "when that session is down the answer carries code connector_unreachable or account_not_connected, and "
+        "userio.messenger.capabilities reports first_contact.supported=false for the same account.",
         schema(
             {
                 "account_ref": {"type": "string", "maxLength": 128},
@@ -130,7 +132,9 @@ TOOL_SPECS = (
         "identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS "
         "or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is "
         "delivered through the same durable path as every other outbound message. The request_id makes a retry "
-        "reuse the same message instead of sending it twice.",
+        "reuse the same message instead of sending it twice. The answer reports what the transport really proved: "
+        "delivery_status=delivered only with a provider confirmation, delivery_status=smtp_accepted when the mail "
+        "transport merely took the letter.",
         schema(
             {
                 "account_ref": {"type": "string", "maxLength": 128},

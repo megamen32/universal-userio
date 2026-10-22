@@ -9,6 +9,7 @@ from typing import Any
 
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
+from .delivery_receipt import delivery_fields
 from .token_permissions import READ_ONLY_TOOLS, MEETING_RECORDING_TOOLS
 from .service import UserIOService
 from .store import SQLiteUserIOStore
@@ -72,11 +73,11 @@ TOOL_SPECS = (
         "until": {"type": "number"},
         "max_messages": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 20000},
     })),
-    ToolSpec("userio.contacts.resolve", "Resolve a contact that is not in the history yet into a peer the account can write to: a Telegram username or phone number, a phone number for SMS or WhatsApp, a mail address, a VK profile or link, or a Yandex user id. The answer names the account, the channel and the provider-native peer, so the next call can write to it. Nothing is sent to the contact here.", _schema({
+    ToolSpec("userio.contacts.resolve", "Resolve a contact that is not in the history yet into a peer the account can write to: a Telegram username or phone number, a phone number for SMS or WhatsApp, a mail address, a VK profile or link, or a Yandex user id. The answer names the account, the channel and the provider-native peer, so the next call can write to it. Nothing is sent to the contact here. A Telegram identifier needs the connector's own live session: when that session is down the answer carries code connector_unreachable or account_not_connected, and userio.messenger.capabilities reports first_contact.supported=false for the same account.", _schema({
         "account_ref": {"type": "string", "maxLength": 128},
         "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
     }, ["account_ref", "identifier"])),
-    ToolSpec("userio.contacts.start", "Start a conversation with a contact that is not in the history yet and send the first message. The identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is delivered through the same durable path as every other outbound message. The request_id makes a retry reuse the same message instead of sending it twice.", _schema({
+    ToolSpec("userio.contacts.start", "Start a conversation with a contact that is not in the history yet and send the first message. The identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is delivered through the same durable path as every other outbound message. The request_id makes a retry reuse the same message instead of sending it twice. The answer reports what the transport really proved: delivery_status=delivered only with a provider confirmation, delivery_status=smtp_accepted when the mail transport merely took the letter.", _schema({
         "account_ref": {"type": "string", "maxLength": 128},
         "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
         "text": {"type": "string", "minLength": 1, "maxLength": 65536},
@@ -643,7 +644,7 @@ class UserIOMcpSurface:
                         need_send=False,
                     )
                 except ContactStartError as error:
-                    return {"ok": False, "error": str(error)}
+                    return {"ok": False, "error": str(error), "code": error.code}
                 return {"ok": True, "peer": resolved.as_dict()}
             if name == "userio.contacts.start":
                 from .contact_start import ContactStartError
@@ -660,7 +661,7 @@ class UserIOMcpSurface:
                         text=text, request_id=request_id,
                     )
                 except ContactStartError as error:
-                    return {"ok": False, "error": str(error)}
+                    return {"ok": False, "error": str(error), "code": error.code}
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()
@@ -1051,16 +1052,31 @@ class UserIOMcpSurface:
             expected_snapshot=snapshot,
         )
         conversation = self._store.conversation(draft.conversation_id, user_id=principal.user_id) or {}
+        delivery = delivery_fields(draft.receipt or "")
         return {
             "ok": True, "draft": self._draft(draft),
-            "sent": draft.status == "approved",
+            **delivery,
+            # The draft keeps its receipt, so an approval is never retried
+            # blindly: the same draft replays its own outcome.
+            "retry_allowed": False,
             "receipt": draft.receipt or None,
             "channel": str(conversation.get("source") or ""),
-            "delivery_note": self._delivery_note(conversation),
+            "delivery_note": self._delivery_note(conversation, delivery),
+            "replay": bool(getattr(draft, "replayed", False)),
         }
 
     @staticmethod
-    def _delivery_note(conversation: dict[str, Any]) -> str:
+    def _delivery_note(conversation: dict[str, Any], delivery: dict[str, Any] | None = None) -> str:
+        delivery = delivery or {}
+        if delivery.get("delivery_status") == "smtp_accepted":
+            note = ("The mail transport accepted the message; UserIO has no provider "
+                    "delivery confirmation, so this is not a confirmed delivery.")
+            copy = delivery.get("sent_copy") or {}
+            if str(copy.get("saved") or "") == "true":
+                note += " A copy was saved to the Sent mailbox."
+            else:
+                note += " No Sent copy was saved: " + str(copy.get("reason") or "unknown") + "."
+            return note
         source = str(conversation.get("source") or "")
         if source == "sms":
             return "Android gateway accepted the SMS; carrier delivery is not guaranteed."
@@ -1136,6 +1152,9 @@ class UserIOMcpSurface:
         payload = {
             "id": draft.id, "conversation_id": draft.conversation_id,
             "body": draft.body, "status": draft.status,
+            # ``approved`` means the transport took this message; it never
+            # means "waiting to be sent".
+            "sent": draft.status == "approved",
         }
         receipt = getattr(draft, "receipt", "")
         if receipt:

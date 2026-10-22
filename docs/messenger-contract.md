@@ -139,6 +139,30 @@ from the Telegram accounts page before live operations are available.
 The old relay protocol was retired from runtime configuration; it is retained
 in Git history only.
 
+## First contact with a contact outside the history
+
+`userio.contacts.resolve` and `userio.contacts.start` open a conversation with
+a contact that has never written to the account. For Telegram this needs the
+connector's own live session, so it can be impossible while the account itself
+still reads and sends. The account's `capabilities` therefore carry a
+`first_contact` block: `supported`, `allowed`, a machine-readable `reason` and
+`availability` (`available`, `unavailable`, `unknown`). A failed resolve
+answers with the same reason in `code`. A consumer must read that block before
+it promises a first contact, and must not infer availability from
+`provider_status`. The full contract is in
+[first contact and first delivery](contracts/messenger-first-contact-v1.md).
+
+## Draft status after approval
+
+A draft that was sent stays on record, so the conversation keeps its history.
+Its `status` is `approved`, which means the transport took the message and
+never means "approved but not sent": `proposed` waits for an approval,
+`sending` is claimed with an unknown outcome, `approved` was handed to the
+transport, `rejected` was refused. Every draft projection carries `sent`, and
+the pending list contains only drafts that still wait. Approving the same
+draft again replays its stored receipt and sends nothing a second time; the
+answer says `replay: true`.
+
 ## Separate native sender credential
 
 The owner can issue a distinct app-specific Bearer using the existing normal
@@ -262,6 +286,15 @@ of invented content. These source checks alone do not certify live delivery.
 детерминированным Message-ID и In-Reply-To/References исходного письма. Receipt
 `delivery_status=smtp_accepted` означает принятие SMTP; доставку адресату проверяет
 реальный consumer. UNKNOWN сохраняет `sending`, не даёт повторить отправку.
+
+Отправленное письмо теперь копируется в папку Sent аккаунта (IMAP APPEND того же MIME),
+поэтому в самом ящике есть доказательство отправки, а не только в receipt. Receipt стал
+`himalaya:<account>:<draft_id>:<message_id>:<sent_copy>`: `message_id` — RFC Message-ID,
+принятый провайдером, `sent_copy` — `saved` либо причина, по которой копия не
+сохранилась. Ответ об отправке различает «передано транспорту» и «доставлено»:
+`delivery_status=smtp_accepted` даёт `sent=false` и `delivery_unconfirmed=true`,
+`delivered` — только вместе с подтверждением провайдера. Подробности — в отдельном
+контракте [first contact and first delivery](contracts/messenger-first-contact-v1.md).
 
 Новый отдельный personal token с `scope=messenger_actions` может перечислять собственные
 reply-capable Gmail IDs в `account_refs`. Старые readonly токены остаются readonly;

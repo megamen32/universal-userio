@@ -1475,7 +1475,10 @@ class UserIOService:
                     code="delivery_outcome_unknown") from None
             raise
         if draft.status == "approved":
-            return draft
+            # The draft was already sent. Replaying its stored receipt is the
+            # only correct answer: a second send would deliver the message
+            # twice.
+            return replace(draft, replayed=True)
         try:
             send = self._prepare_claimed_draft(draft, user_id=resolved_user_id)
         except Exception:
@@ -1509,6 +1512,24 @@ class UserIOService:
                 reconcile_vk_receipt(self,conversation,receipt,user_id=user_id)
             except Exception as error:
                 _LOG.warning('Accepted VK receipt mirror is pending: %s',type(error).__name__)
+        if conversation and (str(conversation["source"]) == "gmail"
+                             or str(conversation["source"]).startswith("gmail:")):
+            try:
+                # The letter the mail transport accepted belongs in its own
+                # chat. Without this mirror the conversation shows nothing,
+                # so the owner cannot see what was sent.
+                from .delivery_receipt import read_receipt
+                message_id = str(read_receipt(receipt).get("message_id") or "")
+                if message_id:
+                    peer = str(conversation.get("peer_id") or conversation.get("sender") or "")
+                    self.receive(InboxMessage(source=str(conversation["source"]),
+                        message_id=message_id, sender=peer, body=approved.body,
+                        received_at=time.time(), direction="outgoing",
+                        reconciliation=True, peer_id=peer, conversation_kind="direct"),
+                        route_id=str(conversation["route_id"]), user_id=user_id,
+                        account_ref=str(conversation.get("account_ref") or ""))
+            except Exception as error:
+                _LOG.warning('Accepted Gmail receipt mirror is pending: %s',type(error).__name__)
         if conversation and conversation["source"] == "max":
             try:
                 from .max_ingress import message_envelope, _own_id

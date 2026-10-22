@@ -25,6 +25,20 @@ class ProviderAuthenticationNotSubmittedError(ProviderAuthenticationRequiredErro
     """Provider auth failed while verifying source, before any mutation."""
 
 
+class ContactResolutionUnavailable(ValueError):
+    """A new peer cannot be resolved right now; nothing was sent.
+
+    Resolving a contact that is not in the history yet needs the provider's
+    own live session, so it can be impossible while the account itself is
+    healthy. The machine-readable ``code`` says why, and a consumer must
+    branch on it instead of on the message text.
+    """
+
+    def __init__(self, code: str, *, message: str = "") -> None:
+        self.code = code
+        super().__init__(message or code)
+
+
 @dataclass(frozen=True, slots=True)
 class InboxMessage:
     source: str
@@ -70,6 +84,9 @@ class ReplyDraft:
     body: str
     status: str
     receipt: str = ""
+    # True when the draft was already approved and this call replayed its
+    # stored outcome instead of sending again.
+    replayed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

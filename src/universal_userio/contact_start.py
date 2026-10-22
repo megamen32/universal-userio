@@ -23,7 +23,15 @@ _PHONE = re.compile(r"[0-9]{7,15}")
 
 
 class ContactStartError(ValueError):
-    """The identifier cannot become a writable conversation."""
+    """The identifier cannot become a writable conversation.
+
+    ``code`` is the machine-readable reason. A consumer must branch on it,
+    never on the message text.
+    """
+
+    def __init__(self, code: str, *, detail: str = "") -> None:
+        self.code = code
+        super().__init__(f"{code}:{detail}" if detail else code)
 
 
 @dataclass(frozen=True)
@@ -81,6 +89,54 @@ class ContactStarter:
 
     # -- resolution ---------------------------------------------------------------
 
+    def resolution_support(self, *, user_id: str, account_ref: str) -> dict[str, Any]:
+        """Report whether this account can resolve a new peer right now.
+
+        Resolution is a local lookup for most providers, but a Telegram
+        username can only become a peer id inside the connector's own live
+        session. That session can be down while the account itself looks
+        healthy, so a consumer has to learn about it from capabilities
+        instead of from a failed call.
+
+        The answer is ``supported`` (the provider can do it at all),
+        ``availability`` (``available``, ``unavailable`` or ``unknown``) and
+        a machine-readable ``reason``.
+        """
+        account = next(
+            (item for item in self._store.accounts(user_id=user_id)
+             if str(item.get("id") or "") == str(account_ref or "")), None)
+        if account is None:
+            return {"supported": False, "availability": "unavailable",
+                    "reason": "contact_account_not_found"}
+        if not bool(account.get("enabled")):
+            return {"supported": False, "availability": "unavailable",
+                    "reason": "contact_account_disabled"}
+        provider = str(account.get("provider") or "").strip().lower()
+        if getattr(self, f"_resolve_{provider}", None) is None:
+            return {"supported": False, "availability": "unavailable",
+                    "reason": "contact_resolution_unsupported"}
+        if provider != "telegram":
+            return {"supported": True, "availability": "available", "reason": ""}
+        outbox = getattr(self._service, "telegram_outbox", None)
+        status = getattr(outbox, "contact_resolution_status", None)
+        if not callable(status):
+            return {"supported": False, "availability": "unavailable",
+                    "reason": "contact_resolution_unsupported"}
+        try:
+            verdict = status(str(account["id"]))
+        except Exception:
+            return {"supported": True, "availability": "unknown",
+                    "reason": "connector_status_unavailable"}
+        resolvable = verdict.get("resolvable") if isinstance(verdict, dict) else None
+        reason = str((verdict or {}).get("reason") or "") if isinstance(verdict, dict) else ""
+        if resolvable is True:
+            return {"supported": True, "availability": "available", "reason": ""}
+        if resolvable is None:
+            return {"supported": True, "availability": "unknown",
+                    "reason": reason or "connector_status_unavailable"}
+        return {"supported": False, "availability": "unavailable",
+                "reason": reason or "connector_unreachable"}
+
     def resolve(self, *, user_id: str, account_ref: str, identifier: str,
                 need_send: bool = True) -> ResolvedContact:
         """Resolve a human identifier into a provider-native peer."""
@@ -135,6 +191,9 @@ class ContactStarter:
 
     def _resolve_telegram(self, account: dict[str, Any], identifier: str, *,
                           user_id: str) -> ResolvedContact:
+        from .adapters import TelegramConnectorRefused
+        from .contracts import ContactResolutionUnavailable
+
         outbox = getattr(self._service, "telegram_outbox", None)
         resolve = getattr(outbox, "resolve_contact", None)
         if not callable(resolve):
@@ -144,6 +203,12 @@ class ContactStarter:
             found = resolve(value, account_ref=str(account["id"]))
         except ContactStartError:
             raise
+        except ContactResolutionUnavailable as error:
+            raise ContactStartError(error.code) from None
+        except TelegramConnectorRefused as error:
+            # The connector answered before touching Telegram: it holds no
+            # live session for this account.
+            raise ContactStartError(error.connector_code or "account_not_connected") from None
         except ValueError as error:
             raise ContactStartError(str(error) or "contact_telegram_not_resolved") from None
         peer_id = str((found or {}).get("peer_id") or "")
@@ -237,6 +302,8 @@ class ContactStarter:
         conversation = self.conversation(resolved, user_id=user_id)
         draft = self._service.send_manual_message(
             str(conversation["id"]), body=body, request_id=request_id, user_id=user_id)
+        from .delivery_receipt import delivery_fields
+        delivery = delivery_fields(draft.receipt or "")
         return {
             "ok": True,
             "conversation_id": str(conversation["id"]),
@@ -244,4 +311,8 @@ class ContactStarter:
             "peer": resolved.as_dict(),
             "draft_id": draft.id,
             "status": draft.status,
+            **delivery,
+            "receipt": draft.receipt or None,
+            "retry_allowed": False,
+            "replay": bool(getattr(draft, "replayed", False)),
         }

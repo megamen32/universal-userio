@@ -373,7 +373,7 @@ def _dispatch_scoped_contacts(store, service, principal, name, arguments):
         return starter.start(user_id=principal.user_id, account_ref=account_ref,
                              identifier=identifier, text=text, request_id=request_id)
     except ContactStartError as error:
-        return {'ok': False, 'error': str(error)}
+        return {'ok': False, 'error': str(error), 'code': error.code}
 
 
 def dispatch_scoped(store, service, principal, name, arguments):

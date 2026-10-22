@@ -3288,7 +3288,7 @@ class SQLiteUserIOStore:
             ).fetchall()
             drafts = self._connection.execute(
                 """
-                SELECT id,body,status,outbox_receipt,created_at FROM drafts
+                SELECT id,body,status,delivery_state,outbox_receipt,created_at FROM drafts
                 WHERE user_id=? AND conversation_id=? ORDER BY created_at
                 """,
                 (user_id, conversation_id),
@@ -3331,6 +3331,10 @@ class SQLiteUserIOStore:
             saved = json.loads(snapshots[draft["id"]]) if draft["id"] in snapshots else None
             draft["reply_to"] = None
             draft["context_status"] = "unknown"
+            # A draft keeps its record after it was sent. ``sent`` says which
+            # it is, so a kept record is never read as "still to send".
+            draft["sent"] = draft["status"] == "approved"
+            draft["delivery_state"] = str(draft.get("delivery_state") or "")
             if saved:
                 draft["reply_to"] = {key: saved[key] for key in ("source", "message_id", "body", "received_at")}
                 try:

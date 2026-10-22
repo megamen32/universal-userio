@@ -53,7 +53,12 @@ def test_stored_mail_source_history_and_exact_rfc_reply(tmp_path):
     assert wire['Message-ID'].strip('<>')==sent['receipt']['provider_message_id']
     assert 'Ответ с маркером' in wire.get_payload(decode=True).decode()
     assert api.approve(action['id'],action['hash'],True)['receipt']==sent['receipt']
-    assert len(calls)==1
+    # One SMTP send plus one IMAP APPEND of the same letter into Sent.
+    assert len(calls)==2
+    assert calls[0][0][-2:]==['message','send']
+    assert calls[1][0][-4:]==['message','add','--mailbox','sent']
+    assert calls[1][1]==calls[0][1]
+    assert sent['receipt']['sent_copy']['saved']=='true'
     history=api.history('gmail-care',cid)
     outgoing=history['messages'][-1]
     assert outgoing['author']['id']=='care@example.test' and outgoing['source']['direction']=='outgoing'

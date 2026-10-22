@@ -65,6 +65,51 @@ class Messenger:
             return None
         return provider
 
+    def _first_contact(self, account_ref, account):
+        """Whether a first contact with a contact outside the history is possible.
+
+        Resolving a new peer is a separate capability from answering an
+        existing chat: it needs the provider's own live session, which can
+        be unavailable while the account itself is healthy. The declared
+        answer must match what the call can actually do.
+        """
+        starter = getattr(self.service, 'contact_starter', None)
+        support = ({'supported': False, 'availability': 'unavailable',
+                    'reason': 'provider_not_supported'} if starter is None else
+                   starter.resolution_support(user_id=self.user, account_ref=account_ref))
+        operations = {}
+        for name in ('resolve', 'start'):
+            reason = ''
+            if not support['supported']:
+                reason = support['reason']
+            elif not account['enabled']:
+                reason = 'account_disabled'
+            elif self.principal.read_only:
+                reason = 'read_only_token'
+            elif name == 'start' and 'reply' not in account['capabilities']:
+                reason = 'account_capability_disabled'
+            elif not self.store.capability_enabled(
+                    'send' if name == 'start' else 'read', user_id=self.user):
+                reason = 'user_capability_disabled'
+            elif self.principal.messenger_grants is not None:
+                grant = next((g for g in self.principal.messenger_grants
+                              if g['account_ref'] == account_ref), None)
+                if grant is None:
+                    reason = 'account_outside_credential_scope'
+                elif name == 'start' and (grant.get('access') != 'read_write'
+                                          or grant.get('chats') is not None):
+                    reason = 'account_scope_required_for_new_contact'
+            operations[name] = {
+                'supported': bool(support['supported']), 'allowed': not reason,
+                'reason': reason, 'availability': support['availability'],
+            }
+        allowed = all(item['allowed'] for item in operations.values())
+        reason = next((item['reason'] for item in operations.values() if item['reason']), '')
+        return {
+            'supported': bool(support['supported']), 'allowed': allowed, 'reason': reason,
+            'availability': support['availability'], 'operations': operations,
+        }
+
     def capabilities(self, account_ref):
         account = self._account(account_ref)
         provider = self._provider(account_ref)
@@ -118,6 +163,7 @@ class Messenger:
                                     else 'messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
+                'first_contact':self._first_contact(account_ref, account),
                 'telegram_admin':{'supported':admin_supported,'allowed':admin_supported and not admin_reason,
                     'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS)},
                 **({'reaction_options':provider.reaction_options} if hasattr(provider,'reaction_options') else {}),

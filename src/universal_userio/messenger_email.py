@@ -4,6 +4,7 @@ import time
 from email.utils import parseaddr
 
 from .contracts import InboxMessage
+from .delivery_receipt import read_receipt
 from .messenger import Messenger
 
 
@@ -63,8 +64,10 @@ class GmailMessengerProvider:
         receipt = outbox.send_message(account=self.alias, sender=self.sender_id,
             recipient=conv['peer_id'], message_id=source_id, body=envelope['payload']['text'],
             draft_id=envelope['action_id'], subject=subject[:998])
+        delivery = read_receipt(receipt)
         return {'account_ref':self.account_ref, 'peer_id':conv['peer_id'], 'receipt':receipt,
             'provider_message_id':outbox.outgoing_message_id(self.alias, envelope['action_id']),
+            'sent_copy':delivery.get('sent_copy') or {},
             'submitted_at':time.time(), 'delivery_status':'smtp_accepted'}
 
     def project_receipt(self, envelope, result):
