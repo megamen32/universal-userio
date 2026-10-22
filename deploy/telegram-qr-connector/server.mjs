@@ -91,12 +91,20 @@ if (!whisperApiKey) console.warn("Telegram auto-transcription disabled: Whisper 
 
 mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
 restoreAgentDeliverDebounce();
+const profilePath = `${stateDir}/slot-profiles.json`;
+const slotProfiles = existsSync(profilePath) ? JSON.parse(readFileSync(profilePath, "utf8")) : {};
+function saveSlotProfile(slot, accountId) {
+  if (accountId) slotProfiles[slot] = accountId; else delete slotProfiles[slot];
+  const next = `${profilePath}.next`;
+  writeFileSync(next, JSON.stringify(slotProfiles), { mode: 0o600 });
+  chmodSync(next, 0o600); renameSync(next, profilePath);
+}
 const enrollmentOwners=new EnrollmentOwners(`${stateDir}/slot-owners.json`,process.env.USERIO_TELEGRAM_USER_ID||"user_owner");
 for (const file of readdirSync(sessionsDir)) {
   const match = /^account-(\d+)\.session$/.exec(file);
   if (!match) continue;
   const id = `account-${match[1]}`;
-  slots.set(id, { status: "connected" });
+  slots.set(id, { status: "connected", accountId: slotProfiles[id] || "" });
   nextSlot = Math.max(nextSlot, Number(match[1]) + 1);
   void syncAccount(id);
 }
@@ -411,16 +419,17 @@ async function finishLogin(slot, client, user) {
     writeFileSync(temporary, client.session.save(), { mode: 0o600 });
     chmodSync(temporary, 0o600);
     renameSync(temporary, file);
+    saveSlotProfile(slot, accountId);
     try {
       const headers = enrollmentOwners.registrationHeaders(slot)
         || { Authorization: `Bearer ${process.env.USERIO_API_TOKEN || ""}` };
       const accounts = await registeredAccounts(headers);
-      const previous = accounts.find(account => account.provider === "telegram" && account.id === accountId);
-      const oldSlot = /^telegram-qr:(account-\d+)$/.exec(String(previous?.credential_ref || ""))?.[1];
+      // Public account responses intentionally omit credential references.
+      // The connector persists its own verified slot-to-profile identities.
+      const previous = accounts.some(account => account.provider === "telegram" && account.id === accountId);
       const retire = new Set();
-      if (oldSlot && oldSlot !== slot && enrollmentOwners.allowed(oldSlot, owner)) retire.add(oldSlot);
       for (const [id, state] of slots) {
-        if (id !== slot && enrollmentOwners.allowed(id, owner)
+        if (previous && id !== slot && enrollmentOwners.allowed(id, owner)
             && (liveSlots.get(id)?.accountId || state.accountId) === accountId) retire.add(id);
       }
       await registerAccount(slot, user);
@@ -854,6 +863,7 @@ async function syncAccount(slot) {
       const me = await client.getMe();
       if (disconnectedSlots.has(slot)) break;
       const accountId = `telegram:${me.id}`;
+      saveSlotProfile(slot, accountId);
       const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
@@ -1059,6 +1069,7 @@ function clearSlot(slotId) {
   slots.delete(slotId);
   syncs.delete(slotId);
   enrollmentOwners.remove(slotId);
+  saveSlotProfile(slotId, "");
   try { unlinkSync(`${sessionsDir}/${slotId}.session`); }
   catch (error) { if (error?.code !== "ENOENT") throw error; }
   return live;
@@ -1095,8 +1106,7 @@ async function refreshAccounts(force){
 function render(list){
   var box = document.getElementById("cards");
   accounts.forEach(function(account){
-    var slot=String(account.credential_ref||'').replace(/^telegram-qr:/,'');
-    var session=list.find(function(s){return s.id===slot;});
+    var session=list.find(function(s){return s.accountId===account.id;});
     if(session){session.accountId=account.id;return;}
     list.push({id:'missing-'+account.id.replace(/[^a-zA-Z0-9]/g,'-'),accountId:account.id,status:'reconnect-required',sync:'missing-session',qr:''});
   });
