@@ -19,6 +19,7 @@ from .channels.whatsapp import WhatsAppBridgeClient
 from .native_fast_agent import FastAgentDraftGenerator
 from .channels.live_telegram import live_telegram_outbox_from_env
 from .draft_notifications import TelegramDraftApprovalNotifier
+from .delivery_reconciliation import TelegramDeliveryReconciliationWorker
 from .http_api import handler
 from .service import UserIOService
 from .store import SQLiteUserIOStore
@@ -247,6 +248,11 @@ def main() -> None:
     from .account_connections import UserAccountPoller
     connected_poller = UserAccountPoller(service)
     connected_poller.start()
+    telegram_delivery_reconciliation = TelegramDeliveryReconciliationWorker(
+        service,
+        interval_seconds=float(environment.get("USERIO_TELEGRAM_DELIVERY_RECONCILE_POLL_SECONDS", "5") or "5"),
+    )
+    telegram_delivery_reconciliation.start()
     from .webhooks import WebhookDeliveryWorker
     webhook_delivery = WebhookDeliveryWorker(service._store)
     webhook_delivery.start()
@@ -260,6 +266,7 @@ def main() -> None:
         server.serve_forever()
     finally:
         webhook_delivery.close()
+        telegram_delivery_reconciliation.close()
         connected_poller.stop.set()
         server.RequestHandlerClass.max_connections.close()
         with service._max_owned_lock:

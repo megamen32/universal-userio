@@ -808,10 +808,13 @@ class UserIOService:
         draft = self._store.claim_draft_send(
             draft_id, user_id=resolved_user, expected_snapshot=snapshot,
         )
+        attempt_generation = int(self._store.draft_delivery_state(
+            draft_id, user_id=resolved_user)["generation"])
         try:
             send = self._prepare_claimed_draft(draft, user_id=resolved_user)
         except Exception:
-            self._store.release_draft_send(draft_id, user_id=resolved_user)
+            self._store.release_reconciled_delivery(draft_id, user_id=resolved_user,
+                expected_generation=attempt_generation, reason="preparation_failed_before_provider_io")
             raise
         try:
             self._store.claim_workspace_triage_send(
@@ -819,7 +822,8 @@ class UserIOService:
                 actor=actor, user_id=resolved_user,
             )
         except Exception:
-            self._store.release_draft_send(draft_id, user_id=resolved_user)
+            self._store.release_reconciled_delivery(draft_id, user_id=resolved_user,
+                expected_generation=attempt_generation, reason="triage_claim_failed_before_provider_io")
             raise
         try:
             receipt = send()
@@ -827,12 +831,15 @@ class UserIOService:
             # Refused before provider IO: the triage claim and the draft claim
             # are both released, so an exact retry is possible and nothing is
             # left stuck in an ambiguous sending state.
-            self._store.release_draft_send(draft_id, user_id=resolved_user)
+            self._store.release_reconciled_delivery(draft_id, user_id=resolved_user,
+                expected_generation=attempt_generation, reason="provider_preflight_proved_not_submitted")
             self._store.release_workspace_triage_send(
                 event_seq=event_seq, request_id=request_id, draft_id=draft_id,
                 user_id=resolved_user)
             raise
-        approved = self._store.approve(draft_id, receipt, user_id=resolved_user)
+        approved = self._commit_accepted_draft(
+            draft_id, receipt, user_id=resolved_user,
+            expected_attempt_generation=attempt_generation)
         self._store.complete_workspace_triage_send(
             event_seq=event_seq, request_id=request_id, draft_id=draft_id,
             receipt=receipt, user_id=resolved_user,
@@ -1460,7 +1467,8 @@ class UserIOService:
         resolved_user_id = self._store._user(user_id)
         if not self._store.send_enabled(user_id=resolved_user_id):
             raise DeliveryUnavailableError("outbound delivery is disabled by user policy")
-        if self._store.draft(draft_id, user_id=resolved_user_id).status == "sending":
+        current_draft = self._store.draft(draft_id, user_id=resolved_user_id)
+        if current_draft.status in {"sending", "delivery_unknown"}:
             raise DeliveryUnavailableError(
                 "Результат отправки неизвестен. Повтор заблокирован.",
                 code="delivery_outcome_unknown")
@@ -1469,30 +1477,53 @@ class UserIOService:
                 draft_id, user_id=resolved_user_id, expected_snapshot=expected_snapshot,
             )
         except ValueError:
-            if self._store.draft(draft_id, user_id=resolved_user_id).status == "sending":
+            if self._store.draft(draft_id, user_id=resolved_user_id).status in {"sending", "delivery_unknown"}:
                 raise DeliveryUnavailableError(
                     "Результат отправки неизвестен. Повтор заблокирован.",
                     code="delivery_outcome_unknown") from None
             raise
         if draft.status == "approved":
             return draft
+        attempt_generation = int(self._store.draft_delivery_state(
+            draft_id, user_id=resolved_user_id)["generation"])
         try:
             send = self._prepare_claimed_draft(draft, user_id=resolved_user_id)
         except Exception:
-            self._store.release_draft_send(draft_id, user_id=resolved_user_id)
+            self._store.release_reconciled_delivery(
+                draft_id, user_id=resolved_user_id,
+                expected_generation=attempt_generation, reason="preparation_failed_before_provider_io")
             raise
         # Once a provider may have accepted delivery, a timeout or receipt-store
         # failure is uncertain. Keep the durable claim; never retry blindly.
         try:
             receipt = send()
         except DeliveryNotSubmittedError:
-            self._store.release_draft_send(draft_id, user_id=resolved_user_id)
+            self._store.release_reconciled_delivery(
+                draft_id, user_id=resolved_user_id,
+                expected_generation=attempt_generation, reason="provider_preflight_proved_not_submitted")
             raise
-        return self._commit_accepted_draft(draft_id, receipt, user_id=resolved_user_id)
+        return self._commit_accepted_draft(
+            draft_id, receipt, user_id=resolved_user_id,
+            expected_attempt_generation=attempt_generation)
 
-    def _commit_accepted_draft(self, draft_id: str, receipt: str, *, user_id: str) -> ReplyDraft:
+    def _commit_accepted_draft(self, draft_id: str, receipt: str, *, user_id: str,
+                               expected_attempt_generation: int | None = None) -> ReplyDraft:
         """Persist the existing outbox receipt and run its source mirrors."""
-        approved = self._store.approve(draft_id, receipt, user_id=user_id)
+        draft = self._store.draft(draft_id, user_id=user_id)
+        conversation_before = self._store.conversation(draft.conversation_id, user_id=user_id) or {}
+        if conversation_before.get("source") == "telegram":
+            attempt_generation = int(expected_attempt_generation if expected_attempt_generation is not None
+                                     else self._store.draft_delivery_state(
+                                         draft_id, user_id=user_id)["generation"])
+            resolution = self._store.approve_reconciled_delivery(
+                draft_id, receipt, user_id=user_id, expected_generation=attempt_generation)
+            if resolution["status"] != "approved" or resolution["receipt"] != receipt:
+                raise DeliveryUnavailableError(
+                    "Provider accepted the Telegram send, but this attempt was superseded; receipt remains in reconciliation.",
+                    code="delivery_receipt_superseded")
+            approved = self._store.draft(draft_id, user_id=user_id)
+        else:
+            approved = self._store.approve(draft_id, receipt, user_id=user_id)
         # Persist acceptance first. A read-side outage must not invalidate a
         # real receipt or cause another outbound write. MAX's listener can be
         # delayed, so hydrate this exact sent message before the web refresh.
@@ -1534,7 +1565,81 @@ class UserIOService:
     def reconcile_draft_delivery(self, draft_id: str, *, user_id: str | None = None,
                                  expected_snapshot: dict[str, object] | None = None,
                                  provider_history: bool = False,
-                                 connector_available_since: float = 0.0) -> dict[str, object]:
+                                 connector_available_since: float = 0.0,
+                                 automatic: bool = False,
+                                 automatic_next_check_at: float | None = None,
+                                 automatic_terminal_unknown: bool = False,
+                                 expected_generation: int | None = None,
+                                 expected_lease_owner: str | None = None) -> dict[str, object]:
+        """Reconcile the original Telegram attempt and persist why it changed (or did not)."""
+        resolved_user_id = self._store._user(user_id)
+        before = self._store.draft_delivery_state(draft_id, user_id=resolved_user_id)
+        generation = int(before["generation"] if expected_generation is None else expected_generation)
+        if generation != int(before["generation"]):
+            result = {"resolution": "unknown", "draft_id": draft_id,
+                      "status": before["status"], "reason": "attempt_generation_changed_before_check",
+                      "retry_allowed": False, "evidence": {"attempt_id": draft_id,
+                                                               "expected_generation": generation,
+                                                               "current_generation": before["generation"]}}
+        else:
+            try:
+                result = self._reconcile_draft_delivery_once(
+                    draft_id, user_id=resolved_user_id, expected_snapshot=expected_snapshot,
+                    provider_history=provider_history,
+                    connector_available_since=connector_available_since,
+                    expected_generation=generation,
+                    expected_lease_owner=expected_lease_owner)
+            except Exception as error:
+                if not automatic:
+                    raise
+                retry_after = getattr(error, "retry_after_seconds", None)
+                headers = getattr(error, "headers", None)
+                if retry_after is None and int(getattr(error, "code", 0) or 0) == 429 and headers is not None:
+                    try:
+                        retry_after = max(5.0, min(float(headers.get("Retry-After")), 31_536_000.0))
+                    except (TypeError, ValueError):
+                        retry_after = None
+                result = {"resolution": "unknown", "draft_id": draft_id,
+                          "status": before["status"], "reason": "provider_check_failed",
+                          "error": type(error).__name__, "retry_after_seconds": retry_after,
+                          "retry_allowed": False,
+                          "evidence": {"attempt_id": draft_id, "read_error_type": type(error).__name__,
+                                      "retry_after_seconds": retry_after}}
+        current = self._store.draft_delivery_state(draft_id, user_id=resolved_user_id)
+        unresolved = str(result.get("resolution")) == "unknown"
+        next_check = automatic_next_check_at if automatic and unresolved else None
+        retry_after = result.get("retry_after_seconds")
+        if automatic and unresolved and retry_after is not None:
+            next_check = max(float(next_check or 0.0),
+                             time.time() + max(5.0, min(float(retry_after), 31_536_000.0)))
+        elif not automatic and unresolved and current["status"] == "sending":
+            next_check = before["next_check_at"]
+        terminal_unknown = bool(automatic and unresolved and automatic_terminal_unknown
+                                and current["status"] == "sending")
+        if terminal_unknown:
+            result["last_provider_reason"] = str(result.get("reason") or "provider_state_unreported")
+            result["reason"] = "automatic_reconciliation_attempts_exhausted"
+        audit = self._store.record_draft_delivery_reconciliation(
+            draft_id, user_id=resolved_user_id, result=result, automatic=automatic,
+            next_check_at=next_check, terminal_unknown=terminal_unknown,
+            evidence=result.get("evidence") if isinstance(result.get("evidence"), dict) else {},
+            previous_status=str(before["status"]),
+            previous_delivery_state=str(before["delivery_state"]),
+            expected_generation=generation,
+            expected_lease_owner=expected_lease_owner,
+        )
+        result["status"] = audit["status"]
+        if audit["stale"]:
+            result["resolution"] = "superseded"
+        result["delivery_check"] = audit
+        return result
+
+    def _reconcile_draft_delivery_once(self, draft_id: str, *, user_id: str | None = None,
+                                       expected_snapshot: dict[str, object] | None = None,
+                                       provider_history: bool = False,
+                                       connector_available_since: float = 0.0,
+                                       expected_generation: int,
+                                       expected_lease_owner: str | None) -> dict[str, object]:
         """Resolve one in-flight Telegram delivery without ever replaying it.
 
         The connector owns the Telegram session, so its durable journal of
@@ -1554,7 +1659,7 @@ class UserIOService:
         if draft.status == "approved":
             return {"resolution": "delivered", "draft_id": draft.id, "status": draft.status,
                     "receipt": draft.receipt, "retry_allowed": False}
-        if draft.status != "sending":
+        if draft.status not in {"sending", "delivery_unknown"}:
             raise DeliveryUnavailableError("Этот черновик не находится в отправке.")
         if expected_snapshot is not None and expected_snapshot != {
             "expected_text": draft.body, "expected_chat_id": draft.conversation_id,
@@ -1577,74 +1682,100 @@ class UserIOService:
             slot = str(record.get("slot") or "?")
             message_id = str(record.get("message_id") or "")
             if not message_id.isdigit():
-                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id,
+                                                     expected_generation=expected_generation,
+                                                     expected_lease_owner=expected_lease_owner)
                 return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                        "reason": "provider_receipt_incomplete", "retry_allowed": False}
-            if account_ref and str(record.get("account_id") or "") not in ("", account_ref):
-                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                        "reason": "provider_receipt_incomplete", "retry_allowed": False,
+                        "evidence": self._delivery_evidence(record, draft.id)}
+            if str(record.get("account_id") or "") != account_ref:
+                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id,
+                                                     expected_generation=expected_generation,
+                                                     expected_lease_owner=expected_lease_owner)
                 return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                        "reason": "provider_account_mismatch", "retry_allowed": False}
-            if peer_id and str(record.get("peer_id") or "") not in ("", peer_id):
-                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                        "reason": "provider_account_mismatch", "retry_allowed": False,
+                        "evidence": self._delivery_evidence(record, draft.id)}
+            if str(record.get("peer_id") or "") != peer_id:
+                self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id,
+                                                     expected_generation=expected_generation,
+                                                     expected_lease_owner=expected_lease_owner)
                 return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                        "reason": "provider_peer_mismatch", "retry_allowed": False}
+                        "reason": "provider_peer_mismatch", "retry_allowed": False,
+                        "evidence": self._delivery_evidence(record, draft.id)}
             receipt = f"telegram-qr:{slot}:{message_id}:{draft.id}"
-            approved = self._store.approve(draft.id, receipt, user_id=resolved_user_id)
-            return {"resolution": "delivered", "draft_id": approved.id, "status": approved.status,
-                    "receipt": receipt, "retry_allowed": False}
+            applied = self._store.approve_reconciled_delivery(
+                draft.id, receipt, user_id=resolved_user_id,
+                expected_generation=expected_generation,
+                expected_lease_owner=expected_lease_owner,
+            )
+            resolution = "delivered" if applied["status"] == "approved" and applied["receipt"] == receipt else "unknown"
+            return {"resolution": resolution, "draft_id": draft.id, "status": applied["status"],
+                    "receipt": applied["receipt"] or None,
+                    "reason": None if resolution == "delivered" else "attempt_generation_or_state_changed",
+                    "retry_allowed": False,
+                    "evidence": self._delivery_evidence(record, draft.id)}
         if state == "refused":
             # The connector refused before any provider call, so nothing was
             # submitted and the exact retry stays possible.
-            self._store.release_draft_send(draft.id, user_id=resolved_user_id)
-            return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
+            released = self._store.release_reconciled_delivery(
+                draft.id, user_id=resolved_user_id,
+                expected_generation=expected_generation,
+                reason=str(record.get("code") or "refused_before_submission"),
+                expected_lease_owner=expected_lease_owner,
+            )
+            return {"resolution": "not_submitted" if released["applied"] else "unknown",
+                    "draft_id": draft.id, "status": released["status"],
                     "reason": str(record.get("code") or "refused_before_submission"),
-                    "retry_allowed": True}
+                    "retry_allowed": bool(released["applied"]),
+                    "evidence": self._delivery_evidence(record, draft.id)}
         if state == "absent":
-            # The connector never received this attempt. That proves
-            # non-submission only for a claim taken after the connector could
-            # first record one; an older claim keeps its unknown outcome
-            # unless the operator asks for the provider evidence.
-            epoch = float(record.get("epoch") or 0)
-            claimed = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)
-            sending_at = claimed.get("sending_at")
-            if epoch and sending_at is not None and float(sending_at) >= epoch:
-                self._store.release_draft_send(draft.id, user_id=resolved_user_id)
-                return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
-                        "reason": "connector_never_received_attempt", "retry_allowed": True}
+            # Absence is only a point-in-time observation: the original request
+            # may still be queued or in flight and journal later. It never
+            # releases this claim; only an explicit refused receipt can do so.
             if provider_history:
                 history_reader = getattr(self.telegram_outbox, "reconcile_history", None)
                 if not callable(history_reader):
                     raise DeliveryUnavailableError("Сверка доставки Telegram недоступна.")
-                return self._resolve_by_provider_history(
+                result = self._resolve_by_provider_history(
                     draft, conversation=conversation, account_ref=account_ref, peer_id=peer_id,
                     outbox=history_reader, resolved_user_id=resolved_user_id,
-                    connector_available_since=connector_available_since)
-            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
+                    connector_available_since=connector_available_since,
+                    expected_generation=expected_generation,
+                    expected_lease_owner=expected_lease_owner)
+                result["evidence"] = self._delivery_evidence(record, draft.id)
+                return result
+            prior_state = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)["delivery_state"]
+            if prior_state not in {"legacy_unknown", "provider_match_unverified"}:
+                self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id,
+                                                     expected_generation=expected_generation,
+                                                     expected_lease_owner=expected_lease_owner)
             return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                    "reason": "attempt_predates_connector_journal", "retry_allowed": False}
-        self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id)
+                    "reason": "journal_absence_is_not_final_submission_evidence", "retry_allowed": False,
+                    "evidence": self._delivery_evidence(record, draft.id)}
+        self._store.mark_draft_delivery_state(draft.id, "uncertain", user_id=resolved_user_id,
+                                             expected_generation=expected_generation,
+                                             expected_lease_owner=expected_lease_owner)
         return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
-                "reason": "provider_outcome_undecided", "retry_allowed": False}
+                "reason": "provider_outcome_undecided", "retry_allowed": False,
+                "evidence": self._delivery_evidence(record, draft.id)}
+
+    @staticmethod
+    def _delivery_evidence(record: dict[str, object], attempt_id: str) -> dict[str, object]:
+        """Whitelist non-secret fields that explain a provider reconciliation result."""
+        allowed = ("state", "epoch", "slot", "account_id", "peer_id", "message_id", "code")
+        return {"attempt_id": attempt_id, **{key: record[key] for key in allowed if key in record}}
 
     def _resolve_by_provider_history(self, draft: ReplyDraft, *, conversation: dict,
                                      account_ref: str, peer_id: str, outbox: Any,
                                      resolved_user_id: str,
-                                     connector_available_since: float = 0.0) -> dict[str, object]:
+                                     connector_available_since: float = 0.0,
+                                     expected_generation: int,
+                                     expected_lease_owner: str | None) -> dict[str, object]:
         """Resolve a legacy claim from the provider's own history.
 
-        This path is only reachable for a claim the connector's journal cannot
-        speak about. It therefore needs two independent facts:
-
-        - the operator attests when the connector became able to serve again.
-          If that is after the claim, the connector provably could not have
-          accepted the request;
-        - the provider is asked for the peer's authoritative history. If the
-          peer holds no message at or after the attempt, the provider never
-          received the approved text.
-
-        A message that the provider accepted and then deleted leaves no trace
-        in the history, so the operator's attestation is what makes the
-        conclusion sound. The evidence is recorded with the draft.
+        History is a diagnostic cross-check only. No-match is not final proof:
+        history can be incomplete and the original request can still be in
+        flight. This path therefore never releases a draft for retry.
         """
         claimed = self._store.draft_delivery_state(draft.id, user_id=resolved_user_id)
         sending_at = claimed.get("sending_at")
@@ -1655,7 +1786,9 @@ class UserIOService:
             attempt_at = float(claimed.get("created_at") or 0.0)
         available_since = float(connector_available_since or 0.0)
         if not available_since or available_since <= attempt_at:
-            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
+            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id,
+                                                 expected_generation=expected_generation,
+                                                 expected_lease_owner=expected_lease_owner)
             return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
                     "reason": "connector_availability_not_attested", "retry_allowed": False}
         history = outbox(account_ref=account_ref, peer_id=peer_id)
@@ -1663,10 +1796,8 @@ class UserIOService:
         # conversation must be read again after the provider answered.
         fresh = self._store.conversation(draft.conversation_id, user_id=resolved_user_id) or {}
         messages = list(fresh.get("messages") or [])
-        # The connector fetched the newest provider messages of that peer. The
-        # window covers the attempt only when its oldest message is older than
-        # the attempt: then every message the provider holds at or after the
-        # attempt is inside the window, and an absent body proves absence.
+        # Record whether the bounded mirror includes the attempt's time, but
+        # do not use an empty window as permission to replay the original send.
         oldest_id = str(history.get("oldest_id") or "")
         window_oldest = 0.0
         for message in messages:
@@ -1674,7 +1805,9 @@ class UserIOService:
                 window_oldest = float(message.get("received_at") or 0.0)
                 break
         if not window_oldest or window_oldest > attempt_at - _PROVIDER_CLOCK_TOLERANCE:
-            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id)
+            self._store.mark_draft_delivery_state(draft.id, "legacy_unknown", user_id=resolved_user_id,
+                                                 expected_generation=expected_generation,
+                                                 expected_lease_owner=expected_lease_owner)
             return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
                     "reason": "provider_history_does_not_cover_the_attempt", "retry_allowed": False,
                     "provider_window_oldest_at": window_oldest}
@@ -1683,15 +1816,14 @@ class UserIOService:
                    and str(m.get("body") or "") == draft.body]
         if matched:
             self._store.mark_draft_delivery_state(draft.id, "provider_match_unverified",
-                                                  user_id=resolved_user_id)
+                                                  user_id=resolved_user_id,
+                                                  expected_generation=expected_generation,
+                                                  expected_lease_owner=expected_lease_owner)
             return {"resolution": "unknown", "draft_id": draft.id, "status": "sending",
                     "reason": "provider_has_a_matching_message", "retry_allowed": False,
                     "provider_message_id": str(matched[-1].get("message_id") or "")}
-        self._store.release_draft_send(draft.id, user_id=resolved_user_id)
-        self._store.mark_draft_delivery_state(
-            draft.id, "not_delivered_by_provider_history", user_id=resolved_user_id)
-        return {"resolution": "not_submitted", "draft_id": draft.id, "status": "proposed",
-                "reason": "not_delivered_by_provider_history", "retry_allowed": True,
+        return {"resolution": "unknown", "draft_id": draft.id, "status": draft.status,
+                "reason": "provider_history_no_match_is_not_final_submission_evidence", "retry_allowed": False,
                 "provider_window_oldest_at": window_oldest,
                 "connector_available_since": available_since,
                 "provider_mirrored": int(history.get("mirrored") or 0)}

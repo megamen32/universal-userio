@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime as dt
+from email.utils import parsedate_to_datetime
 import json
 import io
 import math
@@ -304,6 +306,31 @@ def _connector_refusal_message(status: int, detail: str) -> str:
     return f"Telegram не принял сообщение до отправки (HTTP {status}). Черновик можно отправить снова."
 
 
+class TelegramQrHttpError(RuntimeError):
+    """Sanitized connector HTTP failure with retry metadata and no body text."""
+
+    def __init__(self, status: int, retry_after_seconds: float | None = None) -> None:
+        super().__init__(f"telegram-qr connector returned HTTP {int(status)}")
+        self.code = int(status)
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _telegram_retry_after(headers: Any) -> float | None:
+    if headers is None:
+        return None
+    value = headers.get("Retry-After")
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=dt.timezone.utc)
+            return max(0.0, (retry_at - dt.datetime.now(dt.timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
 class TelegramQrHttpOutbox:
     """Deliver approved Telegram drafts through the telegram-qr connector.
 
@@ -449,8 +476,8 @@ class TelegramQrHttpOutbox:
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 return {"state": "absent"}
-            detail = error.read().decode(errors="replace")[:200]
-            raise RuntimeError(f"telegram-qr send attempt lookup failed: HTTP {error.code} {detail}") from error
+            retry_after = _telegram_retry_after(error.headers) if error.code == 429 else None
+            raise TelegramQrHttpError(error.code, retry_after) from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         if not isinstance(result, dict) or not isinstance(result.get("state"), str):
