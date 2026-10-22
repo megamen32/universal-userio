@@ -19,6 +19,8 @@ OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker'
 READ_OPERATIONS = frozenset({'read', 'history', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
+TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
+SAFE_ACTIONS = frozenset({'react', 'typing'})
 
 
 def canonical(value) -> bytes:
@@ -65,6 +67,51 @@ class Messenger:
             return None
         return provider
 
+    def _first_contact(self, account_ref, account):
+        """Whether a first contact with a contact outside the history is possible.
+
+        Resolving a new peer is a separate capability from answering an
+        existing chat: it needs the provider's own live session, which can
+        be unavailable while the account itself is healthy. The declared
+        answer must match what the call can actually do.
+        """
+        starter = getattr(self.service, 'contact_starter', None)
+        support = ({'supported': False, 'availability': 'unavailable',
+                    'reason': 'provider_not_supported'} if starter is None else
+                   starter.resolution_support(user_id=self.user, account_ref=account_ref))
+        operations = {}
+        for name in ('resolve', 'start'):
+            reason = ''
+            if not support['supported']:
+                reason = support['reason']
+            elif not account['enabled']:
+                reason = 'account_disabled'
+            elif self.principal.read_only:
+                reason = 'read_only_token'
+            elif name == 'start' and 'reply' not in account['capabilities']:
+                reason = 'account_capability_disabled'
+            elif not self.store.capability_enabled(
+                    'send' if name == 'start' else 'read', user_id=self.user):
+                reason = 'user_capability_disabled'
+            elif self.principal.messenger_grants is not None:
+                grant = next((g for g in self.principal.messenger_grants
+                              if g['account_ref'] == account_ref), None)
+                if grant is None:
+                    reason = 'account_outside_credential_scope'
+                elif name == 'start' and (grant.get('access') != 'read_write'
+                                          or grant.get('chats') is not None):
+                    reason = 'account_scope_required_for_new_contact'
+            operations[name] = {
+                'supported': bool(support['supported']), 'allowed': not reason,
+                'reason': reason, 'availability': support['availability'],
+            }
+        allowed = all(item['allowed'] for item in operations.values())
+        reason = next((item['reason'] for item in operations.values() if item['reason']), '')
+        return {
+            'supported': bool(support['supported']), 'allowed': allowed, 'reason': reason,
+            'availability': support['availability'], 'operations': operations,
+        }
+
     def capabilities(self, account_ref):
         account = self._account(account_ref)
         provider = self._provider(account_ref)
@@ -87,6 +134,10 @@ class Messenger:
             elif authentication_required and name not in {'read', 'history'}:
                 reason = 'provider_authentication_required'
             result[name] = {'supported': supported, 'allowed': supported and not reason, 'reason':reason}
+            if name in SAFE_ACTIONS:
+                result[name]['approval_required'] = False
+            if name=='react':
+                result[name]['removal_supported'] = supported and self._reaction_removal_supported(account_ref, provider)
             if name=='typing' and supported:
                 result[name]['stop_mode']=getattr(provider,'typing_stop_mode','provider_command')
         admin_outbox=getattr(self.service,'telegram_outbox',None)
@@ -118,8 +169,11 @@ class Messenger:
                                     else 'messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
+                'first_contact':self._first_contact(account_ref, account),
                 'telegram_admin':{'supported':admin_supported,'allowed':admin_supported and not admin_reason,
-                    'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS)},
+                    'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS),
+                    'direct_actions':sorted(TELEGRAM_CREATE_OPERATIONS),
+                    'approval_required_actions':sorted(TELEGRAM_ADMIN_OPERATIONS - TELEGRAM_CREATE_OPERATIONS)},
                 **({'reaction_options':provider.reaction_options} if hasattr(provider,'reaction_options') else {}),
                 'upload_limits':{'max_bytes':effective_upload_limit,
                     'provider_max_bytes':provider_upload_limit,
@@ -451,12 +505,28 @@ class Messenger:
         return digest({'source_binding':projected['binding'],
                        'attachment_id':attachment['attachment_id'],'attachment_index':index})
 
+    def _reaction_removal_supported(self, account_ref, provider):
+        return provider is not None and getattr(provider, 'reaction_remove_supported', False) is True
+
+    def safe_action(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
+        if action not in SAFE_ACTIONS:
+            raise ValueError('safe_action_required')
+        prepared = self._prepare_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
+        return self._execute_action(prepared)
+
     def propose(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
+        if action in SAFE_ACTIONS:
+            return self.safe_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
+        return self._prepare_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
+
+    def _prepare_action(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
         if action not in OPERATIONS or action in READ_OPERATIONS: raise ValueError('invalid_action')
         self._allow(account_ref,action)
         if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}',request_id):
             raise ValueError('request_id_required')
         payload = self._payload(action,payload)
+        if action == 'react' and payload['emoji'] == '' and not self._reaction_removal_supported(account_ref, self._provider(account_ref)):
+            raise PermissionError('reaction_removal_not_supported')
         conv = self._conversation(account_ref,conversation_id)
         supports_action=getattr(self._provider(account_ref),'supports_action',None)
         if callable(supports_action) and supports_action(action,conv) is False:
@@ -540,7 +610,20 @@ class Messenger:
                 raise ValueError('channel_delete_phrase_required')
         return value
 
+    def create_telegram(self, account_ref, operation, payload, request_id):
+        if operation not in TELEGRAM_CREATE_OPERATIONS:
+            raise ValueError('telegram_creation_operation_required')
+        if not isinstance(account_ref, str) or not re.fullmatch(r'telegram:[1-9][0-9]*', account_ref):
+            raise ValueError('stable_telegram_account_ref_required')
+        action = self._prepare_telegram_admin(account_ref, operation, payload, request_id)
+        return self._execute_action(action)
+
     def propose_telegram_admin(self, account_ref, operation, payload, request_id):
+        if operation in TELEGRAM_CREATE_OPERATIONS:
+            raise ValueError('use_telegram_admin_create')
+        return self._prepare_telegram_admin(account_ref, operation, payload, request_id)
+
+    def _prepare_telegram_admin(self, account_ref, operation, payload, request_id):
         if operation not in TELEGRAM_ADMIN_OPERATIONS: raise ValueError('invalid_telegram_admin_operation')
         account=self._account(account_ref)
         caps=self.capabilities(account_ref)['telegram_admin']
@@ -612,8 +695,12 @@ class Messenger:
 
     def approve(self, action_id, expected_hash, confirm):
         if confirm is not True: raise ValueError('exact_confirmation_required')
-        action = self.get(action_id); e = action['envelope']
+        action = self.get(action_id)
         if expected_hash != action['hash']: raise ValueError('action_snapshot_conflict')
+        return self._execute_action(action)
+
+    def _execute_action(self, action):
+        action_id = action['id']; e = action['envelope']
         if e.get('action')=='telegram_admin':
             if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:
                 raise PermissionError(self.capabilities(e['account_ref'])['telegram_admin']['reason'])
@@ -716,7 +803,9 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'media': return {'ok':True,**api.media(**arguments)}
         if op == 'events': return {'ok':True,**api.events(**arguments)}
         if op == 'upload': return {'ok':True,'upload':api.upload(**arguments)}
+        if op == 'safe_action': return {'ok':True,'action':api.safe_action(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
+        if op == 'telegram_admin.create': return {'ok':True,'action':api.create_telegram(**arguments)}
         if op == 'telegram_admin.propose': return {'ok':True,'action':api.propose_telegram_admin(**arguments)}
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
         if op == 'approve': return {'ok':True,'action':api.approve(**arguments)}

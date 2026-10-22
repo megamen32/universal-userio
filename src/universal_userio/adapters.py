@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import datetime as dt
+from email.utils import parsedate_to_datetime
 import json
 import io
 import math
@@ -29,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from . import chatgpt_sessions
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
-from .contracts import ChannelFile, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
+from .contracts import ChannelFile, ContactResolutionUnavailable, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
 
 if TYPE_CHECKING:
     from .service import UserIOService
@@ -304,7 +306,33 @@ def _connector_refusal_message(status: int, detail: str) -> str:
     return f"Telegram не принял сообщение до отправки (HTTP {status}). Черновик можно отправить снова."
 
 
+class TelegramQrHttpError(RuntimeError):
+    """Sanitized connector HTTP failure with retry metadata and no body text."""
+
+    def __init__(self, status: int, retry_after_seconds: float | None = None) -> None:
+        super().__init__(f"telegram-qr connector returned HTTP {int(status)}")
+        self.code = int(status)
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _telegram_retry_after(headers: Any) -> float | None:
+    if headers is None:
+        return None
+    value = headers.get("Retry-After")
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        try:
+            retry_at = parsedate_to_datetime(str(value))
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=dt.timezone.utc)
+            return max(0.0, (retry_at - dt.datetime.now(dt.timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+
 class TelegramQrHttpOutbox:
+    reaction_remove_supported = True
     """Deliver approved Telegram drafts through the telegram-qr connector.
 
     The connector owns every Telegram session (login, live ingest, delivery),
@@ -313,9 +341,70 @@ class TelegramQrHttpOutbox:
     """
 
     def __init__(self, base_url: str, token: str, *, runner: Any = urllib.request.urlopen,
-                 timeout: int = 20, probe: Any = None) -> None:
+                 timeout: int = 20, probe: Any = None, status_ttl: float = 30.0,
+                 status_timeout: float = 3.0) -> None:
         self._base_url, self._token, self._runner, self._timeout = base_url.rstrip("/"), token, runner, timeout
         self._probe = probe or _default_connector_probe
+        self._status_ttl = status_ttl
+        # Capabilities are read on every messenger operation, so the
+        # availability probe must answer fast even when the connector is
+        # unreachable.
+        self._status_timeout = max(0.5, min(float(status_timeout), float(timeout)))
+        self._resolution_status: dict[str, tuple[float, dict[str, object]]] = {}
+
+    def contact_resolution_status(self, account_ref: str) -> dict[str, object]:
+        """Report whether this account can resolve a new peer right now.
+
+        Turning a username into a peer id needs the connector's own live
+        Telegram session, so it can be impossible while the account itself
+        looks healthy. The verdict is cached briefly, because capabilities
+        are read on every messenger operation.
+
+        The answer is one of:
+
+        ``resolvable`` True  - the connector holds a live session for the account.
+        ``resolvable`` False - it does not; ``reason`` says why.
+        ``resolvable`` None  - the connector's own state could not be read;
+                               ``reason`` says why.
+        """
+        account = str(account_ref or "")
+        cached = self._resolution_status.get(account)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < self._status_ttl:
+            return dict(cached[1])
+        status = self._read_contact_resolution_status(account)
+        self._resolution_status[account] = (now, status)
+        return dict(status)
+
+    def _read_contact_resolution_status(self, account_ref: str) -> dict[str, object]:
+        # Transport first: a refused connection proves the connector is down,
+        # which is exactly what makes a first contact impossible.
+        try:
+            self._probe(self._base_url, self._status_timeout)
+        except (ConnectionRefusedError, socket.gaierror):
+            return {"resolvable": False, "reason": "connector_unreachable"}
+        except (OSError, urllib.error.URLError):
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        request = urllib.request.Request(  # noqa: S310
+            f"{self._base_url}/state", headers={"Authorization": f"Bearer {self._token}"})
+        try:
+            with self._runner(request, timeout=self._status_timeout) as response:
+                rows = json.loads(response.read().decode() or "[]")
+        except urllib.error.HTTPError:
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        except (OSError, urllib.error.URLError):
+            return {"resolvable": False, "reason": "connector_unreachable"}
+        except (TypeError, ValueError):
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        if not isinstance(rows, list):
+            return {"resolvable": None, "reason": "connector_status_unavailable"}
+        for row in rows:
+            if not isinstance(row, dict) or str(row.get("accountId") or "") != account_ref:
+                continue
+            connected = str(row.get("status") or "").startswith("connected")
+            return {"resolvable": bool(connected),
+                    "reason": "" if connected else "account_not_connected"}
+        return {"resolvable": False, "reason": "account_not_connected"}
 
     def _assert_connector_accepts(self) -> None:
         """Refuse to send when the connector is provably not accepting connections.
@@ -449,13 +538,61 @@ class TelegramQrHttpOutbox:
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 return {"state": "absent"}
-            detail = error.read().decode(errors="replace")[:200]
-            raise RuntimeError(f"telegram-qr send attempt lookup failed: HTTP {error.code} {detail}") from error
+            retry_after = _telegram_retry_after(error.headers) if error.code == 429 else None
+            raise TelegramQrHttpError(error.code, retry_after) from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         if not isinstance(result, dict) or not isinstance(result.get("state"), str):
             raise RuntimeError("telegram-qr send attempt answer is invalid")
         return result
+
+    def resolve_contact(self, identifier: str, *, account_ref: str) -> dict[str, object]:
+        """Resolve a Telegram username or phone number into a native peer.
+
+        The connector owns the Telegram session, so only it can turn a
+        username into the peer id the approved send addresses. Nothing is
+        written to Telegram here.
+        """
+        value = str(identifier or "").strip().lstrip("@")
+        if not account_ref or not value or len(value) > 64:
+            raise ValueError("Telegram contact resolution requires an account and an identifier")
+        payload = json.dumps({"account_id": account_ref, "identifier": value}).encode()
+        request = urllib.request.Request(
+            f"{self._base_url}/resolve", data=payload, method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
+        )
+        try:
+            with self._runner(request, timeout=self._timeout) as response:
+                result = json.loads(response.read().decode() or "{}")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:200]
+            if error.code in _CONNECTOR_REFUSED_HTTP:
+                raise TelegramConnectorRefused(
+                    _connector_refusal_message(error.code, detail),
+                    connector_code=_connector_code(detail), http_status=error.code,
+                ) from error
+            raise ValueError(f"telegram-qr contact resolution failed: HTTP {error.code}") from error
+        except (OSError, urllib.error.URLError) as error:
+            # Nothing was sent and nothing was resolved. The connector was
+            # not reachable, so the reason is named instead of leaking a
+            # transport string into the consumer's answer.
+            raise ContactResolutionUnavailable("connector_unreachable") from error
+        except (TypeError, ValueError) as error:
+            raise ContactResolutionUnavailable(
+                "connector_answer_invalid",
+                message=f"telegram-qr contact resolution answered invalidly: {error}",
+            ) from None
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise ValueError(str(result.get("error") or "telegram-qr contact resolution failed"))
+        peer_id = str(result.get("peer_id") or "")
+        if not peer_id.lstrip("-").isdigit():
+            raise ValueError("telegram-qr contact resolution returned no peer")
+        return {
+            "peer_id": peer_id,
+            "name": str(result.get("name") or ""),
+            "username": str(result.get("username") or ""),
+            "phone": str(result.get("phone") or ""),
+        }
 
     def reply_message(self, *, chat_id: str, account_ref: str, message_id: str,
                       thread_id: str, expected_text: str, text: str, request_id: str) -> dict[str, object]:
@@ -570,7 +707,7 @@ class TelegramQrHttpOutbox:
         return result
 
     def react(self, *, chat: str, chat_id: str, account_ref: str, message_id: str, emoji: str) -> dict[str, object]:
-        if not (chat or chat_id) or not message_id or not emoji:
+        if not (chat or chat_id) or not message_id or not isinstance(emoji, str):
             raise ValueError("Telegram reaction requires chat or chat_id, message id and emoji")
         payload = json.dumps({
             "chat": chat, "chat_id": chat_id, "account_id": account_ref,
@@ -588,6 +725,15 @@ class TelegramQrHttpOutbox:
             raise RuntimeError(f"telegram-qr reaction failed: HTTP {error.code} {detail}") from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
+
+    def typing(self, *, account_ref: str, peer_id: str, active: bool, thread_id: str = '') -> dict[str, object]:
+        if not account_ref or not peer_id or type(active) is not bool:
+            raise DeliveryNotSubmittedError('exact Telegram typing account/peer/active required')
+        payload = {'account_id':account_ref, 'peer_id':peer_id, 'active':active, 'thread_id':thread_id}
+        request = urllib.request.Request(f'{self._base_url}/typing', data=json.dumps(payload).encode(),
+            method='POST', headers={'Content-Type':'application/json','Authorization':f'Bearer {self._token}'})
+        with self._runner(request, timeout=self._timeout) as response:
+            return json.loads(response.read())
 
     def edit_message(self, *, chat_id: str, account_ref: str, message_id: str,
                      expected_text: str, text: str) -> dict[str, object]:
@@ -629,14 +775,27 @@ class TelegramQrHttpOutbox:
         return result
 
 
+_GMAIL_PREFIX = "himalaya:"
+
+
 class HimalayaGmailOutbox:
-    """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account."""
+    """Send one explicitly approved Gmail reply through the configured Himalaya SMTP account.
+
+    SMTP accepts a message; it never confirms that the recipient received
+    it. The receipt therefore states ``smtp_accepted`` and carries the RFC
+    Message-ID the transport accepted, so a consumer can tell an accepted
+    letter from a confirmed one. A copy of the very same message is appended
+    to the account's Sent mailbox, so the mailbox itself keeps the evidence;
+    when that append fails the receipt names the reason instead of pretending
+    the copy exists.
+    """
 
     def __init__(
         self, *, binary: str = "/home/roomhacker/.cargo/bin/himalaya", config: str = "/home/roomhacker/.config/himalaya/config.toml",
-        runner: Any = subprocess.run,
+        runner: Any = subprocess.run, sent_mailbox: str = "sent",
     ) -> None:
         self._binary, self._config, self._runner = binary, config, runner
+        self._sent_mailbox = sent_mailbox
 
     def send_reply(self, *, account: str, sender: str, recipient: str, message_id: str, body: str, draft_id: str) -> str:
         return self.send_message(account=account, sender=sender, recipient=recipient,
@@ -646,17 +805,40 @@ class HimalayaGmailOutbox:
     def outgoing_message_id(account: str, draft_id: str) -> str:
         return hashlib.sha256((account+'\0'+draft_id).encode()).hexdigest()+'@userio.local'
 
+    def _save_sent_copy(self, *, account: str, raw: str) -> str:
+        """Append the sent message to the account's Sent mailbox.
+
+        The append happens after SMTP already accepted the letter, so a
+        failure here cannot undo the send. It is reported as an explicit
+        reason so no consumer believes a Sent copy exists when it does not.
+        """
+        try:
+            completed = self._runner(
+                [self._binary, "--config", self._config, "--account", account,
+                 "message", "add", "--mailbox", self._sent_mailbox],
+                input=raw, text=True, capture_output=True, timeout=30, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "not_saved_command_failed"
+        if completed.returncode != 0:
+            return "not_saved_rejected"
+        return "saved"
+
     def send_message(self, *, account: str, sender: str, recipient: str, message_id: str,
-                     body: str, draft_id: str, subject: str) -> str:
+                     body: str, draft_id: str, subject: str, in_reply_to: str | None = None) -> str:
         address = parseaddr(recipient)[1]
         from_address = parseaddr(sender)[1]
-        if not account or not from_address or not address or not message_id:
-            raise ValueError("Gmail reply requires account, sender, recipient, and message id")
-        reference = message_id.strip("<>")
+        if not account or not from_address or not address:
+            raise ValueError("Gmail delivery requires account, sender and recipient")
+        # A first message to a new contact has no message to answer, so it goes
+        # out without an In-Reply-To reference.
+        reference = (message_id if in_reply_to is None else in_reply_to).strip("<>")
+        outgoing_id = self.outgoing_message_id(account, draft_id)
         mail = EmailMessage()
         mail['From'], mail['To'], mail['Subject'] = from_address, address, subject
-        mail['Message-ID'] = '<'+self.outgoing_message_id(account, draft_id)+'>'
-        mail['In-Reply-To'], mail['References'] = '<'+reference+'>', '<'+reference+'>'
+        mail['Message-ID'] = '<'+outgoing_id+'>'
+        if reference:
+            mail['In-Reply-To'], mail['References'] = '<'+reference+'>', '<'+reference+'>'
         mail.set_content(body)
         raw = mail.as_string()
         try:
@@ -669,7 +851,10 @@ class HimalayaGmailOutbox:
         if completed.returncode != 0:
             detail = completed.stderr.strip().splitlines()[-1] if completed.stderr else "unknown Himalaya error"
             raise RuntimeError(f"Himalaya Gmail delivery failed: {detail[:240]}")
-        return f"himalaya:{account}:{draft_id}"
+        # SMTP accepted the letter. Keep the evidence in the mailbox and say
+        # exactly how far the delivery is proven.
+        copy_state = self._save_sent_copy(account=account, raw=raw)
+        return f"{_GMAIL_PREFIX}{account}:{draft_id}:{outgoing_id}:{copy_state}"
 
 
 class StoredChannelAdapter:

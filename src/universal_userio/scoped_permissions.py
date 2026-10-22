@@ -105,17 +105,44 @@ def enforce(store, principal, name, args):
             raise ValueError('invalid_file_ref')
         _scoped_conversation(store, principal, channel, message_id=message_id)
         return
+    if name == 'userio.messages.prepare':
+        if principal.read_only or not store.capability_enabled('send',user_id=principal.user_id):
+            raise PermissionError('send_capability_disabled')
+        if args.get('conversation_id'):
+            conversation, access = _scoped_conversation(store, principal, None, chat_id=args['conversation_id'])
+            if access != 'read_write':
+                raise PermissionError('chat_read_only_token')
+            if args.get('account_ref') and args['account_ref'] != conversation['account_ref']:
+                raise PermissionError('chat_or_account_outside_token_scope')
+        else:
+            grant = next((g for g in principal.messenger_grants or () if g['account_ref']==args.get('account_ref')), None)
+            if grant is None or grant['access'] != 'read_write' or grant['chats'] is not None:
+                raise PermissionError('account_scope_required_for_new_contact')
+        return
     if name == 'userio.channels.send_draft':
         conversation, access = _scoped_conversation(
             store, principal, None, chat_id=args.get('chat_id'))
         if access != 'read_write':
             raise PermissionError('chat_read_only_token')
         return
+    if name in {'userio.contacts.resolve', 'userio.contacts.start'}:
+        ref = str(args.get('account_ref') or '').strip()
+        grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
+        if grant is None:
+            raise PermissionError('chat_or_account_outside_token_scope')
+        if name == 'userio.contacts.start':
+            if grant['access'] != 'read_write':
+                raise PermissionError('chat_read_only_token')
+            if grant['chats'] is not None:
+                # A token limited to named chats may not open a conversation
+                # with a contact that is not in the history yet.
+                raise PermissionError('account_scope_required_for_new_contact')
+        return
     if not name.startswith('userio.messenger.'):
         raise PermissionError('scoped_messenger_only')
     op = name.removeprefix('userio.messenger.')
     ref, cid = args.get('account_ref'), args.get('conversation_id')
-    admin = op == 'telegram_admin.propose'
+    admin = op in {'telegram_admin.create', 'telegram_admin.propose'}
     admin_operation = args.get('operation', '') if admin else ''
     if op in {'get','approve'}:
         with store._lock:
@@ -340,12 +367,39 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
     raise KeyError('unknown_scoped_channel_operation')
 
 
+def _dispatch_scoped_contacts(store, service, principal, name, arguments):
+    from .contact_start import ContactStartError
+
+    account_ref = str(arguments.get('account_ref') or '').strip()
+    identifier = str(arguments.get('identifier') or '').strip()
+    if not account_ref or not identifier:
+        raise ValueError('account_ref and identifier are required')
+    starter = service.contact_starter
+    try:
+        if name == 'userio.contacts.resolve':
+            resolved = starter.resolve(user_id=principal.user_id, account_ref=account_ref,
+                                       identifier=identifier, need_send=False)
+            return {'ok': True, 'peer': resolved.as_dict()}
+        text = str(arguments.get('text') or '').strip()
+        request_id = str(arguments.get('request_id') or '').strip()
+        if not text or not request_id:
+            raise ValueError('text and request_id are required')
+        return starter.start(user_id=principal.user_id, account_ref=account_ref,
+                             identifier=identifier, text=text, request_id=request_id)
+    except ContactStartError as error:
+        return {'ok': False, 'error': str(error), 'code': error.code}
+
+
 def dispatch_scoped(store, service, principal, name, arguments):
     from .messenger import Messenger, dispatch
     enforce(store, principal, name, arguments)
     op = name.removeprefix('userio.messenger.')
+    if name == 'userio.messages.prepare':
+        return service.contact_starter.prepare(user_id=principal.user_id, **arguments)
     if name.startswith('userio.channels.'):
         return _dispatch_scoped_channels(store,service,principal,name,arguments)
+    if name.startswith('userio.contacts.'):
+        return _dispatch_scoped_contacts(store,service,principal,name,arguments)
     if op != 'events':
         result = dispatch(store,service,principal,name,arguments)
         if op == 'capabilities' and result.get('ok') and grant_for(principal, arguments.get('account_ref')) == 'read_only':

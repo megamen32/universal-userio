@@ -164,3 +164,31 @@ readonly conversation_ids filter,схема БД и прежние env/volumes �
 опубликованные Git objects и сохраняют runtime-конфигурацию. Voice не менялся.
 Точные helpers и откатные контейнеры — в журнале задачи поиска; настройки
 Qdrant/embeddings и секреты остаются в действующем защищённом хранилище.
+
+## Плановое обновление только backend
+
+Одноразовый `cutover` не предназначен для обновлений. Используйте
+`replace-backend` с опубликованной ревизией и точным ID текущего контейнера:
+
+```bash
+sudo python3 scripts/container_release.py replace-backend \
+  --image universal-userio:<published-tag> --revision <full-published-commit> \
+  --expected-container <current-full-container-id> \
+  --receipt-directory /var/backups/universal-userio/<unique-release>
+```
+
+Команда проверяет metadata и source hashes образа, отсутствие звонков/встреч,
+здоровье supervisor и API, затем сохраняет закрытые snapshots Config/HostConfig,
+окружения, mounts и исходные bytes Compose. Она заменяет только канонический
+`userio-backend`; frontend и voice сохраняются. Единственная разрешённая
+нормализация HostConfig — `OomKillDisable: null ↔ false`. Остальные Config/Env
+и HostConfig сравниваются точно. Обновление Compose атомарное.
+
+При ошибке команда восстанавливает backend из сохранённого образа и
+конфигурации, возвращает bytes Compose и проверяет supervisor/API. Базы и сессии
+не откатываются. Каталог содержит intent, исходный snapshot и конечную receipt;
+повтор успешного вызова возвращает ту же receipt, незавершённый или неуспешный
+вызов требует разбора сохранённого состояния и не повторяет замену автоматически.
+Команда блокирует параллельный запуск этой же процедуры и проверяет ID живого
+контейнера непосредственно перед остановкой. Старый образ сохраняется локально;
+новое имя временного контейнера не создаётся.

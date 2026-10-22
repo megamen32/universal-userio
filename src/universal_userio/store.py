@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .contact_keys import peer_conversation_id, peer_conversation_key
 from .contracts import ConversationPolicy, InboxMessage, ReplyDraft, UserPrincipal
 
 
@@ -372,6 +373,10 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,old_id TEXT NOT NULL,canonical_id TEXT NOT NULL,
                 PRIMARY KEY(user_id,old_id)
             );
+            CREATE TABLE IF NOT EXISTS contact_address_aliases (
+                user_id TEXT NOT NULL,address TEXT NOT NULL,conversation_id TEXT NOT NULL,
+                PRIMARY KEY(user_id,address)
+            );
             CREATE TABLE IF NOT EXISTS messages (
                 user_id TEXT NOT NULL,source TEXT NOT NULL,message_id TEXT NOT NULL,
                 conversation_id TEXT NOT NULL,sender TEXT NOT NULL,body TEXT NOT NULL,
@@ -472,7 +477,26 @@ class SQLiteUserIOStore:
                 body TEXT NOT NULL,status TEXT NOT NULL,created_at REAL NOT NULL,
                 approved_at REAL,outbox_receipt TEXT,browser_notified_at REAL,
                 sending_at REAL,delivery_state TEXT NOT NULL DEFAULT '',
+                delivery_attempt_generation INTEGER NOT NULL DEFAULT 0,
+                delivery_attempts INTEGER NOT NULL DEFAULT 0,
+                delivery_next_check_at REAL,delivery_last_checked_at REAL,
+                delivery_reason TEXT NOT NULL DEFAULT '',
+                delivery_evidence_json TEXT NOT NULL DEFAULT '{}',
                 PRIMARY KEY(user_id,id)
+            );
+            CREATE TABLE IF NOT EXISTS draft_delivery_reconciliation_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,draft_id TEXT NOT NULL,checked_at REAL NOT NULL,
+                automatic INTEGER NOT NULL,previous_status TEXT NOT NULL,
+                previous_delivery_state TEXT NOT NULL,new_status TEXT NOT NULL,
+                new_delivery_state TEXT NOT NULL,resolution TEXT NOT NULL,reason TEXT NOT NULL,
+                evidence_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS draft_delivery_reconciliation_events_idx
+                ON draft_delivery_reconciliation_events(user_id,draft_id,checked_at);
+            CREATE TABLE IF NOT EXISTS draft_delivery_reconciliation_leases (
+                user_id TEXT NOT NULL,draft_id TEXT NOT NULL,worker_id TEXT NOT NULL,
+                lease_until REAL NOT NULL,PRIMARY KEY(user_id,draft_id)
             );
             CREATE TABLE IF NOT EXISTS task_mandates (
                 user_id TEXT NOT NULL,id TEXT NOT NULL,issuer_user_id TEXT NOT NULL,
@@ -751,6 +775,17 @@ class SQLiteUserIOStore:
                     self._connection.execute(f"ALTER TABLE drafts ADD COLUMN {column} {definition}")
                 except sqlite3.OperationalError:  # column already exists
                     pass
+        for column, definition in (
+            ("delivery_attempt_generation", "INTEGER NOT NULL DEFAULT 0"),
+            ("delivery_attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("delivery_next_check_at", "REAL"),
+            ("delivery_last_checked_at", "REAL"),
+            ("delivery_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("delivery_evidence_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ):
+            columns = {row['name'] for row in self._connection.execute('PRAGMA table_info(drafts)')}
+            if column not in columns:
+                self._connection.execute(f"ALTER TABLE drafts ADD COLUMN {column} {definition}")
         for column in (
             "source TEXT NOT NULL DEFAULT ''",
             "account_ref TEXT NOT NULL DEFAULT ''",
@@ -2467,6 +2502,80 @@ class SQLiteUserIOStore:
         assert record is not None
         return record
 
+    def ensure_contact_conversation(
+        self, source: str, sender: str, *, user_id: str | None = None,
+        account_ref: str = "", peer_id: str = "", conversation_kind: str = "direct",
+        route_id: str | None = None, native_sms: bool = False,
+    ) -> dict[str, object]:
+        """Create (or reuse) the conversation of a peer that has no history yet.
+
+        The conversation key is the one the ingress will compute for the same
+        peer, so the contact's first inbound message lands in this very chat
+        instead of a second one.
+        """
+        user_id = self._user(user_id)
+        source, sender = source.strip(), sender.strip()
+        if not source or not sender:
+            raise ValueError("source and sender are required")
+        message_key = peer_conversation_key(
+            source, account_ref, peer_id, sender, native_sms=native_sms)
+        existing = self.conversation_id_for_key(message_key, user_id=user_id)
+        conversation_id = existing or peer_conversation_id(user_id, message_key)
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO conversations
+                (user_id,id,conversation_key,route_id,source,sender,identity_id,response_mode,updated_at)
+                VALUES (?,?,?,?,?,?,NULL,'approve',?)
+                """,
+                (user_id, conversation_id, message_key, route_id or source, source, sender, time.time()),
+            )
+            self._connection.execute(
+                "UPDATE conversations SET "
+                "account_ref=CASE WHEN ?<>'' THEN ? ELSE account_ref END, "
+                "peer_id=CASE WHEN ?<>'' THEN ? ELSE peer_id END, "
+                "conversation_kind=CASE WHEN conversation_kind IS NULL OR conversation_kind='' "
+                "OR conversation_kind='unknown' THEN ? ELSE conversation_kind END, "
+                "route_id=CASE WHEN route_id IS NULL OR route_id='' THEN ? ELSE route_id END "
+                "WHERE user_id=? AND id=?",
+                (account_ref, account_ref, peer_id, peer_id, conversation_kind,
+                 route_id or source, user_id, conversation_id),
+            )
+        record = self.conversation(conversation_id, user_id=user_id)
+        assert record is not None
+        return record
+
+    def bind_contact_address(self, *, user_id: str | None = None,
+                             address: str, conversation_id: str) -> None:
+        """Remember which conversation belongs to a bare mail address.
+
+        A mail thread is keyed by the whole ``From`` header, so the reply of a
+        contact we wrote to first arrives under a different key. The alias
+        maps the bare address back to the chat we created for it.
+        """
+        address = (address or "").strip().casefold()
+        if not address:
+            raise ValueError("address is required")
+        with self._lock, self._connection:
+            self._connection.execute(
+                "INSERT OR REPLACE INTO contact_address_aliases VALUES (?,?,?)",
+                (self._user(user_id), address, conversation_id),
+            )
+
+    def conversation_id_for_contact_address(self, address: str, *, user_id: str | None = None) -> str | None:
+        """Return the conversation bound to a bare mail address, if any."""
+        address = (address or "").strip().casefold()
+        if not address:
+            return None
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT conversation_id FROM contact_address_aliases WHERE user_id=? AND address=?",
+                (self._user(user_id), address),
+            ).fetchone()
+        if row is None:
+            return None
+        return self.resolve_conversation_id(str(row[0]), user_id=user_id)
+
     def create_task_contact_conversation(
         self, *, user_id: str, qualification: dict[str, object],
         route_id: str, display_name: str = "", authority_lease: object,
@@ -2886,10 +2995,10 @@ class SQLiteUserIOStore:
             ).fetchone()
             if row is None:
                 return False
-            if row["status"] in ("approved", "sending"):
+            if row["status"] in ("approved", "sending", "delivery_unknown"):
                 raise ValueError("approved drafts are immutable receipts")
             changed = self._connection.execute(
-                "DELETE FROM drafts WHERE user_id=? AND id=? AND status NOT IN ('approved','sending')",
+                "DELETE FROM drafts WHERE user_id=? AND id=? AND status NOT IN ('approved','sending','delivery_unknown')",
                 (user_id, draft_id),
             ).rowcount
             if changed != 1:
@@ -2902,7 +3011,7 @@ class SQLiteUserIOStore:
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             if self._connection.execute(
-                "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND status='sending'",
+                "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND status IN ('sending','delivery_unknown')",
                 (user_id, conversation_id),
             ).fetchone():
                 raise ValueError("conversation has a delivery in progress")
@@ -2989,25 +3098,105 @@ class SQLiteUserIOStore:
             if draft.status != "proposed":
                 raise ValueError("draft is not approvable")
             self._connection.execute(
-                "UPDATE drafts SET status='sending',sending_at=?,delivery_state='claimed' "
+                "UPDATE drafts SET status='sending',sending_at=?,delivery_state='claimed',"
+                "delivery_attempt_generation=delivery_attempt_generation+1,delivery_attempts=0,"
+                "delivery_next_check_at=?,delivery_last_checked_at=NULL,"
+                "delivery_reason='',delivery_evidence_json='{}' "
                 "WHERE user_id=? AND id=?",
-                (time.time(), user_id, draft_id),
+                (time.time(), time.time() + 5.0, user_id, draft_id),
             )
             return draft
 
     def release_draft_send(self, draft_id: str, *, user_id: str) -> None:
         with self._lock, self._connection:
             self._connection.execute(
-                "UPDATE drafts SET status='proposed',sending_at=NULL,delivery_state='not_submitted' "
-                "WHERE user_id=? AND id=? AND status='sending'",
+                "UPDATE drafts SET status='proposed',sending_at=NULL,delivery_state='not_submitted',"
+                "delivery_next_check_at=NULL "
+                "WHERE user_id=? AND id=? AND status IN ('sending','delivery_unknown')",
                 (user_id, draft_id),
             )
+
+    def approve_reconciled_delivery(self, draft_id: str, receipt: str, *, user_id: str,
+                                   expected_generation: int,
+                                   expected_lease_owner: str | None = None) -> dict[str, object]:
+        """Apply only an exact journal receipt to the still-current claimed attempt."""
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT status,outbox_receipt,delivery_attempt_generation FROM drafts WHERE user_id=? AND id=?",
+                (user, draft_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("draft not found")
+            lease = self._connection.execute(
+                "SELECT worker_id,lease_until FROM draft_delivery_reconciliation_leases WHERE user_id=? AND draft_id=?",
+                (user, draft_id),
+            ).fetchone() if expected_lease_owner is not None else None
+            lease_matches = expected_lease_owner is None or bool(
+                lease and lease["worker_id"] == expected_lease_owner and float(lease["lease_until"]) > time.time())
+            applied = False
+            if (lease_matches and int(row["delivery_attempt_generation"] or 0) == int(expected_generation)
+                    and row["status"] in ("sending", "delivery_unknown")):
+                self._connection.execute(
+                    """UPDATE drafts SET status='approved',approved_at=?,outbox_receipt=?,
+                       sending_at=NULL,delivery_state='delivered',delivery_next_check_at=NULL
+                       WHERE user_id=? AND id=? AND delivery_attempt_generation=?
+                         AND status IN ('sending','delivery_unknown')""",
+                    (time.time(), receipt, user, draft_id, int(expected_generation)),
+                )
+                applied = self._connection.execute("SELECT changes()").fetchone()[0] == 1
+            final = self._connection.execute(
+                "SELECT status,outbox_receipt,delivery_attempt_generation FROM drafts WHERE user_id=? AND id=?",
+                (user, draft_id),
+            ).fetchone()
+        return {"status": str(final["status"]), "receipt": str(final["outbox_receipt"] or ""),
+                "generation": int(final["delivery_attempt_generation"] or 0), "applied": applied}
+
+    def release_reconciled_delivery(self, draft_id: str, *, user_id: str,
+                                    expected_generation: int, reason: str,
+                                    expected_lease_owner: str | None = None) -> dict[str, object]:
+        """Release only an explicitly proven non-submission for the same attempt generation."""
+        user = self._user(user_id)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT status,delivery_attempt_generation FROM drafts WHERE user_id=? AND id=?",
+                (user, draft_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("draft not found")
+            lease = self._connection.execute(
+                "SELECT worker_id,lease_until FROM draft_delivery_reconciliation_leases WHERE user_id=? AND draft_id=?",
+                (user, draft_id),
+            ).fetchone() if expected_lease_owner is not None else None
+            lease_matches = expected_lease_owner is None or bool(
+                lease and lease["worker_id"] == expected_lease_owner and float(lease["lease_until"]) > time.time())
+            applied = False
+            if (lease_matches and int(row["delivery_attempt_generation"] or 0) == int(expected_generation)
+                    and row["status"] in ("sending", "delivery_unknown")):
+                self._connection.execute(
+                    """UPDATE drafts SET status='proposed',sending_at=NULL,delivery_state='not_submitted',
+                       delivery_next_check_at=NULL,delivery_reason=?
+                       WHERE user_id=? AND id=? AND delivery_attempt_generation=?
+                         AND status IN ('sending','delivery_unknown')""",
+                    (reason, user, draft_id, int(expected_generation)),
+                )
+                applied = self._connection.execute("SELECT changes()").fetchone()[0] == 1
+            final = self._connection.execute(
+                "SELECT status,delivery_attempt_generation FROM drafts WHERE user_id=? AND id=?",
+                (user, draft_id),
+            ).fetchone()
+        return {"status": str(final["status"]),
+                "generation": int(final["delivery_attempt_generation"] or 0), "applied": applied}
 
     def draft_delivery_state(self, draft_id: str, *, user_id: str | None = None) -> dict[str, object]:
         """Read the durable delivery bookkeeping of one draft."""
         with self._lock:
             row = self._connection.execute(
-                "SELECT status,sending_at,delivery_state,outbox_receipt,created_at FROM drafts "
+                "SELECT status,sending_at,delivery_state,outbox_receipt,created_at,delivery_attempt_generation,delivery_attempts,"
+                "delivery_next_check_at,delivery_last_checked_at,delivery_reason,delivery_evidence_json "
+                "FROM drafts "
                 "WHERE user_id=? AND id=?",
                 (self._user(user_id), draft_id),
             ).fetchone()
@@ -3019,16 +3208,173 @@ class SQLiteUserIOStore:
             "delivery_state": str(row["delivery_state"] or ""),
             "receipt": str(row["outbox_receipt"] or ""),
             "created_at": float(row["created_at"]) if row["created_at"] is not None else None,
+            "attempts": int(row["delivery_attempts"] or 0),
+            "generation": int(row["delivery_attempt_generation"] or 0),
+            "next_check_at": float(row["delivery_next_check_at"]) if row["delivery_next_check_at"] is not None else None,
+            "last_checked_at": float(row["delivery_last_checked_at"]) if row["delivery_last_checked_at"] is not None else None,
+            "reason": str(row["delivery_reason"] or ""),
+            "evidence": json.loads(row["delivery_evidence_json"] or "{}"),
         }
 
     def mark_draft_delivery_state(self, draft_id: str, state: str, *,
-                                  user_id: str | None = None) -> None:
+                                  user_id: str | None = None,
+                                  expected_generation: int | None = None,
+                                  expected_lease_owner: str | None = None) -> None:
         """Record how an in-flight delivery attempt was resolved."""
         with self._lock, self._connection:
             self._connection.execute(
-                "UPDATE drafts SET delivery_state=? WHERE user_id=? AND id=? AND status='sending'",
-                (state, self._user(user_id), draft_id),
+                "UPDATE drafts SET delivery_state=? WHERE user_id=? AND id=? "
+                "AND status IN ('sending','delivery_unknown') "
+                "AND NOT (delivery_state='provider_match_unverified' AND ? IN ('uncertain','legacy_unknown'))"
+                " AND (? IS NULL OR delivery_attempt_generation=?)"
+                " AND (? IS NULL OR EXISTS (SELECT 1 FROM draft_delivery_reconciliation_leases l "
+                "WHERE l.user_id=drafts.user_id AND l.draft_id=drafts.id AND l.worker_id=? AND l.lease_until>?))",
+                (state, self._user(user_id), draft_id, state, expected_generation, expected_generation,
+                 expected_lease_owner, expected_lease_owner, time.time()),
             )
+
+    def claim_due_telegram_delivery_reconciliations(self, *, worker_id: str,
+                                                     now: float | None = None,
+                                                     limit: int = 10,
+                                                     lease_seconds: float = 120.0) -> list[dict[str, object]]:
+        """Claim due in-flight Telegram attempts; expired leases recover after a crash."""
+        instant = time.time() if now is None else float(now)
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            rows = self._connection.execute(
+                """SELECT d.user_id,d.id,d.conversation_id,d.delivery_attempt_generation,d.delivery_attempts,
+                          d.delivery_state,d.delivery_next_check_at,c.account_ref,c.peer_id
+                   FROM drafts d JOIN conversations c
+                     ON c.user_id=d.user_id AND c.id=d.conversation_id
+                   LEFT JOIN draft_delivery_reconciliation_leases l
+                     ON l.user_id=d.user_id AND l.draft_id=d.id
+                   WHERE d.status IN ('sending','delivery_unknown') AND c.source='telegram'
+                     AND (d.delivery_next_check_at IS NULL OR d.delivery_next_check_at<=?)
+                     AND (l.lease_until IS NULL OR l.lease_until<=?)
+                   ORDER BY COALESCE(d.delivery_next_check_at,0),d.sending_at LIMIT ?""",
+                (instant, instant, max(1, min(int(limit), 50))),
+            ).fetchall()
+            claimed = [dict(row) for row in rows]
+            for row in claimed:
+                self._connection.execute(
+                    """INSERT INTO draft_delivery_reconciliation_leases
+                       (user_id,draft_id,worker_id,lease_until) VALUES (?,?,?,?)
+                       ON CONFLICT(user_id,draft_id) DO UPDATE SET
+                         worker_id=excluded.worker_id,lease_until=excluded.lease_until""",
+                    (row["user_id"], row["id"], worker_id, instant + max(5.0, lease_seconds)),
+                )
+        return claimed
+
+    def release_draft_delivery_reconciliation_claim(self, draft_id: str, *, user_id: str,
+                                                      worker_id: str) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM draft_delivery_reconciliation_leases WHERE user_id=? AND draft_id=? AND worker_id=?",
+                (self._user(user_id), draft_id, worker_id),
+            )
+
+    def record_draft_delivery_reconciliation(self, draft_id: str, *, user_id: str,
+                                               result: dict[str, object], automatic: bool = False,
+                                               next_check_at: float | None = None,
+                                               terminal_unknown: bool = False,
+                                               evidence: dict[str, object] | None = None,
+                                               previous_status: str | None = None,
+                                               previous_delivery_state: str | None = None,
+                                               expected_generation: int | None = None,
+                                               expected_lease_owner: str | None = None) -> dict[str, object]:
+        """Persist the check, evidence, prior/final state and retry schedule atomically."""
+        user = self._user(user_id)
+        now = time.time()
+        payload = evidence or {}
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        reason = str(result.get("reason") or result.get("resolution") or "provider_state_unreported")
+        with self._lock, self._connection:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT status,delivery_state,delivery_attempts,delivery_attempt_generation,outbox_receipt FROM drafts WHERE user_id=? AND id=?",
+                (user, draft_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("draft not found")
+            prior_status = previous_status or str(row["status"])
+            prior_state = previous_delivery_state if previous_delivery_state is not None else str(row["delivery_state"] or "")
+            generation_matches = (expected_generation is None or
+                                  int(row["delivery_attempt_generation"] or 0) == int(expected_generation))
+            lease = self._connection.execute(
+                "SELECT worker_id,lease_until FROM draft_delivery_reconciliation_leases WHERE user_id=? AND draft_id=?",
+                (user, draft_id),
+            ).fetchone() if expected_lease_owner is not None else None
+            lease_matches = expected_lease_owner is None or bool(
+                lease and lease["worker_id"] == expected_lease_owner and float(lease["lease_until"]) > now)
+            result_resolution = str(result.get("resolution") or "unknown")
+            valid_terminal_result = (
+                (result_resolution == "delivered" and row["status"] == "approved"
+                 and str(row["outbox_receipt"] or "") == str(result.get("receipt") or ""))
+                or (result_resolution == "not_submitted" and row["status"] == "proposed"
+                    and str(row["delivery_state"] or "") == "not_submitted")
+            )
+            can_update = generation_matches and lease_matches and (
+                row["status"] in ("sending", "delivery_unknown") or valid_terminal_result)
+            attempts = int(row["delivery_attempts"] or 0) + (1 if automatic and can_update else 0)
+            if terminal_unknown and can_update and prior_status == "sending":
+                self._connection.execute(
+                    "UPDATE drafts SET status='delivery_unknown',delivery_attempts=?,"
+                    "delivery_next_check_at=?,delivery_last_checked_at=?,delivery_reason=?,"
+                    "delivery_evidence_json=? WHERE user_id=? AND id=? AND status='sending'",
+                    (attempts, next_check_at, now, reason, encoded, user, draft_id),
+                )
+            elif can_update:
+                self._connection.execute(
+                    "UPDATE drafts SET delivery_attempts=?,delivery_next_check_at=?,"
+                    "delivery_last_checked_at=?,delivery_reason=?,delivery_evidence_json=? "
+                    "WHERE user_id=? AND id=?",
+                    (attempts, next_check_at, now, reason, encoded, user, draft_id),
+                )
+            final = self._connection.execute(
+                "SELECT status,delivery_state,delivery_attempts,delivery_next_check_at,"
+                "delivery_last_checked_at,delivery_reason,delivery_evidence_json "
+                "FROM drafts WHERE user_id=? AND id=?",
+                (user, draft_id),
+            ).fetchone()
+            self._connection.execute(
+                """INSERT INTO draft_delivery_reconciliation_events
+                   (user_id,draft_id,checked_at,automatic,previous_status,previous_delivery_state,
+                    new_status,new_delivery_state,resolution,reason,evidence_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (user, draft_id, now, int(automatic), prior_status, prior_state,
+                 str(final["status"]), str(final["delivery_state"] or ""),
+                 (result_resolution if can_update else "stale_check_ignored"),
+                 (reason if can_update else ("attempt_generation_changed" if not generation_matches else
+                    "reconciliation_lease_expired_or_replaced" if not lease_matches else "attempt_already_terminal")),
+                 encoded),
+            )
+        return {"attempts": int(final["delivery_attempts"] or 0),
+                "last_checked_at": float(final["delivery_last_checked_at"]) if final["delivery_last_checked_at"] is not None else None,
+                "next_check_at": float(final["delivery_next_check_at"]) if final["delivery_next_check_at"] is not None else None,
+                "status": str(final["status"]),
+                "delivery_state": str(final["delivery_state"] or ""),
+                "reason": str(final["delivery_reason"] or ""),
+                "evidence": json.loads(final["delivery_evidence_json"] or "{}"),
+                "stale": not can_update}
+
+    def draft_delivery_reconciliation_events(self, draft_id: str, *, user_id: str | None = None,
+                                               limit: int = 20) -> list[dict[str, object]]:
+        user = self._user(user_id)
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT checked_at,automatic,previous_status,previous_delivery_state,new_status,
+                          new_delivery_state,resolution,reason,evidence_json
+                   FROM draft_delivery_reconciliation_events WHERE user_id=? AND draft_id=?
+                   ORDER BY event_id DESC LIMIT ?""",
+                (user, str(draft_id), max(1, min(int(limit), 100))),
+            ).fetchall()
+        events = []
+        for row in rows:
+            event = dict(row)
+            event["automatic"] = bool(event["automatic"])
+            event["evidence"] = json.loads(event.pop("evidence_json") or "{}")
+            events.append(event)
+        return events
 
     def approve(self, draft_id: str, receipt: str, *, user_id: str | None = None) -> ReplyDraft:
         user_id = self._user(user_id)
@@ -3048,7 +3394,7 @@ class SQLiteUserIOStore:
             self._connection.execute(
                 """
                 UPDATE drafts SET status='approved',approved_at=?,outbox_receipt=?,
-                    sending_at=NULL,delivery_state='delivered'
+                    sending_at=NULL,delivery_state='delivered',delivery_next_check_at=NULL
                 WHERE user_id=? AND id=?
                 """,
                 (time.time(), receipt, user_id, draft_id),
@@ -3209,7 +3555,9 @@ class SQLiteUserIOStore:
             ).fetchall()
             drafts = self._connection.execute(
                 """
-                SELECT id,body,status,outbox_receipt,created_at FROM drafts
+                SELECT id,body,status,outbox_receipt,created_at,sending_at,delivery_state,
+                       delivery_attempts,delivery_next_check_at,delivery_last_checked_at,
+                       delivery_reason,delivery_evidence_json FROM drafts
                 WHERE user_id=? AND conversation_id=? ORDER BY created_at
                 """,
                 (user_id, conversation_id),
@@ -3249,9 +3597,17 @@ class SQLiteUserIOStore:
                 "SELECT draft_id,context_json FROM draft_context_snapshots WHERE user_id=? AND conversation_id=?",
                 (user_id, conversation_id)).fetchall())
         for draft in draft_records:
+            draft["delivery_evidence"] = json.loads(draft.pop("delivery_evidence_json") or "{}")
+            draft["outbox_receipt"] = str(draft.get("outbox_receipt") or "")
+            draft["delivery_history"] = self.draft_delivery_reconciliation_events(
+                str(draft["id"]), user_id=user_id, limit=20)
             saved = json.loads(snapshots[draft["id"]]) if draft["id"] in snapshots else None
             draft["reply_to"] = None
             draft["context_status"] = "unknown"
+            # A draft keeps its record after it was sent. ``sent`` says which
+            # it is, so a kept record is never read as "still to send".
+            draft["sent"] = draft["status"] == "approved"
+            draft["delivery_state"] = str(draft.get("delivery_state") or "")
             if saved:
                 draft["reply_to"] = {key: saved[key] for key in ("source", "message_id", "body", "received_at")}
                 try:
@@ -3402,7 +3758,7 @@ class SQLiteUserIOStore:
                 """UPDATE conversations SET account_ref=? WHERE user_id=? AND id=?
                    AND (COALESCE(account_ref,'')=? OR NOT EXISTS (
                        SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=?
-                       AND status IN ('proposed','sending')))
+                       AND status IN ('proposed','sending','delivery_unknown')))
                 """,
                 (account_ref.strip(), user_id, conversation_id, account_ref.strip(), user_id, conversation_id),
             ).rowcount == 1

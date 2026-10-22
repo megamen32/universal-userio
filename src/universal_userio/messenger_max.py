@@ -14,6 +14,7 @@ from .contracts import (DeliveryNotSubmittedError, ProviderAuthenticationRequire
 
 
 class MaxMessengerProvider:
+    reaction_remove_supported = True
     typing_stop_mode = 'expires_automatically'
     account_ref = 'max'
     operations = frozenset({'reply','edit','react','sticker','file','file_upload','typing','download','history'})

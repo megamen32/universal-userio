@@ -20,29 +20,33 @@ function slotNumber(slotId) {
 
 export function telegramAccountCard(session, account = null) {
   const revoked = session.sync === 'relogin-required';
+  const missing = session.status === 'reconnect-required' || session.sync === 'missing-session';
   const suffix = accountSuffix(session.accountId);
-  const displayName = String(account?.display_name || session.name || '').trim();
+  const displayName = String(session.profileName || account?.display_name || session.name || '').trim();
   const title = displayName
     ? `${displayName} · Telegram${suffix ? ` · ${suffix}` : ''}`
     : suffix ? `Telegram · ${suffix}`
-      : `Сохранённая сессия Telegram №${slotNumber(session.id) || session.id || 'новая'}`;
+      : 'Подключение Telegram';
   const managed = account?.can_disconnect === true && !!session.accountId;
   const accountFound = !!account;
 
   return {
-    title,
-    status: revoked ? 'Сессия отключена · Telegram отозвал вход'
+    title: session.profileNumber ? `ID ${session.profileNumber} · ${displayName}` : title,
+    reconnect: revoked || missing,
+    status: missing ? 'Ошибка подключения · переподключите Telegram' : revoked ? 'Сессия отключена · Telegram отозвал вход'
       : statusLabels[session.status] || 'Проверяем состояние входа',
-    note: revoked
+    note: missing
+      ? 'Для этого профиля нет сохранённого сеанса. Подключите тот же Telegram-аккаунт заново: его адрес и сохранённые переписки останутся прежними.'
+      : revoked
       ? `${displayName ? 'Telegram отозвал эту сессию. Она не подключена; сохранённые переписки останутся в UserIO.' : 'Имя аккаунта не сохранено в UserIO. Telegram уже отозвал вход, поэтому проверить его не удалось. Сессия отключена; сохранённые переписки останутся в UserIO.'}`
       : session.sync === 'retrying'
         ? 'Синхронизация сообщений восстанавливается.'
         : session.sync
           ? `Синхронизация сообщений включена${session.syncChats ? ` · ${session.syncChats} диалогов` : ''}.`
           : '',
-    sessionLabel: session.id ? `Сессия ${session.id}` : '',
+    sessionLabel: session.accountId ? `Постоянный ID: ${session.accountId}` : '',
     action: managed
-      ? { kind: 'account', label: revoked ? 'Убрать из UserIO' : 'Отключить аккаунт', accountId: session.accountId }
+      ? { kind: 'profile', label: 'Отключить вход', accountId: session.accountId }
       : revoked && !accountFound
         ? { kind: 'revoked-slot', label: 'Убрать из UserIO', slot: session.id }
         : null,

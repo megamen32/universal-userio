@@ -9,6 +9,7 @@ from typing import Any
 
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
+from .delivery_receipt import delivery_fields
 from .token_permissions import READ_ONLY_TOOLS, MEETING_RECORDING_TOOLS
 from .service import UserIOService
 from .store import SQLiteUserIOStore
@@ -72,6 +73,16 @@ TOOL_SPECS = (
         "until": {"type": "number"},
         "max_messages": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 20000},
     })),
+    ToolSpec("userio.contacts.resolve", "Resolve a contact that is not in the history yet into a peer the account can write to: a Telegram username or phone number, a phone number for SMS or WhatsApp, a mail address, a VK profile or link, or a Yandex user id. The answer names the account, the channel and the provider-native peer, so the next call can write to it. Nothing is sent to the contact here. A Telegram identifier needs the connector's own live session: when that session is down the answer carries code connector_unreachable or account_not_connected, and userio.messenger.capabilities reports first_contact.supported=false for the same account.", _schema({
+        "account_ref": {"type": "string", "maxLength": 128},
+        "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+    }, ["account_ref", "identifier"])),
+    ToolSpec("userio.contacts.start", "Start a conversation with a contact that is not in the history yet and send the first message. The identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is delivered through the same durable path as every other outbound message. The request_id makes a retry reuse the same message instead of sending it twice. The answer reports what the transport really proved: delivery_status=delivered only with a provider confirmation, delivery_status=smtp_accepted when the mail transport merely took the letter.", _schema({
+        "account_ref": {"type": "string", "maxLength": 128},
+        "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
+        "text": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "request_id": {"type": "string", "minLength": 16, "maxLength": 80},
+    }, ["account_ref", "identifier", "text", "request_id"])),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
@@ -181,10 +192,11 @@ TOOL_SPECS = (
     ToolSpec("userio.message.mark_seen", "Mark one user-owned message as seen.", _schema({
         "source": {"type": "string"}, "message_id": {"type": "string"},
     }, ["source", "message_id"])),
-    ToolSpec("userio.messages.react", "Set an emoji reaction on a stored message; visible to the peer.", _schema({
+    ToolSpec("userio.messages.react", "Set a source-bound reaction immediately without confirmation. Empty emoji removes it only where the provider supports removal. Does not send a message. Reuse request_id for dedup.", _schema({
         "conversation_id": {"type": "string"}, "message_id": {"type": "string"},
-        "emoji": {"type": "string", "maxLength": 16}, "confirm": {"type": "boolean"},
-    }, ["conversation_id", "message_id", "emoji", "confirm"])),
+        "emoji": {"type": "string", "maxLength": 16},
+        "request_id": {"type":"string","minLength":16,"maxLength":128},
+    }, ["conversation_id", "message_id", "emoji"])),
     ToolSpec("userio.draft.create", "Create a reply draft; does not send.", _schema({
         "conversation_id": {"type": "string"}, "body": {"type": "string"},
     }, ["conversation_id", "body"])),
@@ -227,23 +239,28 @@ TOOL_SPECS = (
 
 
 
-from .mcp_catalog import MESSENGER_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
+from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS)
 
 TOOL_CAPABILITIES = {
+    "userio.messages.prepare": "send",
     'userio.messenger.capabilities': 'read',
     'userio.messenger.events': 'read',
     'userio.messenger.history': 'read',
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
+    'userio.messenger.safe_action': 'send',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.upload': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.search": "read",
     "userio.channels.export": "read",
+    "userio.contacts.resolve": "read",
+    "userio.contacts.start": "send",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
@@ -302,9 +319,9 @@ class UserIOMcpSurface:
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
             and (principal.messenger_grants is None or any(g['access']=='read_write' for g in principal.messenger_grants)
                  or spec.name in READ_ONLY_TOOLS
-                 or spec.name in {'userio.messenger.telegram_admin.propose','userio.messenger.approve'}
+                 or spec.name in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose','userio.messenger.approve'}
                  and any(g.get('telegram_admin') for g in principal.messenger_grants))
-            and (spec.name!='userio.messenger.telegram_admin.propose'
+            and (spec.name not in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose'}
                  or principal.messenger_accounts is None and principal.messenger_grants is None
                  or any(g.get('telegram_admin') for g in principal.messenger_grants or ()))
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
@@ -312,7 +329,7 @@ class UserIOMcpSurface:
                  or principal.messenger_grants is not None and spec.name in {
                     'userio.accounts.list','userio.channels.list','userio.channels.search',
                     'userio.channels.export','userio.channels.read','userio.channels.download',
-                    'userio.channels.send_draft'}
+                    'userio.channels.send_draft','userio.contacts.resolve','userio.contacts.start','userio.messages.prepare'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -558,6 +575,10 @@ class UserIOMcpSurface:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.prepare':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name.startswith('userio.contacts.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
                 return {'ok':False,'error':str(error).strip("'")}
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
@@ -617,6 +638,38 @@ class UserIOMcpSurface:
                 if len(markdown.encode("utf-8")) <= 32768:
                     result["content"] = markdown
                 return result
+            if name == 'userio.messages.prepare':
+                return self._service.contact_starter.prepare(user_id=user_id, **arguments)
+            if name == "userio.contacts.resolve":
+                from .contact_start import ContactStartError
+                account_ref = str(arguments.get("account_ref") or "").strip()
+                identifier = str(arguments.get("identifier") or "").strip()
+                if not account_ref or not identifier:
+                    raise ValueError("account_ref and identifier are required")
+                try:
+                    resolved = self._service.contact_starter.resolve(
+                        user_id=user_id, account_ref=account_ref, identifier=identifier,
+                        need_send=False,
+                    )
+                except ContactStartError as error:
+                    return {"ok": False, "error": str(error), "code": error.code}
+                return {"ok": True, "peer": resolved.as_dict()}
+            if name == "userio.contacts.start":
+                from .contact_start import ContactStartError
+                account_ref = str(arguments.get("account_ref") or "").strip()
+                identifier = str(arguments.get("identifier") or "").strip()
+                text = str(arguments.get("text") or "").strip()
+                request_id = str(arguments.get("request_id") or "").strip()
+                if not account_ref or not identifier or not text or not request_id:
+                    raise ValueError(
+                        "account_ref, identifier, text and request_id are required")
+                try:
+                    return self._service.contact_starter.start(
+                        user_id=user_id, account_ref=account_ref, identifier=identifier,
+                        text=text, request_id=request_id,
+                    )
+                except ContactStartError as error:
+                    return {"ok": False, "error": str(error), "code": error.code}
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()
@@ -910,8 +963,8 @@ class UserIOMcpSurface:
                 return self._service.react_to_message(
                     conversation_id=self._required(arguments, "conversation_id"),
                     message_id=self._required(arguments, "message_id"),
-                    emoji=self._required(arguments, "emoji"),
-                    confirm=arguments.get("confirm") is True, user_id=user_id,
+                    emoji=arguments.get("emoji"), user_id=user_id,
+                    request_id=arguments.get("request_id", ""), principal=principal,
                 )
             if name == "userio.draft.create":
                 draft = self._service.create_manual_draft(
@@ -1007,16 +1060,31 @@ class UserIOMcpSurface:
             expected_snapshot=snapshot,
         )
         conversation = self._store.conversation(draft.conversation_id, user_id=principal.user_id) or {}
+        delivery = delivery_fields(draft.receipt or "")
         return {
             "ok": True, "draft": self._draft(draft),
-            "sent": draft.status == "approved",
+            **delivery,
+            # The draft keeps its receipt, so an approval is never retried
+            # blindly: the same draft replays its own outcome.
+            "retry_allowed": False,
             "receipt": draft.receipt or None,
             "channel": str(conversation.get("source") or ""),
-            "delivery_note": self._delivery_note(conversation),
+            "delivery_note": self._delivery_note(conversation, delivery),
+            "replay": bool(getattr(draft, "replayed", False)),
         }
 
     @staticmethod
-    def _delivery_note(conversation: dict[str, Any]) -> str:
+    def _delivery_note(conversation: dict[str, Any], delivery: dict[str, Any] | None = None) -> str:
+        delivery = delivery or {}
+        if delivery.get("delivery_status") == "smtp_accepted":
+            note = ("The mail transport accepted the message; UserIO has no provider "
+                    "delivery confirmation, so this is not a confirmed delivery.")
+            copy = delivery.get("sent_copy") or {}
+            if str(copy.get("saved") or "") == "true":
+                note += " A copy was saved to the Sent mailbox."
+            else:
+                note += " No Sent copy was saved: " + str(copy.get("reason") or "unknown") + "."
+            return note
         source = str(conversation.get("source") or "")
         if source == "sms":
             return "Android gateway accepted the SMS; carrier delivery is not guaranteed."
@@ -1092,6 +1160,9 @@ class UserIOMcpSurface:
         payload = {
             "id": draft.id, "conversation_id": draft.conversation_id,
             "body": draft.body, "status": draft.status,
+            # ``approved`` means the transport took this message; it never
+            # means "waiting to be sent".
+            "sent": draft.status == "approved",
         }
         receipt = getattr(draft, "receipt", "")
         if receipt:

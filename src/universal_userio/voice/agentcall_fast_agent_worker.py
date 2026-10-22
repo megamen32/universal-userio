@@ -21,8 +21,9 @@ VOICE_LANGUAGE_POLICY = (
     'а вслух произнеси стандартное русское написание в кириллице — например «Джи-пи-ти Админ» или '
     '«Докер». Имя нельзя заменять безымянным описанием, и ответ не должен оставаться целиком на '
     'английском. Не опускай технический смысл и важные для ответа детали, но и не перечисляй подряд '
-    'все числа, времена и проверки. Служебные идентификаторы и адреса не произноси дословно, а '
-    'объясни их назначение понятными русскими словами.')
+    'все числа, времена и проверки. Домен и код ошибки сохраняй точно в тексте ответа, '
+    'например notify.bezrabotnyi.com и HTTP 502: синтез речи сам произнесёт домен и код по-русски. '
+    'Служебные идентификаторы без диагностического значения объясняй понятными русскими словами.')
 
 
 def compose_voice_instruction(instruction=None):
@@ -141,8 +142,11 @@ async def serve(wire):
     settings.setdefault('generic',{})['base_url']=boot['base_url']
     settings.setdefault('shell_execution',{})['enabled']=False
     servers=settings.setdefault('mcp',{}).setdefault('servers',{})
-    servers['AgentHerder']={'transport':'http','url':boot['herder_url']}
-    servers['agentcall']={'command':boot['mcp_python'],
+    # Host-local URLs, authentication and environment are protected deployment settings.
+    herder = dict(servers.get('AgentHerder') or {})
+    herder.update(transport='http', url=herder.get('url') or boot['herder_url'])
+    servers['AgentHerder'] = herder
+    servers['agentcall']={**(servers.get('agentcall') or {}),'command':boot['mcp_python'],
         'args':[boot['mcp_script'],'--context',boot['context'],'--live-context']}
     config.write_text(yaml.safe_dump(settings,allow_unicode=True))
     full=json.loads(card.read_text());full['model']=boot['model']

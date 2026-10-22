@@ -1,7 +1,7 @@
 import http from "node:http";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
@@ -15,6 +15,7 @@ import { telegramConversationKind, telegramGroupRoutingAttachment } from "./grou
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
 import { syncContactProfiles } from "./contact-index.mjs";
+import { resolveTelegramContact, peerProfile } from "./contact-resolve.mjs";
 import { mirrorMetadata, confirmedDeletedIds, providerUnreadCount } from "./mirror-metadata.mjs";
 import { loginAuthorized, normalizeLoginCode, normalizeLoginPhone } from "./login-api.mjs";
 import { acknowledgeRead } from './read-receipt.mjs';
@@ -62,6 +63,7 @@ const liveSlots = new Map();
 const disconnectedSlots = new Set();
 let nextSlot = 1;
 let promptSeq = 0;
+const accountRegistrations = new Map();
 const agentDeliverUrl = String(process.env.USERIO_AGENT_DELIVER_URL || "").trim();
 const agentDeliverSecret = String(process.env.USERIO_AGENT_DELIVER_HMAC_SECRET || "").trim();
 const agentDeliverChatId = String(process.env.USERIO_AGENT_DELIVER_CHAT_ID || "").trim();
@@ -89,12 +91,51 @@ if (!whisperApiKey) console.warn("Telegram auto-transcription disabled: Whisper 
 
 mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
 restoreAgentDeliverDebounce();
+const profilePath = `${stateDir}/slot-profiles.json`;
+const slotProfiles = existsSync(profilePath) ? JSON.parse(readFileSync(profilePath, "utf8")) : {};
+function saveSlotProfile(slot, accountId) {
+  if (accountId) slotProfiles[slot] = accountId; else delete slotProfiles[slot];
+  const next = `${profilePath}.next`;
+  writeFileSync(next, JSON.stringify(slotProfiles), { mode: 0o600 });
+  chmodSync(next, 0o600); renameSync(next, profilePath);
+}
 const enrollmentOwners=new EnrollmentOwners(`${stateDir}/slot-owners.json`,process.env.USERIO_TELEGRAM_USER_ID||"user_owner");
+const registryPath = `${stateDir}/profiles.json`;
+const profiles = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, "utf8")) : {};
+function saveProfiles() {
+  const next = `${registryPath}.next`;
+  writeFileSync(next, JSON.stringify(profiles), { mode: 0o600 });
+  chmodSync(next, 0o600); renameSync(next, registryPath);
+}
+function profileKey(owner, accountId) { return `${owner}/${accountId}`; }
+function rememberProfile(slot, accountId, name) {
+  const owner = enrollmentOwners.owner(slot), key = profileKey(owner, accountId);
+  const previous = profiles[key];
+  const number = previous?.number || Math.max(0, ...Object.values(profiles).filter(p => p.owner === owner).map(p => p.number || 0)) + 1;
+  profiles[key] = { owner, accountId, number, name: previous?.name || name || accountId, slot };
+  saveProfiles();
+  return profiles[key];
+}
+async function profileState(browserOwner) {
+  const owner = browserOwner.principal.user_id;
+  const accounts = (await registeredAccounts(browserOwner.headers)).filter(a => a.provider === "telegram");
+  const raw = enrollmentOwners.filter(publicState(), owner);
+  const rows = accounts.map(account => {
+    const profile = profiles[profileKey(owner, account.id)];
+    const current = raw.find(row => profile ? row.id === profile.slot : row.accountId === account.id);
+    return { ...(current || { status: "reconnect-required", sync: "missing-session", qr: "" }),
+      id: account.id, accountId: account.id, profileNumber: profile?.number || 0,
+      profileName: profile?.name || account.display_name || account.id };
+  });
+  // Pending login challenges are enrollments, never additional account identities.
+  rows.push(...raw.filter(row => !row.accountId && !["connected", "connected-unregistered"].includes(row.status)));
+  return rows.sort((a, b) => (a.profileNumber || 999999) - (b.profileNumber || 999999));
+}
 for (const file of readdirSync(sessionsDir)) {
   const match = /^account-(\d+)\.session$/.exec(file);
   if (!match) continue;
   const id = `account-${match[1]}`;
-  slots.set(id, { status: "connected" });
+  slots.set(id, { status: "connected", accountId: slotProfiles[id] || "" });
   nextSlot = Math.max(nextSlot, Number(match[1]) + 1);
   void syncAccount(id);
 }
@@ -113,15 +154,16 @@ function credentials() {
   return { apiId: Number(decrypt("telegram_qr_api_id")), apiHash: decrypt("telegram_qr_api_hash") };
 }
 
-function registerAccount(slot, user) {
-  const personalHeaders=enrollmentOwners.registrationHeaders(slot);
-  const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || `Telegram ${user.id}`;
+function registerAccount(slot, user, { headers = null, canReply = null } = {}) {
+  const personalHeaders=headers || enrollmentOwners.registrationHeaders(slot);
+  const displayName = (headers ? user.firstName : profiles[profileKey(enrollmentOwners.owner(slot), `telegram:${user.id}`)]?.name)
+    || [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || `Telegram ${user.id}`;
   const body = JSON.stringify({
     id: `telegram:${user.id}`,
     provider: "telegram",
     display_name: displayName,
     can_read: true,
-    can_reply: Boolean(personalHeaders),
+    can_reply: canReply === null ? Boolean(personalHeaders) : canReply,
     credential_ref: `telegram-qr:${slot}`,
     enabled: true,
   });
@@ -138,8 +180,28 @@ function registerAccount(slot, user) {
       response.resume();
       response.on("end", () => response.statusCode === 202 ? resolve(displayName) : reject(new Error(`UserIO returned HTTP ${response.statusCode}`)));
     });
+    request.setTimeout(10000, () => request.destroy(new Error("Account registration timeout; reconcile before retry")));
     request.once("error", reject);
     request.end(body);
+  });
+}
+
+// Read through the same owner-scoped API used by the browser. Never infer
+// ownership from a Telegram identity observed in another user's live slot.
+function registeredAccounts(headers) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(new URL("/v1/accounts", userIoUrl), { headers }, response => {
+      let body = "";
+      response.on("data", chunk => { body += chunk; if (body.length > 1024 * 1024) request.destroy(new Error("Account list too large")); });
+      response.on("end", () => {
+        try {
+          if (response.statusCode !== 200) throw new Error(`UserIO returned HTTP ${response.statusCode}`);
+          resolve(JSON.parse(body).accounts || []);
+        } catch (error) { reject(error); }
+      });
+    });
+    request.setTimeout(5000, () => request.destroy(new Error("Account lookup timeout")));
+    request.on("error", reject);
   });
 }
 
@@ -377,21 +439,57 @@ function errorLogger() {
 }
 
 async function finishLogin(slot, client, user) {
-  const session = client.session.save();
-  const file = `${sessionsDir}/${slot}.session`;
-  writeFileSync(file, session, { mode: 0o600 });
-  chmodSync(file, 0o600);
-  const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || String(user.id);
-  try {
-    await registerAccount(slot, user);
-    enrollmentOwners.registered(slot);
-    slots.set(slot, { status: "connected", name: displayName });
-  } catch (error) {
-    console.error("Telegram account registration error:", (error && error.message) || "unknown");
-    slots.set(slot, { status: "connected-unregistered", name: displayName });
-    return;
-  }
-  void syncAccount(slot);
+  const accountId = `telegram:${user.id}`;
+  const owner = enrollmentOwners.owner(slot);
+  const key = `${owner}:${accountId}`;
+  const previousRegistration = accountRegistrations.get(key) || Promise.resolve();
+  const pending = previousRegistration.catch(() => {}).then(async () => {
+    const displayName = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || accountId;
+    const file = `${sessionsDir}/${slot}.session`;
+    // Publish complete bytes before the account reference can point here.
+    const temporary = `${file}.next`;
+    writeFileSync(temporary, client.session.save(), { mode: 0o600 });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, file);
+    saveSlotProfile(slot, accountId);
+    try {
+      const headers = enrollmentOwners.registrationHeaders(slot)
+        || { Authorization: `Bearer ${process.env.USERIO_API_TOKEN || ""}` };
+      const accounts = await registeredAccounts(headers);
+      // Public account responses intentionally omit credential references.
+      // The connector persists its own verified slot-to-profile identities.
+      const previous = accounts.some(account => account.provider === "telegram" && account.id === accountId);
+      const retire = new Set();
+      for (const [id, state] of slots) {
+        if (previous && id !== slot && enrollmentOwners.allowed(id, owner)
+            && (liveSlots.get(id)?.accountId || state.accountId) === accountId) retire.add(id);
+      }
+      await registerAccount(slot, user);
+      enrollmentOwners.registered(slot);
+      rememberProfile(slot, accountId, displayName);
+      slots.set(slot, { status: "connected", name: displayName, accountId });
+      // Registration is the commit point. A failed/unknown request keeps both
+      // sessions and the previous binding available for reconciliation.
+      for (const id of retire) {
+        try {
+          const old = clearSlot(id, { preserveProfile: true });
+          if (old?.client) await old.client.disconnect().catch(() => {});
+        } catch (error) {
+          console.error(`Telegram old session retirement failed for ${id}:`, error.message || "unknown");
+        }
+      }
+    } catch (error) {
+      console.error("Telegram account registration error:", error?.message || "unknown");
+      slots.set(slot, { status: "connected-unregistered", name: displayName, accountId });
+      return;
+    }
+    // The login client releases the key before ingestion takes ownership.
+    await client.disconnect();
+    void syncAccount(slot);
+  });
+  accountRegistrations.set(key, pending);
+  try { await pending; }
+  finally { if (accountRegistrations.get(key) === pending) accountRegistrations.delete(key); }
 }
 
 function failSlot(slot, error) {
@@ -794,8 +892,11 @@ async function syncAccount(slot) {
         throw failure;
       }
       const me = await client.getMe();
+      if (disconnectedSlots.has(slot)) break;
       const accountId = `telegram:${me.id}`;
+      saveSlotProfile(slot, accountId);
       const displayName = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || accountId;
+      rememberProfile(slot, accountId, displayName);
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
       liveSlots.set(slot, { client, labelPeers, accountId, dialogLabels });
@@ -820,6 +921,7 @@ async function syncAccount(slot) {
           const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
           await refreshUnreadSnapshot(client, accountId).catch(error =>
             console.error(`unread snapshot startup: ${error.message || error}`));
+      if (disconnectedSlots.has(slot)) break;
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
       // GramJS 2.26 has no runUntilDisconnected; the client keeps itself
@@ -840,6 +942,7 @@ async function syncAccount(slot) {
         setSync(slot, { status: "live", lastError: "", lastSyncAt: Date.now() });
       }
     } catch (error) {
+      if (disconnectedSlots.has(slot)) break;
       setSync(slot, { status: authTerminal ? "relogin-required" : "retrying",
         lastError: String((error && error.message) || error),
         authCode: (error && error.authCode) || "" });
@@ -988,7 +1091,7 @@ function publicState() {
   return publicIngressState(slots, syncs, liveSlots);
 }
 
-function clearSlot(slotId) {
+function clearSlot(slotId, { preserveProfile = false } = {}) {
   disconnectedSlots.add(slotId);
   const timer = unreadRefreshTimers.get(slotId);
   if (timer) clearTimeout(timer);
@@ -997,13 +1100,16 @@ function clearSlot(slotId) {
   liveSlots.delete(slotId);
   slots.delete(slotId);
   syncs.delete(slotId);
-  enrollmentOwners.remove(slotId);
+  if (!preserveProfile) {
+    enrollmentOwners.remove(slotId);
+    saveSlotProfile(slotId, "");
+  }
   try { unlinkSync(`${sessionsDir}/${slotId}.session`); }
   catch (error) { if (error?.code !== "ENOENT") throw error; }
   return live;
 }
 
-const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Подключённые аккаунты и сохранённые входы. Старые сеансы без имени отмечены отдельно.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p><details><summary>Импортировать существующий сеанс</summary><p class="userio-note">Локально преобразуйте файл через <code>tg-convert путь-к-файлу --to gramjs-string --print</code> и вставьте результат. Остановите другие клиенты этого аккаунта перед импортом: одну Telegram-сессию должен обслуживать один живой владелец.</p><form id="import-session-form"><textarea name="session" required autocomplete="off" spellcheck="false" aria-label="GramJS session string" rows="4"></textarea><button class="userio-setup-button" type="submit">Проверить и сохранить</button><p class="userio-note" id="import-session-status" aria-live="polite"></p></form></details></section><div id=cards aria-live="polite"></div></main></div><script type="module">
+const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Каждый профиль сохраняет постоянный Telegram ID при любом повторном входе.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p><details><summary>Импортировать существующий сеанс</summary><p class="userio-note">Локально преобразуйте файл через <code>tg-convert путь-к-файлу --to gramjs-string --print</code> и вставьте результат. Остановите другие клиенты этого аккаунта перед импортом: одну Telegram-сессию должен обслуживать один живой владелец.</p><form id="import-session-form"><textarea name="session" required autocomplete="off" spellcheck="false" aria-label="GramJS session string" rows="4"></textarea><button class="userio-setup-button" type="submit">Проверить и сохранить</button><p class="userio-note" id="import-session-status" aria-live="polite"></p></form></details></section><div id=cards aria-live="polite"></div><details id="old-sessions" hidden><summary>Старые отключённые сеансы</summary><p class="userio-note">Эти входы уже отозваны Telegram. Привязанные профили показаны выше; история сохранена.</p><div id="old-cards"></div></details></main></div><script type="module">
 import { telegramAccountCard } from "__PREFIX__/account-card.mjs";
 var prefix = location.pathname.replace(/\\/$/, "");
 var seen = new Map();
@@ -1016,6 +1122,7 @@ function card(s){
   var html = '<section class="userio-setup-panel" id="card-'+esc(s.id)+'"><h2>'+esc(view.title)+'</h2><p class="userio-status" role="status">'+esc(view.status)+'</p>';
   if (view.sessionLabel) html += '<p class="userio-note">'+esc(view.sessionLabel)+'</p>';
   if (view.note) html += '<p class="userio-note">'+esc(view.note)+'</p>';
+  if (view.reconnect) html += '<a class="userio-setup-button" href="'+a('/new')+'">Переподключить Telegram</a>';
   if (view.action) html += '<div class="userio-setup-actions"><button class="userio-setup-button userio-setup-secondary" type="button" data-account-action="'+esc(view.action.kind)+'" data-account-id="'+esc(view.action.accountId||'')+'" data-slot="'+esc(view.action.slot||'')+'" data-label="'+esc(view.title)+'">'+esc(view.action.label)+'</button><p class="userio-note" data-action-status aria-live="polite"></p></div>';
   if (s.qr) html += '<img class="userio-qr" src="'+s.qr+'" alt="QR-код входа в Telegram"><p class="userio-note">Telegram \\u2192 Настройки → Устройства → Подключить устройство</p>';
   if (s.status === "code-required") html += '<form method=post action="'+a('/code?slot='+encodeURIComponent(s.id))+'" data-async=1><p>Введите код входа'+(s.codeViaApp?" (пришёл в Telegram)":" (SMS)")+'</p><input name=code inputmode=numeric autocomplete=one-time-code autofocus><button class="userio-setup-button" type=submit>Подтвердить код</button></form>';
@@ -1032,18 +1139,26 @@ async function refreshAccounts(force){
 }
 function render(list){
   var box = document.getElementById("cards");
+  var oldBox = document.getElementById("old-cards");
+  accounts.forEach(function(account){
+    var session=list.find(function(s){return s.accountId===account.id;});
+    if(session){session.accountId=account.id;return;}
+    list.push({id:'missing-'+account.id.replace(/[^a-zA-Z0-9]/g,'-'),accountId:account.id,status:'reconnect-required',sync:'missing-session',qr:''});
+  });
   var connected = list.filter(function(s){return s.status==='connected'&&s.sync!=='relogin-required';}).length;
-  var revoked = list.filter(function(s){return s.sync==='relogin-required';}).length;
-  document.getElementById('account-summary').textContent='Подключено аккаунтов: '+connected+' · отозванные сеансы: '+revoked;
+  var revoked = list.filter(function(s){return accounts.has(s.accountId)&&(s.sync==='relogin-required'||s.status==='reconnect-required');}).length;
+  document.getElementById('old-sessions').hidden=!list.some(function(s){return s.sync==='relogin-required'&&!accounts.has(s.accountId);});
+  document.getElementById('account-summary').textContent='Подключено аккаунтов: '+connected+' · требуют переподключения: '+revoked;
   var live = new Set(list.map(function(s){return s.id;}));
   list.forEach(function(s){
     var account=accounts.get(s.accountId)||{};
-    var sig = [s.status,s.name,s.accountId,account.display_name,account.can_disconnect,s.qr.slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
+    var target=s.sync==='relogin-required'&&!accounts.has(s.accountId)?oldBox:box;
+    var sig = [s.status,s.name,s.accountId,s.profileNumber,s.profileName,account.display_name,account.can_disconnect,(s.qr||" ").slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
     if (seen.get(s.id) === sig) return;
     seen.set(s.id, sig);
     var el = document.getElementById("card-"+s.id);
     var html = card(s);
-    if (el) el.outerHTML = html; else box.insertAdjacentHTML("beforeend", html);
+    if (el) el.remove(); target.insertAdjacentHTML("beforeend", html);
   });
   [...seen.keys()].forEach(function(id){
     if (!live.has(id)) { var el = document.getElementById("card-"+id); if (el) el.remove(); seen.delete(id); }
@@ -1071,13 +1186,15 @@ document.getElementById('import-session-form').addEventListener('submit',async f
 document.addEventListener('click',async function(event){
   var button=event.target.closest('[data-account-action]');if(!button)return;
   var kind=button.dataset.accountAction,label=button.dataset.label||'этот аккаунт';
-  var question=kind==='account'
+  var question=kind==='profile'?'Отключить вход «'+label+'»? Профиль и история сохранятся, затем можно будет переподключиться.':kind==='account'
     ? (button.textContent==='Отключить аккаунт'?'Отключить «'+label+'»? Сохранённая история останется в UserIO.':'Убрать отключённый аккаунт «'+label+'» из UserIO? История останется.')
     : 'Убрать отключённую сессию «'+label+'» из UserIO? Сохранённая история останется.';
   if(!confirm(question))return;
   button.disabled=true;var status=button.parentElement.querySelector('[data-action-status]');status.textContent='Выполняем…';
   try{
-    var response=kind==='account'
+    var response=kind==='profile'
+      ? await fetch(prefix+'/profiles/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account_id:button.dataset.accountId})})
+      : kind==='account'
       ? await fetch('/v1/accounts/'+encodeURIComponent(button.dataset.accountId),{method:'DELETE'})
       : await fetch(prefix+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slot:button.dataset.slot})});
     var data=await response.json().catch(function(){return {};});
@@ -1092,7 +1209,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1116,7 +1233,8 @@ http.createServer(async (req, res) => {
   }
   if (url.pathname === "/state") {
     res.setHeader("content-type", "application/json");
-    return res.end(JSON.stringify(enrollmentOwners.filter(publicState(),browserOwner.principal.user_id)));
+    try { return res.end(JSON.stringify(await profileState(browserOwner))); }
+    catch { res.writeHead(503); return res.end(JSON.stringify({ error: "Не удалось проверить профили Telegram" })); }
   }
   if (url.pathname === "/import-session" && req.method === "POST") {
     let importedClient=null;
@@ -1132,12 +1250,10 @@ http.createServer(async (req, res) => {
       if (!auth.authorized) throw new Error("Telegram session is not authorized");
       const user=await importedClient.getMe();
       const accountId=`telegram:${user.id}`;
-      const existing=[...liveSlots.values()].some(value=>value.accountId===accountId)
-        || [...slots.values()].some(value=>value.accountId===accountId);
       const savedSession=importedClient.session.save();
       const sameSession=readdirSync(sessionsDir).some(file=>/^account-\d+\.session$/.test(file)
         && readFileSync(`${sessionsDir}/${file}`,"utf8").trim()===savedSession);
-      if (existing || sameSession) throw new Error("Telegram account or session is already connected in UserIO");
+      if (sameSession) throw new Error("Telegram account or session is already connected in UserIO");
       await importedClient.disconnect();
       const slotId=`account-${nextSlot++}`;
       enrollmentOwners.bind(slotId,browserOwner.principal,browserOwner.headers);
@@ -1188,6 +1304,83 @@ http.createServer(async (req, res) => {
     } catch {
       res.writeHead(400, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "Не удалось убрать отключённую сессию" }));
+    }
+  }
+  if (url.pathname === "/profiles/logout" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "");
+      const owner = browserOwner.principal.user_id;
+      const profile = profiles[profileKey(owner, accountId)];
+      if (!profile || !enrollmentOwners.allowed(profile.slot, owner)) throw new Error("profile not owned");
+      const live = liveSlots.get(profile.slot);
+      if (live?.client) await logoutTelegramClient(live.client, Api);
+      else if (existsSync(`${sessionsDir}/${profile.slot}.session`) && syncs.get(profile.slot)?.status !== "relogin-required") {
+        throw new Error("session is offline, logout is not confirmed");
+      }
+      saveSlotProfile(profile.slot, accountId);
+      const removed = clearSlot(profile.slot, { preserveProfile: true });
+      if (removed?.client) await removed.client.disconnect().catch(() => {});
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ account_id: accountId, reconnect_required: true }));
+    } catch {
+      res.writeHead(409, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "Отключение не подтверждено; профиль и вход сохранены" }));
+    }
+  }
+  if (["/profiles/configure", "/profiles/cleanup"].includes(url.pathname) && req.method === "POST") {
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== `Bearer ${process.env.USERIO_API_TOKEN}`) {
+      res.writeHead(401); return res.end();
+    }
+    try {
+      const payload = await readJsonBody(req), owner = String(payload.user_id || "");
+      if (!owner || owner !== enrollmentOwners.legacyUser) throw new Error("owner-scoped maintenance required");
+      if (url.pathname === "/profiles/configure") {
+        if (owner !== enrollmentOwners.legacyUser) throw new Error("owner-scoped maintenance required");
+        const registrationHeaders = { Authorization: `Bearer ${process.env.USERIO_API_TOKEN}` };
+        const accounts = await registeredAccounts(registrationHeaders);
+        const rows = payload.profiles;
+        if (!Array.isArray(rows) || !rows.length || new Set(rows.map(p => p.number)).size !== rows.length) throw new Error("unique profile numbers required");
+        const updates = [];
+        for (const row of rows) {
+          if (!Number.isSafeInteger(row.number) || row.number < 1 || typeof row.name !== "string" || !row.name.trim()) throw new Error("invalid profile label");
+          const current = [...liveSlots].find(([slot, live]) => enrollmentOwners.allowed(slot, owner) && live.accountId === row.account_id);
+          if (!current) throw new Error("verified live owned profile required");
+          updates.push({ owner, accountId: row.account_id, number: row.number, name: row.name.trim(), slot: current[0] });
+        }
+        for (const profile of updates) {
+          const account = accounts.find(a => a.id === profile.accountId && a.provider === "telegram");
+          if (!account) throw new Error("registered profile required");
+          await registerAccount(profile.slot, { id: profile.accountId.split(":")[1], firstName: profile.name },
+            { headers: registrationHeaders, canReply: (account.capabilities || []).includes("reply") });
+        }
+        for (const profile of updates) profiles[profileKey(owner, profile.accountId)] = profile;
+        saveProfiles();
+      } else {
+        if (!Array.isArray(payload.slots) || !payload.slots.length) throw new Error("slots required");
+        // Validate the complete batch before persisting aliases or removing bytes.
+        for (const row of payload.slots) {
+          if (!/^account-\d+$/.test(row.slot) || !enrollmentOwners.allowed(row.slot, owner)) throw new Error("slot not owned");
+          const profile = profiles[profileKey(owner, row.account_id)];
+          if (!profile || profile.slot === row.slot || liveSlots.get(profile.slot)?.accountId !== row.account_id) throw new Error("verified replacement required");
+          if (slotProfiles[row.slot] && slotProfiles[row.slot] !== row.account_id) throw new Error("legacy identity mismatch");
+          if (liveSlots.has(row.slot) || syncs.get(row.slot)?.status !== "relogin-required") throw new Error("revoked slot required");
+        }
+        for (const row of payload.slots) {
+          saveSlotProfile(row.slot, row.account_id);
+          enrollmentOwners.bind(row.slot, { user_id: owner, can_manage: true }, {});
+          enrollmentOwners.registered(row.slot);
+          clearSlot(row.slot, { preserveProfile: true });
+          for (const file of readdirSync(sessionsDir)) {
+            if (file.startsWith(`${row.slot}.session.`)) unlinkSync(`${sessionsDir}/${file}`);
+          }
+        }
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, profiles: Object.values(profiles).filter(p => p.owner === owner).map(({ slot, owner, ...p }) => p) }));
+    } catch (error) {
+      res.writeHead(409, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: error.message || "profile maintenance refused" }));
     }
   }
   if (url.pathname === "/disconnect" && req.method === "POST") {
@@ -1374,6 +1567,55 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: (error && error.message) || "download failed" }));
     }
   }
+  if (url.pathname === "/resolve" && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(raw || "{}");
+        const accountId = String(payload.account_id || "").trim();
+        const identifier = String(payload.identifier || "").trim();
+        if (!accountId || !identifier || identifier.length > 64) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "account and identifier are required",
+            code: "invalid_contact_scope" }));
+        }
+        const chosen = [...liveSlots].find(([, item]) => item.accountId === accountId);
+        if (!chosen) {
+          res.writeHead(404, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "Telegram account is not connected",
+            code: "account_not_connected" }));
+        }
+        const [slot, item] = chosen;
+        const entity = await resolveTelegramContact(item.client, identifier, Api);
+        if (!entity) {
+          res.writeHead(404, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: `Telegram did not resolve "${identifier}"`,
+            code: "contact_not_found" }));
+        }
+        const peerId = String(await item.client.getPeerId(entity, true));
+        const profile = peerProfile(entity);
+        // Register the peer so the approved send can address it by its id.
+        item.labelPeers.idPeers.set(peerId, entity);
+        if (profile.username) item.labelPeers.labelPeers.set(profile.username, entity);
+        if (profile.name) item.labelPeers.labelPeers.set(profile.name, entity);
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ ok: true, slot, account_id: accountId, peer_id: peerId,
+          username: profile.username, name: profile.name, phone: profile.phone }));
+      } catch (error) {
+        console.error("resolve error:", (error && error.message) || error);
+        res.writeHead(502, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: (error && error.message) || "resolve failed",
+          code: "resolve_failed" }));
+      }
+    });
+    return;
+  }
   if (url.pathname === "/send" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
     if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
@@ -1426,14 +1668,19 @@ http.createServer(async (req, res) => {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id) and body are required" }));
         }
-        // When an account (and the slot the store pins for it) is requested,
-        // send strictly from it — never fall back to another slot, so the
-        // sender identity always matches the dashboard.
+        // The stable account identity is authoritative after reconnect. An
+        // obsolete same-owner slot may resolve to its new session, while a
+        // live mismatched slot or a different owner must never be substituted.
         const candidates = wantAccount || wantSlot ? [] : [...liveSlots];
         let chosen = null;
         if (wantSlot) {
           const live = liveSlots.get(wantSlot);
           if (live && (!wantAccount || live.accountId === wantAccount)) chosen = [wantSlot, live];
+          if (!live && wantAccount && (!slotProfiles[wantSlot] || slotProfiles[wantSlot] === wantAccount)
+              && (slots.has(wantSlot) || Object.hasOwn(enrollmentOwners.owners, wantSlot) || Object.hasOwn(slotProfiles, wantSlot))) {
+            chosen = [...liveSlots].find(([id, item]) => item.accountId === wantAccount
+              && enrollmentOwners.owner(id) === enrollmentOwners.owner(wantSlot)) || null;
+          }
         } else if (wantAccount) {
           chosen = [...liveSlots].find(([, item]) => item.accountId === wantAccount) || null;
         }
@@ -1481,8 +1728,9 @@ http.createServer(async (req, res) => {
           // a revoked saved session needs a fresh login, an offline one is
           // worth retrying. Both answers happen before any provider call, so
           // nothing was submitted either way.
-          const pinned = wantSlot ? wantSlot
-            : [...slots.entries()].find(([, item]) => String(item.accountId || "") === wantAccount);
+          const pinned = wantAccount
+            ? [...slots.entries()].find(([, item]) => String(item.accountId || "") === wantAccount)?.[0] || wantSlot
+            : wantSlot;
           const sync = pinned ? syncs.get(pinned) : null;
           const relogin = Boolean(sync && (sync.status === "relogin-required" || sync.authCode));
           sendAttempts.record(attemptId, { state: "refused",
@@ -1765,6 +2013,47 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: "Telegram edit outcome is unknown", submitted: "unknown" }));
     }
   }
+  if (url.pathname === "/typing" && req.method === "POST") {
+    if (!loginAuthorized(req.headers, process.env.USERIO_API_TOKEN)) {
+      res.writeHead(401, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"unauthorized"}));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "");
+      const peerId = String(payload.peer_id || "");
+      const threadId = String(payload.thread_id || "");
+      if (!/^telegram:[1-9][0-9]*$/.test(accountId) || !/^-?[1-9][0-9]*$/.test(peerId)
+          || typeof payload.active !== "boolean" || (threadId && !/^[1-9][0-9]*$/.test(threadId))
+          || (threadId && (!Number.isSafeInteger(Number(threadId)) || Number(threadId) > 0x7fffffff))) {
+        res.writeHead(400, {"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"exact account, peer, active boolean and optional thread required",submitted:false}));
+      }
+      const chosen = [...liveSlots].find(([, item]) => item.accountId === accountId);
+      const item = chosen && chosen[1];
+      let peer = item && item.labelPeers.idPeers.get(peerId);
+      if (!item || !peer) {
+        res.writeHead(404, {"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"account_peer_not_connected",submitted:false}));
+      }
+      // Android rejects broadcast channels; typing applies to users/groups/megagroups.
+      if (peer.className === "InputPeerChannel") peer = await item.client.getEntity(peer);
+      if (peer.className === "Channel" && !peer.megagroup) {
+        res.writeHead(400, {"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"broadcast_typing_not_supported",submitted:false}));
+      }
+      const action = payload.active ? new Api.SendMessageTypingAction() : new Api.SendMessageCancelAction();
+      const accepted = await item.client.invoke(new Api.messages.SetTyping({peer,
+        ...(threadId ? {topMsgId:Number(threadId)} : {}), action}));
+      if (accepted !== true) throw new Error("typing_not_accepted");
+      res.writeHead(200, {"content-type":"application/json"});
+      return res.end(JSON.stringify({ok:true,account_id:accountId,peer_id:peerId,
+        thread_id:threadId,active:payload.active,provider_read_acknowledged:false}));
+    } catch {
+      res.writeHead(502, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"typing_outcome_unknown",submitted:"unknown"}));
+    }
+  }
   if (url.pathname === "/react" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
     if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
@@ -1791,9 +2080,9 @@ http.createServer(async (req, res) => {
           targetChatId = messageId.slice(0, cut) || targetChatId;
           messageId = messageId.slice(cut + 1);
         }
-        const emoji = String(payload.emoji || "").trim();
+        const emoji = typeof payload.emoji === "string" ? payload.emoji.trim() : null;
         const msgId = Number(messageId);
-        if ((!chat && !targetChatId) || !Number.isSafeInteger(msgId) || msgId <= 0 || !emoji || emoji.length > 16) {
+        if ((!chat && !targetChatId) || !Number.isSafeInteger(msgId) || msgId <= 0 || emoji === null || emoji.length > 16) {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id), valid message_id and emoji are required" }));
         }
@@ -1803,11 +2092,11 @@ http.createServer(async (req, res) => {
           const peer = (chat && peers.labelPeers.get(chat)) || (targetChatId && peers.idPeers.get(targetChatId)) || null;
           if (!peer || !item.client) return false;
           await item.client.invoke(
-            new Api.messages.SendReaction({ peer, msgId, reaction: [new Api.ReactionEmoji({ emoticon: emoji })] }),
+            new Api.messages.SendReaction({ peer, msgId, reaction: emoji ? [new Api.ReactionEmoji({ emoticon: emoji })] : [] }),
           );
           console.log(`react ${slot}: "${chat || targetChatId}" msg ${msgId} ${emoji}`);
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, reacted: true }));
+          res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id:targetChatId, message_id:String(msgId), reacted: true, removed:emoji === "" }));
           return true;
         };
         if (wantAccount) {

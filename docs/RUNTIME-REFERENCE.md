@@ -565,17 +565,31 @@ reads that journal and answers one of:
 | `sent` | the provider message id is known for this exact attempt | draft `approved` with the durable provider receipt |
 | `refused` | the connector refused before any provider call | claim released to `proposed`, exact retry allowed |
 | `pending` / `unknown` | the outcome is still undecided | claim kept in `sending`, retry stays blocked |
-| `absent` for a claim taken after the journal epoch | the connector never received the attempt | claim released to `proposed`, exact retry allowed |
-| `absent` for an older claim | the journal cannot speak about it | claim kept in `sending`, retry stays blocked |
+| `absent` | the journal has no record at this instant; the original request may still be queued or in flight | outcome stays unknown and retry stays blocked |
 
-A claim older than the connector journal can still be resolved from the
-provider itself. The caller asks for `provider_history` and states when the
-connector became able to serve again. The service then reads the peer's
-authoritative provider history and resolves the draft only when both hold: the
-connector provably could not have accepted the request at the claimed time, and
-the provider holds no message at or after that time. A message the provider
-accepted and then deleted leaves no trace in the history, so the operator's
-attestation is what makes the conclusion sound; it is recorded with the draft.
+UserIO runs a bounded background checker for persisted Telegram drafts whose
+status is `sending` or `delivery_unknown`. It reads the same draft-id journal;
+it never calls the send endpoint. The first check is scheduled five seconds
+after the durable claim, followed by backoff (30 seconds, 2 minutes, 10
+minutes, 30 minutes and 2 hours); after that, unresolved attempts continue to
+be checked every 2 hours. A provider `Retry-After` overrides the shorter
+interval. After six inconclusive checks the visible status becomes
+`delivery_unknown`, while automatic read-only checks continue on the same
+attempt. The attempt remains blocked from resend, and the existing
+**Проверить доставку** action can still resolve a later exact receipt.
+Proposed drafts are never put in this queue.
+
+Only an exact journal `sent` record with a valid provider message id and
+matching Telegram account and peer becomes `approved`. Only an explicit
+connector `refused` record (or the pre-request connection check proving no
+request bytes were submitted) becomes `proposed`. Neither elapsed time, an
+absent journal entry nor a bounded history no-match proves non-submission.
+Each automatic and manual check stores the prior/final state, reason, attempt
+id, whitelisted provider record fields and check time in a durable reconciliation
+history. Conversation reads expose that delivery metadata separately from
+`context_status`, which only describes whether the original reply context is
+still present/current. Concurrent workers use SQLite leases and an attempt
+generation; expired workers cannot apply stale results.
 
 Both the MCP approve path and the reconcile path require the complete draft
 snapshot (`expected_text`, `expected_chat_id` and `expected_attachments`). A

@@ -8,6 +8,7 @@ from typing import Any
 
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
+from .delivery_receipt import delivery_fields
 from .token_permissions import READ_ONLY_TOOLS, MEETING_RECORDING_TOOLS
 from .mcp_catalog import TOOL_CAPABILITIES
 from .service import UserIOService
@@ -61,6 +62,8 @@ class UserIOToolDispatcher:
                     return {'ok':True, 'accounts':[{k:v for k,v in a.items() if k!='credential_ref'}
                         for a in self._store.accounts(user_id=principal.user_id) if a['id'] in principal.messenger_accounts]}
                 if name.startswith('userio.messenger.'):
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.prepare':
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
@@ -180,6 +183,8 @@ class UserIOToolDispatcher:
                         conversation_id=conversation_id, user_id=user_id,
                     )
                 return {"ok": True, **result}
+            if name == 'userio.messages.prepare':
+                return self._service.contact_starter.prepare(user_id=user_id, **arguments)
             if name.startswith('userio.meetings.telemost.'):
                 from .telemost.meetings import meetings_for
                 meetings=meetings_for(self._service)
@@ -586,17 +591,30 @@ class UserIOToolDispatcher:
         conversation = self._store.conversation(
             draft.conversation_id, user_id=principal.user_id
         ) or {}
+        delivery = delivery_fields(draft.receipt or "")
         return {
             "ok": True,
             "draft": self._draft(draft),
-            "sent": draft.status == "approved",
+            **delivery,
+            "retry_allowed": False,
             "receipt": draft.receipt or None,
             "channel": str(conversation.get("source") or ""),
-            "delivery_note": self._delivery_note(conversation),
+            "delivery_note": self._delivery_note(conversation, delivery),
+            "replay": bool(getattr(draft, "replayed", False)),
         }
 
     @staticmethod
-    def _delivery_note(conversation: dict[str, Any]) -> str:
+    def _delivery_note(conversation: dict[str, Any], delivery: dict[str, Any] | None = None) -> str:
+        delivery = delivery or {}
+        if delivery.get("delivery_status") == "smtp_accepted":
+            note = ("The mail transport accepted the message; UserIO has no provider "
+                    "delivery confirmation, so this is not a confirmed delivery.")
+            copy = delivery.get("sent_copy") or {}
+            if str(copy.get("saved") or "") == "true":
+                note += " A copy was saved to the Sent mailbox."
+            else:
+                note += " No Sent copy was saved: " + str(copy.get("reason") or "unknown") + "."
+            return note
         source = str(conversation.get("source") or "")
         if source == "sms":
             return "Android gateway accepted the SMS; carrier delivery is not guaranteed."
@@ -685,6 +703,9 @@ class UserIOToolDispatcher:
             "conversation_id": draft.conversation_id,
             "body": draft.body,
             "status": draft.status,
+            # ``approved`` means the transport took this message; it never
+            # means "waiting to be sent".
+            "sent": draft.status == "approved",
         }
         receipt = getattr(draft, "receipt", "")
         if receipt:
