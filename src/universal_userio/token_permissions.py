@@ -6,7 +6,7 @@ READ_ONLY_TOOLS = frozenset({
     'userio.calls.telegram.get',
     'userio.messenger.events',
     'userio.messenger.capabilities', 'userio.messenger.history', 'userio.messenger.get', 'userio.messenger.resolve', 'userio.messenger.media',
-    "userio.accounts.list", "userio.channels.list", "userio.channels.read",
+    "userio.accounts.list", "userio.channels.list", "userio.channels.search", "userio.channels.read",
     "userio.channels.download", "userio.inbox.list_new", "userio.conversation.get",
     "userio.workspace.poll", "userio.workspace.claim_log",
     "userio.workspace.exclusions.list", "userio.workspace.policy.get",

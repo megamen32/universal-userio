@@ -70,6 +70,31 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
+        "userio.channels.search",
+        "Search this user's chats and retained message history by name, text, conversation id or message id. "
+        "The same core as the web search: scope=conversation returns one row per chat, scope=message returns one "
+        "row per matching message with a deep link. Read the rows from `structuredContent.results` and pass a found "
+        "conversation_id to userio.channels.read.",
+        schema(
+            {
+                "query": {"type": "string", "minLength": 2, "maxLength": 256},
+                "conversation_id": {"type": "string", "maxLength": 128},
+                "message_id": {"type": "string", "maxLength": 256},
+                "channel": CHANNEL_SCHEMA,
+                "scope": {"type": "string", "enum": ["conversation", "message"]},
+                "mode": {"type": "string", "enum": ["text", "semantic", "hybrid"]},
+                "match_type": {"type": "string", "enum": ["all", "exact", "fuzzy"]},
+                "account_ref": {"type": "string", "maxLength": 128},
+                "conversation_ids": {
+                    "type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "offset": {"type": "integer", "minimum": 0},
+                "ignored_chats": IGNORED_CHATS_SCHEMA,
+            }
+        ),
+    ),
+    ToolSpec(
         "userio.channels.read",
         "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
@@ -483,6 +508,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
+    "userio.channels.search": "read",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",

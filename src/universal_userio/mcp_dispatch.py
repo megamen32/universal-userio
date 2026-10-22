@@ -89,6 +89,13 @@ class UserIOToolDispatcher:
                     "ok": False,
                     "error": f"{required_capability}_capability_disabled",
                 }
+            if name == "userio.channels.search":
+                ignored_chats = self._ignored_chats(arguments)
+                from .search_surface import search_tool_response
+                return search_tool_response(
+                    self._store, arguments, user_id=user_id,
+                    source=self._optional(arguments, "channel"), ignored=ignored_chats,
+                )
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()

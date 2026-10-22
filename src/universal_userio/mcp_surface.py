@@ -51,6 +51,20 @@ TOOL_SPECS = (
         "conversation_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100},
         "account_ref": {"type": "string", "maxLength": 128},
     })),
+    ToolSpec("userio.channels.search", "Search this user's chats and retained message history by name, text, conversation id or message id. The same core as the web search: scope=conversation returns one row per chat, scope=message returns one row per matching message with a deep link. Read the rows from `structuredContent.results` and pass a found conversation_id to userio.channels.read.", _schema({
+        "query": {"type": "string", "minLength": 2, "maxLength": 256},
+        "conversation_id": {"type": "string", "maxLength": 128},
+        "message_id": {"type": "string", "maxLength": 256},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "yandex"]},
+        "scope": {"type": "string", "enum": ["conversation", "message"]},
+        "mode": {"type": "string", "enum": ["text", "semantic", "hybrid"]},
+        "match_type": {"type": "string", "enum": ["all", "exact", "fuzzy"]},
+        "account_ref": {"type": "string", "maxLength": 128},
+        "conversation_ids": {"type": "array", "items": {"type": "string", "maxLength": 128}, "maxItems": 100},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        "offset": {"type": "integer", "minimum": 0},
+        "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+    })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
@@ -221,6 +235,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.upload': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
+    "userio.channels.search": "read",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
@@ -287,8 +302,8 @@ class UserIOMcpSurface:
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
                  or principal.messenger_grants is not None and spec.name in {
-                    'userio.accounts.list','userio.channels.list','userio.channels.read',
-                    'userio.channels.download','userio.channels.send_draft'}
+                    'userio.accounts.list','userio.channels.list','userio.channels.search',
+                    'userio.channels.read','userio.channels.download','userio.channels.send_draft'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -568,6 +583,13 @@ class UserIOMcpSurface:
             required_capability = TOOL_CAPABILITIES.get(name)
             if required_capability and not self._store.capability_enabled(required_capability, user_id=user_id):
                 return {"ok": False, "error": f"{required_capability}_capability_disabled"}
+            if name == "userio.channels.search":
+                ignored_chats = self._ignored_chats(arguments)
+                from .search_surface import search_tool_response
+                return search_tool_response(
+                    self._store, arguments, user_id=user_id,
+                    source=self._optional(arguments, "channel"), ignored=ignored_chats,
+                )
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()

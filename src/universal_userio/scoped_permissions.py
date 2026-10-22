@@ -85,6 +85,11 @@ def enforce(store, principal, name, args):
         if ref is not None and grant_for(principal, ref) is None:
             raise PermissionError('chat_or_account_outside_token_scope')
         return
+    if name == 'userio.channels.search':
+        ref = args.get('account_ref')
+        if ref is not None and grant_for(principal, ref) is None:
+            raise PermissionError('chat_or_account_outside_token_scope')
+        return
     if name == 'userio.channels.read':
         _scoped_conversation(store, principal, args.get('channel'),
                              chat_id=args.get('chat_id'), message_id=args.get('message_id'))
@@ -212,6 +217,39 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
                     'results':scoped[:limit],'limit':limit}
         scoped.sort(key=lambda row:row.pop('_sort_at',0),reverse=True)
         return {'ok':True,'chats':scoped[:limit]}
+
+    if name == 'userio.channels.search':
+        from .search_surface import search_tool_response
+        ignored = arguments.get('ignored_chats', [])
+        if not isinstance(ignored, list) or len(ignored) > 100 or any(not isinstance(x, str) for x in ignored):
+            raise ValueError('invalid_ignored_chats')
+        limit = arguments.get('limit', 100)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError('limit_must_be_1_to_100')
+        owned = {account['id']: account for account in store.accounts(user_id=principal.user_id)}
+        scoped = []
+        for grant in principal.messenger_grants:
+            if arguments.get('account_ref') and arguments['account_ref'] != grant['account_ref']:
+                continue
+            account = owned.get(grant['account_ref'])
+            if account is None or channel and account['provider'] != channel:
+                continue
+            permitted = [c['conversation_id'] for c in grant['chats']] if grant['chats'] is not None else []
+            requested = arguments.get('conversation_ids') or []
+            if requested and permitted:
+                permitted = [cid for cid in permitted if cid in requested]
+                if not permitted:
+                    continue
+            elif requested and grant['chats'] is None:
+                permitted = requested
+            result = search_tool_response(store, {
+                **arguments, 'account_ref': grant['account_ref'], 'conversation_ids': permitted,
+            }, user_id=principal.user_id, source=channel, ignored=ignored)
+            scoped.extend(result.get('results') or [])
+        by_id = bool(arguments.get('conversation_id') or arguments.get('message_id'))
+        return {'ok': True, 'scope': arguments.get('scope') or 'conversation',
+                'results': scoped[:limit], 'limit': limit,
+                'mode_used': 'exact_id' if by_id else 'text'}
 
     if name == 'userio.channels.read':
         ignored = arguments.get('ignored_chats', [])

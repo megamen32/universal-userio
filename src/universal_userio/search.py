@@ -645,3 +645,95 @@ def search_conversations(store: Any, query: str, *, source: str|None=None, accou
               'match_message_id':message.get('message_id') or '', 'match_body':str(message.get('body') or '')[:500],
               'match_type':kind,'match_field':'contact' if r['kind']=='contact' else 'message'})
         return results
+
+
+CONVERSATION_LOOKUP_SELECT = '''SELECT c.id AS conversation_id,c.source,c.sender,c.identity_id,
+  c.account_ref,c.updated_at,m.message_id,m.body,m.received_at,
+  COALESCE(NULLIF((SELECT name FROM contact_names x WHERE x.user_id=c.user_id
+    AND x.source=c.source AND x.sender=c.sender AND x.is_explicit=1),''),
+    NULLIF(trim(COALESCE(p.first_name,'')||' '||COALESCE(p.last_name,'')),''),
+    NULLIF('@'||p.username,'@'),NULLIF(p.phone,''),
+    (SELECT name FROM contact_names n WHERE n.user_id=c.user_id AND n.source=c.source AND n.sender=
+      CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!=''
+      THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END)) AS display_name
+  FROM conversations c
+  LEFT JOIN messages m ON m.rowid=(SELECT rowid FROM messages WHERE user_id=c.user_id
+    AND conversation_id=c.id AND deleted_at IS NULL ORDER BY received_at DESC,rowid DESC LIMIT 1)
+  LEFT JOIN search_profiles p ON p.user_id=c.user_id AND p.conversation_id=c.id
+  WHERE c.user_id=? AND c.id=?'''
+
+
+MESSAGE_LOOKUP_SELECT = '''SELECT m.message_id,m.body,m.received_at,m.direction,m.provider_thread_id,
+  m.provider_reply_to,c.id AS conversation_id,c.source,c.sender,c.account_ref,c.peer_id,
+  c.conversation_kind,'' AS sender_name,COALESCE(p.username,'') AS peer_username,
+  COALESCE(NULLIF((SELECT name FROM contact_names x WHERE x.user_id=c.user_id
+    AND x.source=c.source AND x.sender=c.sender AND x.is_explicit=1),''),
+    NULLIF(trim(COALESCE(p.first_name,'')||' '||COALESCE(p.last_name,'')),''),
+    NULLIF('@'||p.username,'@'),NULLIF(p.phone,''),NULLIF(n.name,''),'') AS display_name
+  FROM messages m
+  JOIN conversations c ON c.id=m.conversation_id AND c.user_id=m.user_id
+  LEFT JOIN search_profiles p ON p.user_id=c.user_id AND p.conversation_id=c.id
+  LEFT JOIN contact_names n ON n.user_id=c.user_id AND n.source=c.source AND n.sender=
+    CASE WHEN c.source IN ('max','phone','vk','yandex') AND c.account_ref!='' AND c.peer_id!=''
+    THEN 'chat:'||c.account_ref||':'||c.peer_id ELSE c.sender END
+  WHERE m.user_id=? AND m.message_id=? AND m.deleted_at IS NULL'''
+
+
+def lookup_conversation(store: Any, conversation_id: str, *, user_id: str | None = None,
+                         source: str | None = None, account_ref: str | None = None) -> dict[str, Any] | None:
+    """Exact conversation lookup by id, in the same row shape as a search hit.
+
+    The search index only holds text, so an identifier is resolved against the
+    live conversations table instead: a chat that was never indexed is still
+    found by its id.
+    """
+    uid = store._user(user_id)
+    conversation_id = store.resolve_conversation_id(str(conversation_id), user_id=uid)
+    args: list[object] = [uid, conversation_id]
+    clause = ''
+    if source:
+        clause = ' AND ' + source_clause(source)
+        if source_clause(source) == 'c.source=?':
+            args.append(source)
+    if account_ref:
+        clause += ' AND c.account_ref=?'
+        args.append(account_ref)
+    with store._lock:
+        row = store._connection.execute(
+            CONVERSATION_LOOKUP_SELECT + clause, args).fetchone()
+        if row is None:
+            return None
+        unread = store._connection.execute(
+            'SELECT COUNT(*) FROM messages WHERE user_id=? AND conversation_id=?'
+            ' AND seen_at IS NULL AND deleted_at IS NULL', (uid, conversation_id)).fetchone()[0]
+    r = dict(row)
+    return {'id': str(r['conversation_id']), 'source': r['source'], 'sender': r['sender'],
+      'identity_id': r['identity_id'], 'display_name': r['display_name'],
+      'account_ref': r['account_ref'], 'preview': str(r['body'] or '')[:300],
+      'unread_count': int(unread), 'last_at': r['received_at'] or r['updated_at'],
+      'match_message_id': r['message_id'] or '', 'match_body': str(r['body'] or '')[:500],
+      'match_type': 'exact', 'match_field': 'id'}
+
+
+def lookup_message(store: Any, message_id: str, *, source: str | None = None,
+                   account_ref: str | None = None, user_id: str | None = None,
+                   base_url: str = '') -> dict[str, Any] | None:
+    """Exact message lookup by id, in the same row shape as a search hit."""
+    uid = store._user(user_id)
+    args: list[object] = [uid, str(message_id)]
+    clause = ''
+    if source:
+        clause = ' AND ' + source_clause(source)
+        if source_clause(source) == 'c.source=?':
+            args.append(source)
+    if account_ref:
+        clause += ' AND c.account_ref=?'
+        args.append(account_ref)
+    with store._lock:
+        rows = store._connection.execute(
+            MESSAGE_LOOKUP_SELECT + clause + ' ORDER BY m.received_at DESC', args).fetchall()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise ValueError('message_id is ambiguous; provide channel')
+    return _hit(store, uid, dict(rows[0]), kind='exact', score=1.0, base_url=base_url)
