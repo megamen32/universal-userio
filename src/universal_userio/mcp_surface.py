@@ -238,10 +238,11 @@ TOOL_SPECS = (
 
 
 
-from .mcp_catalog import MESSENGER_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
+from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS)
 
 TOOL_CAPABILITIES = {
+    "userio.messages.prepare": "send",
     'userio.messenger.capabilities': 'read',
     'userio.messenger.events': 'read',
     'userio.messenger.history': 'read',
@@ -327,7 +328,7 @@ class UserIOMcpSurface:
                  or principal.messenger_grants is not None and spec.name in {
                     'userio.accounts.list','userio.channels.list','userio.channels.search',
                     'userio.channels.export','userio.channels.read','userio.channels.download',
-                    'userio.channels.send_draft','userio.contacts.resolve','userio.contacts.start'}
+                    'userio.channels.send_draft','userio.contacts.resolve','userio.contacts.start','userio.messages.prepare'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -573,6 +574,8 @@ class UserIOMcpSurface:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.prepare':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.contacts.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
@@ -634,6 +637,8 @@ class UserIOMcpSurface:
                 if len(markdown.encode("utf-8")) <= 32768:
                     result["content"] = markdown
                 return result
+            if name == 'userio.messages.prepare':
+                return self._service.contact_starter.prepare(user_id=user_id, **arguments)
             if name == "userio.contacts.resolve":
                 from .contact_start import ContactStartError
                 account_ref = str(arguments.get("account_ref") or "").strip()

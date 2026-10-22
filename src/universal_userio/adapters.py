@@ -332,6 +332,7 @@ def _telegram_retry_after(headers: Any) -> float | None:
 
 
 class TelegramQrHttpOutbox:
+    reaction_remove_supported = True
     """Deliver approved Telegram drafts through the telegram-qr connector.
 
     The connector owns every Telegram session (login, live ingest, delivery),
@@ -637,7 +638,7 @@ class TelegramQrHttpOutbox:
         return result
 
     def react(self, *, chat: str, chat_id: str, account_ref: str, message_id: str, emoji: str) -> dict[str, object]:
-        if not (chat or chat_id) or not message_id or not emoji:
+        if not (chat or chat_id) or not message_id or not isinstance(emoji, str):
             raise ValueError("Telegram reaction requires chat or chat_id, message id and emoji")
         payload = json.dumps({
             "chat": chat, "chat_id": chat_id, "account_id": account_ref,
@@ -655,6 +656,15 @@ class TelegramQrHttpOutbox:
             raise RuntimeError(f"telegram-qr reaction failed: HTTP {error.code} {detail}") from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
+
+    def typing(self, *, account_ref: str, peer_id: str, active: bool, thread_id: str = '') -> dict[str, object]:
+        if not account_ref or not peer_id or type(active) is not bool:
+            raise DeliveryNotSubmittedError('exact Telegram typing account/peer/active required')
+        payload = {'account_id':account_ref, 'peer_id':peer_id, 'active':active, 'thread_id':thread_id}
+        request = urllib.request.Request(f'{self._base_url}/typing', data=json.dumps(payload).encode(),
+            method='POST', headers={'Content-Type':'application/json','Authorization':f'Bearer {self._token}'})
+        with self._runner(request, timeout=self._timeout) as response:
+            return json.loads(response.read())
 
     def edit_message(self, *, chat_id: str, account_ref: str, message_id: str,
                      expected_text: str, text: str) -> dict[str, object]:

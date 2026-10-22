@@ -591,7 +591,9 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
         'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
         'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
-        'voice/agentcall_phone_tts.py')]
+        'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
+        'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
+        'telemost/meetings.py', 'static/telemost.html')]
     paths += ['deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs')]
     expected_hashes = {}
     for path in paths:

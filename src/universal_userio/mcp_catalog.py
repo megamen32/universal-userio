@@ -539,12 +539,28 @@ TELEGRAM_CALL_SPECS = (
 )
 TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
 
+MESSAGE_PREPARE_SPECS = (
+    ToolSpec('userio.messages.prepare',
+        'Prepare one message draft for either a known conversation_id or account_ref plus a new contact identifier. '
+        'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: approve the exact '
+        'returned draft with userio.draft.approve_send. Retries with the same request_id reuse the same draft. '
+        'Use this as the default text preparation tool; contacts.start is a legacy explicit-send compatibility call.',
+        dict(schema({'conversation_id':{'type':'string','minLength':1},
+            'account_ref':{'type':'string','maxLength':128},
+            'identifier':{'type':'string','minLength':1,'maxLength':256},
+            'text':{'type':'string','minLength':1,'maxLength':65536},
+            'request_id':{'type':'string','minLength':16,'maxLength':80}}, ['text','request_id']),
+            oneOf=[{'required':['conversation_id'],'not':{'required':['identifier']}},
+                   {'required':['account_ref','identifier'],'not':{'required':['conversation_id']}}])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *MESSAGE_PREPARE_SPECS)
+
 TELEMOST_SPECS = (
     ToolSpec('userio.meetings.telemost.start',
-        'Join one explicitly requested Telemost meeting as a visible, muted recorder. Never replay UNKNOWN joins.',
+        'Join one explicitly requested Telemost meeting as a visible, muted recorder in one call; no separate approval. Never replay accepted or UNKNOWN joins.',
         schema({'url':{'type':'string','maxLength':2048},'request_id':{'type':'string','minLength':16,'maxLength':128},
-                'confirm':{'type':'boolean'},'max_seconds':{'type':'integer','minimum':30,'maximum':7200}},
-               ['url','request_id','confirm'])),
+                'max_seconds':{'type':'integer','minimum':30,'maximum':7200}},
+               ['url','request_id'])),
     ToolSpec('userio.meetings.telemost.get','Read recording, audio links and transcription for this owned meeting.',
         schema({'meeting_id':{'type':'string'}},['meeting_id'])),
     ToolSpec('userio.meetings.telemost.stop','Stop this owned recording without joining another meeting.',
@@ -567,6 +583,7 @@ DIAGNOSTIC_SPECS = (
 TOOL_SPECS = (*TOOL_SPECS, *DIAGNOSTIC_SPECS)
 
 TOOL_CAPABILITIES = {
+    "userio.messages.prepare": "send",
     'userio.diagnostic.create':'send','userio.diagnostic.get':'read','userio.diagnostic.message':'send',
     'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send',
     'userio.calls.telegram.start':'send', 'userio.calls.telegram.get':'read', 'userio.calls.telegram.stop':'send',

@@ -227,21 +227,43 @@ class ContactStarter:
             )
         return conversation
 
+    def prepare(self, *, user_id: str, text: str, request_id: str,
+                conversation_id: str = '', account_ref: str = '', identifier: str = '',
+                notify: bool = True) -> dict[str, Any]:
+        """Canonical recipient first, then one durable draft. Never send here."""
+        body = str(text or '').strip()
+        if not body:
+            raise ContactStartError('contact_message_required')
+        if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{16,80}',request_id):
+            raise ContactStartError('request_id_required')
+        if bool(conversation_id) == bool(identifier) or identifier and not account_ref:
+            raise ContactStartError('provide_conversation_id_or_account_and_identifier')
+        peer = None
+        if conversation_id:
+            conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
+            conversation = self._store.conversation(conversation_id, user_id=user_id)
+            if conversation is None:
+                raise ContactStartError('conversation_not_found')
+            self.account(user_id=user_id,account_ref=conversation.get('account_ref'))
+            if account_ref and conversation.get('account_ref') != account_ref:
+                raise ContactStartError('contact_account_conflict')
+        else:
+            resolved = self.resolve(user_id=user_id, account_ref=account_ref, identifier=identifier)
+            conversation = self.conversation(resolved, user_id=user_id)
+            peer = resolved.as_dict()
+        draft = self._service.prepare_manual_message(str(conversation['id']), body=body,
+            request_id=request_id, user_id=user_id, notify=notify)
+        return {'ok':True, 'conversation_id':str(conversation['id']),
+            'channel':str(conversation.get('source') or ''), 'peer':peer,
+            'draft_id':draft.id, 'body':draft.body, 'status':draft.status,
+            'approval_required':draft.status=='proposed', 'sent':draft.status=='sent'}
+
     def start(self, *, user_id: str, account_ref: str, identifier: str, text: str,
               request_id: str) -> dict[str, Any]:
-        """Resolve the contact, open the chat and deliver the first message."""
-        body = str(text or "").strip()
-        if not body:
-            raise ContactStartError("contact_message_required")
-        resolved = self.resolve(user_id=user_id, account_ref=account_ref, identifier=identifier)
-        conversation = self.conversation(resolved, user_id=user_id)
-        draft = self._service.send_manual_message(
-            str(conversation["id"]), body=body, request_id=request_id, user_id=user_id)
-        return {
-            "ok": True,
-            "conversation_id": str(conversation["id"]),
-            "channel": str(conversation.get("source") or resolved.source),
-            "peer": resolved.as_dict(),
-            "draft_id": draft.id,
-            "status": draft.status,
-        }
+        """Compatibility: this explicit first-message command authorizes delivery."""
+        prepared = self.prepare(user_id=user_id, account_ref=account_ref, identifier=identifier,
+            text=text, request_id=request_id, notify=False)
+        draft = self._service.approve(prepared['draft_id'], user_id=user_id, expected_snapshot={
+            'expected_text':prepared['body'], 'expected_chat_id':prepared['conversation_id'],
+            'expected_attachments':[]})
+        return {**prepared, 'status':draft.status, 'approval_required':False, 'sent':draft.status=='sent'}

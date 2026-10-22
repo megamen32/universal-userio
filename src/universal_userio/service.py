@@ -1192,24 +1192,25 @@ class UserIOService:
     def create_manual_draft(
         self, conversation_id: str, *, body: str, user_id: str | None = None
     ) -> ReplyDraft:
-        conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
-        if self._store.conversation(conversation_id, user_id=user_id) is None:
-            raise KeyError("conversation not found")
-        text = body.strip()
-        if not text:
-            raise ValueError("draft body is required")
-        draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, text, "proposed")
-        self._persist_reply_draft(draft, user_id=user_id)
-        self._notify_drafts_for_approval([draft], user_id=user_id)
-        return draft
+        return self.prepare_manual_message(conversation_id, body=body,
+            request_id=uuid.uuid4().hex, user_id=user_id)
 
     def send_manual_message(self, conversation_id: str, *, body: str,
                             request_id: str, user_id: str | None = None, upload_id: str = '') -> ReplyDraft:
-        """A human pressing Send authorizes exactly this body and recipient.
+        """Compatibility for an explicit human Send/contacts.start command."""
+        conversation = self._store.conversation(conversation_id, user_id=user_id)
+        if conversation and conversation['source']=='diagnostic':
+            raise DeliveryUnavailableError('Diagnostic chats cannot send external messages.')
+        draft = self.prepare_manual_message(conversation_id, body=body, request_id=request_id,
+            user_id=user_id, upload_id=upload_id, notify=False)
+        return self.approve(draft.id, user_id=user_id, expected_snapshot={
+            'expected_text':draft.body, 'expected_chat_id':draft.conversation_id, 'expected_attachments':[],
+        })
 
-        Retain the normal durable delivery claim/receipt, but do not place this
-        intent in the AI approval notification queue. Retries reuse its receipt.
-        """
+    def prepare_manual_message(self, conversation_id: str, *, body: str,
+                            request_id: str, user_id: str | None = None, upload_id: str = '',
+                               notify: bool = True) -> ReplyDraft:
+        """Prepare one durable draft; delivery always uses approve and its receipt."""
         conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
         if not re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", request_id):
             raise ValueError("request_id is required")
@@ -1218,17 +1219,19 @@ class UserIOService:
             raise ValueError("Сообщение не может быть пустым")
         user = self._store._user(user_id)
         conv=self._store.conversation(conversation_id,user_id=user)
-        if conv and conv['source']=='diagnostic':
-            raise DeliveryUnavailableError('Это диагностический чат UserIO; используйте diagnostic.message, внешняя отправка невозможна.')
+        if conv is None:
+            raise KeyError('conversation not found')
         if upload_id and (not conv or conv['source'] not in {'vk','max'}):
             raise ValueError('Вложения поддерживаются в личных VK и MAX')
         draft_id = "draft_web_" + hashlib.sha256(f"{user}:{request_id}".encode()).hexdigest()
+        created = False
         with self._manual_send_lock:
             try:
                 draft = self._store.draft(draft_id, user_id=user)
             except KeyError:
                 draft = ReplyDraft(draft_id, conversation_id, text, "proposed")
                 self._persist_reply_draft(draft, user_id=user)
+                created = True
             if draft.body != text or draft.conversation_id != conversation_id:
                 raise ValueError("Этот запрос уже относится к другому сообщению")
             if draft.status == "sending":
@@ -1239,9 +1242,9 @@ class UserIOService:
             if conv and conv['source']=='max' and upload_id:
                 from .max_web import MaxWeb
                 MaxWeb(self,user).bind(draft,conv,upload_id)
-        return self.approve(draft.id, user_id=user, expected_snapshot={
-            "expected_text": text, "expected_chat_id": conversation_id, "expected_attachments": [],
-        })
+        if created and notify:
+            self._notify_drafts_for_approval([draft], user_id=user)
+        return draft
 
     @staticmethod
     def _first_contact_subject(body: str) -> str:
