@@ -22,7 +22,7 @@ export function telegramAccountCard(session, account = null) {
   const revoked = session.sync === 'relogin-required';
   const missing = session.status === 'reconnect-required' || session.sync === 'missing-session';
   const suffix = accountSuffix(session.accountId);
-  const displayName = String(account?.display_name || session.name || '').trim();
+  const displayName = String(session.profileName || account?.display_name || session.name || '').trim();
   const title = displayName
     ? `${displayName} · Telegram${suffix ? ` · ${suffix}` : ''}`
     : suffix ? `Telegram · ${suffix}`
@@ -31,7 +31,7 @@ export function telegramAccountCard(session, account = null) {
   const accountFound = !!account;
 
   return {
-    title,
+    title: session.profileNumber ? `ID ${session.profileNumber} · ${displayName}` : title,
     reconnect: revoked || missing,
     status: missing ? 'Ошибка подключения · переподключите Telegram' : revoked ? 'Сессия отключена · Telegram отозвал вход'
       : statusLabels[session.status] || 'Проверяем состояние входа',
@@ -44,9 +44,9 @@ export function telegramAccountCard(session, account = null) {
         : session.sync
           ? `Синхронизация сообщений включена${session.syncChats ? ` · ${session.syncChats} диалогов` : ''}.`
           : '',
-    sessionLabel: !missing && session.id ? `Сессия ${session.id}` : '',
+    sessionLabel: session.accountId ? `Постоянный ID: ${session.accountId}` : '',
     action: managed
-      ? { kind: 'account', label: revoked ? 'Убрать из UserIO' : 'Отключить аккаунт', accountId: session.accountId }
+      ? { kind: 'profile', label: 'Отключить вход', accountId: session.accountId }
       : revoked && !accountFound
         ? { kind: 'revoked-slot', label: 'Убрать из UserIO', slot: session.id }
         : null,
