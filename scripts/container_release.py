@@ -471,11 +471,243 @@ def finalize():
     private_json(CONFIG / 'accepted.json', {'at': time.time(), 'containers': ['backend', 'frontend', 'voice']})
 
 
+def replace_backend(*, image: str, revision: str, expected_container: str, receipt_directory: Path):
+    import fcntl
+    with open('/run/lock/userio-backend-release.lock', 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError('another routine backend replacement is active') from error
+        _replace_backend_locked(image=image, revision=revision, expected_container=expected_container,
+                                receipt_directory=receipt_directory)
+
+
+def _replace_backend_locked(*, image: str, revision: str, expected_container: str, receipt_directory: Path):
+    """Routine replacement of the canonical backend; never replay migration cutover."""
+    import http.client
+    import socket
+    import tempfile
+    import urllib.parse
+    import urllib.request
+
+    class DockerConnection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.sock.connect('/var/run/docker.sock')
+
+    def api(method, route, body=None):
+        connection = DockerConnection('localhost', timeout=90)
+        connection.request(method, '/v1.55/' + route,
+                           body=None if body is None else json.dumps(body),
+                           headers={'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        data = response.read()
+        connection.close()
+        if response.status >= 300 and not (response.status == 304 and method == 'POST' and route.split('?')[0].endswith(('/start', '/stop'))):
+            # Docker error payloads can contain configuration: keep them private.
+            raise RuntimeError(f'Docker {method} {route.split("?")[0]} returned {response.status}')
+        return json.loads(data) if data else None
+
+    def save(path, value):
+        private_json(path, value)
+        with open(path, 'rb') as stream:
+            os.fsync(stream.fileno())
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+    def inspect(name):
+        return api('GET', 'containers/' + name + '/json')
+
+    def normalized_host(value):
+        value = dict(value)
+        if value.get('OomKillDisable') is None:
+            value['OomKillDisable'] = False
+        return value
+
+    def atomic_config(data):
+        descriptor, temporary = tempfile.mkstemp(prefix='.compose.backend-', dir=CONFIG)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, CONFIG / 'compose.host.json')
+            directory = os.open(CONFIG, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def health():
+        for _ in range(30):
+            try:
+                result = subprocess.run(['docker', 'exec', 'userio-backend', 'python', '-m',
+                                         'universal_userio.container_runtime', '--health'],
+                                        capture_output=True, timeout=25)
+                if result.returncode == 0:
+                    return
+            except subprocess.TimeoutExpired:
+                pass
+            time.sleep(2)
+        raise RuntimeError('backend supervisor readiness failed')
+
+    def accounts():
+        processes = json.loads((CONFIG / 'processes.json').read_text())['processes']
+        telegram = next(p for p in processes if p['name'] == 'telegram')
+        environment = telegram.get('environment', telegram.get('env', {}))
+        request = urllib.request.Request('http://127.0.0.1:18093/v1/accounts',
+            headers={'Authorization': 'Bearer ' + environment['USERIO_API_TOKEN']})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            value = json.load(response)
+        rows = value['accounts'] if isinstance(value, dict) else value
+        return sorted(row['id'] for row in rows)
+
+    if os.getuid() != 0:
+        raise RuntimeError('replace-backend requires root')
+    full_revision = output(['git', '-C', ROOT, 'rev-parse', revision])
+    command(['git', '-C', ROOT, 'merge-base', '--is-ancestor', full_revision, 'origin/main'])
+    image_id = api('GET', 'images/' + urllib.parse.quote(image, safe='') + '/json')['Id']
+    receipt_file = receipt_directory / 'receipt.json'
+    if receipt_file.exists():
+        previous = json.loads(receipt_file.read_text())
+        current = inspect('userio-backend')
+        if (previous.get('status') == 'installed' and previous.get('revision') == full_revision
+                and previous.get('image_id') == image_id and current['Id'] == previous.get('container_id')
+                and current['State']['Running'] and hashlib.sha256((CONFIG / 'compose.host.json').read_bytes()).hexdigest() == previous.get('compose_sha256')):
+            health()
+            print(json.dumps(previous))
+            return
+        raise RuntimeError('release receipt already exists; reconcile before another replacement')
+    if receipt_directory.exists():
+        raise RuntimeError('release directory already exists; reconcile incomplete intent')
+    paths = ['src/universal_userio/' + f for f in (
+        'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
+        'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
+        'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
+        'voice/agentcall_phone_tts.py')]
+    paths += ['deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs')]
+    expected_hashes = {}
+    for path in paths:
+        pinned = subprocess.check_output(['git', '-C', ROOT, 'show', full_revision + ':' + path])
+        if pinned != subprocess.check_output(['git', '-C', ROOT, 'show', 'origin/main:' + path]):
+            raise RuntimeError('candidate source changed since pin: ' + path)
+        destination = ('/opt/universal-userio/' + path if path.startswith('src/')
+                       else '/opt/userio-telegram-qr/' + path.rsplit('/', 1)[1])
+        expected_hashes[destination] = hashlib.sha256(pinned).hexdigest()
+    code = ('import pathlib,hashlib,json; print(json.dumps({"release":json.loads(pathlib.Path('
+            '"/opt/universal-userio/.userio-release.json").read_text()),"hashes":{p:hashlib.sha256('
+            'pathlib.Path(p).read_bytes()).hexdigest() for p in ' + repr(list(expected_hashes)) + '}}))')
+    candidate = json.loads(output(['docker', 'run', '--rm', '--network', 'none', '--entrypoint',
+                                  'python', image_id, '-c', code]))
+    if candidate['release']['commit'] != full_revision or candidate['hashes'] != expected_hashes:
+        raise RuntimeError('candidate provenance differs from pinned published source')
+    old = inspect('userio-backend')
+    if old['Id'] != expected_container or not old['State']['Running']:
+        raise RuntimeError('canonical backend baseline changed')
+    if old['HostConfig']['NetworkMode'] != 'host' or old['HostConfig'].get('AutoRemove'):
+        raise RuntimeError('unsupported backend network or auto-remove configuration')
+    if api('GET', 'images/' + urllib.parse.quote(old['Config']['Image'], safe='') + '/json')['Id'] != old['Image']:
+        raise RuntimeError('rollback image tag no longer resolves to baseline image')
+    others = {name: inspect(name) for name in ('userio-frontend', 'userio-voice')}
+    original = (CONFIG / 'compose.host.json').read_bytes()
+    configured = json.loads(original)
+    account_ids = accounts()
+    health()
+    assert_idle()
+    receipt_directory.mkdir(parents=True, mode=0o700, exist_ok=False)
+    save(receipt_directory / 'baseline.json', {'backend': old, 'others': others,
+        'account_ids': account_ids, 'candidate': candidate, 'image_id': image_id,
+        'allowed_normalizations': {'HostConfig.OomKillDisable': [None, False]}})
+    descriptor = os.open(receipt_directory / 'compose.host.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(original)
+        stream.flush()
+        os.fsync(stream.fileno())
+    save(receipt_directory / 'intent.json', {'revision': full_revision, 'image_id': image_id,
+        'expected_container': expected_container, 'started_at': time.time()})
+    if inspect('userio-backend')['Id'] != old['Id'] or (CONFIG / 'compose.host.json').read_bytes() != original:
+        raise RuntimeError('baseline changed after preflight; no replacement attempted')
+    removed = False
+    try:
+        api('POST', 'containers/userio-backend/stop?t=40')
+        api('DELETE', 'containers/userio-backend')
+        removed = True
+        body = dict(old['Config'], Image=image, HostConfig=old['HostConfig'])
+        api('POST', 'containers/create?name=userio-backend', body)
+        now = inspect('userio-backend')
+        save(receipt_directory / 'candidate.json', now)
+        if now['Image'] != image_id or normalized_host(now['HostConfig']) != normalized_host(old['HostConfig']):
+            raise RuntimeError('replacement image or HostConfig changed')
+        if sorted(now['Mounts'], key=lambda mount: mount['Destination']) != sorted(old['Mounts'], key=lambda mount: mount['Destination']):
+            raise RuntimeError('replacement mounts changed')
+        if dict(now['Config'], Image=old['Config']['Image']) != old['Config']:
+            raise RuntimeError('replacement Config/Env changed')
+        api('POST', 'containers/userio-backend/start')
+        health()
+        if accounts() != account_ids:
+            raise RuntimeError('backend account identities changed')
+        for name, baseline in others.items():
+            if inspect(name) != baseline:
+                # State timestamps/counters may evolve; configuration and identity may not.
+                current = inspect(name)
+                if any(current[key] != baseline[key] for key in ('Id', 'Image', 'Config', 'HostConfig')):
+                    raise RuntimeError('unrelated container configuration changed: ' + name)
+        configured.setdefault('services', {}).setdefault('backend', {})['image'] = image
+        installed_config = json.dumps(configured, indent=2).encode()
+        atomic_config(installed_config)
+        receipt = {'status': 'installed', 'revision': full_revision, 'image': image,
+            'image_id': image_id, 'container_id': now['Id'], 'previous_image_id': old['Image'],
+            'compose_sha256': hashlib.sha256(installed_config).hexdigest(),
+            'supervisor_healthy': True, 'account_ids_unchanged': True,
+            'frontend_voice_configuration_unchanged': True, 'backup': str(receipt_directory)}
+        save(receipt_file, receipt)
+        print(json.dumps(receipt))
+    except BaseException as error:
+        # Never restore databases: preserve every delivery/session written during the attempt.
+        if removed:
+            try:
+                api('GET', 'containers/userio-backend/json')
+            except RuntimeError as missing:
+                if not str(missing).endswith('returned 404'):
+                    raise
+            else:
+                api('POST', 'containers/userio-backend/stop?t=20')
+                api('DELETE', 'containers/userio-backend')
+            if api('GET', 'images/' + urllib.parse.quote(old['Config']['Image'], safe='') + '/json')['Id'] != old['Image']:
+                raise RuntimeError('rollback image tag changed; protected baseline retained') from error
+            api('POST', 'containers/create?name=userio-backend', dict(old['Config'], HostConfig=old['HostConfig']))
+        api('POST', 'containers/userio-backend/start')
+        atomic_config(original)
+        health()
+        if accounts() != account_ids:
+            raise RuntimeError('rollback API account readback differs; protected baseline retained') from error
+        save(receipt_file, {'status': 'rolled_back', 'revision': full_revision,
+            'previous_image_id': old['Image'], 'error': str(error), 'backup': str(receipt_directory)})
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize'))
+    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend'))
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--image')
+    parser.add_argument('--revision')
+    parser.add_argument('--expected-container')
+    parser.add_argument('--receipt-directory', type=Path)
     args = parser.parse_args()
+    if args.action == 'replace-backend':
+        if not all((args.image, args.revision, args.expected_container, args.receipt_directory)):
+            parser.error('replace-backend requires --image, --revision, --expected-container and --receipt-directory')
+        replace_backend(image=args.image, revision=args.revision, expected_container=args.expected_container,
+                        receipt_directory=args.receipt_directory)
+        return
     if args.action == 'context':
         if not args.output:
             parser.error('context requires --output')
