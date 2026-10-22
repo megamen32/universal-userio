@@ -26,7 +26,7 @@ export function telegramAccountCard(session, account = null) {
   const title = displayName
     ? `${displayName} · Telegram${suffix ? ` · ${suffix}` : ''}`
     : suffix ? `Telegram · ${suffix}`
-      : `Сохранённая сессия Telegram №${slotNumber(session.id) || session.id || 'новая'}`;
+      : 'Подключение Telegram';
   const managed = account?.can_disconnect === true && !!session.accountId;
   const accountFound = !!account;
 

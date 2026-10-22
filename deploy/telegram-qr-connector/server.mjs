@@ -1334,7 +1334,7 @@ http.createServer(async (req, res) => {
     }
     try {
       const payload = await readJsonBody(req), owner = String(payload.user_id || "");
-      if (!owner) throw new Error("owner required");
+      if (!owner || owner !== enrollmentOwners.legacyUser) throw new Error("owner-scoped maintenance required");
       if (url.pathname === "/profiles/configure") {
         if (owner !== enrollmentOwners.legacyUser) throw new Error("owner-scoped maintenance required");
         const registrationHeaders = { Authorization: `Bearer ${process.env.USERIO_API_TOKEN}` };
