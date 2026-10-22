@@ -35,7 +35,7 @@
 | Метод и путь | Назначение |
 | --- | --- |
 | `POST /v1/messages` | Приём нормализованного сообщения по настроенному маршруту |
-| `POST /v1/conversations/{id}/drafts` | Создание текстового черновика |
+| `POST /v1/messages/prepare` | Один черновик: conversation_id либо account_ref+identifier, text, request_id; без отправки |
 | `PATCH /v1/drafts/{id}` | Изменение сохранённого черновика |
 | `POST /v1/drafts/{id}/approve` | Действие доставки выбранного черновика |
 | `POST /v1/inbox/seen` | Явное изменение локального статуса прочитанного |

@@ -127,25 +127,6 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
-        "userio.contacts.start",
-        "Start a conversation with a contact that is not in the history yet and send the first message. The "
-        "identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS "
-        "or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is "
-        "delivered through the same durable path as every other outbound message. The request_id makes a retry "
-        "reuse the same message instead of sending it twice. The answer reports what the transport really proved: "
-        "delivery_status=delivered only with a provider confirmation, delivery_status=smtp_accepted when the mail "
-        "transport merely took the letter.",
-        schema(
-            {
-                "account_ref": {"type": "string", "maxLength": 128},
-                "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
-                "text": {"type": "string", "minLength": 1, "maxLength": 65536},
-                "request_id": {"type": "string", "minLength": 16, "maxLength": 80},
-            },
-            ["account_ref", "identifier", "text", "request_id"],
-        ),
-    ),
-    ToolSpec(
         "userio.channels.read",
         "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
@@ -166,18 +147,6 @@ TOOL_SPECS = (
         schema({"file_ref": {"type": "string"},
                 "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
                 "include_images":{"type":"boolean","default":True}}, ["file_ref"]),
-    ),
-    ToolSpec(
-        "userio.channels.send_draft",
-        "Queue a draft; never send or bypass approval.",
-        schema(
-            {
-                "chat_id": {"type": "string"},
-                "text": {"type": "string"},
-                "attachments": {"type": "array", "items": {"type": "string"}},
-            },
-            ["chat_id", "text"],
-        ),
     ),
     ToolSpec(
         "userio.workspace.poll",
@@ -326,17 +295,6 @@ TOOL_SPECS = (
         schema(
             {"source": {"type": "string"}, "message_id": {"type": "string"}},
             ["source", "message_id"],
-        ),
-    ),
-    ToolSpec(
-        "userio.draft.create",
-        "Create a reply draft; does not send.",
-        schema(
-            {
-                "conversation_id": {"type": "string"},
-                "body": {"type": "string"},
-            },
-            ["conversation_id", "body"],
         ),
     ),
     ToolSpec(
@@ -548,7 +506,7 @@ MESSAGE_PREPARE_SPECS = (
         'Prepare one message draft for either a known conversation_id or account_ref plus a new contact identifier. '
         'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: approve the exact '
         'returned draft with userio.draft.approve_send. Retries with the same request_id reuse the same draft. '
-        'Use this as the default text preparation tool; contacts.start is a legacy explicit-send compatibility call.',
+        'This is the only public text-draft preparation entrypoint for known chats and new contacts.',
         dict(schema({'conversation_id':{'type':'string','minLength':1},
             'account_ref':{'type':'string','maxLength':128},
             'identifier':{'type':'string','minLength':1,'maxLength':256},
@@ -608,10 +566,8 @@ TOOL_CAPABILITIES = {
     "userio.channels.search": "read",
     "userio.channels.export": "read",
     "userio.contacts.resolve": "read",
-    "userio.contacts.start": "send",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
-    "userio.channels.send_draft": "send",
     "userio.workspace.poll": "read",
     "userio.workspace.claim": "read",
     "userio.workspace.renew": "read",
@@ -633,7 +589,6 @@ TOOL_CAPABILITIES = {
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
-    "userio.draft.create": "send",
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
     "userio.draft.approve_send": "send",

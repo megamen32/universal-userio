@@ -265,36 +265,6 @@ class UserIOToolDispatcher:
                         "data": base64.b64encode(file.data).decode(),
                     },
                 }
-            if name == "userio.channels.send_draft":
-                attachments = arguments.get("attachments")
-                if attachments is not None and not isinstance(attachments, list):
-                    raise ValueError("attachments must be an array")
-                draft = channels.send(
-                    chat_id=self._required(arguments, "chat_id"),
-                    text=self._required(arguments, "text"),
-                    attachments=attachments,
-                )
-                conversation = self._store.conversation(
-                    draft.conversation_id, user_id=user_id
-                ) or {}
-                manual_lock = self._service.manual_approval_required(conversation)
-                hint = (
-                    "Автоматическая отправка отключена. Чтобы отправить сообщение, "
-                    "подтвердите этот черновик."
-                    if manual_lock else
-                    "Черновик сохранён. Чтобы отправить сообщение, "
-                    "подтвердите этот текст и получателя."
-                )
-                return {
-                    "ok": True,
-                    "draft": self._draft(draft),
-                    "sent": False,
-                    "approval_required": True,
-                    "channel": str(conversation.get("source") or ""),
-                    "response_mode": str(conversation.get("response_mode") or ""),
-                    "manual_approval_only": manual_lock,
-                    "approval_hint": hint,
-                }
             if name == "userio.workspace.poll":
                 page = self._store.workspace_events(
                     after=arguments.get("after", 0),
@@ -471,13 +441,6 @@ class UserIOToolDispatcher:
                         user_id=user_id,
                     ),
                 }
-            if name == "userio.draft.create":
-                draft = self._service.create_manual_draft(
-                    self._required(arguments, "conversation_id"),
-                    body=self._required(arguments, "body"),
-                    user_id=user_id,
-                )
-                return {"ok": True, "draft": self._draft(draft)}
             if name == "userio.draft.update":
                 draft = self._store.update_draft(
                     self._required(arguments, "draft_id"),

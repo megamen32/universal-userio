@@ -1346,6 +1346,9 @@ def handler(
                         return
                     conversation_id = unquote(path.removeprefix("/v1/conversations/").removesuffix("/send").strip("/"))
                     payload = self._json()
+                    conv=service._store.conversation(conversation_id,user_id=user_id)
+                    if conv and conv['source']=='diagnostic':
+                        self._reply(409,{'error':'diagnostic_chat_cannot_send'});return
                     upload_id=str(payload.get('upload_id') or '')
                     if upload_id:
                         conv=service._store.conversation(conversation_id,user_id=user_id)
@@ -1362,18 +1365,25 @@ def handler(
                                 self._reply(409,{'error':'delivery_uncertain_do_not_retry'});return
                             self._reply(200,{'id':result['id'],'status':result['status'],'receipt':result.get('receipt')})
                             return
-                    draft = service.send_manual_message(conversation_id, body=str(payload.get("body") or ""),
+                    draft = service.prepare_manual_message(conversation_id, body=str(payload.get("body") or ""),
                         request_id=str(payload.get("request_id") or ""), user_id=user_id,
-                        upload_id=upload_id)
+                        upload_id=upload_id, notify=False)
+                    draft = service.approve(draft.id, user_id=user_id, expected_snapshot={
+                        "expected_text":draft.body, "expected_chat_id":draft.conversation_id,
+                        "expected_attachments":[]})
                     self._reply(200, {"id": draft.id, "status": draft.status, "receipt": draft.receipt})
                     return
-                if path.startswith("/v1/conversations/") and path.endswith("/drafts"):
-                    conversation_id = path.removeprefix("/v1/conversations/").removesuffix("/drafts").strip("/")
-                    draft = service.create_manual_draft(
-                        conversation_id, body=str(self._json().get("body") or ""), user_id=user_id
-                    )
-                    self._reply(202, {"id": draft.id, "body": draft.body, "status": draft.status})
-                    return
+                if path == '/v1/messages/prepare':
+                    if not service._store.capability_enabled('send',user_id=user_id):
+                        self._reply(403,{'error':'send_capability_disabled'});return
+                    payload = self._json()
+                    if set(payload) - {'conversation_id','account_ref','identifier','text','request_id'}:
+                        self._reply(400,{'error':'unknown_prepare_field'});return
+                    if principal.messenger_grants is not None:
+                        from .scoped_permissions import enforce
+                        enforce(service._store,principal,'userio.messages.prepare',payload)
+                    result = service.contact_starter.prepare(user_id=user_id, **payload)
+                    self._reply(202,result);return
                 if path == "/v1/identities":
                     payload = self._json()
                     service._store.register_identity(

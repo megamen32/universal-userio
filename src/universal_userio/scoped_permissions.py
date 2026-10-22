@@ -119,24 +119,11 @@ def enforce(store, principal, name, args):
             if grant is None or grant['access'] != 'read_write' or grant['chats'] is not None:
                 raise PermissionError('account_scope_required_for_new_contact')
         return
-    if name == 'userio.channels.send_draft':
-        conversation, access = _scoped_conversation(
-            store, principal, None, chat_id=args.get('chat_id'))
-        if access != 'read_write':
-            raise PermissionError('chat_read_only_token')
-        return
-    if name in {'userio.contacts.resolve', 'userio.contacts.start'}:
+    if name == 'userio.contacts.resolve':
         ref = str(args.get('account_ref') or '').strip()
         grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
         if grant is None:
             raise PermissionError('chat_or_account_outside_token_scope')
-        if name == 'userio.contacts.start':
-            if grant['access'] != 'read_write':
-                raise PermissionError('chat_read_only_token')
-            if grant['chats'] is not None:
-                # A token limited to named chats may not open a conversation
-                # with a contact that is not in the history yet.
-                raise PermissionError('account_scope_required_for_new_contact')
         return
     if not name.startswith('userio.messenger.'):
         raise PermissionError('scoped_messenger_only')
@@ -359,11 +346,6 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
             'size':len(file.data),'sha256':hashlib.sha256(file.data).hexdigest(),
             'encoding':'base64','data':base64.b64encode(file.data).decode('ascii')}}
 
-    if name == 'userio.channels.send_draft':
-        draft = channels.send(chat_id=arguments['chat_id'],text=arguments['text'],
-                              attachments=arguments.get('attachments'))
-        return {'ok':True,'draft':{'id':draft.id,'conversation_id':draft.conversation_id,
-            'body':draft.body,'status':draft.status,'approval_required':True,'sent':False}}
     raise KeyError('unknown_scoped_channel_operation')
 
 
@@ -380,12 +362,7 @@ def _dispatch_scoped_contacts(store, service, principal, name, arguments):
             resolved = starter.resolve(user_id=principal.user_id, account_ref=account_ref,
                                        identifier=identifier, need_send=False)
             return {'ok': True, 'peer': resolved.as_dict()}
-        text = str(arguments.get('text') or '').strip()
-        request_id = str(arguments.get('request_id') or '').strip()
-        if not text or not request_id:
-            raise ValueError('text and request_id are required')
-        return starter.start(user_id=principal.user_id, account_ref=account_ref,
-                             identifier=identifier, text=text, request_id=request_id)
+        raise KeyError('unknown_contact_operation')
     except ContactStartError as error:
         return {'ok': False, 'error': str(error), 'code': error.code}
 

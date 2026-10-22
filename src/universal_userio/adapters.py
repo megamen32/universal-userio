@@ -908,15 +908,6 @@ class StoredChannelAdapter:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
 
-    def send(
-        self, *, chat_id: str, text: str, attachments: list[str] | None = None
-    ) -> ReplyDraft:
-        if attachments:
-            raise AdapterNotSupported("attachments are not supported by adapter")
-        record = self._store.conversation(chat_id, user_id=self._user_id)
-        if record is None or not self._matches(str(record["source"])):
-            raise KeyError("chat not found")
-        return self._service.create_manual_draft(chat_id, body=text, user_id=self._user_id)
 
     def _matches(self, source: str) -> bool:
         if self.channel is None:
@@ -1681,25 +1672,6 @@ class ChatGPTCDPChannelAdapter:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
 
-    def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
-        if attachments:
-            raise AdapterNotSupported("attachments are not supported by adapter")
-        exported = self.read(chat_id=chat_id)["chat"]
-        messages = exported.get("messages")
-        if not isinstance(messages, list) or not messages:
-            raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
-        latest = messages[-1]
-        if not isinstance(latest, Mapping):
-            raise RuntimeError("chatgpt-cdp-mcp returned an invalid message export")
-        body = str(latest.get("text") or latest.get("body") or "").strip()
-        message_ref = str(latest.get("messageRef") or latest.get("id") or "").strip()
-        if not body or not message_ref:
-            raise RuntimeError("chatgpt-cdp-mcp returned a message without text or reference")
-        conversation_id, _ = self._service.receive(
-            InboxMessage("chatgpt", message_ref, chat_id, body, time.time()),
-            route_id="chatgpt", user_id=self._user_id,
-        )
-        return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
 
     @classmethod
     def _chat_summary(cls, chat: Mapping[str, Any]) -> dict[str, Any]:
@@ -1860,22 +1832,6 @@ class ChatGPTWebChannelAdapter:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
 
-    def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
-        if attachments:
-            raise AdapterNotSupported("attachments are not supported by adapter")
-        slug = _chatgpt_resolve_account(self._username, chat_id)
-        chat = _chatgpt_conversation(self._username, slug, chat_id)
-        messages = chat.get("messages") or []
-        if not messages:
-            raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
-        latest = messages[-1]
-        message_ref = f"{chat_id}:{latest.get('created_at', 0)}:{len(messages)}"
-        conversation_id, _ = self._service.receive(
-            InboxMessage("chatgpt", message_ref, chat_id, str(latest.get("text", ""))[:8000], time.time()),
-            route_id="chatgpt", user_id=self._user_id,
-        )
-        self._store.set_conversation_account(conversation_id, slug, user_id=self._user_id)
-        return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
 
     @classmethod
     def _chat_summary(cls, chat: Mapping[str, Any]) -> dict[str, Any]:

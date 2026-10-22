@@ -141,8 +141,8 @@ in Git history only.
 
 ## First contact with a contact outside the history
 
-`userio.contacts.resolve` and `userio.contacts.start` open a conversation with
-a contact that has never written to the account. For Telegram this needs the
+`userio.contacts.resolve` resolves the peer; `userio.messages.prepare` resolves
+and prepares an approval-bound draft for a contact that has never written to the account. For Telegram this needs the
 connector's own live session, so it can be impossible while the account itself
 still reads and sends. The account's `capabilities` therefore carry a
 `first_contact` block: `supported`, `allowed`, a machine-readable `reason` and

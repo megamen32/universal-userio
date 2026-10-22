@@ -80,7 +80,7 @@ class Messenger:
                     'reason': 'provider_not_supported'} if starter is None else
                    starter.resolution_support(user_id=self.user, account_ref=account_ref))
         operations = {}
-        for name in ('resolve', 'start'):
+        for name in ('resolve', 'prepare'):
             reason = ''
             if not support['supported']:
                 reason = support['reason']
@@ -88,17 +88,17 @@ class Messenger:
                 reason = 'account_disabled'
             elif self.principal.read_only:
                 reason = 'read_only_token'
-            elif name == 'start' and 'reply' not in account['capabilities']:
+            elif name == 'prepare' and 'reply' not in account['capabilities']:
                 reason = 'account_capability_disabled'
             elif not self.store.capability_enabled(
-                    'send' if name == 'start' else 'read', user_id=self.user):
+                    'send' if name == 'prepare' else 'read', user_id=self.user):
                 reason = 'user_capability_disabled'
             elif self.principal.messenger_grants is not None:
                 grant = next((g for g in self.principal.messenger_grants
                               if g['account_ref'] == account_ref), None)
                 if grant is None:
                     reason = 'account_outside_credential_scope'
-                elif name == 'start' and (grant.get('access') != 'read_write'
+                elif name == 'prepare' and (grant.get('access') != 'read_write'
                                           or grant.get('chats') is not None):
                     reason = 'account_scope_required_for_new_contact'
             operations[name] = {

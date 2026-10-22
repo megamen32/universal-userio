@@ -1,14 +1,4 @@
-"""Start a conversation with a contact that is not in the history yet.
-
-UserIO writes into conversations that already exist. This module resolves a
-human identifier (username, phone number, mail address, provider id) into a
-provider-native peer, opens the canonical conversation for that peer and hands
-the first message to the existing durable send path.
-
-The send itself is not new: :meth:`UserIOService.send_manual_message` already
-claims a draft, delivers it through the per-channel outbox and stores the
-receipt. Only the peer resolution and the conversation creation are new.
-"""
+"""Resolve canonical contacts and prepare durable drafts before explicit approval."""
 from __future__ import annotations
 
 import re
@@ -318,35 +308,8 @@ class ContactStarter:
             peer = resolved.as_dict()
         draft = self._service.prepare_manual_message(str(conversation['id']), body=body,
             request_id=request_id, user_id=user_id, notify=notify)
+        from .delivery_receipt import delivery_fields
         return {'ok':True, 'conversation_id':str(conversation['id']),
             'channel':str(conversation.get('source') or ''), 'peer':peer,
             'draft_id':draft.id, 'body':draft.body, 'status':draft.status,
-            'approval_required':draft.status=='proposed', 'sent':draft.status=='sent'}
-
-    def start(self, *, user_id: str, account_ref: str, identifier: str, text: str,
-              request_id: str) -> dict[str, Any]:
-        """Resolve the contact, open the chat and deliver the first message."""
-        body = str(text or "").strip()
-        if not body:
-            raise ContactStartError("contact_message_required")
-        prepared = self.prepare(user_id=user_id, account_ref=account_ref, identifier=identifier,
-            text=text, request_id=request_id, notify=False)
-        draft = self._service.approve(prepared['draft_id'], user_id=user_id, expected_snapshot={
-            'expected_text':prepared['body'], 'expected_chat_id':prepared['conversation_id'],
-            'expected_attachments':[]})
-        from .delivery_receipt import delivery_fields
-        delivery = delivery_fields(draft.receipt or "")
-        return {
-            **prepared,
-            "ok": True,
-            "conversation_id": str(prepared["conversation_id"]),
-            "channel": str(prepared.get("channel") or ""),
-            "peer": prepared.get("peer"),
-            "draft_id": draft.id,
-            "status": draft.status,
-            **delivery,
-            "receipt": draft.receipt or None,
-            "retry_allowed": False,
-            "replay": bool(getattr(draft, "replayed", False)),
-            "approval_required": False,
-        }
+            'approval_required':draft.status=='proposed', **delivery_fields(draft.receipt or '')}

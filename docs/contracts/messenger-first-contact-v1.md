@@ -7,8 +7,8 @@ operations are unchanged.
 
 ## A first contact is a separate capability
 
-`userio.contacts.resolve` and `userio.contacts.start` are the only operations
-that open a conversation with a contact that has never written to the account.
+`userio.contacts.resolve` resolves the peer; `userio.messages.prepare` resolves
+and prepares an approval-bound draft to open a conversation with a contact that has never written to the account.
 They need more than a stored chat: they need a provider-native peer id for an
 identifier the account has never seen.
 
@@ -29,7 +29,7 @@ So the account's capabilities carry a `first_contact` block:
   "operations": {
     "resolve": {"supported": false, "allowed": false, "reason": "connector_unreachable",
                 "availability": "unavailable"},
-    "start":   {"supported": false, "allowed": false, "reason": "connector_unreachable",
+    "prepare":   {"supported": false, "allowed": false, "reason": "connector_unreachable",
                 "availability": "unavailable"}
   }
 }
@@ -70,7 +70,7 @@ delivered:
   `delivery_unconfirmed` is `true`.
 - `delivery_status: unknown` — the outcome is not known.
 
-The answer of `userio.draft.approve_send` and of `userio.contacts.start`
+The answer of `userio.draft.approve_send` after `userio.messages.prepare`
 carries `sent`, `delivery_status`, `delivery_confirmed`,
 `delivery_unconfirmed`, `message_id`, `idempotency_key`, `sent_copy`,
 `retry_allowed` and `replay`. `sent` is true only for a confirmed delivery.

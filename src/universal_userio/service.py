@@ -1189,23 +1189,7 @@ class UserIOService:
         self._notify_drafts_for_approval(drafts, user_id=user_id)
         return drafts
 
-    def create_manual_draft(
-        self, conversation_id: str, *, body: str, user_id: str | None = None
-    ) -> ReplyDraft:
-        return self.prepare_manual_message(conversation_id, body=body,
-            request_id=uuid.uuid4().hex, user_id=user_id)
 
-    def send_manual_message(self, conversation_id: str, *, body: str,
-                            request_id: str, user_id: str | None = None, upload_id: str = '') -> ReplyDraft:
-        """Compatibility for an explicit human Send/contacts.start command."""
-        conversation = self._store.conversation(conversation_id, user_id=user_id)
-        if conversation and conversation['source']=='diagnostic':
-            raise DeliveryUnavailableError('Diagnostic chats cannot send external messages.')
-        draft = self.prepare_manual_message(conversation_id, body=body, request_id=request_id,
-            user_id=user_id, upload_id=upload_id, notify=False)
-        return self.approve(draft.id, user_id=user_id, expected_snapshot={
-            'expected_text':draft.body, 'expected_chat_id':draft.conversation_id, 'expected_attachments':[],
-        })
 
     def prepare_manual_message(self, conversation_id: str, *, body: str,
                             request_id: str, user_id: str | None = None, upload_id: str = '',
