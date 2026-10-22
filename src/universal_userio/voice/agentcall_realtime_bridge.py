@@ -1141,8 +1141,80 @@ def pcm_playback_seconds(pcm: bytes, speed: float) -> float:
     return len(pcm)/(2*getattr(pcm,'sample_rate',8000)*factor)
 
 
+_LATIN_TO_CYRILLIC = {
+    'a': 'а', 'b': 'б', 'c': 'к', 'd': 'д', 'e': 'е', 'f': 'ф', 'g': 'г', 'h': 'х',
+    'i': 'и', 'j': 'дж', 'k': 'к', 'l': 'л', 'm': 'м', 'n': 'н', 'o': 'о',
+    'p': 'п', 'q': 'к', 'r': 'р', 's': 'с', 't': 'т', 'u': 'у', 'v': 'в',
+    'w': 'в', 'x': 'кс', 'y': 'и', 'z': 'з',
+}
+
+# Symbols the speech engine cannot pronounce become words, so the owner hears
+# the same content instead of a gap where the character used to be.
+_SPOKEN_PUNCTUATION = (
+    ('/', ' слеш '),
+    ('@', ' собачка '),
+    ('#', ' решётка '),
+    ('%', ' процентов '),
+    ('&', ' и '),
+    ('+', ' плюс '),
+    ('=', ' равно '),
+    ('*', ' умножить на '),
+    ('<', ' меньше '),
+    ('>', ' больше '),
+    ('~', ' '),
+    ('^', ' '),
+    ('$', ' '),
+    ('(', ' '),
+    (')', ' '),
+    ('[', ' '),
+    (']', ' '),
+    ('{', ' '),
+    ('}', ' '),
+    ('"', ' '),
+    ("'", ' '),
+    ('`', ' '),
+    ('\\', ' '),
+)
+
+
+def _transliterate_latin(text: str) -> str:
+    """Latin letters become Cyrillic, so the Russian engine pronounces them."""
+    spoken = []
+    for char in text:
+        if 'A' <= char <= 'Z':
+            spoken.append(_LATIN_TO_CYRILLIC[char.lower()])
+        elif 'a' <= char <= 'z':
+            spoken.append(_LATIN_TO_CYRILLIC[char])
+        else:
+            spoken.append(char)
+    return ''.join(spoken)
+
+
+def _readable_punctuation(text: str) -> str:
+    """Turn every symbol the speech engine cannot pronounce into a word."""
+    text = text.replace('://', ' слеш слеш ')
+    # A colon inside a time stays; every other colon becomes a spoken pause.
+    text = re.sub(r'(?<!\d):(?!\d)', ' — ', text)
+    for symbol, spoken in _SPOKEN_PUNCTUATION:
+        text = text.replace(symbol, spoken)
+    return text
+
+
+def _spell_code_digits(text: str) -> str:
+    """A three-digit error code is read digit by digit, not as a number."""
+    return re.sub(
+        r'(?<![\d.])([0-9]{3})(?!\d)(?!\.\d)(?!\s(?:миллисекунд|секунд|процентов|минут))',
+        lambda match: ' ' + ' '.join(match.group(1)),
+        text,
+    )
+
+
 def text_for_speech(text: str) -> str:
-    """Remove presentation markup without dropping the spoken content."""
+    """Make the text speakable: presentation markup goes, content never does.
+
+    Latin is transliterated, punctuation becomes a word and a three-digit error
+    code is read digit by digit, so the owner hears which error happened.
+    """
     text = re.sub(r'```.*?(?:```|$)|~~~.*?(?:~~~|$)', ' ', text, flags=re.DOTALL)
     text = re.sub(r'<code>.*?(?:</code>|$)', ' ', text, flags=re.DOTALL)
     text = re.sub(r"(?m)^\s*(?:```|~~~)[^\n]*$", "", text)
@@ -1159,7 +1231,6 @@ def text_for_speech(text: str) -> str:
     text = re.sub(r"</?(?:b|i|strong|em|p|br|code)>\s*", " ", text)
     text = html.unescape(text)
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'https?://[^\s<>]+', ' ', text)
     text = re.sub(r'\b(из|от|для|без|вместо)\s+(?:payload|содержимое запроса)\b', r'\1 данных запроса', text, flags=re.IGNORECASE)
     text = re.sub(r'\bк\s+(?:payload|содержимое запроса)\b', 'к данным запроса', text, flags=re.IGNORECASE)
     text = re.sub(r'\bс\s+(?:payload|содержимое запроса)\b', 'с данными запроса', text, flags=re.IGNORECASE)
@@ -1203,18 +1274,17 @@ def text_for_speech(text: str) -> str:
     text = re.sub(r'\bвотчере\b', 'автоматической проверке', text, flags=re.IGNORECASE)
     text = re.sub(r'\bвотчер\b', 'автоматическая проверка', text, flags=re.IGNORECASE)
     text = re.sub(r'\bворкера\b', 'службы', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b(?:inc|ses|sess)_[A-Za-z0-9_-]+\b', ' ', text)
-    text = re.sub(r'\b[0-9a-f]{8}-[0-9a-f-]{27,}\b|\b[0-9a-f]{32,64}\b', ' ', text, flags=re.IGNORECASE)
-    text = re.sub(r'(?<!\w)/(?:[\w.:-]+/?)+', ' ', text)
     text = re.sub(r'\bHTTP\s*([1-5]\d\d)\b', r'код ответа \1', text, flags=re.IGNORECASE)
     text = re.sub(r'\bHTTPS?\b', 'протокол связи', text, flags=re.IGNORECASE)
     text = re.sub(r'\bID\b', 'идентификатор', text, flags=re.IGNORECASE)
-    text = re.sub(r'\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b', ' ', text)
     text = re.sub(r'(?<=\d)\s*ms\b', ' миллисекунд', text, flags=re.IGNORECASE)
     text = re.sub(r'(?<=\d)\s*(?:s|sec)\b', ' секунд', text, flags=re.IGNORECASE)
-    # Unknown Latin names are not split, transliterated or sent raw to Google.
-    # Full technical spelling remains in the native answer/history.
-    text = re.sub(r'[A-Za-z][A-Za-z0-9]*(?:[-./][A-Za-z0-9]+)*', ' ', text)
+    # From here on nothing is dropped. An identifier, a path, a URL or an error
+    # code is the part the owner needs, so it is spoken instead of deleted.
+    text = _readable_punctuation(text)
+    text = _transliterate_latin(text)
+    text = re.sub(r'(?<=[А-Яа-яЁё])\.(?=[А-Яа-яЁё])', ' точка ', text)
+    text = _spell_code_digits(text)
     text = re.sub(r'\bслужебн\w*\s+(?:обозначени\w*|параметр\w*|запис\w*|идентификатор\w*|адрес\w*)\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'\bтехнические подробности\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'(?<=[.!?])(?:\s*[,;:.!?])+\s*', ' ', text)
