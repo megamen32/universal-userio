@@ -95,6 +95,22 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
+        "userio.channels.export",
+        "Export one user-owned chat as a Markdown file: every message with its author, direction and time, "
+        "voice messages marked as transcribed speech with the stored transcript, replies marked, and media "
+        "only when include_images is true. The result carries the file path, the authenticated download path "
+        "and a bounded preview, so the chat is read from the file instead of paged into the conversation.",
+        schema(
+            {
+                "conversation_id": {"type": "string", "maxLength": 128},
+                "include_images": {"type": "boolean", "default": False},
+                "since": {"type": "number"},
+                "until": {"type": "number"},
+                "max_messages": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 20000},
+            }
+        ),
+    ),
+    ToolSpec(
         "userio.channels.read",
         "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
@@ -509,6 +525,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.search": "read",
+    "userio.channels.export": "read",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",

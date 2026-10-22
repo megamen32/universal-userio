@@ -6,7 +6,8 @@ READ_ONLY_TOOLS = frozenset({
     'userio.calls.telegram.get',
     'userio.messenger.events',
     'userio.messenger.capabilities', 'userio.messenger.history', 'userio.messenger.get', 'userio.messenger.resolve', 'userio.messenger.media',
-    "userio.accounts.list", "userio.channels.list", "userio.channels.search", "userio.channels.read",
+    "userio.accounts.list", "userio.channels.list", "userio.channels.search",
+    "userio.channels.export", "userio.channels.read",
     "userio.channels.download", "userio.inbox.list_new", "userio.conversation.get",
     "userio.workspace.poll", "userio.workspace.claim_log",
     "userio.workspace.exclusions.list", "userio.workspace.policy.get",
@@ -43,6 +44,8 @@ def read_only_http_allowed(method: str, path: str) -> bool:
         return False
     if path in {"/v1/accounts", "/v1/conversations", "/v1/search", "/v1/runtime",
                 "/v1/workspace/events", "/v1/inbox", "/v1/drafts/pending"}:
+        return True
+    if path.startswith("/v1/exports/") and len(path.split("/")) == 4 and path.split("/")[3]:
         return True
     if path.startswith(('/v1/calls/matrix/','/v1/calls/telegram/')) and len(path.split('/')) == 5:
         return True

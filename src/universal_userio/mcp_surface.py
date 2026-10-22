@@ -65,6 +65,13 @@ TOOL_SPECS = (
         "offset": {"type": "integer", "minimum": 0},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
+    ToolSpec("userio.channels.export", "Export one user-owned chat as a Markdown file: every message with its author, direction and time, voice messages marked as transcribed speech with the stored transcript, replies marked, and media only when include_images is true. The result carries the file path, the authenticated download path and a bounded preview, so the chat is read from the file instead of paged into the conversation.", _schema({
+        "conversation_id": {"type": "string", "maxLength": 128},
+        "include_images": {"type": "boolean", "default": False},
+        "since": {"type": "number"},
+        "until": {"type": "number"},
+        "max_messages": {"type": "integer", "minimum": 1, "maximum": 50000, "default": 20000},
+    })),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
@@ -236,6 +243,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",
     "userio.channels.search": "read",
+    "userio.channels.export": "read",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
     "userio.channels.send_draft": "send",
@@ -303,7 +311,8 @@ class UserIOMcpSurface:
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
                  or principal.messenger_grants is not None and spec.name in {
                     'userio.accounts.list','userio.channels.list','userio.channels.search',
-                    'userio.channels.read','userio.channels.download','userio.channels.send_draft'}
+                    'userio.channels.export','userio.channels.read','userio.channels.download',
+                    'userio.channels.send_draft'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -590,6 +599,24 @@ class UserIOMcpSurface:
                     self._store, arguments, user_id=user_id,
                     source=self._optional(arguments, "channel"), ignored=ignored_chats,
                 )
+            if name == "userio.channels.export":
+                from .chat_export import export_conversation
+                conversation_id = str(arguments.get("conversation_id") or "").strip()
+                if not conversation_id:
+                    raise ValueError("conversation_id is required")
+                result = export_conversation(
+                    self._store, conversation_id, user_id=user_id,
+                    include_images=bool(arguments.get("include_images")),
+                    since=arguments.get("since"), until=arguments.get("until"),
+                    max_messages=int(arguments.get("max_messages") or 20000),
+                )
+                if not result:
+                    return {"ok": False, "error": "conversation not found"}
+                markdown = str(result.pop("markdown"))
+                result["preview"] = markdown[:2000]
+                if len(markdown.encode("utf-8")) <= 32768:
+                    result["content"] = markdown
+                return result
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()

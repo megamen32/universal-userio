@@ -96,6 +96,24 @@ class UserIOToolDispatcher:
                     self._store, arguments, user_id=user_id,
                     source=self._optional(arguments, "channel"), ignored=ignored_chats,
                 )
+            if name == "userio.channels.export":
+                from .chat_export import export_conversation
+                conversation_id = str(arguments.get("conversation_id") or "").strip()
+                if not conversation_id:
+                    raise ValueError("conversation_id is required")
+                result = export_conversation(
+                    self._store, conversation_id, user_id=user_id,
+                    include_images=bool(arguments.get("include_images")),
+                    since=arguments.get("since"), until=arguments.get("until"),
+                    max_messages=int(arguments.get("max_messages") or 20000),
+                )
+                if not result:
+                    return {"ok": False, "error": "conversation not found"}
+                markdown = str(result.pop("markdown"))
+                result["preview"] = markdown[:2000]
+                if len(markdown.encode("utf-8")) <= 32768:
+                    result["content"] = markdown
+                return result
             if name == "userio.channels.list":
                 ignored_chats = self._ignored_chats(arguments)
                 query = str(arguments.get("search") or "").strip()

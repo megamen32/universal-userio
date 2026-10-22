@@ -1774,6 +1774,18 @@ def handler(
                 self._reply(403, {"error": "read_only_token"})
                 return
             user_id = principal.user_id
+            if path.startswith('/v1/exports/'):
+                name = path.removeprefix('/v1/exports/')
+                if not re.fullmatch(r'[A-Za-z0-9._-]{1,120}\.md', name):
+                    self._reply(404, {'error': 'export_not_found'}); return
+                from .chat_export import user_exports_dir
+                folder = user_exports_dir(service._store, user_id).resolve()
+                target = (folder / name).resolve()
+                if folder not in target.parents or not target.is_file():
+                    self._reply(404, {'error': 'export_not_found'}); return
+                self._reply_raw(200, target.read_bytes(),
+                                content_type='text/markdown; charset=utf-8', filename=name)
+                return
             if path == '/v1/meetings/telemost' or path.startswith('/v1/meetings/telemost/'):
                 if not service._store.capability_enabled('read',user_id=user_id):
                     self._reply(403,{'error':'read_capability_disabled'});return

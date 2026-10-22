@@ -90,6 +90,10 @@ def enforce(store, principal, name, args):
         if ref is not None and grant_for(principal, ref) is None:
             raise PermissionError('chat_or_account_outside_token_scope')
         return
+    if name == 'userio.channels.export':
+        _scoped_conversation(store, principal, args.get('channel'),
+                             chat_id=args.get('conversation_id'))
+        return
     if name == 'userio.channels.read':
         _scoped_conversation(store, principal, args.get('channel'),
                              chat_id=args.get('chat_id'), message_id=args.get('message_id'))
@@ -250,6 +254,26 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
         return {'ok': True, 'scope': arguments.get('scope') or 'conversation',
                 'results': scoped[:limit], 'limit': limit,
                 'mode_used': 'exact_id' if by_id else 'text'}
+
+    if name == 'userio.channels.export':
+        from .chat_export import export_conversation
+        conversation_id = str(arguments.get('conversation_id') or '').strip()
+        if not conversation_id:
+            raise ValueError('exact_chat_required')
+        conversation, _ = _scoped_conversation(store, principal, channel, chat_id=conversation_id)
+        result = export_conversation(
+            store, str(conversation['id']), user_id=principal.user_id,
+            include_images=bool(arguments.get('include_images')),
+            since=arguments.get('since'), until=arguments.get('until'),
+            max_messages=int(arguments.get('max_messages') or 20000),
+        )
+        if not result:
+            raise KeyError('chat_not_found')
+        markdown = str(result.pop('markdown'))
+        result['preview'] = markdown[:2000]
+        if len(markdown.encode('utf-8')) <= 32768:
+            result['content'] = markdown
+        return result
 
     if name == 'userio.channels.read':
         ignored = arguments.get('ignored_chats', [])
