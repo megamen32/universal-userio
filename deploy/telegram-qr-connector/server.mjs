@@ -1075,7 +1075,7 @@ function clearSlot(slotId) {
   return live;
 }
 
-const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Подключённые аккаунты и сохранённые входы. Старые сеансы без имени отмечены отдельно.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p><details><summary>Импортировать существующий сеанс</summary><p class="userio-note">Локально преобразуйте файл через <code>tg-convert путь-к-файлу --to gramjs-string --print</code> и вставьте результат. Остановите другие клиенты этого аккаунта перед импортом: одну Telegram-сессию должен обслуживать один живой владелец.</p><form id="import-session-form"><textarea name="session" required autocomplete="off" spellcheck="false" aria-label="GramJS session string" rows="4"></textarea><button class="userio-setup-button" type="submit">Проверить и сохранить</button><p class="userio-note" id="import-session-status" aria-live="polite"></p></form></details></section><div id=cards aria-live="polite"></div></main></div><script type="module">
+const pageShell = `<!doctype html><html lang="ru"><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Аккаунты Telegram · UserIO</title><link rel="stylesheet" href="/assets/userio-onboarding.css"><script src="/assets/userio-onboarding-theme.js"></script></head><body class="userio-setup-page"><div class="userio-setup-shell"><header class="userio-setup-header"><a class="userio-brand" href="/accounts?service=telegram"><span class="userio-brand-mark" aria-hidden="true">U</span><span>UserIO</span></a><nav class="userio-setup-nav"><a href="/accounts?service=telegram">&#8592; Все аккаунты</a></nav></header><main class="userio-setup-main"><h1 class="userio-setup-title">Аккаунты и сеансы Telegram</h1><p class="userio-setup-lead">Подключённые аккаунты и сохранённые входы. Старые сеансы без имени отмечены отдельно.</p><p class="userio-note" id="account-summary" aria-live="polite"></p><section class="userio-setup-panel"><h2>Добавить аккаунт</h2><form method=post action="__PREFIX__/phone" data-async=1><input name=phone type=tel placeholder="+79990001111" autocomplete=off aria-label="Номер телефона"><button class="userio-setup-button" type=submit>Войти по номеру</button></form><p><a class="userio-setup-button userio-setup-secondary" href="__PREFIX__/new">Показать QR-код</a></p><details><summary>Импортировать существующий сеанс</summary><p class="userio-note">Локально преобразуйте файл через <code>tg-convert путь-к-файлу --to gramjs-string --print</code> и вставьте результат. Остановите другие клиенты этого аккаунта перед импортом: одну Telegram-сессию должен обслуживать один живой владелец.</p><form id="import-session-form"><textarea name="session" required autocomplete="off" spellcheck="false" aria-label="GramJS session string" rows="4"></textarea><button class="userio-setup-button" type="submit">Проверить и сохранить</button><p class="userio-note" id="import-session-status" aria-live="polite"></p></form></details></section><div id=cards aria-live="polite"></div><details id="old-sessions" hidden><summary>Старые отключённые сеансы</summary><p class="userio-note">Эти входы уже отозваны Telegram. Привязанные профили показаны выше; история сохранена.</p><div id="old-cards"></div></details></main></div><script type="module">
 import { telegramAccountCard } from "__PREFIX__/account-card.mjs";
 var prefix = location.pathname.replace(/\\/$/, "");
 var seen = new Map();
@@ -1105,23 +1105,26 @@ async function refreshAccounts(force){
 }
 function render(list){
   var box = document.getElementById("cards");
+  var oldBox = document.getElementById("old-cards");
   accounts.forEach(function(account){
     var session=list.find(function(s){return s.accountId===account.id;});
     if(session){session.accountId=account.id;return;}
     list.push({id:'missing-'+account.id.replace(/[^a-zA-Z0-9]/g,'-'),accountId:account.id,status:'reconnect-required',sync:'missing-session',qr:''});
   });
   var connected = list.filter(function(s){return s.status==='connected'&&s.sync!=='relogin-required';}).length;
-  var revoked = list.filter(function(s){return s.sync==='relogin-required'||s.status==='reconnect-required';}).length;
+  var revoked = list.filter(function(s){return accounts.has(s.accountId)&&(s.sync==='relogin-required'||s.status==='reconnect-required');}).length;
+  document.getElementById('old-sessions').hidden=!list.some(function(s){return s.sync==='relogin-required'&&!accounts.has(s.accountId);});
   document.getElementById('account-summary').textContent='Подключено аккаунтов: '+connected+' · требуют переподключения: '+revoked;
   var live = new Set(list.map(function(s){return s.id;}));
   list.forEach(function(s){
     var account=accounts.get(s.accountId)||{};
+    var target=s.sync==='relogin-required'&&!accounts.has(s.accountId)?oldBox:box;
     var sig = [s.status,s.name,s.accountId,account.display_name,account.can_disconnect,(s.qr||" ").slice(0,80),s.passwordHint,s.phone,s.codeViaApp?1:0,s.promptSeq,s.mode,s.sync,s.syncChats,s.syncError].join("|");
     if (seen.get(s.id) === sig) return;
     seen.set(s.id, sig);
     var el = document.getElementById("card-"+s.id);
     var html = card(s);
-    if (el) el.outerHTML = html; else box.insertAdjacentHTML("beforeend", html);
+    if (el) el.remove(); target.insertAdjacentHTML("beforeend", html);
   });
   [...seen.keys()].forEach(function(id){
     if (!live.has(id)) { var el = document.getElementById("card-"+id); if (el) el.remove(); seen.delete(id); }
