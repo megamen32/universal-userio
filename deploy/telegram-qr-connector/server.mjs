@@ -1564,7 +1564,8 @@ http.createServer(async (req, res) => {
         if (wantSlot) {
           const live = liveSlots.get(wantSlot);
           if (live && (!wantAccount || live.accountId === wantAccount)) chosen = [wantSlot, live];
-          if (!live && wantAccount && (slots.has(wantSlot) || Object.hasOwn(enrollmentOwners.owners, wantSlot))) {
+          if (!live && wantAccount && (!slotProfiles[wantSlot] || slotProfiles[wantSlot] === wantAccount)
+              && (slots.has(wantSlot) || Object.hasOwn(enrollmentOwners.owners, wantSlot) || Object.hasOwn(slotProfiles, wantSlot))) {
             chosen = [...liveSlots].find(([id, item]) => item.accountId === wantAccount
               && enrollmentOwners.owner(id) === enrollmentOwners.owner(wantSlot)) || null;
           }
