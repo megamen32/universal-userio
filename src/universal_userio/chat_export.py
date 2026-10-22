@@ -23,9 +23,14 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+# UserIO works in Moscow time (МСК, UTC+03:00) and the runtime container runs
+# in UTC, so the export states and renders the reference time zone itself.
+OWNER_TIMEZONE = timezone(timedelta(hours=3), "МСК")
+OWNER_TIMEZONE_LABEL = "МСК (UTC+03:00)"
 
 MAX_MESSAGES_LIMIT = 50000
 DEFAULT_MAX_MESSAGES = 20000
@@ -80,7 +85,7 @@ def user_exports_dir(store: Any, user_id: str | None) -> Path:
 
 def _timestamp(value: Any) -> str:
     try:
-        moment = datetime.fromtimestamp(float(value)).astimezone()
+        moment = datetime.fromtimestamp(float(value), OWNER_TIMEZONE)
     except (TypeError, ValueError, OSError):
         return "?"
     return moment.strftime("%Y-%m-%d %H:%M:%S %z")
@@ -88,7 +93,7 @@ def _timestamp(value: Any) -> str:
 
 def _iso(value: Any) -> str:
     try:
-        return datetime.fromtimestamp(float(value)).astimezone().isoformat(timespec="seconds")
+        return datetime.fromtimestamp(float(value), OWNER_TIMEZONE).isoformat(timespec="seconds")
     except (TypeError, ValueError, OSError):
         return ""
 
@@ -306,7 +311,8 @@ def export_conversation(store: Any, conversation_id: str, *, user_id: str | None
         f"- conversation_id: {resolved}",
         f"- канал: {conversation.get('source') or ''}"
         + (f" · аккаунт: {conversation.get('account_ref')}" if conversation.get("account_ref") else ""),
-        f"- экспортировано: {_iso(time.time())}",
+        f"- экспортировано: {_iso(time.time())} ({OWNER_TIMEZONE_LABEL})",
+        f"- время сообщений: {OWNER_TIMEZONE_LABEL}",
         f"- сообщений в чате: {total}; в окне: {window_total}; в файле: {exported}",
     ]
     header = lines[:]
