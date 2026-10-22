@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 
 _LOG = logging.getLogger(__name__)
-MAX_AUTOMATIC_CHECKS = 6
+DELIVERY_UNKNOWN_AFTER_CHECKS = 6
 RETRY_DELAYS_SECONDS = (30.0, 120.0, 600.0, 1800.0, 7200.0)
 
 
@@ -60,10 +60,13 @@ class TelegramDeliveryReconciliationWorker:
             try:
                 attempts = int(item.get("delivery_attempts") or 0)
                 check_number = attempts + 1
-                terminal = check_number >= MAX_AUTOMATIC_CHECKS
-                next_check = None
-                if not terminal:
-                    next_check = self.clock() + RETRY_DELAYS_SECONDS[attempts]
+                # `delivery_unknown` is a user-facing uncertainty state, not
+                # an automatic-reconciliation stop. Keep checking the same
+                # attempt at the capped interval until a definitive journal
+                # receipt/refusal resolves it.
+                terminal = check_number >= DELIVERY_UNKNOWN_AFTER_CHECKS
+                delay = RETRY_DELAYS_SECONDS[min(attempts, len(RETRY_DELAYS_SECONDS) - 1)]
+                next_check = self.clock() + delay
                 result = self.service.reconcile_draft_delivery(
                     draft_id, user_id=user_id, automatic=True,
                     automatic_next_check_at=next_check,

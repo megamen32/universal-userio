@@ -568,14 +568,16 @@ reads that journal and answers one of:
 | `absent` | the journal has no record at this instant; the original request may still be queued or in flight | outcome stays unknown and retry stays blocked |
 
 UserIO runs a bounded background checker for persisted Telegram drafts whose
-status is `sending`. It reads the same draft-id journal; it never calls the
-send endpoint. The first check is scheduled five seconds after the durable
-claim, followed by bounded backoff (30 seconds, 2 minutes, 10 minutes, 30
-minutes and 2 hours). A provider `Retry-After` overrides the shorter interval.
-After six inconclusive checks the visible status becomes `delivery_unknown`;
-the attempt remains blocked from resend, and the existing **Проверить
-доставку** action can still resolve a later exact receipt. Proposed drafts are
-never put in this queue.
+status is `sending` or `delivery_unknown`. It reads the same draft-id journal;
+it never calls the send endpoint. The first check is scheduled five seconds
+after the durable claim, followed by backoff (30 seconds, 2 minutes, 10
+minutes, 30 minutes and 2 hours); after that, unresolved attempts continue to
+be checked every 2 hours. A provider `Retry-After` overrides the shorter
+interval. After six inconclusive checks the visible status becomes
+`delivery_unknown`, while automatic read-only checks continue on the same
+attempt. The attempt remains blocked from resend, and the existing
+**Проверить доставку** action can still resolve a later exact receipt.
+Proposed drafts are never put in this queue.
 
 Only an exact journal `sent` record with a valid provider message id and
 matching Telegram account and peer becomes `approved`. Only an explicit

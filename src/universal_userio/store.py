@@ -3248,7 +3248,7 @@ class SQLiteUserIOStore:
                      ON c.user_id=d.user_id AND c.id=d.conversation_id
                    LEFT JOIN draft_delivery_reconciliation_leases l
                      ON l.user_id=d.user_id AND l.draft_id=d.id
-                   WHERE d.status='sending' AND c.source='telegram'
+                   WHERE d.status IN ('sending','delivery_unknown') AND c.source='telegram'
                      AND (d.delivery_next_check_at IS NULL OR d.delivery_next_check_at<=?)
                      AND (l.lease_until IS NULL OR l.lease_until<=?)
                    ORDER BY COALESCE(d.delivery_next_check_at,0),d.sending_at LIMIT ?""",
@@ -3319,9 +3319,9 @@ class SQLiteUserIOStore:
             if terminal_unknown and can_update and prior_status == "sending":
                 self._connection.execute(
                     "UPDATE drafts SET status='delivery_unknown',delivery_attempts=?,"
-                    "delivery_next_check_at=NULL,delivery_last_checked_at=?,delivery_reason=?,"
+                    "delivery_next_check_at=?,delivery_last_checked_at=?,delivery_reason=?,"
                     "delivery_evidence_json=? WHERE user_id=? AND id=? AND status='sending'",
-                    (attempts, now, reason, encoded, user, draft_id),
+                    (attempts, next_check_at, now, reason, encoded, user, draft_id),
                 )
             elif can_update:
                 self._connection.execute(

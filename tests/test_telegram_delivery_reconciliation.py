@@ -534,6 +534,31 @@ def test_late_sent_receipt_resolves_delivery_unknown_without_send_approval(tmp_p
     assert len(outbox.sent) == 1
 
 
+def test_automatic_reconciliation_continues_after_delivery_unknown(tmp_path):
+    service, draft_id = _uncertain_draft(tmp_path, {"state": "pending"})
+    outbox = service.telegram_outbox
+    original_send_count = len(outbox.sent)
+    worker = TelegramDeliveryReconciliationWorker(service)
+
+    for check in range(1, 8):
+        _make_due(service, draft_id)
+        assert worker.run_once() == 1
+        state = service._store.draft_delivery_state(draft_id)
+        assert state["attempts"] == check
+        assert state["next_check_at"] is not None
+        if check < 6:
+            assert state["status"] == "sending"
+        else:
+            assert state["status"] == "delivery_unknown"
+
+    state = service._store.draft_delivery_state(draft_id)
+    assert state["next_check_at"] >= time.time() + 7199
+    assert outbox.attempt_reads == [draft_id] * 7
+    assert len(outbox.sent) == original_send_count == 1
+    assert service._store.claim_due_telegram_delivery_reconciliations(
+        worker_id="not-yet-due", now=state["next_check_at"] - 1) == []
+
+
 def test_adapter_429_retry_after_is_preserved_without_response_body(tmp_path):
     def run(request, **_kwargs):
         raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests",
