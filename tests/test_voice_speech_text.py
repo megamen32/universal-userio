@@ -67,3 +67,9 @@ def test_speech_cleanup_is_idempotent():
     raw = 'В 20:00 HTTP 502 на https://a.test/x?y=1, source_id: abc123.'
     once = spoken(raw)
     assert spoken(once) == once
+
+
+def test_markdown_destination_domain_survives_when_label_is_generic():
+    out = spoken('На [сайте](https://notify.bezrabotnyi.com) ошибка HTTP 502.')
+    assert spoken('notify.bezrabotnyi.com') in out, out
+    assert '5 0 2' in out

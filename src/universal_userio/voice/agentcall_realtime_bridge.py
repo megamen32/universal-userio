@@ -1218,6 +1218,8 @@ def text_for_speech(text: str) -> str:
     text = re.sub(r'```.*?(?:```|$)|~~~.*?(?:~~~|$)', ' ', text, flags=re.DOTALL)
     text = re.sub(r'<code>.*?(?:</code>|$)', ' ', text, flags=re.DOTALL)
     text = re.sub(r"(?m)^\s*(?:```|~~~)[^\n]*$", "", text)
+    text = re.sub(r"!?\[([^\]]+)\]\((https?://[^\s)]+)\)",
+                  lambda match: match.group(1) if match.group(2) in match.group(1) else match.group(1) + " " + match.group(2), text)
     text = re.sub(r"!?\[([^\]]+)\]\([^\n]*?\)", r"\1", text)
     text = re.sub(r"(?m)^\s*(?:#{1,6}\s+|>\s*|[-+*]\s+(?:\[[ xX]\]\s*)?|\d+[.)]\s+)", "", text)
     text = re.sub(r"(?m)^\s*(?:[-*_]\s*){3,}$", "", text)
@@ -2500,7 +2502,7 @@ class CallController:
         peer_label = '+' + normalized_peer_digits(caller) if account_ref else ''
         self._prune()
         greeting = (
-            "Алло, я на связи. Могу рассказать о текущих инцидентах и работе сессий. Что хотите узнать?"
+            "Алло, я ваш личный помощник. Чем могу помочь?"
             if owner else GUEST_GREETING
         )
         greeting_wav = Path(self.config.incoming_greeting_wav)
@@ -2511,7 +2513,7 @@ class CallController:
         call_id = str(uuid.uuid4())
         self.prepared_calls[call_id] = PreparedCall(
             greeting, pcm, '', b'\x00\x00' * 160,
-            'Владелец сам позвонил узнать о текущих инцидентах и связанных сессиях. Читай свежие данные инструментами.' if owner else '',
+            'Владелец сам позвонил личному помощнику. Выясни его задачу, не предполагай цель звонка.' if owner else '',
             sanitize_agent_context({'call_mode':'incoming' if owner else 'incoming_guest'}), time.time(), wait_prompts,
             account_ref=account_ref, peer_ref=peer_ref,
             peer_label=peer_label,

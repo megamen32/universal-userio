@@ -817,6 +817,9 @@ class CallPeerSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('phone100', bridge.call_peer_snapshot('phone100', self.target)[1]),
                          (call.account_ref, call.peer_ref))
         self.assertEqual('incoming', call.agent_context['call_mode'])
+        self.assertNotIn('инцидент', call.greeting_text.lower())
+        self.assertNotIn('инцидент', call.context.lower())
+        self.assertIn('помощник', call.greeting_text.lower())
         self.assertEqual(self.target, call.peer_label)
 
     async def scenario(self, *, known=True, incoming=False, fail=False):
