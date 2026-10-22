@@ -20,6 +20,7 @@ READ_OPERATIONS = frozenset({'read', 'history', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
 TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
+SAFE_ACTIONS = frozenset({'react', 'typing'})
 
 
 def canonical(value) -> bytes:
@@ -88,6 +89,10 @@ class Messenger:
             elif authentication_required and name not in {'read', 'history'}:
                 reason = 'provider_authentication_required'
             result[name] = {'supported': supported, 'allowed': supported and not reason, 'reason':reason}
+            if name in SAFE_ACTIONS:
+                result[name]['approval_required'] = False
+            if name=='react':
+                result[name]['removal_supported'] = supported and self._reaction_removal_supported(account_ref, provider)
             if name=='typing' and supported:
                 result[name]['stop_mode']=getattr(provider,'typing_stop_mode','provider_command')
         admin_outbox=getattr(self.service,'telegram_outbox',None)
@@ -454,12 +459,28 @@ class Messenger:
         return digest({'source_binding':projected['binding'],
                        'attachment_id':attachment['attachment_id'],'attachment_index':index})
 
+    def _reaction_removal_supported(self, account_ref, provider):
+        return provider is not None and getattr(provider, 'reaction_remove_supported', False) is True
+
+    def safe_action(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
+        if action not in SAFE_ACTIONS:
+            raise ValueError('safe_action_required')
+        prepared = self._prepare_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
+        return self._execute_action(prepared)
+
     def propose(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
+        if action in SAFE_ACTIONS:
+            return self.safe_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
+        return self._prepare_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
+
+    def _prepare_action(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
         if action not in OPERATIONS or action in READ_OPERATIONS: raise ValueError('invalid_action')
         self._allow(account_ref,action)
         if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}',request_id):
             raise ValueError('request_id_required')
         payload = self._payload(action,payload)
+        if action == 'react' and payload['emoji'] == '' and not self._reaction_removal_supported(account_ref, self._provider(account_ref)):
+            raise PermissionError('reaction_removal_not_supported')
         conv = self._conversation(account_ref,conversation_id)
         supports_action=getattr(self._provider(account_ref),'supports_action',None)
         if callable(supports_action) and supports_action(action,conv) is False:
@@ -736,6 +757,7 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'media': return {'ok':True,**api.media(**arguments)}
         if op == 'events': return {'ok':True,**api.events(**arguments)}
         if op == 'upload': return {'ok':True,'upload':api.upload(**arguments)}
+        if op == 'safe_action': return {'ok':True,'action':api.safe_action(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
         if op == 'telegram_admin.create': return {'ok':True,'action':api.create_telegram(**arguments)}
         if op == 'telegram_admin.propose': return {'ok':True,'action':api.propose_telegram_admin(**arguments)}

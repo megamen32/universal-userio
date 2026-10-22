@@ -882,16 +882,15 @@ class UserIOService:
 
     def react_to_message(
         self, *, conversation_id: str, message_id: str, emoji: str,
-        confirm: bool, user_id: str | None = None, request_id: str = '', principal=None,
+        confirm: bool | None = None, user_id: str | None = None, request_id: str = '', principal=None,
     ) -> dict[str, object]:
-        if confirm is not True:
-            return {"ok": False, "error": "exact_confirmation_required"}
-        emoji = str(emoji or "").strip()
+        # Compatibility-only confirm argument: reactions no longer require approval.
+        if not isinstance(emoji, str) or len(emoji) > 16 or emoji and not emoji.strip():
+            return {"ok": False, "error": "invalid_emoji"}
+        emoji = emoji.strip()
         message_id = str(message_id or "").strip()
         if not message_id:
             return {"ok": False, "error": "message_id_required"}
-        if not emoji or len(emoji) > 16:
-            return {"ok": False, "error": "invalid_emoji"}
         resolved_user = self._store._user(user_id)
         conversation = self._store.conversation(conversation_id, user_id=resolved_user)
         if conversation is None:
@@ -906,9 +905,8 @@ class UserIOService:
         messenger = Messenger(self._store, self, principal)
         account_ref = str(conversation.get('account_ref') or '')
         request_id = request_id or ('web-react-' + uuid.uuid4().hex)
-        proposed = messenger.propose(account_ref, conversation_id, message_id,
+        accepted = messenger.safe_action(account_ref, conversation_id, message_id,
             'react', {'emoji':emoji}, request_id)
-        accepted = messenger.approve(proposed['id'], proposed['hash'], True)
         return {"ok": True, "reacted": accepted['status'] == 'accepted',
             "source": source, "action": accepted, "receipt": accepted.get('receipt')}
 

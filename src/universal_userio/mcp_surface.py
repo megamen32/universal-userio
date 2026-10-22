@@ -191,10 +191,11 @@ TOOL_SPECS = (
     ToolSpec("userio.message.mark_seen", "Mark one user-owned message as seen.", _schema({
         "source": {"type": "string"}, "message_id": {"type": "string"},
     }, ["source", "message_id"])),
-    ToolSpec("userio.messages.react", "Set an emoji reaction on a stored message; visible to the peer.", _schema({
+    ToolSpec("userio.messages.react", "Set a source-bound reaction immediately without confirmation. Empty emoji removes it only where the provider supports removal. Does not send a message. Reuse request_id for dedup.", _schema({
         "conversation_id": {"type": "string"}, "message_id": {"type": "string"},
-        "emoji": {"type": "string", "maxLength": 16}, "confirm": {"type": "boolean"},
-    }, ["conversation_id", "message_id", "emoji", "confirm"])),
+        "emoji": {"type": "string", "maxLength": 16},
+        "request_id": {"type":"string","minLength":16,"maxLength":128},
+    }, ["conversation_id", "message_id", "emoji"])),
     ToolSpec("userio.draft.create", "Create a reply draft; does not send.", _schema({
         "conversation_id": {"type": "string"}, "body": {"type": "string"},
     }, ["conversation_id", "body"])),
@@ -247,6 +248,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
+    'userio.messenger.safe_action': 'send',
     'userio.messenger.propose': 'send',
     'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
@@ -955,8 +957,8 @@ class UserIOMcpSurface:
                 return self._service.react_to_message(
                     conversation_id=self._required(arguments, "conversation_id"),
                     message_id=self._required(arguments, "message_id"),
-                    emoji=self._required(arguments, "emoji"),
-                    confirm=arguments.get("confirm") is True, user_id=user_id,
+                    emoji=arguments.get("emoji"), user_id=user_id,
+                    request_id=arguments.get("request_id", ""), principal=principal,
                 )
             if name == "userio.draft.create":
                 draft = self._service.create_manual_draft(
