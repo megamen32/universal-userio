@@ -1554,14 +1554,18 @@ http.createServer(async (req, res) => {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id) and body are required" }));
         }
-        // When an account (and the slot the store pins for it) is requested,
-        // send strictly from it — never fall back to another slot, so the
-        // sender identity always matches the dashboard.
+        // The stable account identity is authoritative after reconnect. An
+        // obsolete same-owner slot may resolve to its new session, while a
+        // live mismatched slot or a different owner must never be substituted.
         const candidates = wantAccount || wantSlot ? [] : [...liveSlots];
         let chosen = null;
         if (wantSlot) {
           const live = liveSlots.get(wantSlot);
           if (live && (!wantAccount || live.accountId === wantAccount)) chosen = [wantSlot, live];
+          if (!live && wantAccount && (slots.has(wantSlot) || Object.hasOwn(enrollmentOwners.owners, wantSlot))) {
+            chosen = [...liveSlots].find(([id, item]) => item.accountId === wantAccount
+              && enrollmentOwners.owner(id) === enrollmentOwners.owner(wantSlot)) || null;
+          }
         } else if (wantAccount) {
           chosen = [...liveSlots].find(([, item]) => item.accountId === wantAccount) || null;
         }
