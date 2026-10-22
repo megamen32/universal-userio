@@ -19,6 +19,7 @@ OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker'
 READ_OPERATIONS = frozenset({'read', 'history', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
+TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
 
 
 def canonical(value) -> bytes:
@@ -119,7 +120,9 @@ class Messenger:
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
                 'telegram_admin':{'supported':admin_supported,'allowed':admin_supported and not admin_reason,
-                    'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS)},
+                    'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS),
+                    'direct_actions':sorted(TELEGRAM_CREATE_OPERATIONS),
+                    'approval_required_actions':sorted(TELEGRAM_ADMIN_OPERATIONS - TELEGRAM_CREATE_OPERATIONS)},
                 **({'reaction_options':provider.reaction_options} if hasattr(provider,'reaction_options') else {}),
                 'upload_limits':{'max_bytes':effective_upload_limit,
                     'provider_max_bytes':provider_upload_limit,
@@ -540,7 +543,20 @@ class Messenger:
                 raise ValueError('channel_delete_phrase_required')
         return value
 
+    def create_telegram(self, account_ref, operation, payload, request_id):
+        if operation not in TELEGRAM_CREATE_OPERATIONS:
+            raise ValueError('telegram_creation_operation_required')
+        if not isinstance(account_ref, str) or not re.fullmatch(r'telegram:[1-9][0-9]*', account_ref):
+            raise ValueError('stable_telegram_account_ref_required')
+        action = self._prepare_telegram_admin(account_ref, operation, payload, request_id)
+        return self._execute_action(action)
+
     def propose_telegram_admin(self, account_ref, operation, payload, request_id):
+        if operation in TELEGRAM_CREATE_OPERATIONS:
+            raise ValueError('use_telegram_admin_create')
+        return self._prepare_telegram_admin(account_ref, operation, payload, request_id)
+
+    def _prepare_telegram_admin(self, account_ref, operation, payload, request_id):
         if operation not in TELEGRAM_ADMIN_OPERATIONS: raise ValueError('invalid_telegram_admin_operation')
         account=self._account(account_ref)
         caps=self.capabilities(account_ref)['telegram_admin']
@@ -612,8 +628,12 @@ class Messenger:
 
     def approve(self, action_id, expected_hash, confirm):
         if confirm is not True: raise ValueError('exact_confirmation_required')
-        action = self.get(action_id); e = action['envelope']
+        action = self.get(action_id)
         if expected_hash != action['hash']: raise ValueError('action_snapshot_conflict')
+        return self._execute_action(action)
+
+    def _execute_action(self, action):
+        action_id = action['id']; e = action['envelope']
         if e.get('action')=='telegram_admin':
             if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:
                 raise PermissionError(self.capabilities(e['account_ref'])['telegram_admin']['reason'])
@@ -717,6 +737,7 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'events': return {'ok':True,**api.events(**arguments)}
         if op == 'upload': return {'ok':True,'upload':api.upload(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
+        if op == 'telegram_admin.create': return {'ok':True,'action':api.create_telegram(**arguments)}
         if op == 'telegram_admin.propose': return {'ok':True,'action':api.propose_telegram_admin(**arguments)}
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
         if op == 'approve': return {'ok':True,'action':api.approve(**arguments)}

@@ -128,7 +128,7 @@ def enforce(store, principal, name, args):
         raise PermissionError('scoped_messenger_only')
     op = name.removeprefix('userio.messenger.')
     ref, cid = args.get('account_ref'), args.get('conversation_id')
-    admin = op == 'telegram_admin.propose'
+    admin = op in {'telegram_admin.create', 'telegram_admin.propose'}
     admin_operation = args.get('operation', '') if admin else ''
     if op in {'get','approve'}:
         with store._lock:

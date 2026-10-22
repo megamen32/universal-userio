@@ -465,9 +465,25 @@ MESSENGER_SPECS = (
                 'action':{'type':'string','enum':['reply','edit','react','sticker','file','typing']},
                 'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
+    ToolSpec('userio.messenger.telegram_admin.create',
+        'Create a Telegram group or private broadcast channel immediately in one call, without approval. '
+        'Use a stable telegram:<TelegramUserID> account_ref. Keep request_id for idempotency: '
+        'accepted or uncertain creation must never be repeated under a new ID. '
+        'group_create payload: title and exact participant_ids; channel_create payload: title and optional about. '
+        'Inviting/removing members of existing chats and deleting channels still require explicit approval.',
+        schema({'account_ref':{'type':'string','pattern':r'^telegram:[1-9][0-9]*$'},
+                'operation':{'type':'string','enum':['group_create','channel_create']},
+                'payload':{'oneOf':[
+                    schema({'title':{'type':'string','minLength':1,'maxLength':128},
+                            'participant_ids':{'type':'array','minItems':1,'maxItems':50,'uniqueItems':True,
+                                'items':{'type':'string','pattern':r'^[1-9][0-9]*$'}}}, ['title','participant_ids']),
+                    schema({'title':{'type':'string','minLength':1,'maxLength':128},
+                            'about':{'type':'string','maxLength':255}}, ['title'])]},
+                'request_id':{'type':'string','minLength':16,'maxLength':128,'pattern':r'^[a-zA-Z0-9:_-]+$'}},
+               ['account_ref','operation','payload','request_id'])),
     ToolSpec('userio.messenger.telegram_admin.propose',
-        'Prepare one Telegram group or private broadcast-channel action for explicit approval. Never executes the Telegram change. Channel deletion requires the exact phrase DELETE CHANNEL <peer_id>; supergroup removal is a ban.',
-        schema({'account_ref':{'type':'string'},'operation':{'type':'string','enum':['group_create','group_invite','group_remove','channel_create','channel_delete']},
+        'Prepare a Telegram member invitation/removal or channel deletion for explicit approval. Never executes the Telegram change. Use telegram_admin.create for immediate group/channel creation. Channel deletion requires the exact phrase DELETE CHANNEL <peer_id>; supergroup removal is a ban.',
+        schema({'account_ref':{'type':'string'},'operation':{'type':'string','enum':['group_invite','group_remove','channel_delete']},
                 'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','operation','payload','request_id'])),
     ToolSpec('userio.messenger.get',
@@ -552,6 +568,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",

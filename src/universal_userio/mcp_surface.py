@@ -248,6 +248,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.upload': 'send',
     'userio.messenger.approve': 'send',
@@ -314,9 +315,9 @@ class UserIOMcpSurface:
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
             and (principal.messenger_grants is None or any(g['access']=='read_write' for g in principal.messenger_grants)
                  or spec.name in READ_ONLY_TOOLS
-                 or spec.name in {'userio.messenger.telegram_admin.propose','userio.messenger.approve'}
+                 or spec.name in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose','userio.messenger.approve'}
                  and any(g.get('telegram_admin') for g in principal.messenger_grants))
-            and (spec.name!='userio.messenger.telegram_admin.propose'
+            and (spec.name not in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose'}
                  or principal.messenger_accounts is None and principal.messenger_grants is None
                  or any(g.get('telegram_admin') for g in principal.messenger_grants or ()))
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
