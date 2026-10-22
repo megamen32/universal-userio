@@ -1037,8 +1037,7 @@ def handler(
                     result = service.react_to_message(
                         conversation_id=str(payload.get("conversation_id") or "").strip(),
                         message_id=str(payload.get("message_id") or "").strip(),
-                        emoji=str(payload.get("emoji") or "").strip(),
-                        confirm=payload.get("confirm") is True, user_id=user_id,
+                        emoji=payload.get("emoji"), user_id=user_id,
                         request_id=str(payload.get('request_id') or ''), principal=principal,
                     )
                     self._reply(200, result)

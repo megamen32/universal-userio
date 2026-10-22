@@ -2013,6 +2013,47 @@ http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ error: "Telegram edit outcome is unknown", submitted: "unknown" }));
     }
   }
+  if (url.pathname === "/typing" && req.method === "POST") {
+    if (!loginAuthorized(req.headers, process.env.USERIO_API_TOKEN)) {
+      res.writeHead(401, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"unauthorized"}));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "");
+      const peerId = String(payload.peer_id || "");
+      const threadId = String(payload.thread_id || "");
+      if (!/^telegram:[1-9][0-9]*$/.test(accountId) || !/^-?[1-9][0-9]*$/.test(peerId)
+          || typeof payload.active !== "boolean" || (threadId && !/^[1-9][0-9]*$/.test(threadId))
+          || (threadId && (!Number.isSafeInteger(Number(threadId)) || Number(threadId) > 0x7fffffff))) {
+        res.writeHead(400, {"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"exact account, peer, active boolean and optional thread required",submitted:false}));
+      }
+      const chosen = [...liveSlots].find(([, item]) => item.accountId === accountId);
+      const item = chosen && chosen[1];
+      let peer = item && item.labelPeers.idPeers.get(peerId);
+      if (!item || !peer) {
+        res.writeHead(404, {"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"account_peer_not_connected",submitted:false}));
+      }
+      // Android rejects broadcast channels; typing applies to users/groups/megagroups.
+      if (peer.className === "InputPeerChannel") peer = await item.client.getEntity(peer);
+      if (peer.className === "Channel" && !peer.megagroup) {
+        res.writeHead(400, {"content-type":"application/json"});
+        return res.end(JSON.stringify({error:"broadcast_typing_not_supported",submitted:false}));
+      }
+      const action = payload.active ? new Api.SendMessageTypingAction() : new Api.SendMessageCancelAction();
+      const accepted = await item.client.invoke(new Api.messages.SetTyping({peer,
+        ...(threadId ? {topMsgId:Number(threadId)} : {}), action}));
+      if (accepted !== true) throw new Error("typing_not_accepted");
+      res.writeHead(200, {"content-type":"application/json"});
+      return res.end(JSON.stringify({ok:true,account_id:accountId,peer_id:peerId,
+        thread_id:threadId,active:payload.active,provider_read_acknowledged:false}));
+    } catch {
+      res.writeHead(502, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"typing_outcome_unknown",submitted:"unknown"}));
+    }
+  }
   if (url.pathname === "/react" && req.method === "POST") {
     const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
     if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
@@ -2039,9 +2080,9 @@ http.createServer(async (req, res) => {
           targetChatId = messageId.slice(0, cut) || targetChatId;
           messageId = messageId.slice(cut + 1);
         }
-        const emoji = String(payload.emoji || "").trim();
+        const emoji = typeof payload.emoji === "string" ? payload.emoji.trim() : null;
         const msgId = Number(messageId);
-        if ((!chat && !targetChatId) || !Number.isSafeInteger(msgId) || msgId <= 0 || !emoji || emoji.length > 16) {
+        if ((!chat && !targetChatId) || !Number.isSafeInteger(msgId) || msgId <= 0 || emoji === null || emoji.length > 16) {
           res.writeHead(400, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: "chat (or chat_id), valid message_id and emoji are required" }));
         }
@@ -2051,11 +2092,11 @@ http.createServer(async (req, res) => {
           const peer = (chat && peers.labelPeers.get(chat)) || (targetChatId && peers.idPeers.get(targetChatId)) || null;
           if (!peer || !item.client) return false;
           await item.client.invoke(
-            new Api.messages.SendReaction({ peer, msgId, reaction: [new Api.ReactionEmoji({ emoticon: emoji })] }),
+            new Api.messages.SendReaction({ peer, msgId, reaction: emoji ? [new Api.ReactionEmoji({ emoticon: emoji })] : [] }),
           );
           console.log(`react ${slot}: "${chat || targetChatId}" msg ${msgId} ${emoji}`);
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, reacted: true }));
+          res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id:targetChatId, message_id:String(msgId), reacted: true, removed:emoji === "" }));
           return true;
         };
         if (wantAccount) {

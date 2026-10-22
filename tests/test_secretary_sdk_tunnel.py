@@ -39,3 +39,65 @@ def test_public_or_loopback_upstream_is_denied():
 def test_native_opaque_bearer_does_not_invent_a_jwt_expiry_gate():
     value = snapshot(exp=1)
     assert tunnel.validate(value)[1] == value["token"]
+
+
+def test_live_app_token_rotation_refreshes_protected_reference_without_replay(tmp_path, monkeypatch):
+    import subprocess
+    old = snapshot()
+    new = snapshot(token_version=8)
+    new['containerId'] = 'replacement-fixed-app'
+    values = iter([old, new])
+    monkeypatch.setattr(tunnel, 'STATE', tmp_path)
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(tunnel, 'resolve_snapshot', lambda: next(values))
+    class Child:
+        count = 0
+        def wait(self, timeout):
+            self.count += 1
+            if self.count == 1:
+                raise subprocess.TimeoutExpired('fixture SSH', timeout)
+            return 0
+        def poll(self): return 0
+    starts = []
+    monkeypatch.setattr(tunnel, 'start_forward', lambda address: starts.append(address) or Child())
+    assert tunnel.supervise() == 0
+    assert (tmp_path / 'voice.token').read_text().strip() == new['token']
+    assert starts == [old['address']]
+    assert json.loads((tmp_path / 'upstream.json').read_text())['tokenVersion'] == 8
+
+
+def test_ip_change_waits_for_idle_before_reconnecting(tmp_path, monkeypatch):
+    import subprocess
+    old, new = snapshot(), dict(snapshot(token_version=8), address='192.168.128.8')
+    values, idles = iter([old, new, new]), iter([False, True])
+    monkeypatch.setattr(tunnel, 'STATE', tmp_path)
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(tunnel, 'resolve_snapshot', lambda: next(values))
+    monkeypatch.setattr(tunnel, 'voice_idle', lambda: next(idles))
+    class Child:
+        stopped = False
+        def __init__(self, running): self.running = running
+        def wait(self, timeout):
+            if self.running and not self.stopped:
+                raise subprocess.TimeoutExpired('fixture SSH', timeout)
+            return 0
+        def poll(self): return 0 if self.stopped or not self.running else None
+        def terminate(self): self.stopped = True
+    starts = []
+    monkeypatch.setattr(tunnel, 'start_forward', lambda address: starts.append(address) or Child(address == old['address']))
+    assert tunnel.supervise() == 0
+    assert starts == [old['address'], new['address']]
+    assert json.loads((tmp_path / 'upstream.json').read_text())['pendingIdleReconnect'] is False
+
+
+@pytest.mark.parametrize('output', ['10 active channels\n10 active calls\n', '100 active channels\n100 active calls\n', 'unknown\n', '0 active channels\n'])
+def test_active_or_unknown_call_count_never_allows_rebind(output, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(tunnel.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=output))
+    assert tunnel.voice_idle() is False
+
+
+def test_exact_zero_call_counts_allow_rebind(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(tunnel.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='0 active channels\n0 active calls\n11 calls processed\n'))
+    assert tunnel.voice_idle() is True

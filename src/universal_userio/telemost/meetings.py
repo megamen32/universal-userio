@@ -74,8 +74,8 @@ class Meetings:
             if record['owner']==owner:records.append(record)
         return sorted(records,key=lambda r:r['started_at'],reverse=True)[:50]
 
-    def start(self,*,user_id,url,request_id,confirm=False,max_seconds=3600):
-        if confirm is not True:raise ValueError('Подтвердите запись этой встречи')
+    def start(self,*,user_id,url,request_id,max_seconds=3600,confirm=None):
+        # Ignore the former flag from cached HTTP clients; the explicit call authorizes entry.
         url=meeting_url(url)
         if (not isinstance(request_id,str) or not 16<=len(request_id)<=128
             or type(max_seconds) is not int or not 30<=max_seconds<=7200):
@@ -92,6 +92,7 @@ class Meetings:
                     'chat_supported':False}
             # Persist before remote submission. A lost response is not safe to rejoin.
             self._save(record)
+            # Legacy worker transport field, supplied by the explicit authorized start call.
             try:record=self._remote(dict(record,op='start',confirm=True))
             except Exception:
                 record['status']='unknown';self._save(record);raise

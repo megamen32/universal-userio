@@ -192,10 +192,11 @@ TOOL_SPECS = (
     ToolSpec("userio.message.mark_seen", "Mark one user-owned message as seen.", _schema({
         "source": {"type": "string"}, "message_id": {"type": "string"},
     }, ["source", "message_id"])),
-    ToolSpec("userio.messages.react", "Set an emoji reaction on a stored message; visible to the peer.", _schema({
+    ToolSpec("userio.messages.react", "Set a source-bound reaction immediately without confirmation. Empty emoji removes it only where the provider supports removal. Does not send a message. Reuse request_id for dedup.", _schema({
         "conversation_id": {"type": "string"}, "message_id": {"type": "string"},
-        "emoji": {"type": "string", "maxLength": 16}, "confirm": {"type": "boolean"},
-    }, ["conversation_id", "message_id", "emoji", "confirm"])),
+        "emoji": {"type": "string", "maxLength": 16},
+        "request_id": {"type":"string","minLength":16,"maxLength":128},
+    }, ["conversation_id", "message_id", "emoji"])),
     ToolSpec("userio.draft.create", "Create a reply draft; does not send.", _schema({
         "conversation_id": {"type": "string"}, "body": {"type": "string"},
     }, ["conversation_id", "body"])),
@@ -238,17 +239,20 @@ TOOL_SPECS = (
 
 
 
-from .mcp_catalog import MESSENGER_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
+from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS)
 
 TOOL_CAPABILITIES = {
+    "userio.messages.prepare": "send",
     'userio.messenger.capabilities': 'read',
     'userio.messenger.events': 'read',
     'userio.messenger.history': 'read',
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
+    'userio.messenger.safe_action': 'send',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.upload': 'send',
     'userio.messenger.approve': 'send',
@@ -315,9 +319,9 @@ class UserIOMcpSurface:
             if (not principal.read_only or spec.name in READ_ONLY_TOOLS)
             and (principal.messenger_grants is None or any(g['access']=='read_write' for g in principal.messenger_grants)
                  or spec.name in READ_ONLY_TOOLS
-                 or spec.name in {'userio.messenger.telegram_admin.propose','userio.messenger.approve'}
+                 or spec.name in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose','userio.messenger.approve'}
                  and any(g.get('telegram_admin') for g in principal.messenger_grants))
-            and (spec.name!='userio.messenger.telegram_admin.propose'
+            and (spec.name not in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose'}
                  or principal.messenger_accounts is None and principal.messenger_grants is None
                  or any(g.get('telegram_admin') for g in principal.messenger_grants or ()))
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
@@ -325,7 +329,7 @@ class UserIOMcpSurface:
                  or principal.messenger_grants is not None and spec.name in {
                     'userio.accounts.list','userio.channels.list','userio.channels.search',
                     'userio.channels.export','userio.channels.read','userio.channels.download',
-                    'userio.channels.send_draft','userio.contacts.resolve','userio.contacts.start'}
+                    'userio.channels.send_draft','userio.contacts.resolve','userio.contacts.start','userio.messages.prepare'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
                  and any(a.startswith('telegram:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
@@ -571,6 +575,8 @@ class UserIOMcpSurface:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.prepare':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.contacts.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
@@ -632,6 +638,8 @@ class UserIOMcpSurface:
                 if len(markdown.encode("utf-8")) <= 32768:
                     result["content"] = markdown
                 return result
+            if name == 'userio.messages.prepare':
+                return self._service.contact_starter.prepare(user_id=user_id, **arguments)
             if name == "userio.contacts.resolve":
                 from .contact_start import ContactStartError
                 account_ref = str(arguments.get("account_ref") or "").strip()
@@ -955,8 +963,8 @@ class UserIOMcpSurface:
                 return self._service.react_to_message(
                     conversation_id=self._required(arguments, "conversation_id"),
                     message_id=self._required(arguments, "message_id"),
-                    emoji=self._required(arguments, "emoji"),
-                    confirm=arguments.get("confirm") is True, user_id=user_id,
+                    emoji=arguments.get("emoji"), user_id=user_id,
+                    request_id=arguments.get("request_id", ""), principal=principal,
                 )
             if name == "userio.draft.create":
                 draft = self._service.create_manual_draft(

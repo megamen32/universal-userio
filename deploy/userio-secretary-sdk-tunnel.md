@@ -6,7 +6,7 @@ and HMAC. It binds only `127.0.0.1:18086` on the voice host. Public app-route
 admission remains unchanged.
 
 The systemd unit runs as `roomhacker` through existing SSH trust to server100.
-Every supervised start resolves the exact native container
+At startup and every ten seconds the supervisor resolves the exact native container
 `airlock-dev-agent-c8b0c2c6-dc99-463f-baed-ff049b455be8`, validates its current
 private IP and app-token identity, and atomically refreshes only
 `/etc/agentcall-secretary/voice.token`. That directory is owned by the service
@@ -34,9 +34,14 @@ release action; do not recreate the unrelated server100 voice container.
 
 ## Native-app deployment hook and exact limitation
 
-The native ExManager deployment owner must run this existing supervisor refresh
-step after the fixed app has been replaced and its new token is ready, before
-calling the deployment complete:
+The same supervisor refreshes the fixed app credential reference within a bounded
+10-second polling interval plus the SSH read timeout. A changed app IP reconnects
+only after the local Asterisk idle guard passes. This is one transport supervisor,
+not a general scheduler. A failed resolution preserves the existing transport and
+prints a secret-free state change; it never replays a voice request.
+
+For immediate supervised refresh during an already idle native deployment, the
+ExManager deployment owner can also use:
 
 ```bash
 ssh -o BatchMode=yes 44 sudo -n systemctl restart userio-secretary-sdk-tunnel.service
@@ -49,11 +54,11 @@ call/turn. Coordinate an active call before refreshing its transport; an admitte
 unknown SDK action remains unknown and must be reconciled by its original receipt.
 
 Systemd reconnects and resolves again when SSH fails; keepalives detect broken
-SSH. Startup resolution alone does **not** detect an otherwise healthy SSH
-connection whose app IP/token changed. This deployment hook is therefore required.
-There is no automatic new scheduler. Until the native deployment workflow has
-integrated this hook, future app replacement requires that exact owner operation;
-do not claim permanent automatic app-replacement resilience.
+SSH. The bounded identity recheck also sees a healthy SSH connection whose app
+IP/token changed. The wrapper rereads the protected token file for each SDK
+request. A running voice gateway is never restarted by this supervisor. Pending
+IP replacement is recorded as pendingIdleReconnect until the call guard is idle;
+an uncertain admitted SDK turn remains subject to ordinary receipt reconciliation.
 
 Rollback: stop/disable only this task-owned transport, restore saved voice files,
 protected config and owner greeting bytes, restore the prior gateway unit/drop-in,

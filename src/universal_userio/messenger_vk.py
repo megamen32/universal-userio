@@ -13,6 +13,7 @@ from .account_connections import vk_personal_message
 
 
 class VKMessengerProvider:
+    reaction_remove_supported = True
     operations=frozenset({'history','react'})
     reaction_options=['❤️','🔥','😂','👍']
 

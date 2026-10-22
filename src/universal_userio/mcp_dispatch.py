@@ -63,6 +63,8 @@ class UserIOToolDispatcher:
                         for a in self._store.accounts(user_id=principal.user_id) if a['id'] in principal.messenger_accounts]}
                 if name.startswith('userio.messenger.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.prepare':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
@@ -181,6 +183,8 @@ class UserIOToolDispatcher:
                         conversation_id=conversation_id, user_id=user_id,
                     )
                 return {"ok": True, **result}
+            if name == 'userio.messages.prepare':
+                return self._service.contact_starter.prepare(user_id=user_id, **arguments)
             if name.startswith('userio.meetings.telemost.'):
                 from .telemost.meetings import meetings_for
                 meetings=meetings_for(self._service)

@@ -25,6 +25,8 @@ class TelegramMirrorProvider:
         outbox=getattr(service,'telegram_outbox',None)
         operations={'history','download'}
         if callable(getattr(outbox,'react',None)): operations.add('react')
+        self.reaction_remove_supported=getattr(outbox,'reaction_remove_supported',False) is True
+        if callable(getattr(outbox,'typing',None)): operations.add('typing')
         if callable(getattr(outbox,'edit_message',None)): operations.add('edit')
         supports_reply=getattr(outbox,'supports_reply',None)
         if callable(getattr(outbox,'reply_message',None)) or (callable(supports_reply) and supports_reply(account_ref)):
@@ -152,7 +154,7 @@ class TelegramMirrorProvider:
     def execute(self, envelope):
         action=envelope.get('action')
         if (envelope.get('account_ref'), envelope.get('user_id')) != (
-                self.account_ref, self.authorized_user) or action not in {'react','edit','reply','file'}:
+                self.account_ref, self.authorized_user) or action not in {'react','edit','reply','file','typing'}:
             raise DeliveryNotSubmittedError('Telegram account operation conflict')
         conversation = self.service._store.conversation(
             envelope['conversation_id'], user_id=self.authorized_user)
@@ -191,6 +193,21 @@ class TelegramMirrorProvider:
                 'receipt':f"telegram-qr-file:{result.get('slot','?')}:{result['message_id']}:{envelope['action_id']}",
                 'filename':metadata['filename'],'mime_type':metadata['mime_type'],
                 'size':len(data),'sha256':metadata['sha256'],'provider_at':float(result['date'])}
+        if action=='typing':
+            typing = getattr(outbox, 'typing', None)
+            if not callable(typing):
+                raise DeliveryNotSubmittedError('Telegram typing route unavailable')
+            result = typing(account_ref=self.account_ref, peer_id=str(envelope['peer_id']),
+                active=envelope['payload']['active'], thread_id=str(envelope.get('thread_id') or ''))
+            if (not isinstance(result,dict) or result.get('ok') is not True
+                    or result.get('account_id')!=self.account_ref
+                    or str(result.get('peer_id'))!=str(envelope['peer_id'])
+                    or result.get('active') is not envelope['payload']['active']
+                    or str(result.get('thread_id') or '')!=str(envelope.get('thread_id') or '')
+                    or result.get('provider_read_acknowledged') is not False):
+                raise RuntimeError('Telegram typing receipt identity conflict')
+            return {'account_ref':self.account_ref,'peer_id':str(envelope['peer_id']),
+                    'receipt':result}
         if action=='react':
             send = getattr(outbox, 'react', None)
             if not callable(send):
@@ -199,6 +216,12 @@ class TelegramMirrorProvider:
                 chat_id=str(envelope['peer_id']), account_ref=self.account_ref,
                 message_id=str(envelope['source_provider_message_id']),
                 emoji=str(envelope['payload']['emoji']))
+            if (not isinstance(result,dict) or result.get('ok') is not True
+                    or result.get('account_id')!=self.account_ref
+                    or str(result.get('peer_id'))!=str(envelope['peer_id'])
+                    or str(result.get('message_id'))!=str(envelope['source_provider_message_id'])
+                    or result.get('removed') is not (envelope['payload']['emoji']=='')):
+                raise RuntimeError('Telegram reaction receipt identity conflict')
             return {'account_ref':self.account_ref, 'peer_id':str(envelope['peer_id']),
                 'provider_message_id':str(envelope['source_provider_message_id']),
                 'receipt':result}

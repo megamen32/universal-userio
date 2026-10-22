@@ -176,6 +176,13 @@ class RelayAccountBridge:
             raise ValueError("explicit source-bound UserIO approval is required")
         return self.fallback.send_reply(**kwargs)
 
+    @property
+    def reaction_remove_supported(self):
+        return getattr(self.fallback, 'reaction_remove_supported', False) is True
+
+    def typing(self, **kwargs):
+        return self.fallback.typing(**kwargs)
+
     def react(self, **kwargs):
         return self.fallback.react(**kwargs)
 

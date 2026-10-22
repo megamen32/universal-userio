@@ -463,15 +463,42 @@ MESSENGER_SPECS = (
                 'limit':{'type':'integer','minimum':1,'maximum':100}, 'cursor':{'type':'string','maxLength':1024},
                 'refresh':{'type':'boolean','default':False}},
                ['account_ref','conversation_id'])),
+    ToolSpec('userio.messenger.safe_action',
+        'Execute one source-bound reaction or typing indicator immediately, without approval or sending content. '
+        'Keep request_id for durable idempotency; UNKNOWN outcomes must not be replayed. '
+        'react payload: emoji (empty removes only where capabilities.operations.react.removal_supported is true); '
+        'typing payload: active boolean. Requires the selected provider capability.',
+        schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},
+                'source_message_id':{'type':'string'},'action':{'type':'string','enum':['react','typing']},
+                'payload':{'oneOf':[schema({'emoji':{'type':'string','maxLength':16}}, ['emoji']),
+                                    schema({'active':{'type':'boolean'}}, ['active'])]},
+                'request_id':{'type':'string','minLength':16,'maxLength':128}},
+               ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
     ToolSpec('userio.messenger.propose',
-        'Propose a source-bound reply/edit/reaction/media/typing operation. Does not execute. Keep request_id for dedup.',
+        'Propose a source-bound reply/edit/media operation for explicit approval. Does not execute. Use safe_action for reactions and typing. Keep request_id for dedup.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},
-                'action':{'type':'string','enum':['reply','edit','react','sticker','file','typing']},
+                'action':{'type':'string','enum':['reply','edit','sticker','file']},
                 'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
+    ToolSpec('userio.messenger.telegram_admin.create',
+        'Create a Telegram group or private broadcast channel immediately in one call, without approval. '
+        'Use a stable telegram:<TelegramUserID> account_ref. Keep request_id for idempotency: '
+        'accepted or uncertain creation must never be repeated under a new ID. '
+        'group_create payload: title and exact participant_ids; channel_create payload: title and optional about. '
+        'Inviting/removing members of existing chats and deleting channels still require explicit approval.',
+        schema({'account_ref':{'type':'string','pattern':r'^telegram:[1-9][0-9]*$'},
+                'operation':{'type':'string','enum':['group_create','channel_create']},
+                'payload':{'oneOf':[
+                    schema({'title':{'type':'string','minLength':1,'maxLength':128},
+                            'participant_ids':{'type':'array','minItems':1,'maxItems':50,'uniqueItems':True,
+                                'items':{'type':'string','pattern':r'^[1-9][0-9]*$'}}}, ['title','participant_ids']),
+                    schema({'title':{'type':'string','minLength':1,'maxLength':128},
+                            'about':{'type':'string','maxLength':255}}, ['title'])]},
+                'request_id':{'type':'string','minLength':16,'maxLength':128,'pattern':r'^[a-zA-Z0-9:_-]+$'}},
+               ['account_ref','operation','payload','request_id'])),
     ToolSpec('userio.messenger.telegram_admin.propose',
-        'Prepare one Telegram group or private broadcast-channel action for explicit approval. Never executes the Telegram change. Channel deletion requires the exact phrase DELETE CHANNEL <peer_id>; supergroup removal is a ban.',
-        schema({'account_ref':{'type':'string'},'operation':{'type':'string','enum':['group_create','group_invite','group_remove','channel_create','channel_delete']},
+        'Prepare a Telegram member invitation/removal or channel deletion for explicit approval. Never executes the Telegram change. Use telegram_admin.create for immediate group/channel creation. Channel deletion requires the exact phrase DELETE CHANNEL <peer_id>; supergroup removal is a ban.',
+        schema({'account_ref':{'type':'string'},'operation':{'type':'string','enum':['group_invite','group_remove','channel_delete']},
                 'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','operation','payload','request_id'])),
     ToolSpec('userio.messenger.get',
@@ -516,12 +543,28 @@ TELEGRAM_CALL_SPECS = (
 )
 TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
 
+MESSAGE_PREPARE_SPECS = (
+    ToolSpec('userio.messages.prepare',
+        'Prepare one message draft for either a known conversation_id or account_ref plus a new contact identifier. '
+        'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: approve the exact '
+        'returned draft with userio.draft.approve_send. Retries with the same request_id reuse the same draft. '
+        'Use this as the default text preparation tool; contacts.start is a legacy explicit-send compatibility call.',
+        dict(schema({'conversation_id':{'type':'string','minLength':1},
+            'account_ref':{'type':'string','maxLength':128},
+            'identifier':{'type':'string','minLength':1,'maxLength':256},
+            'text':{'type':'string','minLength':1,'maxLength':65536},
+            'request_id':{'type':'string','minLength':16,'maxLength':80}}, ['text','request_id']),
+            oneOf=[{'required':['conversation_id'],'not':{'required':['identifier']}},
+                   {'required':['account_ref','identifier'],'not':{'required':['conversation_id']}}])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *MESSAGE_PREPARE_SPECS)
+
 TELEMOST_SPECS = (
     ToolSpec('userio.meetings.telemost.start',
-        'Join one explicitly requested Telemost meeting as a visible, muted recorder. Never replay UNKNOWN joins.',
+        'Join one explicitly requested Telemost meeting as a visible, muted recorder in one call; no separate approval. Never replay accepted or UNKNOWN joins.',
         schema({'url':{'type':'string','maxLength':2048},'request_id':{'type':'string','minLength':16,'maxLength':128},
-                'confirm':{'type':'boolean'},'max_seconds':{'type':'integer','minimum':30,'maximum':7200}},
-               ['url','request_id','confirm'])),
+                'max_seconds':{'type':'integer','minimum':30,'maximum':7200}},
+               ['url','request_id'])),
     ToolSpec('userio.meetings.telemost.get','Read recording, audio links and transcription for this owned meeting.',
         schema({'meeting_id':{'type':'string'}},['meeting_id'])),
     ToolSpec('userio.meetings.telemost.stop','Stop this owned recording without joining another meeting.',
@@ -544,6 +587,7 @@ DIAGNOSTIC_SPECS = (
 TOOL_SPECS = (*TOOL_SPECS, *DIAGNOSTIC_SPECS)
 
 TOOL_CAPABILITIES = {
+    "userio.messages.prepare": "send",
     'userio.diagnostic.create':'send','userio.diagnostic.get':'read','userio.diagnostic.message':'send',
     'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send',
     'userio.calls.telegram.start':'send', 'userio.calls.telegram.get':'read', 'userio.calls.telegram.stop':'send',
@@ -555,7 +599,9 @@ TOOL_CAPABILITIES = {
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
+    'userio.messenger.safe_action': 'send',
     'userio.messenger.propose': 'send',
+    'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.approve': 'send',
     "userio.channels.list": "read",

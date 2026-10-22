@@ -37,6 +37,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+# The native service executes this file as __main__. SDK wrappers import the
+# canonical module for shared exception/progress types; keep one identity.
+if __name__ == "__main__":
+    sys.modules["agentcall_realtime_bridge"] = sys.modules[__name__]
+
 
 AUDIO_KIND = 0x10
 AUDIO_RATES = {0x10:8000, 0x11:12000, 0x12:16000, 0x13:24000,
