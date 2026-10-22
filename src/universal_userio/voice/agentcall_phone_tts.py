@@ -67,8 +67,14 @@ class WarmPhoneTts:
         self._tag = uuid.uuid4().hex
         self._sequence = 0
         self._buffer.clear()
+        # The phone reverse SSH terminates on canonical server-100. Remote
+        # gateways use an operator-selected SSH jump over existing trust.
+        jump = os.environ.get('AGENTCALL_PHONE_TTS_SSH_JUMP', '').strip()
+        jump_args = ['-J', jump] if jump else []
+        ssh_config = os.environ.get('AGENTCALL_PHONE_TTS_SSH_CONFIG', '').strip()
+        config_args = ['-F', ssh_config] if ssh_config else []
         self._process = subprocess.Popen(
-            ['ssh', '-i', '/home/roomhacker/.ssh/phone_gateway_ed25519',
+            ['ssh', *config_args, *jump_args, '-i', '/home/roomhacker/.ssh/phone_gateway_ed25519',
              '-p', '22220', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
              '-o', 'LogLevel=ERROR', 'phone@127.0.0.1',
              "su -c 'CLASSPATH=/data/local/tmp/phone-tts.dex "
