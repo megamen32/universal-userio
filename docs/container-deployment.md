@@ -213,8 +213,10 @@ sudo python3 scripts/container_release.py archive-voice \
 отклоняются. Для целевого файла записываются device/inode/hash, для корней
 каталогов — device/inode. Перед публикацией архив повторно сверяет PID и mount
 namespace контейнера, текст ссылки, inode и хэши bridge/SDK/config, а также
-Docker Config/HostConfig/Mounts; при расхождении временный архив удаляется и
-команда завершается ошибкой.
+Docker Config/HostConfig/Mounts; Mounts сравниваются как отсортированный набор
+полных записей, поэтому порядок ответа Docker не считается изменением, но любое
+изменение поля, добавление или удаление mount отклоняется. При расхождении
+временный архив удаляется и команда завершается ошибкой.
 
 Команда не останавливает контейнер, не публикует образ и не делает звонков.
 Требуются живой `userio-voice`, immutable registry digest, revision label,

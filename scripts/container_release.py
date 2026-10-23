@@ -577,6 +577,18 @@ def _archive_hash(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _archive_canonical_mounts(container):
+    """Normalize Docker's unordered Mounts array without dropping any fields."""
+    mounts = container.get('Mounts')
+    if not isinstance(mounts, list) or any(not isinstance(mount, dict) for mount in mounts):
+        raise RuntimeError('live Voice container mount metadata is invalid')
+    try:
+        return sorted(mounts, key=lambda mount: json.dumps(
+            mount, sort_keys=True, ensure_ascii=False, separators=(',', ':')))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError('live Voice container mount metadata is invalid') from error
+
+
 def _archive_read_file(path: Path, *, max_bytes=512 * 1024 * 1024):
     """Read through the process mount namespace and bind the bytes to an inode."""
     flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
@@ -949,7 +961,8 @@ def _archive_voice_locked(receipt_directory: Path):
         redacted_files = {name: _redacted_config(json.loads(data)) for name, data in config_bytes.items()}
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError('mounted Voice config is not valid JSON') from error
-    runtime_fields = {key: container.get(key) for key in ('Config', 'HostConfig', 'Mounts')}
+    runtime_fields = {key: container.get(key) for key in ('Config', 'HostConfig')}
+    runtime_fields['Mounts'] = _archive_canonical_mounts(container)
     runtime_fields['network_names'] = sorted((container.get('NetworkSettings', {}).get('Networks') or {}).keys())
     safe_config = _redacted_config({'runtime': runtime_fields, 'mounted_config': redacted_files})
     config_fingerprint = _archive_hash(json.dumps(safe_config, sort_keys=True, separators=(',', ':')).encode())
@@ -998,7 +1011,7 @@ def _archive_voice_locked(receipt_directory: Path):
                 or current.get('State', {}).get('Pid') != process_identity['pid']
                 or current.get('Config') != container.get('Config')
                 or current.get('HostConfig') != container.get('HostConfig')
-                or current.get('Mounts') != container.get('Mounts')):
+                or _archive_canonical_mounts(current) != _archive_canonical_mounts(container)):
             raise RuntimeError('live Voice container changed during archive capture')
         if _archive_process_identity(current) != process_identity:
             raise RuntimeError('live Voice process or mount namespace changed during archive capture')

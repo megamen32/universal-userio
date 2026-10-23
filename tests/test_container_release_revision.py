@@ -272,6 +272,53 @@ def test_archive_voice_rejects_bridge_symlink_mutated_during_capture(tmp_path, m
     assert not list(archive_root.glob('.voice-archive-*'))
 
 
+def test_archive_voice_accepts_permuted_but_identical_docker_mount_records(tmp_path, monkeypatch):
+    module, archive_root, current, _, _, _, _ = _voice_archive_fixture(tmp_path, monkeypatch)
+    original = module._archive_docker_json
+    inspect_reads = 0
+
+    def permute_mounts_on_final_inspect(args, description):
+        nonlocal inspect_reads
+        if args[0] == 'inspect' and args[-1] == module.VOICE_CONTAINER:
+            inspect_reads += 1
+            row = copy.deepcopy(current)
+            if inspect_reads == 2:
+                row['Mounts'] = list(reversed(row['Mounts']))
+            return json.dumps([row]).encode(), [row]
+        return original(args, description)
+
+    monkeypatch.setattr(module, '_archive_docker_json', permute_mounts_on_final_inspect)
+    receipt = module.archive_voice(archive_root / 'voice-mount-order-stable')
+    assert receipt['status'] == 'archived_only'
+
+
+def test_archive_voice_rejects_changed_full_mount_record(tmp_path, monkeypatch):
+    module, archive_root, current, _, _, _, _ = _voice_archive_fixture(tmp_path, monkeypatch)
+    original = module._archive_docker_json
+    inspect_reads = 0
+
+    def change_mount_record_on_final_inspect(args, description):
+        nonlocal inspect_reads
+        if args[0] == 'inspect' and args[-1] == module.VOICE_CONTAINER:
+            inspect_reads += 1
+            row = copy.deepcopy(current)
+            if inspect_reads == 2:
+                row['Mounts'][0]['Propagation'] = 'changed'
+            return json.dumps([row]).encode(), [row]
+        return original(args, description)
+
+    monkeypatch.setattr(module, '_archive_docker_json', change_mount_record_on_final_inspect)
+    target = archive_root / 'voice-mount-content-drift'
+    try:
+        module.archive_voice(target)
+    except RuntimeError as error:
+        assert str(error) == 'live Voice container changed during archive capture'
+    else:
+        raise AssertionError('archive must reject changed full mount metadata')
+    assert not target.exists()
+    assert not list(archive_root.glob('.voice-archive-*'))
+
+
 def test_archive_voice_fails_closed_without_immutable_image_digest(tmp_path, monkeypatch):
     module, archive_root, _, _, images, _, _ = _voice_archive_fixture(tmp_path, monkeypatch)
     images['sha256:current-image']['RepoDigests'] = []
