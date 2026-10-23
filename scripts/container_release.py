@@ -482,6 +482,13 @@ def replace_backend(*, image: str, revision: str, expected_container: str, recei
                                 receipt_directory=receipt_directory)
 
 
+def _backend_replacement_config(previous: dict, *, image: str, revision: str) -> dict:
+    """Keep runtime settings exact while recording the reviewed image revision."""
+    labels = dict(previous.get('Labels') or {})
+    labels['org.opencontainers.image.revision'] = revision
+    return dict(previous, Image=image, Labels=labels)
+
+
 def _replace_backend_locked(*, image: str, revision: str, expected_container: str, receipt_directory: Path):
     """Routine replacement of the canonical backend; never replay migration cutover."""
     import http.client
@@ -641,7 +648,8 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         api('POST', 'containers/userio-backend/stop?t=40')
         api('DELETE', 'containers/userio-backend')
         removed = True
-        body = dict(old['Config'], Image=image, HostConfig=old['HostConfig'])
+        expected_config = _backend_replacement_config(old['Config'], image=image, revision=full_revision)
+        body = dict(expected_config, HostConfig=old['HostConfig'])
         api('POST', 'containers/create?name=userio-backend', body)
         now = inspect('userio-backend')
         save(receipt_directory / 'candidate.json', now)
@@ -649,7 +657,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
             raise RuntimeError('replacement image or HostConfig changed')
         if sorted(now['Mounts'], key=lambda mount: mount['Destination']) != sorted(old['Mounts'], key=lambda mount: mount['Destination']):
             raise RuntimeError('replacement mounts changed')
-        if dict(now['Config'], Image=old['Config']['Image']) != old['Config']:
+        if now['Config'] != expected_config:
             raise RuntimeError('replacement Config/Env changed')
         api('POST', 'containers/userio-backend/start')
         health()
