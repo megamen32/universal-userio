@@ -191,13 +191,13 @@ def test_mcp_requires_the_complete_draft_snapshot(tmp_path):
     body = service._store.draft(draft_id).body
     conversation = service._store.draft(draft_id).conversation_id
     # A partial snapshot cannot prove the draft did not change.
-    partial = surface.dispatch("userio.draft.approve_send", {
+    partial = surface.dispatch("userio.messages.send", {
         "draft_id": draft_id, "confirm": True, "expected_text": body,
         "expected_chat_id": conversation})
     assert partial["ok"] is False
     assert partial["error"] == "complete_draft_snapshot_required"
     # An absent snapshot would approve whatever the draft says now.
-    absent = surface.dispatch("userio.draft.approve_send", {
+    absent = surface.dispatch("userio.messages.send", {
         "draft_id": draft_id, "confirm": True})
     assert absent["ok"] is False
     assert absent["error"] == "complete_draft_snapshot_required"
@@ -235,7 +235,7 @@ def test_mcp_approve_reports_an_unknown_outcome_with_a_stable_code(tmp_path):
         service.approve(draft_id)
     except RuntimeError:
         pass
-    result = surface.dispatch("userio.draft.approve_send", {
+    result = surface.dispatch("userio.messages.send", {
         "draft_id": draft_id, "confirm": True, "expected_text": body,
         "expected_chat_id": conversation, "expected_attachments": []})
     assert result["ok"] is False
