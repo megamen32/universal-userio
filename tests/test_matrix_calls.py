@@ -177,6 +177,20 @@ def test_non_owner_cannot_inject_owner_secretary_or_agent_session_context(tmp_pa
     assert service._store.accounts.call_count == 0
 
 
+def test_explicit_stop_after_answer_is_recorded_and_not_misclassified_as_unknown(tmp_path):
+    call_id=str(uuid.uuid4());folder=tmp_path/call_id;folder.mkdir()
+    record={'call_id':call_id,'user_id':'owner','status':'active','answered':True}
+    (folder/'call.json').write_text(json.dumps(record))
+    calls=MatrixCalls(Mock(),tmp_path)
+    stopped=matrix_calls.threading.Event();calls.active[call_id]=stopped
+    result=calls.stop(call_id,'owner')
+    assert stopped.is_set()
+    assert result['stop_requested'] is True
+    assert json.loads((folder/'call.json').read_text())['stop_requested'] is True
+    matrix_calls.settle_disconnected_call(result)
+    assert result['status']=='completed'
+
+
 def test_voice_config_for_record_applies_only_model_alias():
     from dataclasses import dataclass
     from universal_userio.matrix_call_worker import voice_config_for_record
