@@ -2,8 +2,9 @@
 
 The owner reads the incident from a phone call. A dropped error code, URL or
 identifier is a lost diagnosis, so the speech text carries every character
-through: Latin is transliterated, punctuation becomes a word, and a three-digit
-code is read digit by digit.
+through: a link is named the way people say it in Russian, Latin is
+transliterated, punctuation becomes a word, and a three-digit code is read
+digit by digit.
 """
 import importlib.util
 from pathlib import Path
@@ -24,9 +25,41 @@ def spoken(text: str) -> str:
 def test_error_code_and_link_are_spoken_instead_of_deleted():
     out = spoken('Ошибка: https://msg.bezrabotnyi.com/v1/search вернул 502.')
     assert '5 0 2' in out
-    assert 'слеш слеш' in out
+    assert 'слеш' in out
     assert 'протокол связи' in out
     assert 'сеаркх' in out
+
+
+def test_site_is_named_in_russian_instead_of_being_dropped():
+    out = spoken('Сайт https://bezrabotnyi.com не отвечает.')
+    assert 'безработный точка ком' in out, out
+    assert 'bezrabotnyi' not in out
+
+
+def test_subdomain_is_named_part_by_part():
+    out = spoken('Проверка https://msg.bezrabotnyi.com/v1/events упала.')
+    assert 'месенджер точка безработный точка ком' in out, out
+    assert 'bezrabotnyi' not in out
+
+
+def test_brand_is_named_the_way_people_say_it():
+    out = spoken('Сбой Apple привёл к отказу Google, Telegram не отвечает.')
+    assert 'Эйпл' in out, out
+    assert 'Гугл' in out, out
+    assert 'Телеграм' in out, out
+    assert 'Apple' not in out and 'Google' not in out
+
+
+def test_domain_and_sentence_boundary_are_not_mixed():
+    out = spoken('Открой example.com. Дальше работает.')
+    assert out.count('точка') == 1, out
+    assert 'Дальше работает' in out
+
+
+def test_error_code_next_to_a_dot_is_not_read_as_an_address():
+    out = spoken('Код 502. Дальше работает.')
+    assert 'точка' not in out, out
+    assert '5 0 2' in out
 
 
 def test_latin_is_transliterated_so_the_russian_engine_pronounces_it():

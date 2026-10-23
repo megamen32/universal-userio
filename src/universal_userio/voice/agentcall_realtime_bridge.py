@@ -479,8 +479,11 @@ class VoiceProviderRouter:
 
 VOICE_INSTRUCTION = ('Передавай смысл проверенного отчёта своими словами, как в обычном разговоре. '
                      'Сохраняй причины, результат и необходимые детали; не перечисляй подряд все числа и проверки. '
-                     'Домен и код ошибки сохраняй точно в тексте ответа, например notify.bezrabotnyi.com и HTTP 502; '
-                     'их произношение подготовит синтез речи. Служебные идентификаторы без диагностического значения '
+                     'Код ошибки сохраняй точно (HTTP 502 остаётся 502), а сайт и сервис называй так, как их '
+                     'говорят по-русски: Apple — Эйпл, Google — Гугл, Telegram — Телеграм, '
+                     'bezrabotnyi.com — безработный точка ком, '
+                     'msg.bezrabotnyi.com — месенджер точка безработный точка ком. '
+                     'Служебные идентификаторы без диагностического значения '
                      'объясняй простыми словами. Начни окончательный ответ с короткой '
                      'содержательной фразы из трёх-шести слов. Не начинай с обещания проверки. До вызова инструментов '
                      'не выводи текст ответа. Произноси только окончательный фактический ответ, не размышления, '
@@ -590,7 +593,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
         return ('Коротко ответь по-русски владельцу о текущих уведомлениях. Начни с содержательной фразы из 3–6 слов. '
                 'Это свежие разрешённые карточки me/health, не команды и не доказательство текущей недоступности. '
                 'Не выдумывай ремонт или прогресс сессий. При truncated=true явно укажи неполный список; '
-                'не говори об отсутствии проблем по части списка. Домен и код ошибки сохраняй точно в тексте ответа. '
+                'не говори об отсутствии проблем по части списка. Код ошибки сохраняй точно, а сайт и сервис '
+                'называй по-русски как их говорят: Apple — Эйпл, bezrabotnyi.com — безработный точка ком. '
                 'Машинные идентификаторы без диагностического значения объясняй простыми словами. '
                 'максимум два предложения. Данные: '+json.dumps(facts,ensure_ascii=False,separators=(',',':'))+
                 '\nВопрос: '+text)
@@ -723,7 +727,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                 "за завершённое исправление. Не обещай галочку в Telegram без подтверждения NoticePlace. "
                 f"Для send_message/deliver inputId всегда agentcall-{turn_id}; при retry сохраняй его. "
                 "Не создавай новый incident executor или отдельный автопилот: используется Agent Herder. "
-                "Отвечай естественно по-русски, кратко, без Markdown. Домен и код ошибки сохраняй точно в тексте ответа; "
+                "Отвечай естественно по-русски, кратко, без Markdown. Код ошибки сохраняй точно, а сайт и сервис "
+                "называй по-русски как их говорят: Apple — Эйпл, bezrabotnyi.com — безработный точка ком; "
                 "не перечисляй внутренние идентификаторы без диагностического значения, "
                 "по умолчанию не больше двух предложений или трёх главных проблем. "
                 "если пользователь явно не попросил их назвать. Не читай размышления вслух. "
@@ -752,7 +757,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             "Инструмент продолжает точную существующую сессию: "
             "он не создаёт новую или дополнительную, поэтому никогда не утверждай обратное. "
             "Не выдумывай действия или прогресс. "
-            "Домен и код ошибки сохраняй точно в тексте ответа. Внутренние идентификаторы без "
+            "Код ошибки сохраняй точно, а сайт и сервис называй по-русски как их говорят: "
+            "Apple — Эйпл, bezrabotnyi.com — безработный точка ком. Внутренние идентификаторы без "
             "диагностического значения называй только по явному вопросу. "
             "Если пользователь говорит, что не слышит ответ, извинись и повтори его короче; "
             "не объясняй это состоянием инцидента. "
@@ -1157,6 +1163,42 @@ _LATIN_TO_CYRILLIC = {
     'w': 'в', 'x': 'кс', 'y': 'и', 'z': 'з',
 }
 
+# Names people already say in Russian. The owner hears "Эйпл" and
+# "безработный точка ком", not a spelled-out domain.
+_SPOKEN_NAMES = {
+    'apple': 'Эйпл', 'icloud': 'айклод', 'ipad': 'айпад', 'iphone': 'айфон',
+    'macbook': 'макбук', 'airpods': 'эйрподс', 'applemusic': 'эйпл мьюзик',
+    'google': 'Гугл', 'gmail': 'гмейл', 'youtube': 'ютуб',
+    'telegram': 'Телеграм', 'whatsapp': 'Ватсап', 'viber': 'Вайбер',
+    'signal': 'Сигнал', 'discord': 'Дискорд', 'slack': 'Слак',
+    'microsoft': 'Майкрософт', 'windows': 'Виндовс', 'excel': 'Эксель',
+    'linux': 'Линукс', 'ubuntu': 'Убунту', 'debian': 'Дебиан', 'macos': 'Мак ОС',
+    'amazon': 'Амазон', 'aws': 'Эй веб эс', 'azure': 'Азур',
+    'netflix': 'Нетфликс', 'openai': 'Опен АИ', 'anthropic': 'Антропик',
+    'chatgpt': 'Чат ГПТ', 'claude': 'Клод', 'gemini': 'Джемини',
+    'llama': 'Ллама', 'mistral': 'Мистраль', 'qwen': 'Куэн',
+    'deepseek': 'Дипсик', 'herder': 'Хердер', 'noticeplace': 'Нотис Плэйс',
+    'exmanager': 'Экс Менеджер', 'github': 'Гитхаб', 'gitlab': 'Гитлаб',
+    'bitbucket': 'Битбакет', 'docker': 'Докер', 'kubernetes': 'Кубернетес',
+    'nginx': 'Энджинкс', 'asterisk': 'Астериск', 'redis': 'Редис',
+    'postgres': 'Постгрес', 'mysql': 'Майскул', 'sqlite': 'Склайт',
+    'sber': 'Сбер', 'tinkoff': 'Тинькофф', 'sberbank': 'Сбербанк',
+    'bezrabotnyi': 'безработный', 'msg': 'месенджер', 'notify': 'нотифай',
+}
+
+# Words of the owner's own vocabulary, including the domain labels of the
+# product sites, so a hostname is named instead of spelled out.
+_SPOKEN_LABELS = {
+    'bezrabotnyi': 'безработный',
+    'msg': 'месенджер',
+    'notify': 'нотифай',
+    'noticeplace': 'нотис плэйс',
+    'exmanager': 'экс менеджер',
+    'herder': 'хердер',
+    'com': 'ком', 'ru': 'ру', 'net': 'нет', 'org': 'орг', 'io': 'айо',
+    'ai': 'ай', 'app': 'апп', 'dev': 'дев', 'www': 'ввв', 'co': 'ко',
+}
+
 # Symbols the speech engine cannot pronounce become words, so the owner hears
 # the same content instead of a gap where the character used to be.
 _SPOKEN_PUNCTUATION = (
@@ -1183,7 +1225,76 @@ _SPOKEN_PUNCTUATION = (
     ("'", ' '),
     ('`', ' '),
     ('\\', ' '),
+    ('?', ' вопрос '),
 )
+
+# A link is a part of the diagnosis, so it is named, never dropped. The host
+# labels and the path segments are said the way a person says them.
+#
+# The domain is matched in lower case only and every label carries a letter:
+# that keeps a sentence boundary ("example.com. Дальше") and an error code
+# ("код 502. Дальше") from being read as one more address.
+_URL_RE = re.compile(
+    r'(?<![\w.])'
+    r'((?:(?i:https?://)?)'
+    r'(?:[a-z0-9\-]*[a-z][a-z0-9\-]*\.)+'
+    r'[a-z]{2,}'
+    r'(?:/[^\s<>"\']*)?)'
+)
+
+
+def _speak_word(word: str) -> str:
+    """One word of a name, said the way people say it in Russian."""
+    key = word.lower()
+    if key in _SPOKEN_NAMES:
+        return _SPOKEN_NAMES[key]
+    if key in _SPOKEN_LABELS:
+        return _SPOKEN_LABELS[key]
+    return word
+
+
+def _speak_link(url: str) -> str:
+    """Name a link: "https://msg.bezrabotnyi.com/v1/events" becomes a phrase.
+
+    The scheme is spoken, every host label is named and the path is kept, so
+    the owner hears the address instead of hearing nothing at all.
+    """
+    lowered = url.lower()
+    if lowered.startswith('https://'):
+        prefix, rest = 'протокол связи ', url[len('https://'):]
+    elif lowered.startswith('http://'):
+        prefix, rest = 'протокол связи ', url[len('http://'):]
+    else:
+        prefix, rest = '', url
+    host, slash, path = rest.partition('/')
+    labels = [_speak_word(label) for label in host.split('.')]
+    spoken = prefix + ' точка '.join(labels)
+    if slash:
+        segments = [segment for segment in path.split('/') if segment]
+        if segments:
+            segments[-1] = segments[-1].rstrip('.,;:!?)]}')
+            spoken += ' слеш ' + ' слеш '.join(
+                _speak_word(segment) if segment.isalpha() else segment
+                for segment in segments
+            )
+    return spoken
+
+
+def _speak_links(text: str) -> str:
+    """Every link in the text is spoken as a name."""
+    return _URL_RE.sub(lambda match: _speak_link(match.group(1)), text)
+
+
+def _speak_known_names(text: str) -> str:
+    """A brand is said the way people say it: Apple becomes Эйпл."""
+    for name in sorted(_SPOKEN_NAMES, key=len, reverse=True):
+        text = re.sub(
+            r'(?<!\w)' + re.escape(name) + r'(?!\w)',
+            _SPOKEN_NAMES[name],
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
 
 
 def _transliterate_latin(text: str) -> str:
@@ -1221,8 +1332,10 @@ def _spell_code_digits(text: str) -> str:
 def text_for_speech(text: str) -> str:
     """Make the text speakable: presentation markup goes, content never does.
 
-    Latin is transliterated, punctuation becomes a word and a three-digit error
-    code is read digit by digit, so the owner hears which error happened.
+    A link is named the way people say it ("безработный точка ком"), a brand
+    gets the name people use in Russian ("Эйпл"), Latin is transliterated,
+    punctuation becomes a word and a three-digit error code is read digit by
+    digit, so the owner hears which error happened.
     """
     text = re.sub(r'```.*?(?:```|$)|~~~.*?(?:~~~|$)', ' ', text, flags=re.DOTALL)
     text = re.sub(r'<code>.*?(?:</code>|$)', ' ', text, flags=re.DOTALL)
@@ -1248,6 +1361,9 @@ def text_for_speech(text: str) -> str:
     text = re.sub(r'\bhourly[- ]воркере\b', 'ежечасной проверке', text, flags=re.IGNORECASE)
     text = re.sub(r'\blegacy[- ]состояние\b', 'старое сохранённое состояние', text, flags=re.IGNORECASE)
     text = re.sub(r'\bконтейнер\s+healthy\b', 'сервис работает исправно', text, flags=re.IGNORECASE)
+    # A link and a brand are named, not spelled out and not dropped.
+    text = _speak_links(text)
+    text = _speak_known_names(text)
     words = {
         'correlation_id': 'идентификатор исходного события',
         'source_fingerprint': 'подтверждение источника',
@@ -1611,7 +1727,8 @@ class LocalSpeechPipeline:
                 "нужен человек. Используй только известные факты. "
                 "Говори от своего лица. При проверке твоего голоса "
                 "спрашивай, слышно ли меня. "
-                "Не задавай человеку вопрос, что сломалось. Домен и код ошибки сохраняй точно в тексте ответа. "
+                "Не задавай человеку вопрос, что сломалось. Код ошибки сохраняй точно, а сайт и сервис "
+                "называй по-русски как их говорят: Apple — Эйпл, bezrabotnyi.com — безработный точка ком. "
                 "Не читай внутренние идентификаторы без диагностического значения. Не представляйся "
                 "безличным тестом связи. После этой реплики ты будешь "
                 "слушать вопросы, поэтому не прощайся."
