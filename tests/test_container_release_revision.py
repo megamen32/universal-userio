@@ -88,8 +88,6 @@ def _voice_archive_fixture(tmp_path, monkeypatch):
 
     def fake_docker(args, description):
         calls.append(tuple(args))
-        if args[0] == 'ps':
-            return b'container-rollback-id\n', ['container-rollback-id']
         if args[0] == 'image':
             image = images[args[-1]]
             return json.dumps([image]).encode(), [image]
@@ -97,7 +95,13 @@ def _voice_archive_fixture(tmp_path, monkeypatch):
         row = current if identifier == module.VOICE_CONTAINER else old
         return json.dumps([row]).encode(), [row]
 
+    def fake_docker_text(args, description):
+        calls.append(tuple(args))
+        assert args[0] == 'ps'
+        return b'container-rollback-id\n'
+
     monkeypatch.setattr(module, '_archive_docker_json', fake_docker)
+    monkeypatch.setattr(module, '_archive_docker_text', fake_docker_text)
     monkeypatch.setattr(module, 'VOICE_ARCHIVE_ROOT', archive_root)
     lock_path = tmp_path / 'run' / 'lock' / 'voice.lock'
     lock_path.parent.mkdir(parents=True)
@@ -164,14 +168,14 @@ def test_archive_voice_fails_closed_when_running_container_is_missing(tmp_path, 
 
 def test_archive_voice_fails_closed_without_rollback_container(tmp_path, monkeypatch):
     module, archive_root, _, _, _ = _voice_archive_fixture(tmp_path, monkeypatch)
-    original = module._archive_docker_json
+    original = module._archive_docker_text
 
     def without_rollback(args, description):
         if args[0] == 'ps':
-            return b'', []
+            return b''
         return original(args, description)
 
-    monkeypatch.setattr(module, '_archive_docker_json', without_rollback)
+    monkeypatch.setattr(module, '_archive_docker_text', without_rollback)
     try:
         module.archive_voice(archive_root / 'voice-no-rollback')
     except RuntimeError as error:

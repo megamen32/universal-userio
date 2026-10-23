@@ -512,13 +512,27 @@ def _backend_replacement_config(previous: dict, *, image: str, revision: str) ->
 
 def _archive_docker_json(args, description):
     """Read one Docker JSON response without ever surfacing daemon error text."""
-    result = subprocess.run(['docker', *args], capture_output=True, check=False)
+    try:
+        result = subprocess.run(['docker', *args], capture_output=True, check=False, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f'cannot read {description} from Docker') from error
     if result.returncode:
         raise RuntimeError(f'cannot read {description} from Docker')
     try:
         return result.stdout, json.loads(result.stdout)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError(f'invalid Docker {description} response') from error
+
+
+def _archive_docker_text(args, description):
+    """Read bounded plain-text Docker output without exposing daemon errors."""
+    try:
+        result = subprocess.run(['docker', *args], capture_output=True, check=False, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f'cannot read {description} from Docker') from error
+    if result.returncode:
+        raise RuntimeError(f'cannot read {description} from Docker')
+    return result.stdout
 
 
 def _archive_container(name):
@@ -734,7 +748,7 @@ def _archive_voice_locked(receipt_directory: Path):
     safe_config = _redacted_config({'runtime': runtime_fields, 'mounted_config': redacted_files})
     config_fingerprint = _archive_hash(json.dumps(safe_config, sort_keys=True, separators=(',', ':')).encode())
 
-    rollback_ids_raw, rollback_ids = _archive_docker_json(
+    rollback_ids_raw = _archive_docker_text(
         ['ps', '-aq', '--no-trunc', '--filter', f'name=^/{VOICE_ROLLBACK_PREFIX}'], 'rollback container list')
     rollback_names = sorted(set(line.strip() for line in rollback_ids_raw.decode().splitlines() if line.strip()))
     if not rollback_names:
