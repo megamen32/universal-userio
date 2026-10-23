@@ -1968,6 +1968,25 @@ class LocalSpeechPipeline:
                     yield bytes.fromhex(audio_hex)
 
 
+def _phone_ssh_route() -> list:
+    """The route to the phone, when the phone tunnel ends on another host.
+
+    The S21 tunnel lands on the host that owns the phone. A mesh node has no
+    local tunnel, so without the configured jump the synthesis fails and the
+    call drops to the local engine. The route is named by the environment
+    instead of being hardcoded, so the same code works on the owner host and
+    on a node.
+    """
+    route = []
+    config = os.environ.get("AGENTCALL_PHONE_TTS_SSH_CONFIG", "").strip()
+    jump = os.environ.get("AGENTCALL_PHONE_TTS_SSH_JUMP", "").strip()
+    if config:
+        route += ["-F", config]
+    if jump:
+        route += ["-J", jump]
+    return route
+
+
 def synthesize_phone_android(text: str) -> bytes:
     """Use the phone's installed Google engine, with a bounded shared lease."""
     key = "/home/roomhacker/.ssh/phone_gateway_ed25519"
@@ -1986,6 +2005,7 @@ def synthesize_phone_android(text: str) -> bytes:
             result = subprocess.run(
                 ["ssh", "-i", key, "-p", "22220", "-o", "BatchMode=yes",
                  "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR",
+                 *_phone_ssh_route(),
                  "phone@127.0.0.1",
                  "su -c 'CLASSPATH=/data/local/tmp/phone-tts.dex "
                  f"app_process /system/bin PhoneTts {encoded}'"],
