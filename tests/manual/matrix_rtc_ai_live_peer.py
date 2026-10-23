@@ -276,9 +276,6 @@ async def run():
 
         async def finish_audio(self, *, should_stop=None, interrupted=False):
             await finish_rtc_audio(source, should_stop, interrupted=interrupted)
-            if summaries["assistant_turns"] >= args.reply_turns and not stop.is_set():
-                stop.set()
-                audio_reader.feed_data(pack_audiosocket_frame(voice.HANGUP_KIND, b""))
 
         def close(self):
             self.closed = True
@@ -296,6 +293,15 @@ async def run():
                     summaries["caller_turns"] += 1
                 else:
                     summaries["assistant_turns"] += 1
+                # The first assistant transcript is the prepared greeting.
+                # End only after the owner has spoken one reply to B's one
+                # generated answer; never let B answer the owner's reply.
+                if (summaries["caller_turns"] >= args.reply_turns + 1
+                        and summaries["assistant_turns"] >= args.reply_turns + 1
+                        and not stop.is_set()):
+                    stop.set()
+                    audio_reader.feed_data(pack_audiosocket_frame(voice.HANGUP_KIND, b""))
+                    await asyncio.sleep(0)
             elif kind == "error":
                 summaries["errors"] += 1
             elif kind == "voice_mode":
@@ -427,8 +433,9 @@ async def run():
                           "voice_call_id": voice_call_id,
                           "engine_log": str(log_path), "modes_seen": modes,
                           **summaries}), flush=True)
-        return 0 if (summaries["caller_turns"] >= args.reply_turns
-                     and summaries["assistant_turns"] >= args.reply_turns) else 3
+        return 0 if (summaries["caller_turns"] >= args.reply_turns + 1
+                     and summaries["assistant_turns"] >= args.reply_turns + 1
+                     and summaries["errors"] == 0) else 3
     finally:
         stop.set()
         if engine is not None and not engine.done():
