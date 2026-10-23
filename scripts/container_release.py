@@ -12,8 +12,10 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -22,6 +24,17 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = Path('/etc/userio-containers')
 BACKUP = Path('/var/backups/universal-userio/containers-20261015')
+VOICE_ARCHIVE_ROOT = Path('/var/backups/universal-userio')
+VOICE_ARCHIVE_LOCK = Path('/run/lock/userio-voice-archive.lock')
+VOICE_CONTAINER = 'userio-voice'
+VOICE_IMAGE_REPOSITORY = 'ghcr.io/megamen32/universal-userio-voice'
+VOICE_ROLLBACK_PREFIX = 'userio-voice-prev-'
+VOICE_CONFIG_FILES = ('compose.host.json', 'voice.json', 'processes.json')
+VOICE_SECRETARY_CONFIGS = {
+    '/etc/agentcall-secretary-voice.json',
+    '/etc/agentcall-secretary-identities.json',
+}
+SECRET_FIELD = re.compile(r'(?:pass(?:word)?|secret|token|api[_-]?key|credential|authorization|private[_-]?key|access[_-]?key|client[_-]?secret|(?:^|[_-])key(?:$|[_-]))', re.I)
 REMOTE = 'roomhacker@192.168.2.5'
 ASTERISK_HOSTS = (
     ('roomhacker@192.168.2.75', 'roomhacker-server-88'),
@@ -497,6 +510,341 @@ def _backend_replacement_config(previous: dict, *, image: str, revision: str) ->
     return dict(previous, Image=image, Labels=labels)
 
 
+def _archive_docker_json(args, description):
+    """Read one Docker JSON response without ever surfacing daemon error text."""
+    result = subprocess.run(['docker', *args], capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError(f'cannot read {description} from Docker')
+    try:
+        return result.stdout, json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f'invalid Docker {description} response') from error
+
+
+def _archive_container(name):
+    raw, rows = _archive_docker_json(['inspect', '--type', 'container', name], f'container {name}')
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError(f'container {name} is missing or ambiguous')
+    return raw, rows[0]
+
+
+def _archive_image(image_id):
+    raw, rows = _archive_docker_json(['image', 'inspect', image_id], 'image metadata')
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError('image metadata is missing or ambiguous')
+    return raw, rows[0]
+
+
+def _redacted_config(value, key=None):
+    """Build a non-secret projection for the manifest fingerprint only."""
+    if key and SECRET_FIELD.search(str(key)):
+        return '<redacted>'
+    if isinstance(value, dict):
+        return {str(k): _redacted_config(v, str(k)) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        result = []
+        for item in value:
+            if isinstance(item, str) and '=' in item:
+                name, raw = item.split('=', 1)
+                result.append(name + ('=<redacted>' if SECRET_FIELD.search(name) else '=' + raw))
+            else:
+                result.append(_redacted_config(item))
+        return result
+    if isinstance(value, str):
+        text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1<redacted>', value)
+        text = re.sub(r'(://)[^/@\s]+@', r'\1<redacted>@', text)
+        return text
+    return value
+
+
+def _archive_hash(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _archive_has_owner_mode(path: Path, mode: int):
+    info = path.stat()
+    return info.st_uid == 0 and info.st_gid == 0 and stat.S_IMODE(info.st_mode) == mode
+
+
+def _archive_root_is_safe(path: Path):
+    info = path.stat()
+    return info.st_uid == 0 and info.st_gid == 0 and not (info.st_mode & 0o022)
+
+
+def _archive_write(root: Path, relative: str, data: bytes):
+    path = root / relative
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chown(path.parent, 0, 0)
+    os.chmod(path.parent, 0o700)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.fchown(descriptor, 0, 0)
+    with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(path, 0o600)
+    return _archive_hash(data)
+
+
+def _archive_write_json(root: Path, relative: str, value):
+    data = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode()
+    return _archive_write(root, relative, data)
+
+
+def _archive_tree(root: Path):
+    """Hash a mounted source tree without copying its source or executing it."""
+    root = root.resolve(strict=True)
+    if not root.is_dir():
+        raise RuntimeError('mounted SDK source is not a directory')
+    entries = []
+    byte_count = 0
+    for path in sorted(root.rglob('*')):
+        if '.git' in path.relative_to(root).parts:
+            continue
+        if path.is_symlink():
+            entries.append({'path': path.relative_to(root).as_posix(), 'symlink': os.readlink(path)})
+        elif path.is_file():
+            data = path.read_bytes()
+            byte_count += len(data)
+            if len(entries) >= 10000 or byte_count > 512 * 1024 * 1024:
+                raise RuntimeError('mounted SDK source exceeds archive bounds')
+            entries.append({'path': path.relative_to(root).as_posix(), 'sha256': _archive_hash(data), 'size': len(data)})
+    if not entries:
+        raise RuntimeError('mounted SDK source is empty')
+    encoded = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    return entries, _archive_hash(encoded), byte_count
+
+
+def _archive_mount(container, destination_prefix, *, exact=False):
+    mounts = [m for m in container.get('Mounts', []) if isinstance(m, dict)
+              and (str(m.get('Destination', '')) == destination_prefix if exact
+                   else str(m.get('Destination', '')).startswith(destination_prefix))]
+    if len(mounts) != 1:
+        raise RuntimeError(f'expected one mounted source for {destination_prefix}')
+    mount = mounts[0]
+    source = Path(str(mount.get('Source', '')))
+    if not source.is_absolute() or not source.exists():
+        raise RuntimeError(f'mounted source unavailable for {destination_prefix}')
+    return mount, source.resolve(strict=True)
+
+
+def _archive_config_sources(container):
+    sources = {}
+    for mount in container.get('Mounts', []):
+        if not isinstance(mount, dict):
+            continue
+        destination = str(mount.get('Destination', ''))
+        source = Path(str(mount.get('Source', '')))
+        if destination == str(CONFIG) and source.is_dir():
+            for name in VOICE_CONFIG_FILES:
+                path = source / name
+                if not path.is_file():
+                    raise RuntimeError(f'required mounted config is missing: {name}')
+                sources[f'userio-containers/{name}'] = path
+        elif destination in VOICE_SECRETARY_CONFIGS:
+            if not source.is_file():
+                raise RuntimeError('mounted Secretary configuration is unavailable')
+            sources[destination.rsplit('/', 1)[1]] = source
+    if not all(f'userio-containers/{name}' in sources for name in VOICE_CONFIG_FILES):
+        raise RuntimeError('effective UserIO Voice config mount is incomplete')
+    return sources
+
+
+def archive_voice(receipt_directory: Path):
+    """Serialize archive-only snapshots; never stop or recreate userio-voice."""
+    import fcntl
+
+    if os.geteuid() != 0:
+        raise RuntimeError('archive-voice requires root')
+    descriptor = os.open(VOICE_ARCHIVE_LOCK, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.fchown(descriptor, 0, 0)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, 'w') as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError('another Voice archive operation is active') from error
+        return _archive_voice_locked(receipt_directory)
+
+
+def _archive_voice_locked(receipt_directory: Path):
+    """Archive the live Voice image/config/source identities without stopping it."""
+    import datetime
+    import tempfile
+
+    receipt_directory = Path(receipt_directory)
+    archive_root = VOICE_ARCHIVE_ROOT.resolve(strict=True)
+    if receipt_directory.parent.resolve() != archive_root or not receipt_directory.name.startswith('voice-'):
+        raise RuntimeError('archive directory must be a direct voice-* child of the canonical archive root')
+    if not _archive_root_is_safe(archive_root):
+        raise RuntimeError('canonical voice archive root is not protected root-owned storage')
+    if receipt_directory.exists() or receipt_directory.is_symlink():
+        raise RuntimeError('archive directory already exists; reconcile before retrying')
+
+    container_raw, container = _archive_container(VOICE_CONTAINER)
+    if container.get('State', {}).get('Running') is not True:
+        raise RuntimeError('canonical userio-voice container is not running')
+    container_id = str(container.get('Id', ''))
+    image_id = str(container.get('Image', ''))
+    if not container_id or not image_id.startswith('sha256:'):
+        raise RuntimeError('live voice container identity is incomplete')
+    image_raw, image = _archive_image(image_id)
+    image_reference = container.get('Config', {}).get('Image')
+    if not isinstance(image_reference, str) or not image_reference.startswith(
+            (VOICE_IMAGE_REPOSITORY + ':', VOICE_IMAGE_REPOSITORY + '@')):
+        raise RuntimeError('live voice container does not use the canonical UserIO Voice image')
+    repo_digests = sorted(d for d in image.get('RepoDigests', [])
+                          if isinstance(d, str) and d.startswith(VOICE_IMAGE_REPOSITORY + '@sha256:'))
+    if not repo_digests:
+        raise RuntimeError('live voice image has no immutable registry digest')
+    labels = image.get('Config', {}).get('Labels') or container.get('Config', {}).get('Labels') or {}
+    revision = labels.get('org.opencontainers.image.revision') if isinstance(labels, dict) else None
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise RuntimeError('live voice image has no source revision label')
+
+    bridge_mount, bridge_root = _archive_mount(container, '/usr/local/lib/agentcall', exact=True)
+    bridge_path = bridge_root / 'agentcall_realtime_bridge.py'
+    if not bridge_path.is_file():
+        raise RuntimeError('mounted AgentCall bridge source is missing')
+    bridge_path = bridge_path.resolve(strict=True)
+    if bridge_root not in bridge_path.parents:
+        raise RuntimeError('mounted AgentCall bridge source escapes its source tree')
+    bridge_hash = _archive_hash(bridge_path.read_bytes())
+
+    sdk_mount, sdk_root = _archive_mount(container, '/opt/exmanager-voice/')
+    sdk_candidates = [p for p in sdk_root.rglob('agentcall_secretary_voice.py') if p.is_file()]
+    if len(sdk_candidates) != 1:
+        raise RuntimeError('mounted Secretary SDK entrypoint is missing or ambiguous')
+    sdk_entry = sdk_candidates[0].resolve(strict=True)
+    if sdk_root not in sdk_entry.parents:
+        raise RuntimeError('mounted Secretary SDK entrypoint escapes its source tree')
+    sdk_tree, sdk_tree_hash, sdk_tree_bytes = _archive_tree(sdk_root)
+    sdk_hash = _archive_hash(sdk_entry.read_bytes())
+
+    config_sources = _archive_config_sources(container)
+    config_bytes = {}
+    for logical, path in sorted(config_sources.items()):
+        config_bytes[logical] = path.read_bytes()
+    try:
+        redacted_files = {name: _redacted_config(json.loads(data)) for name, data in config_bytes.items()}
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError('mounted Voice config is not valid JSON') from error
+    runtime_fields = {key: container.get(key) for key in ('Config', 'HostConfig', 'Mounts')}
+    runtime_fields['network_names'] = sorted((container.get('NetworkSettings', {}).get('Networks') or {}).keys())
+    safe_config = _redacted_config({'runtime': runtime_fields, 'mounted_config': redacted_files})
+    config_fingerprint = _archive_hash(json.dumps(safe_config, sort_keys=True, separators=(',', ':')).encode())
+
+    rollback_ids_raw, rollback_ids = _archive_docker_json(
+        ['ps', '-aq', '--no-trunc', '--filter', f'name=^/{VOICE_ROLLBACK_PREFIX}'], 'rollback container list')
+    rollback_names = sorted(set(line.strip() for line in rollback_ids_raw.decode().splitlines() if line.strip()))
+    if not rollback_names:
+        raise RuntimeError('no retained previous userio-voice container is available for rollback')
+    rollback = []
+    rollback_raw = {}
+    for index, identifier in enumerate(rollback_names):
+        raw, old = _archive_container(identifier)
+        if old.get('State', {}).get('Running') is True:
+            raise RuntimeError('previous userio-voice rollback container is unexpectedly running')
+        old_image_id = str(old.get('Image', ''))
+        if not old_image_id.startswith('sha256:'):
+            raise RuntimeError('rollback voice image identity is incomplete')
+        old_image_raw, old_image = _archive_image(old_image_id)
+        rollback_raw[f'rollback/container-{index}.json'] = raw
+        rollback_raw[f'rollback/image-{index}.json'] = old_image_raw
+        old_digests = sorted(d for d in old_image.get('RepoDigests', []) if isinstance(d, str) and '@sha256:' in d)
+        rollback.append({'container_name': old.get('Name', '').lstrip('/'), 'container_id': old.get('Id'),
+                         'image': old.get('Config', {}).get('Image'), 'image_id': old_image_id,
+                         'repo_digests': old_digests, 'state': old.get('State', {}).get('Status')})
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    temporary = Path(tempfile.mkdtemp(prefix='.voice-archive-', dir=archive_root))
+    os.chmod(temporary, 0o700)
+    os.chown(temporary, 0, 0)
+    try:
+        file_hashes = {}
+        file_hashes['container-inspect.json'] = _archive_write(temporary, 'container-inspect.json', container_raw)
+        file_hashes['image-inspect.json'] = _archive_write(temporary, 'image-inspect.json', image_raw)
+        file_hashes['sdk-tree.json'] = _archive_write_json(temporary, 'sdk-tree.json', sdk_tree)
+        for relative, raw in sorted(rollback_raw.items()):
+            file_hashes[relative] = _archive_write(temporary, relative, raw)
+        for logical, raw in sorted(config_bytes.items()):
+            file_hashes['config/' + logical.replace('/', '--')] = _archive_write(
+                temporary, 'config/' + logical.replace('/', '--'), raw)
+
+        # Re-read mutable inputs before publishing the completed directory.
+        _, current = _archive_container(VOICE_CONTAINER)
+        if (current.get('Id') != container_id or current.get('Image') != image_id
+                or current.get('State', {}).get('Running') is not True
+                or current.get('Config') != container.get('Config')
+                or current.get('HostConfig') != container.get('HostConfig')
+                or current.get('Mounts') != container.get('Mounts')):
+            raise RuntimeError('live Voice container changed during archive capture')
+        if _archive_hash(bridge_path.read_bytes()) != bridge_hash:
+            raise RuntimeError('mounted AgentCall bridge changed during archive capture')
+        _, verify_tree_hash, _ = _archive_tree(sdk_root)
+        if verify_tree_hash != sdk_tree_hash:
+            raise RuntimeError('mounted Secretary SDK changed during archive capture')
+        for logical, path in config_sources.items():
+            if _archive_hash(path.read_bytes()) != _archive_hash(config_bytes[logical]):
+                raise RuntimeError('mounted Voice config changed during archive capture')
+
+        manifest = {
+            'schema': 'userio-voice-archive/v1',
+            'status': 'archive_only',
+            'captured_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'container': {'name': VOICE_CONTAINER, 'id': container_id, 'state': 'running'},
+            'image': {'reference': container.get('Config', {}).get('Image'), 'image_id': image_id,
+                      'immutable_repo_digests': repo_digests, 'revision': revision},
+            'bridge': {'mount_source_name': bridge_root.name, 'mount_destination': bridge_mount.get('Destination'),
+                       'file': 'agentcall_realtime_bridge.py', 'sha256': bridge_hash},
+            'secretary_sdk': {'mount_source_name': sdk_root.name, 'mount_destination': sdk_mount.get('Destination'),
+                              'entrypoint': sdk_entry.relative_to(sdk_root).as_posix(), 'entrypoint_sha256': sdk_hash,
+                              'tree_sha256': sdk_tree_hash, 'tree_files': len(sdk_tree), 'tree_bytes': sdk_tree_bytes},
+            'effective_config': {'redacted_fingerprint_sha256': config_fingerprint,
+                                 'captured_files': sorted(config_bytes),
+                                 'secret_values_stored_only_in_root_snapshot': True},
+            'rollback': rollback,
+            'snapshot_files_sha256': file_hashes,
+        }
+        manifest_sha = _archive_write_json(temporary, 'manifest.json', manifest)
+        receipt = {'status': 'archived_only', 'archive': str(receipt_directory), 'container_id': container_id,
+                   'image_id': image_id, 'image_digest': repo_digests[0], 'source_revision': revision,
+                   'bridge_sha256': bridge_hash, 'sdk_entrypoint_sha256': sdk_hash,
+                   'config_fingerprint_sha256': config_fingerprint, 'rollback_container_ids': [r['container_id'] for r in rollback],
+                   'manifest_sha256': manifest_sha, 'no_runtime_changes': True}
+        receipt_sha = _archive_write_json(temporary, 'receipt.json', receipt)
+        file_hashes['manifest.json'] = manifest_sha
+        file_hashes['receipt.json'] = receipt_sha
+        sums = ''.join(f'{digest}  {name}\n' for name, digest in sorted(file_hashes.items())).encode()
+        sums_sha = _archive_write(temporary, 'SHA256SUMS', sums)
+        for relative, expected_hash in file_hashes.items():
+            if _archive_hash((temporary / relative).read_bytes()) != expected_hash:
+                raise RuntimeError('archive snapshot readback hash mismatch')
+        for path in temporary.rglob('*'):
+            expected_mode = 0o700 if path.is_dir() else 0o600
+            if not _archive_has_owner_mode(path, expected_mode):
+                raise RuntimeError('archive snapshot is not root-only')
+        if receipt_directory.exists() or receipt_directory.is_symlink():
+            raise RuntimeError('archive destination appeared during capture')
+        os.replace(temporary, receipt_directory)
+        directory = os.open(archive_root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        os.chmod(receipt_directory, 0o700)
+        if not _archive_has_owner_mode(receipt_directory, 0o700):
+            raise RuntimeError('archive ownership is not root:root')
+        for relative in [*file_hashes, 'manifest.json', 'receipt.json', 'SHA256SUMS']:
+            if not _archive_has_owner_mode(receipt_directory / relative, 0o600):
+                raise RuntimeError('archive file permissions or ownership are not root-only')
+        return dict(receipt, archive=str(receipt_directory), sums_sha256=sums_sha)
+    except BaseException:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+
 def _replace_backend_locked(*, image: str, revision: str, expected_container: str, receipt_directory: Path):
     """Routine replacement of the canonical backend; never replay migration cutover."""
     import http.client
@@ -706,13 +1054,18 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend'))
+    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend', 'archive-voice'))
     parser.add_argument('--output', type=Path)
     parser.add_argument('--image')
     parser.add_argument('--revision')
     parser.add_argument('--expected-container')
     parser.add_argument('--receipt-directory', type=Path)
     args = parser.parse_args()
+    if args.action == 'archive-voice':
+        if not args.receipt_directory:
+            parser.error('archive-voice requires --receipt-directory')
+        print(json.dumps(archive_voice(args.receipt_directory), sort_keys=True))
+        return
     if args.action == 'replace-backend':
         if not all((args.image, args.revision, args.expected_container, args.receipt_directory)):
             parser.error('replace-backend requires --image, --revision, --expected-container and --receipt-directory')
