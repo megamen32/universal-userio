@@ -3720,6 +3720,48 @@ def qa_test_admission(call_mode, prepared, now=None):
 
 
 
+def qa_guest_promotion(prepared):
+    """Allow an explicitly scoped, short-lived test pair to leave the guest branch.
+
+    The binding is server-side (AGENTCALL_QA_SCOPE) and names the room, the
+    transport, the participants and an expiry. Anything that does not match
+    stays on the ordinary guest branch.
+    """
+    if prepared is None:
+        return {'allowed': False, 'reason': 'not_prepared'}
+    agent_context = prepared.agent_context or {}
+    room = prepared.peer_ref
+    transport = agent_context.get('voice_transport')
+    raw = os.environ.get(QA_TEST_SCOPE_ENV) or ''
+    try:
+        scope = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {'allowed': False, 'reason': 'qa_scope_unreadable'}
+    entries = scope.get('entries') if isinstance(scope, dict) else None
+    if not isinstance(entries, list):
+        return {'allowed': False, 'reason': 'qa_scope_missing'}
+    known = {str(value) for value in (room, prepared.peer_label, prepared.account_ref,
+                                      agent_context.get('voice_target')) if value}
+    moment = time.time()
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get('promote_guest'):
+            continue
+        if entry.get('room') != room or entry.get('transport') != transport:
+            continue
+        participants = entry.get('participants')
+        if not isinstance(participants, list) or not participants:
+            return {'allowed': False, 'reason': 'qa_promotion_scope_invalid'}
+        if not known & {str(item) for item in participants}:
+            continue
+        expires = entry.get('expires_at')
+        if not isinstance(expires, (int, float)) or float(expires) <= moment:
+            return {'allowed': False, 'reason': 'qa_scope_expired'}
+        return {'allowed': True, 'reason': 'qa_guest_promoted',
+                'room': room, 'transport': transport}
+    return {'allowed': False, 'reason': 'qa_promotion_no_match'}
+
+
+
 async def handle_call(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -3759,7 +3801,13 @@ async def handle_call(
         call_mode = prepared.agent_context.get('call_mode') if prepared is not None else ''
         qa_admission = qa_test_admission(call_mode, prepared)
         qa = call_mode == 'qa_incoming' and qa_admission['allowed']
-        guest = call_mode == 'incoming_guest' or (call_mode == 'qa_incoming' and not qa)
+        if call_mode == 'incoming_guest' and not qa:
+            promotion = qa_guest_promotion(prepared)
+            if promotion['allowed']:
+                qa = True
+                qa_admission = promotion
+            _log(f"session call={call_id} qa_promotion={promotion['reason']}")
+        guest = call_mode in {'incoming_guest', 'qa_incoming'} and not qa
         incoming = call_mode in {'incoming', 'incoming_guest'} or qa
         if call_mode == 'qa_incoming':
             _log(f"session call={call_id} qa_admission={qa_admission['reason']}")

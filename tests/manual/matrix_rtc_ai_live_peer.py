@@ -242,7 +242,7 @@ async def run():
         context=call_context,
         agent_context={
             "call_mode": "qa_incoming", "voice_transport": "matrix",
-            "voice_target": peer["matrix_id"],
+            "voice_target": FIXTURES[alias]["matrix_id"],
             "qa_caller": peer["matrix_id"], "qa_room": room_id,
         },
         created_at=time.time(), wait_prompts=load_wait_prompts(),
