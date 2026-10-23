@@ -12,6 +12,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
 import { bodyWithOrigin, forwardOrigin } from "./forward-origin.mjs";
+import { duplicateReceipt, replyAttemptFields } from "./send-receipt.mjs";
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
@@ -1646,9 +1647,7 @@ http.createServer(async (req, res) => {
           const state = attemptState(recorded);
           if (state === "sent") {
             res.writeHead(200, { "content-type": "application/json" });
-            return res.end(JSON.stringify({ ok: true, duplicate: true, slot: recorded.slot,
-              account_id: recorded.account_id, peer_id: recorded.peer_id,
-              message_id: String(recorded.message_id), date: recorded.date }));
+            return res.end(JSON.stringify(duplicateReceipt(recorded)));
           }
           if (state === "pending" || state === "unknown") {
             res.writeHead(502, { "content-type": "application/json" });
@@ -1700,7 +1699,8 @@ http.createServer(async (req, res) => {
               threadId, expectedText, text });
             console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
             sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
-              peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply" });
+              peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply",
+              ...replyAttemptFields(sent) });
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id: chatId,
               message_id: sent.messageId, reply_to_id: sent.replyToId, thread_id: sent.threadId,

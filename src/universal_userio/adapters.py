@@ -464,9 +464,31 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("Telegram admin status identity conflict")
         return result
 
-    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "", slot: str = "") -> str:
-        if not chat or not body:
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "",
+                   slot: str = "", reply_to: Mapping[str, object] | None = None) -> str:
+        if not body or (reply_to is None and not chat):
             raise ValueError("Telegram delivery requires chat and body")
+        if reply_to is not None:
+            # A source-bound reply answers one exact message: the source id
+            # and the text that source carried when it was picked are both
+            # required, so the answer can never land under another message.
+            if (not isinstance(reply_to, Mapping)
+                    or set(reply_to) - {"message_id", "expected_text", "thread_id"}):
+                raise ValueError("Telegram reply_to must be a source-bound reply object")
+            message_id = reply_to.get("message_id")
+            expected_text = reply_to.get("expected_text")
+            thread_id = reply_to.get("thread_id", "")
+            if (not isinstance(message_id, str) or not isinstance(expected_text, str)
+                    or not isinstance(thread_id, str)):
+                raise ValueError("Telegram reply_to requires source message id and exact source text")
+            receipt = self.reply_message(
+                chat_id=chat_id, account_ref=account_ref, message_id=message_id,
+                thread_id=thread_id, expected_text=expected_text, text=body, request_id=draft_id,
+            )
+            # The durable receipt names the source the answer is bound to, so
+            # the binding survives in UserIO and not only in the connector.
+            return (f"telegram-qr:{slot or '?'}:{receipt['message_id']}:{draft_id}"
+                    f":reply_to:{receipt['reply_to_id']}:thread:{receipt['thread_id']}")
         # The attempt id binds this exact approval to the provider receipt the
         # connector records, so an uncertain outcome can be resolved later
         # without ever replaying the message.
@@ -630,6 +652,10 @@ class TelegramQrHttpOutbox:
             raise RuntimeError(f"telegram-qr reply outcome is unknown: HTTP {error.code}") from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr reply outcome is unknown: connector is unreachable") from error
+        # A repeated approval answers from the connector journal. That
+        # receipt carries no body, so only the body check is relaxed: every
+        # binding (account, peer, source, topic) is still verified.
+        duplicate = result.get("duplicate") is True
         if (result.get("ok") is not True or result.get("account_id") != account_ref
                 or str(result.get("peer_id")) != chat_id
                 or not isinstance(result.get("message_id"), str)
@@ -637,7 +663,7 @@ class TelegramQrHttpOutbox:
                 or int(result["message_id"]) > 0x7FFFFFFF
                 or str(result.get("reply_to_id")) != message_id
                 or str(result.get("thread_id") or "") != thread_id
-                or result.get("text") != text or result.get("out") is not True
+                or (not duplicate and (result.get("text") != text or result.get("out") is not True))
                 or type(result.get("date")) not in (int, float) or result["date"] <= 0):
             raise RuntimeError("Telegram reply receipt could not be verified")
         return result
