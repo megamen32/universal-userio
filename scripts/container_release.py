@@ -595,6 +595,102 @@ def _archive_read_file(path: Path, *, max_bytes=512 * 1024 * 1024):
     return data, identity
 
 
+def _archive_read_container_file(process_identity, container_path, *, max_bytes=512 * 1024 * 1024):
+    """Read a container path with openat-style traversal confined to its root."""
+    logical = PurePosixPath(str(container_path))
+    if not logical.is_absolute() or any(part == '..' for part in logical.parts):
+        raise RuntimeError('container file path is not a safe absolute path')
+    root_path = VOICE_PROC_ROOT / str(process_identity['pid']) / 'root'
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_CLOEXEC', 0)
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        root_fd = os.open(root_path, directory_flags)
+    except OSError as error:
+        raise RuntimeError('container root is unavailable') from error
+
+    dir_fds = [root_fd]
+    resolved = []
+    pending = [part for part in logical.parts[1:] if part not in {'', '.'}]
+    links = []
+    link_count = 0
+    try:
+        if not pending:
+            raise RuntimeError('container file path has no filename')
+        while pending:
+            component = pending.pop(0)
+            if component in {'', '.'}:
+                continue
+            if component == '..' or '/' in component:
+                raise RuntimeError('container symlink escapes its root')
+            parent_fd = dir_fds[-1]
+            try:
+                before = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError as error:
+                raise RuntimeError('container mounted file is unavailable') from error
+            if stat.S_ISLNK(before.st_mode):
+                link_count += 1
+                if link_count > 40:
+                    raise RuntimeError('container path has too many symlinks')
+                target = os.readlink(component, dir_fd=parent_fd)
+                if not target or '\x00' in target:
+                    raise RuntimeError('container symlink target is invalid')
+                links.append({'path': '/' + '/'.join([*resolved, component]), 'target': target})
+                target_path = PurePosixPath(target)
+                target_parts = [part for part in target_path.parts if part not in {'', '.', '/'}]
+                if any(part == '..' for part in target_parts):
+                    raise RuntimeError('container symlink escapes its root')
+                if target_path.is_absolute():
+                    for descriptor in dir_fds[1:]:
+                        os.close(descriptor)
+                    dir_fds = [root_fd]
+                    resolved = []
+                pending = target_parts + pending
+                continue
+
+            final = not pending
+            if final:
+                if not stat.S_ISREG(before.st_mode):
+                    raise RuntimeError('container mounted input is not a regular file')
+                flags = os.O_RDONLY | nofollow | getattr(os, 'O_CLOEXEC', 0)
+            else:
+                if not stat.S_ISDIR(before.st_mode):
+                    raise RuntimeError('container path parent is not a directory')
+                flags = directory_flags | nofollow
+            try:
+                descriptor = os.open(component, flags, dir_fd=parent_fd)
+                opened = os.fstat(descriptor)
+            except OSError as error:
+                raise RuntimeError('container mounted path changed during traversal') from error
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                os.close(descriptor)
+                raise RuntimeError('container mounted path changed during traversal')
+            if final:
+                try:
+                    with os.fdopen(descriptor, 'rb') as stream:
+                        data = stream.read(max_bytes + 1)
+                        after = os.fstat(stream.fileno())
+                except OSError as error:
+                    raise RuntimeError('container mounted file is unavailable') from error
+                if len(data) > max_bytes:
+                    raise RuntimeError('container mounted file exceeds archive bounds')
+                identity = {'device': opened.st_dev, 'inode': opened.st_ino, 'size': opened.st_size,
+                            'mtime_ns': opened.st_mtime_ns,
+                            'resolved_container_path': '/' + '/'.join([*resolved, component])}
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                        opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns):
+                    raise RuntimeError('container mounted file changed while being read')
+                return data, identity, links
+            dir_fds.append(descriptor)
+            resolved.append(component)
+        raise RuntimeError('container mounted file path did not resolve to a file')
+    finally:
+        for descriptor in reversed(dir_fds):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def _archive_directory_identity(path: Path):
     try:
         info = path.lstat()
@@ -815,10 +911,8 @@ def _archive_voice_locked(receipt_directory: Path):
     bridge_mount, bridge_source = _archive_mount(container, '/usr/local/lib/agentcall', exact=True)
     bridge_root = _archive_container_view_path(container, bridge_mount.get('Destination'))
     bridge_root_identity = _archive_directory_identity(bridge_root)
-    bridge_path = bridge_root / 'agentcall_realtime_bridge.py'
-    if not bridge_path.is_file() or bridge_path.is_symlink():
-        raise RuntimeError('mounted AgentCall bridge source is missing')
-    bridge_bytes, bridge_identity = _archive_read_file(bridge_path)
+    bridge_path = str(PurePosixPath(str(bridge_mount.get('Destination'))) / 'agentcall_realtime_bridge.py')
+    bridge_bytes, bridge_identity, bridge_symlinks = _archive_read_container_file(process_identity, bridge_path)
     bridge_hash = _archive_hash(bridge_bytes)
 
     sdk_mount, sdk_source = _archive_mount(container, '/opt/exmanager-voice/')
@@ -908,8 +1002,10 @@ def _archive_voice_locked(receipt_directory: Path):
             raise RuntimeError('live Voice container changed during archive capture')
         if _archive_process_identity(current) != process_identity:
             raise RuntimeError('live Voice process or mount namespace changed during archive capture')
-        bridge_now, bridge_identity_now = _archive_read_file(bridge_path)
-        if _archive_hash(bridge_now) != bridge_hash or bridge_identity_now != bridge_identity:
+        bridge_now, bridge_identity_now, bridge_symlinks_now = _archive_read_container_file(
+            process_identity, bridge_path)
+        if (_archive_hash(bridge_now) != bridge_hash or bridge_identity_now != bridge_identity
+                or bridge_symlinks_now != bridge_symlinks):
             raise RuntimeError('mounted AgentCall bridge changed during archive capture')
         _, verify_tree_hash, _, verify_sdk_root_identity = _archive_tree(sdk_root)
         sdk_entry_now, sdk_entry_identity_now = _archive_read_file(sdk_entry)
@@ -932,7 +1028,9 @@ def _archive_voice_locked(receipt_directory: Path):
             'container_process': process_identity,
             'bridge': {'mount_source_name': bridge_source.name, 'mount_destination': bridge_mount.get('Destination'),
                        'consumer_device': bridge_identity['device'], 'consumer_inode': bridge_identity['inode'],
-                       'file': 'agentcall_realtime_bridge.py', 'sha256': bridge_hash},
+                       'file': 'agentcall_realtime_bridge.py',
+                       'resolved_container_path': bridge_identity['resolved_container_path'],
+                       'symlinks': bridge_symlinks, 'sha256': bridge_hash},
             'secretary_sdk': {'mount_source_name': sdk_source.name, 'mount_destination': sdk_mount.get('Destination'),
                               'consumer_device': sdk_root_identity['device'], 'consumer_inode': sdk_root_identity['inode'],
                               'entrypoint': sdk_entry.relative_to(sdk_root).as_posix(), 'entrypoint_sha256': sdk_hash,

@@ -3,6 +3,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import stat
 
@@ -49,7 +50,8 @@ def _voice_archive_fixture(tmp_path, monkeypatch):
     identity_map.write_text(json.dumps({'matrix:test': 'host-replaced'}))
     bridge_root = tmp_path / 'usr' / 'local' / 'lib' / 'agentcall'
     bridge_root.mkdir(parents=True)
-    (bridge_root / 'agentcall_realtime_bridge.py').write_text('host replacement bridge\n')
+    (bridge_root / 'agentcall_realtime_bridge.py').symlink_to(
+        '/opt/universal-userio/src/universal_userio/voice/agentcall_realtime_bridge.py')
     sdk_root = tmp_path / 'opt' / 'exmanager-voice' / '1db611b'
     sdk_file = sdk_root / 'integrations' / 'agentcall' / 'agentcall_secretary_voice.py'
     sdk_file.parent.mkdir(parents=True)
@@ -80,6 +82,9 @@ def _voice_archive_fixture(tmp_path, monkeypatch):
                 target = mounted_path / relative
                 if child.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
+                elif child.is_symlink():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.symlink_to(os.readlink(child))
                 elif child.is_file():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(child.read_bytes())
@@ -93,8 +98,13 @@ def _voice_archive_fixture(tmp_path, monkeypatch):
         json.dumps({'model': 'mounted-old-inode', 'token': 'mounted-secret'}))
     (consumer_root / 'etc' / 'agentcall-secretary-identities.json').write_text(
         json.dumps({'matrix:test': 'mounted-old-inode'}))
-    (consumer_root / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py').write_text(
-        'mounted old bridge inode\n')
+    bridge_link = consumer_root / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py'
+    bridge_link.unlink()
+    bridge_target_path = '/opt/universal-userio/src/universal_userio/voice/agentcall_realtime_bridge.py'
+    bridge_link.symlink_to(bridge_target_path)
+    mounted_bridge_target = consumer_root / bridge_target_path.lstrip('/')
+    mounted_bridge_target.parent.mkdir(parents=True, exist_ok=True)
+    mounted_bridge_target.write_text('mounted old bridge target inode\n')
     mounted_sdk_file = consumer_root / 'opt' / 'exmanager-voice' / 'b57ae06' / 'integrations' / 'agentcall' / 'agentcall_secretary_voice.py'
     mounted_sdk_file.parent.mkdir(parents=True, exist_ok=True)
     mounted_sdk_file.write_text('mounted old SDK inode\n')
@@ -175,17 +185,91 @@ def test_archive_voice_writes_secret_bearing_snapshot_root_only_without_runtime_
     assert archived_voice_config == (consumer_root / 'etc' / 'userio-containers' / 'voice.json').read_bytes()
     assert b'mounted-old-inode' in archived_voice_config
     manifest = json.loads(manifest_bytes)
-    expected_bridge = consumer_root / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py'
+    expected_bridge = consumer_root / 'opt' / 'universal-userio' / 'src' / 'universal_userio' / 'voice' / 'agentcall_realtime_bridge.py'
     expected_sdk = consumer_root / 'opt' / 'exmanager-voice' / 'b57ae06' / 'integrations' / 'agentcall' / 'agentcall_secretary_voice.py'
     assert manifest['bridge']['sha256'] == hashlib.sha256(expected_bridge.read_bytes()).hexdigest()
     assert manifest['secretary_sdk']['entrypoint_sha256'] == hashlib.sha256(expected_sdk.read_bytes()).hexdigest()
-    assert manifest['bridge']['sha256'] != hashlib.sha256((tmp_path / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py').read_bytes()).hexdigest()
+    assert manifest['bridge']['symlinks'] == [{'path': '/usr/local/lib/agentcall/agentcall_realtime_bridge.py',
+                                                'target': '/opt/universal-userio/src/universal_userio/voice/agentcall_realtime_bridge.py'}]
     host_sdk = tmp_path / 'opt' / 'exmanager-voice' / '1db611b' / 'integrations' / 'agentcall' / 'agentcall_secretary_voice.py'
     assert manifest['secretary_sdk']['entrypoint_sha256'] != hashlib.sha256(host_sdk.read_bytes()).hexdigest()
     for row in (target / 'SHA256SUMS').read_text().splitlines():
         digest, name = row.split('  ', 1)
         assert hashlib.sha256((target / name).read_bytes()).hexdigest() == digest
     assert all(args[0] in {'inspect', 'image', 'ps'} for args in calls)
+
+
+def test_archive_voice_keeps_container_symlink_target_when_host_mount_entry_is_atomically_replaced(tmp_path, monkeypatch):
+    module, archive_root, _, _, _, _, consumer_root = _voice_archive_fixture(tmp_path, monkeypatch)
+    host_entry = tmp_path / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py'
+    replacement = host_entry.with_name('bridge.new')
+    replacement.write_text('host atomically replaced bridge\n')
+    replacement.replace(host_entry)
+
+    target = archive_root / 'voice-container-symlink-view'
+    receipt = module.archive_voice(target)
+    manifest = json.loads((target / 'manifest.json').read_bytes())
+    consumer_target = consumer_root / 'opt' / 'universal-userio' / 'src' / 'universal_userio' / 'voice' / 'agentcall_realtime_bridge.py'
+
+    assert manifest['bridge']['sha256'] == hashlib.sha256(consumer_target.read_bytes()).hexdigest()
+    assert manifest['bridge']['sha256'] != hashlib.sha256(host_entry.read_bytes()).hexdigest()
+    assert manifest['bridge']['resolved_container_path'] == '/opt/universal-userio/src/universal_userio/voice/agentcall_realtime_bridge.py'
+    assert manifest['bridge']['symlinks'][0]['target'] == manifest['bridge']['resolved_container_path']
+    assert receipt['bridge_sha256'] == manifest['bridge']['sha256']
+
+
+def test_archive_container_reader_rejects_symlink_escape_and_broken_target(tmp_path, monkeypatch):
+    module, _, _, _, _, _, consumer_root = _voice_archive_fixture(tmp_path, monkeypatch)
+    bridge = consumer_root / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py'
+    identity = {'pid': 321}
+
+    bridge.unlink()
+    bridge.symlink_to('/../../etc/passwd')
+    try:
+        module._archive_read_container_file(identity, '/usr/local/lib/agentcall/agentcall_realtime_bridge.py')
+    except RuntimeError as error:
+        assert str(error) == 'container symlink escapes its root'
+    else:
+        raise AssertionError('symlink with parent traversal must be rejected')
+
+    bridge.unlink()
+    bridge.symlink_to('/opt/universal-userio/missing/bridge.py')
+    try:
+        module._archive_read_container_file(identity, '/usr/local/lib/agentcall/agentcall_realtime_bridge.py')
+    except RuntimeError as error:
+        assert str(error) == 'container mounted file is unavailable'
+    else:
+        raise AssertionError('broken symlink must be rejected')
+
+
+def test_archive_voice_rejects_bridge_symlink_mutated_during_capture(tmp_path, monkeypatch):
+    module, archive_root, _, _, _, _, consumer_root = _voice_archive_fixture(tmp_path, monkeypatch)
+    bridge = consumer_root / 'usr' / 'local' / 'lib' / 'agentcall' / 'agentcall_realtime_bridge.py'
+    alternate = consumer_root / 'opt' / 'universal-userio' / 'alternate' / 'bridge.py'
+    alternate.parent.mkdir(parents=True)
+    alternate.write_text('different live target\n')
+    original = module._archive_docker_json
+    reads = 0
+
+    def mutate_link_before_final_inspect(args, description):
+        nonlocal reads
+        if args[0] == 'inspect' and args[-1] == module.VOICE_CONTAINER:
+            reads += 1
+            if reads == 2:
+                bridge.unlink()
+                bridge.symlink_to('/opt/universal-userio/alternate/bridge.py')
+        return original(args, description)
+
+    monkeypatch.setattr(module, '_archive_docker_json', mutate_link_before_final_inspect)
+    target = archive_root / 'voice-symlink-drift'
+    try:
+        module.archive_voice(target)
+    except RuntimeError as error:
+        assert str(error) == 'mounted AgentCall bridge changed during archive capture'
+    else:
+        raise AssertionError('archive must reject a changed bridge symlink/target')
+    assert not target.exists()
+    assert not list(archive_root.glob('.voice-archive-*'))
 
 
 def test_archive_voice_fails_closed_without_immutable_image_digest(tmp_path, monkeypatch):
