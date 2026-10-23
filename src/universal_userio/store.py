@@ -3628,6 +3628,17 @@ class SQLiteUserIOStore:
                 self._connection.execute("BEGIN IMMEDIATE")
                 return self._expire_proposed_drafts_locked(user_id=user, now=instant)
 
+    def conversation_identity(self, conversation_id: str, *, user_id: str | None = None) -> dict[str, object] | None:
+        """Read one owned chat identity without building an inbox listing."""
+        user = self._user(user_id)
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT id,source,account_ref,peer_id FROM conversations WHERE user_id=? AND id=?",
+                (user, conversation_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def conversation(
         self, conversation_id: str, *, user_id: str | None = None, text_limit: int | None = None
     ) -> dict[str, object] | None:

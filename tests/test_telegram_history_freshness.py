@@ -211,6 +211,28 @@ def test_read_returns_fresh_history_when_refresh_finishes_inside_budget(history_
     assert requests == [{"account_id": ACCOUNT, "peer_id": PEER, "limit": 50, "scan": True}]
 
 
+def test_mcp_history_associations_do_not_rebuild_inbox_per_message(history_fixture, monkeypatch):
+    store, service, ingest, _coordinator = history_fixture
+    chat_id = ingest(10)
+    ingest(11)
+
+    def expensive_listing_is_forbidden(**_kwargs):
+        raise AssertionError("A chat read must not rebuild the inbox for every message")
+
+    monkeypatch.setattr(store, "conversations", expensive_listing_is_forbidden)
+    monkeypatch.setattr(adapters_module.UnifiedChannels, "adapter", lambda *_args: TelegramChannelAdapter(
+        store, service, store.default_user_id, bridge_url="http://fixture.invalid",
+        runner=lambda *_args, **_kwargs: io.BytesIO(json.dumps({
+            "account_id": ACCOUNT, "peer_id": PEER, "mirrored": 0,
+        }).encode()),
+    ))
+    result = UserIOMcpSurface(store, service).dispatch("userio.channels.read", {
+        "channel": "telegram", "chat_id": chat_id, "include_images": False,
+    })
+    assert result["ok"] is True and result["sync"]["fresh"] is True
+    assert len(result["chat"]["messages"]) == 2
+
+
 def test_mcp_returns_cached_history_after_budget_and_joins_background_refresh(history_fixture, monkeypatch):
     store, service, ingest, coordinator = history_fixture
     chat_id = ingest(10)

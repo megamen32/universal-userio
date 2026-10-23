@@ -320,12 +320,9 @@ class UserIOService:
         it performs no provider I/O or write and does not change send authority.
         """
         user = user_id
-        rows = self._store.conversations(
-            conversation_ids=[conversation_id], limit=1, user_id=user,
-        )
-        if not rows:
+        conversation = self._store.conversation_identity(conversation_id, user_id=user)
+        if conversation is None:
             return None
-        conversation = rows[0]
         provider = str(conversation.get("source") or "").lower()
         try:
             current = self._store.message(
