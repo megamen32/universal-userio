@@ -11,6 +11,7 @@ import { EditedMessage } from "telegram/events/EditedMessage.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
+import { bodyWithOrigin, forwardOrigin } from "./forward-origin.mjs";
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
@@ -646,7 +647,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     ...(entityName(chatEntity) ? { sender_name: entityName(chatEntity) } : {}),
-    body: normalized.body.slice(0, 8000),
+    body: bodyWithOrigin(normalized.body, forwardOrigin(message)),
     ...(attachments.length ? { attachments: attachments.map((attachment, idx) => ({ ...attachment, idx })) } : {}),
   };
 }
