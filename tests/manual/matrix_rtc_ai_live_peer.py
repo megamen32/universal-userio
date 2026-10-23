@@ -155,6 +155,17 @@ def _modes_seen(log_text: str) -> list[str]:
 
 
 async def run():
+    import hashlib as _hashlib
+    import importlib as _importlib
+    _engine = _importlib.import_module('agentcall_realtime_bridge')
+    _engine_path = str(getattr(_engine, '__file__', '') or '')
+    try:
+        with open(_engine_path, 'rb') as _stream:
+            _engine_md5 = _hashlib.md5(_stream.read()).hexdigest()
+    except OSError:
+        _engine_md5 = ''
+    print(json.dumps({"event": "engine_module", "file": _engine_path,
+                      "md5": _engine_md5}), flush=True)
     from livekit import rtc
     from universal_userio.matrix_calls import MEMBER
     from universal_userio.matrix_call_worker import (
