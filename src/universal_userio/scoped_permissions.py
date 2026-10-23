@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 
-READ_TOOLS = {'capabilities', 'history', 'get', 'resolve', 'media', 'events'}
+READ_TOOLS = {'capabilities', 'history', 'has_contacted', 'get', 'resolve', 'media', 'events'}
 
 
 def validate_grants(store, user_id, grants):
@@ -402,7 +402,7 @@ def dispatch_scoped(store, service, principal, name, arguments):
         result = dispatch(store,service,principal,name,arguments)
         if op == 'capabilities' and result.get('ok') and grant_for(principal, arguments.get('account_ref')) == 'read_only':
             for operation, value in result['operations'].items():
-                if operation not in {'read','history','download'}:
+                if operation not in {'read','history','has_contacted','download'}:
                     value.update(allowed=False, reason='chat_read_only_token')
         return result
     api = Messenger(store,service,principal)

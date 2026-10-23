@@ -15,8 +15,8 @@ from .contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequired
 from .source_projection import canonical_author, canonical_source
 
 SCHEMA = 'userio.messenger.v1'
-OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
-READ_OPERATIONS = frozenset({'read', 'history', 'download'})
+OPERATIONS = ('read', 'history', 'has_contacted', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
+READ_OPERATIONS = frozenset({'read', 'history', 'has_contacted', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
 TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
@@ -121,7 +121,7 @@ class Messenger:
         for name in OPERATIONS:
             # All registered accounts have bounded stored reading; live
             # history/media and mutations require an actual configured route.
-            supported = name in {'read', 'history'} or name in ops
+            supported = name in {'read', 'history', 'has_contacted'} or name in ops
             reason = ''
             if not supported: reason = 'provider_not_supported'
             elif not account['enabled']: reason = 'account_disabled'
@@ -795,10 +795,13 @@ def dispatch(store, service, principal, name, arguments):
     api = Messenger(store,service,principal)
     op = name.removeprefix('userio.messenger.')
     try:
-        if principal.read_only and op not in {'capabilities','history','get','resolve','media','events'}:
+        if principal.read_only and op not in {'capabilities','history','has_contacted','get','resolve','media','events'}:
             raise PermissionError('read_only_token')
         if op == 'capabilities': return {'ok':True,**api.capabilities(**arguments)}
         if op == 'history': return {'ok':True,**api.history(**arguments)}
+        if op == 'has_contacted':
+            from .contact_check import has_contacted
+            return {'ok':True, **has_contacted(api, **arguments)}
         if op == 'resolve': return {'ok':True,**api.resolve(**arguments)}
         if op == 'media': return {'ok':True,**api.media(**arguments)}
         if op == 'events': return {'ok':True,**api.events(**arguments)}
