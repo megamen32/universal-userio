@@ -27,8 +27,14 @@
 
 - Room `!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com` was created by test account A for the two-UserIO-principal call test.
 - It is private/invite-only, non-federated and unencrypted; the only joined members are test accounts A and B. The `org.matrix.msc3401.call.member` power level is 0 so both fixture users can publish their RTC membership events.
-- The room is ready for the two-user call flow. Scripted calls and their limitations are recorded below; the per-user UserIO route has not yet been deployed or exercised in this room.
+- The room is ready for the two-user call flow. Scripted calls and their limitations are recorded below; a separate non-owner outbound call is still needed to accept the guest caller route.
 - These fixture rooms do not include `@bezrabotnyi` unless a live membership check proves otherwise. An owner-originated canary needs an already joined private room with exactly one QA peer; do not infer membership from the UserIO account link.
+
+## Owner ↔ QA B Secretary room
+
+- Room `!ipwxjrYHRFBuGnnPnW:chat.bezrabotnyi.com` was created for the explicitly authorized owner MatrixRTC check. It is private, federation-disabled and unencrypted; live `/joined_members` confirmed exactly `@bezrabotnyi` and QA peer B. `org.matrix.msc3401.call.member` is level 0 so B can publish its RTC membership.
+- The owner and B identities were verified separately through their existing UserIO connector refs; no accounts or credentials were created or rotated.
+- Call `6fd4f021-df46-55c7-8e0b-69274c0fc9f9` completed/answered with 894,542 received audio bytes. Durable recording is `/var/lib/agentcall/recordings/04d908d8-be3a-4d31-8e2b-ee8c6733aaae/` (9.32 seconds, complete manifest, post-call transcription complete). The owner transcript says: “Сайт «гпт админ» — панель управления гпт”. The UserIO receipt contains `agent_context.call_mode=incoming`; the installed voice runtime logged `NativeTurnUnsettled: Secretary voice outcome is unknown`, so this is evidence of RTC/audio and a generated Russian answer, not proof of a settled Secretary SDK turn.
 
 ## UserIO test principals
 
