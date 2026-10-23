@@ -25,7 +25,8 @@ import { WebhookSettingsDialog } from "@/components/webhook-settings-dialog"
 type Account = { id: string; provider: string; source?: string; display_name: string; capabilities: string[]; last_message_at?: number; enabled?: boolean }
 type AnalysisPolicy = { conversation_id: string; conversation_kind: string; allowed: boolean; action: string }
 type Chat = { id: string; source: string; sender: string; identity_id?: string; preview?: string; unread_count: number; last_at?: number; display_name?: string; account_last_at?: number; account_ref?: string; peer_id?: string; account_refs?: string[]; account_unread_counts?: Record<string, number>; account_conversation_ids?: Record<string, string>; match_message_id?: string; match_body?: string; match_type?: "exact" | "fuzzy"; match_field?: "contact" | "message"; analysis_policy?: AnalysisPolicy }
-type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; conversation_kind?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean } }
+type HistorySync = { status: string; fresh: boolean; stale?: boolean; refreshing?: boolean; error?: string; reason?: string }
+type Conversation = { id: string; source: string; sender: string; identity_id?: string; display_name?: string; account_ref?: string; conversation_kind?: string; messages: Message[]; drafts: Draft[]; phone_history?: { oldest_id: string; has_more: boolean }; sync?: HistorySync }
 type Message = { source: string; message_id: string; sender: string; sender_name?: string; body: string; direction?: "incoming" | "outgoing" | "system"; can_edit?: boolean; received_at: number; edited_at?: number; attachments?: unknown[]; seen_at?: number; provider_read?: boolean | number | null; attachment_url?: string; outbox_receipt?: string; call_audio?: CallRecording }
 type Draft = { id: string; body: string; status: string; outbox_receipt?: string; created_at?: number; context_status?: "unknown" | "current" | "stale"; delivery_state?: string; delivery_reason?: string; delivery_last_checked_at?: number | null; delivery_next_check_at?: number | null; delivery_attempts?: number; delivery_history?: { checked_at: number; automatic: boolean; previous_status: string; new_status: string; resolution: string; reason: string }[]; reply_to?: { source: string; message_id: string; body: string; received_at: number } | null }
 type UserCapabilities = { read: boolean; subscribe: boolean; download: boolean; send: boolean }
@@ -344,6 +345,7 @@ export function App() {
   const chatsRequest = useRef(new LatestRequest())
   const conversationRequest = useRef(new LatestRequest())
   const activeConversation = useRef("")
+  const telegramHistoryRead = useRef(0)
   const deepLinkFetch = useRef("")
   const [deepLinkHash, setDeepLinkHash] = useState(window.location.hash)
   const secretaryRequest = useRef(new SecretaryRequests())
@@ -497,7 +499,43 @@ export function App() {
   const loadConversation = useCallback(async (id: string) => {
     if (activeConversation.current !== id) return
     const request = conversationRequest.current.begin()
-    const result = await api<Conversation>(`/v1/conversations/${encodeURIComponent(id)}`)
+    let result = await api<Conversation>(`/v1/conversations/${encodeURIComponent(id)}`)
+    if (result.source === "telegram") {
+      try {
+        const history = await api<{ result?: { isError?: boolean; structuredContent?: { chat?: Conversation; sync?: HistorySync } }; error?: string }>("/mcp", {
+          method: "POST",
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: `web-chat-history-${++telegramHistoryRead.current}`,
+            method: "tools/call",
+            params: { name: "userio.channels.read", arguments: {
+              channel: "telegram", chat_id: result.id, history_limit: 50, include_images: false,
+            } },
+          }),
+        })
+        const chat = history.result?.structuredContent?.chat
+        const sync = history.result?.structuredContent?.sync
+        if (history.error || history.result?.isError || !chat || chat.id !== result.id || !sync) {
+          throw new Error("Telegram history read did not return freshness metadata")
+        }
+        const previousMessages = new Map(result.messages.map(message => [message.message_id, message]))
+        result = {
+          ...result,
+          ...chat,
+          drafts: result.drafts,
+          messages: chat.messages.map(message => {
+            const previous = previousMessages.get(message.message_id)
+            return { ...previous, ...message, can_edit: message.can_edit ?? previous?.can_edit }
+          }),
+          sync,
+        }
+      } catch {
+        result = { ...result, sync: {
+          status: "failed", fresh: false, stale: true, refreshing: false,
+          error: "history_read_failed",
+        } }
+      }
+    }
     const target = parseDeepLink(window.location.hash)
     if (target?.conversationId === result.id && target.messageId
         && !result.messages.some(message => message.message_id === target.messageId)) {
@@ -1430,6 +1468,12 @@ export function App() {
             <Button className="hidden size-8 md:inline-flex" variant="ghost" size="icon" onClick={closeChat} title="Закрыть диалог"><X className="size-4" /></Button>
           </div>
         </header>
+        {conversation.source === "telegram" && conversation.sync?.stale && <div role="status" aria-live="polite" className="flex items-center justify-between gap-3 border-b bg-amber-50 px-3 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100 md:px-4">
+          <span>{conversation.sync.refreshing
+            ? "Показана сохранённая переписка; история Telegram обновляется…"
+            : "Показана сохранённая переписка; свежесть истории Telegram не подтверждена."}</span>
+          {!conversation.sync.refreshing && <Button variant="ghost" size="sm" className="h-7 shrink-0 px-2" onClick={() => void loadConversation(conversation.id)}>Проверить снова</Button>}
+        </div>}
         <ScrollArea ref={transcriptRef} onScrollCapture={event => {
           const viewport = event.target as HTMLElement
           if (conversation.source === 'phone' && viewport.dataset.slot === 'scroll-area-viewport') phoneFollowLatest.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96

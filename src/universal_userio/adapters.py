@@ -32,6 +32,7 @@ from . import chatgpt_sessions
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 from .contracts import ChannelFile, ContactResolutionUnavailable, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
+from .telegram_history_refresh import TELEGRAM_HISTORY_REFRESH
 
 if TYPE_CHECKING:
     from .service import UserIOService
@@ -1050,6 +1051,24 @@ class TelegramChannelAdapter(StoredChannelAdapter):
         return result
 
     def _refresh_history(
+        self, chat: dict[str, Any], *, before_id: int | None = None,
+        history_limit: int = 50,
+    ) -> dict[str, Any]:
+        key = (
+            self._user_id,
+            str(chat.get("account_ref") or ""),
+            str(chat.get("peer_id") or ""),
+            before_id,
+            history_limit,
+        )
+        return TELEGRAM_HISTORY_REFRESH.refresh(
+            key,
+            lambda: self._refresh_history_now(
+                chat, before_id=before_id, history_limit=history_limit,
+            ),
+        )
+
+    def _refresh_history_now(
         self, chat: dict[str, Any], *, before_id: int | None = None,
         history_limit: int = 50,
     ) -> dict[str, Any]:
