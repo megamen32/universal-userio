@@ -63,9 +63,10 @@ jobs:
           CONTEXT_TAG: ${{ steps.source.outputs.context_tag }}
         run: |
           mkdir -p "$RUNNER_TEMP/userio-context"
-          is_draft="$(gh release view "$CONTEXT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
-          [[ "$is_draft" == true ]] || {
-            echo '::error::Expected the temporary build-context release to remain a draft.'
+          is_temporary_prerelease="$(gh release view "$CONTEXT_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease --jq '.isPrerelease and (not .isDraft)')"
+          [[ "$is_temporary_prerelease" == true ]] || {
+            echo '::error::Expected a published temporary prerelease for the build context.'
             exit 1
           }
           gh release download "$CONTEXT_TAG" --repo "$GITHUB_REPOSITORY" \
