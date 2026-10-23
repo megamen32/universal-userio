@@ -1,0 +1,125 @@
+name: Build backend image artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full published main commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: userio-backend-image-${{ inputs.commit_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Validate source identity
+        id: source
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          [[ "$GITHUB_REPOSITORY" == 'megamen32/universal-userio' ]] || {
+            echo '::error::This workflow only builds the published UserIO repository.'
+            exit 1
+          }
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo '::error::commit_sha must be a full 40-character hexadecimal SHA.'
+            exit 1
+          }
+          sha="${REQUESTED_SHA,,}"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "context_tag=build-context-$sha" >> "$GITHUB_OUTPUT"
+          echo "image=universal-userio:sha-$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify source is published on main
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          git fetch origin main --no-tags
+          git merge-base --is-ancestor "$SOURCE_SHA" FETCH_HEAD
+
+      - name: Download the exact pinned build context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          CONTEXT_TAG: ${{ steps.source.outputs.context_tag }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/userio-context"
+          is_draft="$(gh release view "$CONTEXT_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          [[ "$is_draft" == true ]] || {
+            echo '::error::Expected the temporary build-context release to remain a draft.'
+            exit 1
+          }
+          gh release download "$CONTEXT_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern universal-userio-context.tar.gz --dir "$RUNNER_TEMP/userio-context"
+          tar -xzf "$RUNNER_TEMP/userio-context/universal-userio-context.tar.gz" \
+            -C "$RUNNER_TEMP/userio-context"
+          context_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' \
+            "$RUNNER_TEMP/userio-context/deploy/containers/release.json")"
+          [[ "$context_commit" == "$SOURCE_SHA" ]] || {
+            echo '::error::Build context commit does not match the requested source.'
+            exit 1
+          }
+
+      - name: Build a Docker-loadable backend image archive
+        id: build
+        env:
+          IMAGE: ${{ steps.source.outputs.image }}
+        run: |
+          builder="userio-backend-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "builder=$builder" >> "$GITHUB_OUTPUT"
+          docker buildx create --name "$builder" --driver docker-container --use
+          docker buildx build --builder "$builder" --platform linux/amd64 \
+            --file "$RUNNER_TEMP/userio-context/Dockerfile" --target backend \
+            --tag "$IMAGE" --output "type=docker,dest=$RUNNER_TEMP/universal-userio-backend.tar" \
+            "$RUNNER_TEMP/userio-context"
+          gzip -1 "$RUNNER_TEMP/universal-userio-backend.tar"
+          sha256sum "$RUNNER_TEMP/universal-userio-backend.tar.gz" \
+            | awk '{print "sha256=" $1}' >> "$GITHUB_OUTPUT"
+
+      - name: Upload the image for installation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: universal-userio-backend-${{ steps.source.outputs.sha }}
+          path: ${{ runner.temp }}/universal-userio-backend.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Record build receipt
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          IMAGE: ${{ steps.source.outputs.image }}
+          IMAGE_SHA256: ${{ steps.build.outputs.sha256 }}
+        run: |
+          {
+            echo "Source: \`$SOURCE_SHA\`"
+            echo "Image: \`$IMAGE\`"
+            echo "Docker archive SHA-256: \`$IMAGE_SHA256\`"
+            echo 'Artifact retention: 1 day.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove builder
+        if: always()
+        env:
+          BUILDER: ${{ steps.build.outputs.builder }}
+        run: |
+          if [[ -n "$BUILDER" ]]; then docker buildx rm "$BUILDER" || true; fi
