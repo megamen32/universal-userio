@@ -50,6 +50,14 @@ VOICE = {
     'agentcall-tts-shim.service': ('tts-fallback', ['python', '/usr/local/lib/agentcall/tts_shim.py']),
 }
 PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-container-platform.conf')
+BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
+    'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
+    'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
+    'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
+    'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
+    'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
+    'matrix_calls.py', 'telemost/meetings.py', 'static/telemost.html')) + tuple(
+    'deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs'))
 
 
 def install_platform_helper():
@@ -594,14 +602,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         raise RuntimeError('release receipt already exists; reconcile before another replacement')
     if receipt_directory.exists():
         raise RuntimeError('release directory already exists; reconcile incomplete intent')
-    paths = ['src/universal_userio/' + f for f in (
-        'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
-        'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
-        'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
-        'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
-        'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
-        'telemost/meetings.py', 'static/telemost.html')]
-    paths += ['deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs')]
+    paths = BACKEND_SOURCE_HASH_PATHS
     expected_hashes = {}
     for path in paths:
         pinned = subprocess.check_output(['git', '-C', ROOT, 'show', full_revision + ':' + path])

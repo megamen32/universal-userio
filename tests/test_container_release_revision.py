@@ -9,6 +9,7 @@ def test_reviewed_revision_label_does_not_fail_an_otherwise_identical_cutover():
     spec = importlib.util.spec_from_file_location('revision_release', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    assert 'src/universal_userio/matrix_calls.py' in module.BACKEND_SOURCE_HASH_PATHS
     previous = {'Image': 'old', 'Labels': {}, 'Env': ['SENTINEL=preserve'],
                 'Cmd': ['original-worker'], 'WorkingDir': '/opt/application'}
     frozen = copy.deepcopy(previous)
