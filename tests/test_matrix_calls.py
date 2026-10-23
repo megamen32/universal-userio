@@ -150,8 +150,17 @@ def test_non_owner_uses_its_owned_matrix_account_and_model_alias(tmp_path, monke
     record=MatrixCalls(service,tmp_path).start(user_id='other',account_ref='matrix:other',room_id='!r:hs',
         target='@b:hs',purpose='Проверить голос',request_id='other-unique-request',confirm=True)
     assert record['user_id']=='other'
+    assert record['agent_context']['call_mode']=='incoming_guest'
+    from types import SimpleNamespace
+    from universal_userio.voice.agentcall_realtime_bridge import FastAgentIncidentBrain
+    guest_brain=object.__new__(FastAgentIncidentBrain)
+    guest_brain.config=SimpleNamespace(fast_agent_enabled=True, fast_agent_bin='/bin/true',
+        fast_agent_python='/bin/true', fast_agent_mcp_script='/bin/true', llm_api_key='test-key')
+    guest_brain.agent_context=record['agent_context']
+    assert guest_brain.available is False
     assert record['voice_model']=='omniroute/minimax-combo-m3.1'
     durable=json.loads((tmp_path/record['call_id']/'call.json').read_text())
+    assert durable['agent_context']['call_mode']=='incoming_guest'
     assert sentinel not in json.dumps(record)
     assert sentinel not in json.dumps(durable)
     assert len(created)==1 and created[0]._args[-1]['token']==sentinel

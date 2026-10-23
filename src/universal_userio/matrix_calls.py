@@ -89,10 +89,15 @@ class MatrixCalls:
         display_account = next((a['id'] for a in self.service._store.accounts(user_id=user_id)
                                 if a['provider']=='matrix' and a['enabled'] and a['display_name']==target), account_ref)
         ai_settings = self.service._store.ai_settings(user_id=user_id)
+        effective_agent_context = (
+            {'call_mode':'incoming_guest'}
+            if user_id != self.service._store.default_user_id
+            else dict(agent_context or {})
+        )
         config = {'user_id': user_id, 'account_ref': account_ref, 'history_account_ref':display_account, 'room_id': room_id,
                   'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
                   **({'voice_model': ai_settings['model']} if isinstance(ai_settings, dict) and ai_settings.get('model') else {}),
-                  **({'agent_context':dict(agent_context)} if agent_context else {})}
+                  **({'agent_context':effective_agent_context} if effective_agent_context else {})}
         call_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id+'\0'+request_id))
         fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
         # Same request after a restart returns its receipt; it never rings twice.
