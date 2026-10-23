@@ -14,6 +14,7 @@
 | Test account A (not used in the latest call) | `@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com` | LHC Voice Caller Test |
 | Peer / callee | `@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com` | LHC Voice Peer Test |
 | UserIO call service | `@aiadmin:chat.bezrabotnyi.com` | Existing connected Matrix caller account |
+| Owner caller (only for the explicitly authorized Secretary SDK check) | `@bezrabotnyi:chat.bezrabotnyi.com` | Existing owner Matrix account; never a QA peer |
 
 ## Test room
 
@@ -27,6 +28,7 @@
 - Room `!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com` was created by test account A for the two-UserIO-principal call test.
 - It is private/invite-only, non-federated and unencrypted; the only joined members are test accounts A and B. The `org.matrix.msc3401.call.member` power level is 0 so both fixture users can publish their RTC membership events.
 - The room is ready for the two-user call flow. Scripted calls and their limitations are recorded below; the per-user UserIO route has not yet been deployed or exercised in this room.
+- These fixture rooms do not include `@bezrabotnyi` unless a live membership check proves otherwise. An owner-originated canary needs an already joined private room with exactly one QA peer; do not infer membership from the UserIO account link.
 
 ## UserIO test principals
 
@@ -44,13 +46,13 @@
 - Matrix bot passwords and access tokens are stored only in BotFather's encrypted vault at `/home/roomhacker/matrix-synapse/matrix-botfather/data/secrets.enc`. The one-time UserIO API tokens for the two principals are no longer available; they are not stored in BotFather's vault.
 - Do not copy credentials into this file, task notes, chat, logs, shell output, or UserIO fixtures.
 - Use BotFather's owner-only credential and room commands for Matrix fixtures. For UserIO caller access, use `tests/manual/start_matrix_rtc_fixture_call.py` immediately before the authorized fixture API call; it never prints or stores the bearer token and revokes it after reconciliation.
-- The operator account `@bezrabotnyi:chat.bezrabotnyi.com` is the owner only. Do not call, impersonate, or use it as a test peer.
+- `@bezrabotnyi:chat.bezrabotnyi.com` remains the owner identity. For the owner's explicit synthetic Secretary SDK acceptance only, it may be the authenticated caller to one existing private QA peer; never use the owner account as the QA peer, never impersonate it, and never place a phone/cellular call.
 - Do not use or invite `@hermesbot`.
 
 ## Allowed test journey
 
-1. Use only the two listed identities on the listed homeserver.
-2. Before a call test, confirm a private test room and a real MatrixRTC-capable receiving client for the peer identity. Account issuance alone does not provide an RTC answerer.
+1. QA principals remain the two listed ordinary fixture identities. The owner account may originate only the explicitly authorized Secretary SDK test into one of those QA peers; it never replaces or elevates a QA principal.
+2. Before a call test, confirm that the selected private test room contains the authenticated caller and exactly one QA peer, and that a real MatrixRTC-capable receiving client is active for that peer. Account issuance alone does not provide an RTC answerer.
 3. Exercise UserIO's existing Matrix call path only; capture the exact UserIO call receipt and recording/transcript references without copying secrets.
 4. Check turn boundaries, stale speech suppression, Russian pronunciation of names, and contextual answers. Keep the existing owner-call canary separate.
 

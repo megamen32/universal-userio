@@ -102,9 +102,9 @@ class MatrixCalls:
                                 if a['provider']=='matrix' and a['enabled'] and a['display_name']==target), account_ref)
         ai_settings = self.service._store.ai_settings(user_id=user_id)
         effective_agent_context = (
-            {'call_mode':'incoming_guest'}
-            if user_id != self.service._store.default_user_id
-            else dict(agent_context or {})
+            {'call_mode':'incoming_guest'} if user_id != self.service._store.default_user_id
+            else dict(agent_context) if agent_context is not None
+            else {'call_mode':'incoming'}
         )
         config = {'user_id': user_id, 'account_ref': account_ref, 'history_account_ref':display_account, 'room_id': room_id,
                   'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
