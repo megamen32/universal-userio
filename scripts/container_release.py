@@ -11,7 +11,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import sqlite3
@@ -26,10 +26,12 @@ CONFIG = Path('/etc/userio-containers')
 BACKUP = Path('/var/backups/universal-userio/containers-20261015')
 VOICE_ARCHIVE_ROOT = Path('/var/backups/universal-userio')
 VOICE_ARCHIVE_LOCK = Path('/run/lock/userio-voice-archive.lock')
+VOICE_PROC_ROOT = Path('/proc')
 VOICE_CONTAINER = 'userio-voice'
 VOICE_IMAGE_REPOSITORY = 'ghcr.io/megamen32/universal-userio-voice'
 VOICE_ROLLBACK_PREFIX = 'userio-voice-prev-'
 VOICE_CONFIG_FILES = ('compose.host.json', 'voice.json', 'processes.json')
+VOICE_CONFIG_DESTINATION = '/etc/userio-containers'
 VOICE_SECRETARY_CONFIGS = {
     '/etc/agentcall-secretary-voice.json',
     '/etc/agentcall-secretary-identities.json',
@@ -575,6 +577,89 @@ def _archive_hash(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _archive_read_file(path: Path, *, max_bytes=512 * 1024 * 1024):
+    """Read through the process mount namespace and bind the bytes to an inode."""
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise RuntimeError('mounted archive input is not a regular file')
+            data = stream.read(max_bytes + 1)
+    except OSError as error:
+        raise RuntimeError('mounted archive input is unavailable') from error
+    if len(data) > max_bytes:
+        raise RuntimeError('mounted archive input exceeds archive bounds')
+    identity = {'device': info.st_dev, 'inode': info.st_ino, 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
+    return data, identity
+
+
+def _archive_directory_identity(path: Path):
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise RuntimeError('mounted archive directory is unavailable') from error
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError('mounted archive path is not a directory')
+    return {'device': info.st_dev, 'inode': info.st_ino}
+
+
+def _archive_verify_file(path: Path, expected_hash: str):
+    try:
+        data, _ = _archive_read_file(path)
+    except RuntimeError:
+        return False
+    return _archive_hash(data) == expected_hash
+
+
+def _archive_rename_noreplace(source: Path, destination: Path):
+    """Publish a completed archive atomically, refusing any existing target."""
+    import ctypes
+    import errno
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, 'renameat2', None)
+    if renameat2 is None:
+        raise RuntimeError('atomic no-overwrite archive publication is unsupported')
+    renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1)  # AT_FDCWD, RENAME_NOREPLACE
+    if result != 0:
+        code = ctypes.get_errno()
+        if code == errno.EEXIST:
+            raise RuntimeError('archive destination already exists; reconcile before retrying')
+        raise RuntimeError('cannot atomically publish completed Voice archive')
+
+
+def _archive_process_identity(container):
+    """Identify the exact init process and mount namespace exposed by Docker."""
+    pid = container.get('State', {}).get('Pid')
+    if type(pid) is not int or pid <= 1:
+        raise RuntimeError('running Voice container has no usable init PID')
+    proc = VOICE_PROC_ROOT / str(pid)
+    try:
+        raw = (proc / 'stat').read_bytes()
+        close = raw.rfind(b')')
+        fields = raw[close + 2:].split()
+        start_time = int(fields[19])
+        mount_namespace_inode = (proc / 'ns' / 'mnt').stat().st_ino
+        if not (proc / 'root').is_dir():
+            raise OSError('container root is unavailable')
+    except (OSError, ValueError, IndexError) as error:
+        raise RuntimeError('cannot identify the live Voice mount namespace') from error
+    return {'pid': pid, 'start_time': start_time, 'mount_namespace_inode': mount_namespace_inode}
+
+
+def _archive_container_view_path(container, destination):
+    """Return a lexical /proc/PID/root path; never realpath proc's magic link."""
+    identity = _archive_process_identity(container)
+    logical = PurePosixPath(str(destination))
+    if not logical.is_absolute() or any(part in {'.', '..'} for part in logical.parts):
+        raise RuntimeError('container mount destination is not a safe absolute path')
+    return VOICE_PROC_ROOT / str(identity['pid']) / 'root' / Path(*logical.parts[1:])
+
+
 def _archive_has_owner_mode(path: Path, mode: int):
     info = path.stat()
     return info.st_uid == 0 and info.st_gid == 0 and stat.S_IMODE(info.st_mode) == mode
@@ -607,26 +692,29 @@ def _archive_write_json(root: Path, relative: str, value):
 
 def _archive_tree(root: Path):
     """Hash a mounted source tree without copying its source or executing it."""
-    root = root.resolve(strict=True)
     if not root.is_dir():
         raise RuntimeError('mounted SDK source is not a directory')
     entries = []
     byte_count = 0
+    root_identity = _archive_directory_identity(root)
     for path in sorted(root.rglob('*')):
         if '.git' in path.relative_to(root).parts:
             continue
+        if len(entries) >= 10000:
+            raise RuntimeError('mounted SDK source exceeds archive bounds')
         if path.is_symlink():
             entries.append({'path': path.relative_to(root).as_posix(), 'symlink': os.readlink(path)})
         elif path.is_file():
-            data = path.read_bytes()
+            data, identity = _archive_read_file(path)
             byte_count += len(data)
-            if len(entries) >= 10000 or byte_count > 512 * 1024 * 1024:
+            if byte_count > 512 * 1024 * 1024:
                 raise RuntimeError('mounted SDK source exceeds archive bounds')
-            entries.append({'path': path.relative_to(root).as_posix(), 'sha256': _archive_hash(data), 'size': len(data)})
+            entries.append({'path': path.relative_to(root).as_posix(), 'sha256': _archive_hash(data),
+                            'size': len(data), 'device': identity['device'], 'inode': identity['inode']})
     if not entries:
         raise RuntimeError('mounted SDK source is empty')
     encoded = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
-    return entries, _archive_hash(encoded), byte_count
+    return entries, _archive_hash(encoded), byte_count, root_identity
 
 
 def _archive_mount(container, destination_prefix, *, exact=False):
@@ -637,9 +725,9 @@ def _archive_mount(container, destination_prefix, *, exact=False):
         raise RuntimeError(f'expected one mounted source for {destination_prefix}')
     mount = mounts[0]
     source = Path(str(mount.get('Source', '')))
-    if not source.is_absolute() or not source.exists():
+    if not source.is_absolute():
         raise RuntimeError(f'mounted source unavailable for {destination_prefix}')
-    return mount, source.resolve(strict=True)
+    return mount, source
 
 
 def _archive_config_sources(container):
@@ -649,16 +737,23 @@ def _archive_config_sources(container):
             continue
         destination = str(mount.get('Destination', ''))
         source = Path(str(mount.get('Source', '')))
-        if destination == str(CONFIG) and source.is_dir():
+        if not source.is_absolute():
+            continue
+        if destination == VOICE_CONFIG_DESTINATION:
+            mounted_root = _archive_container_view_path(container, destination)
+            _archive_directory_identity(mounted_root)
             for name in VOICE_CONFIG_FILES:
-                path = source / name
-                if not path.is_file():
+                path = mounted_root / name
+                if not path.is_file() or path.is_symlink():
                     raise RuntimeError(f'required mounted config is missing: {name}')
-                sources[f'userio-containers/{name}'] = path
+                sources[f'userio-containers/{name}'] = {
+                    'path': path, 'mount_source': str(source), 'mount_destination': destination}
         elif destination in VOICE_SECRETARY_CONFIGS:
-            if not source.is_file():
+            path = _archive_container_view_path(container, destination)
+            if not path.is_file() or path.is_symlink():
                 raise RuntimeError('mounted Secretary configuration is unavailable')
-            sources[destination.rsplit('/', 1)[1]] = source
+            sources[destination.rsplit('/', 1)[1]] = {
+                'path': path, 'mount_source': str(source), 'mount_destination': destination}
     if not all(f'userio-containers/{name}' in sources for name in VOICE_CONFIG_FILES):
         raise RuntimeError('effective UserIO Voice config mount is incomplete')
     return sources
@@ -698,6 +793,7 @@ def _archive_voice_locked(receipt_directory: Path):
     container_raw, container = _archive_container(VOICE_CONTAINER)
     if container.get('State', {}).get('Running') is not True:
         raise RuntimeError('canonical userio-voice container is not running')
+    process_identity = _archive_process_identity(container)
     container_id = str(container.get('Id', ''))
     image_id = str(container.get('Image', ''))
     if not container_id or not image_id.startswith('sha256:'):
@@ -716,29 +812,45 @@ def _archive_voice_locked(receipt_directory: Path):
     if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise RuntimeError('live voice image has no source revision label')
 
-    bridge_mount, bridge_root = _archive_mount(container, '/usr/local/lib/agentcall', exact=True)
+    bridge_mount, bridge_source = _archive_mount(container, '/usr/local/lib/agentcall', exact=True)
+    bridge_root = _archive_container_view_path(container, bridge_mount.get('Destination'))
+    bridge_root_identity = _archive_directory_identity(bridge_root)
     bridge_path = bridge_root / 'agentcall_realtime_bridge.py'
-    if not bridge_path.is_file():
+    if not bridge_path.is_file() or bridge_path.is_symlink():
         raise RuntimeError('mounted AgentCall bridge source is missing')
-    bridge_path = bridge_path.resolve(strict=True)
-    if bridge_root not in bridge_path.parents:
-        raise RuntimeError('mounted AgentCall bridge source escapes its source tree')
-    bridge_hash = _archive_hash(bridge_path.read_bytes())
+    bridge_bytes, bridge_identity = _archive_read_file(bridge_path)
+    bridge_hash = _archive_hash(bridge_bytes)
 
-    sdk_mount, sdk_root = _archive_mount(container, '/opt/exmanager-voice/')
-    sdk_candidates = [p for p in sdk_root.rglob('agentcall_secretary_voice.py') if p.is_file()]
+    sdk_mount, sdk_source = _archive_mount(container, '/opt/exmanager-voice/')
+    sdk_root = _archive_container_view_path(container, sdk_mount.get('Destination'))
+    sdk_root_identity = _archive_directory_identity(sdk_root)
+    sdk_candidates = [p for p in sdk_root.rglob('agentcall_secretary_voice.py')
+                      if p.is_file() and not p.is_symlink()]
     if len(sdk_candidates) != 1:
         raise RuntimeError('mounted Secretary SDK entrypoint is missing or ambiguous')
-    sdk_entry = sdk_candidates[0].resolve(strict=True)
-    if sdk_root not in sdk_entry.parents:
-        raise RuntimeError('mounted Secretary SDK entrypoint escapes its source tree')
-    sdk_tree, sdk_tree_hash, sdk_tree_bytes = _archive_tree(sdk_root)
-    sdk_hash = _archive_hash(sdk_entry.read_bytes())
+    sdk_entry = sdk_candidates[0]
+    try:
+        sdk_entry.relative_to(sdk_root)
+    except ValueError as error:
+        raise RuntimeError('mounted Secretary SDK entrypoint escapes its source tree') from error
+    sdk_tree, sdk_tree_hash, sdk_tree_bytes, sdk_tree_root_identity = _archive_tree(sdk_root)
+    sdk_entry_bytes, sdk_entry_identity = _archive_read_file(sdk_entry)
+    sdk_hash = _archive_hash(sdk_entry_bytes)
 
     config_sources = _archive_config_sources(container)
     config_bytes = {}
-    for logical, path in sorted(config_sources.items()):
-        config_bytes[logical] = path.read_bytes()
+    config_identities = {}
+    config_mount_views = {}
+    for logical, mounted in sorted(config_sources.items()):
+        data, identity = _archive_read_file(mounted['path'])
+        config_bytes[logical] = data
+        config_identities[logical] = identity
+        config_mount_views[logical] = {
+            'mount_source_name': Path(mounted['mount_source']).name,
+            'mount_destination': mounted['mount_destination'],
+            'consumer_device': identity['device'],
+            'consumer_inode': identity['inode'],
+        }
     try:
         redacted_files = {name: _redacted_config(json.loads(data)) for name, data in config_bytes.items()}
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -789,17 +901,25 @@ def _archive_voice_locked(receipt_directory: Path):
         _, current = _archive_container(VOICE_CONTAINER)
         if (current.get('Id') != container_id or current.get('Image') != image_id
                 or current.get('State', {}).get('Running') is not True
+                or current.get('State', {}).get('Pid') != process_identity['pid']
                 or current.get('Config') != container.get('Config')
                 or current.get('HostConfig') != container.get('HostConfig')
                 or current.get('Mounts') != container.get('Mounts')):
             raise RuntimeError('live Voice container changed during archive capture')
-        if _archive_hash(bridge_path.read_bytes()) != bridge_hash:
+        if _archive_process_identity(current) != process_identity:
+            raise RuntimeError('live Voice process or mount namespace changed during archive capture')
+        bridge_now, bridge_identity_now = _archive_read_file(bridge_path)
+        if _archive_hash(bridge_now) != bridge_hash or bridge_identity_now != bridge_identity:
             raise RuntimeError('mounted AgentCall bridge changed during archive capture')
-        _, verify_tree_hash, _ = _archive_tree(sdk_root)
-        if verify_tree_hash != sdk_tree_hash:
+        _, verify_tree_hash, _, verify_sdk_root_identity = _archive_tree(sdk_root)
+        sdk_entry_now, sdk_entry_identity_now = _archive_read_file(sdk_entry)
+        if (verify_tree_hash != sdk_tree_hash or verify_sdk_root_identity != sdk_tree_root_identity
+                or _archive_hash(sdk_entry_now) != sdk_hash or sdk_entry_identity_now != sdk_entry_identity):
             raise RuntimeError('mounted Secretary SDK changed during archive capture')
-        for logical, path in config_sources.items():
-            if _archive_hash(path.read_bytes()) != _archive_hash(config_bytes[logical]):
+        for logical, mounted in config_sources.items():
+            config_now, identity_now = _archive_read_file(mounted['path'])
+            if (_archive_hash(config_now) != _archive_hash(config_bytes[logical])
+                    or identity_now != config_identities[logical]):
                 raise RuntimeError('mounted Voice config changed during archive capture')
 
         manifest = {
@@ -809,13 +929,17 @@ def _archive_voice_locked(receipt_directory: Path):
             'container': {'name': VOICE_CONTAINER, 'id': container_id, 'state': 'running'},
             'image': {'reference': container.get('Config', {}).get('Image'), 'image_id': image_id,
                       'immutable_repo_digests': repo_digests, 'revision': revision},
-            'bridge': {'mount_source_name': bridge_root.name, 'mount_destination': bridge_mount.get('Destination'),
+            'container_process': process_identity,
+            'bridge': {'mount_source_name': bridge_source.name, 'mount_destination': bridge_mount.get('Destination'),
+                       'consumer_device': bridge_identity['device'], 'consumer_inode': bridge_identity['inode'],
                        'file': 'agentcall_realtime_bridge.py', 'sha256': bridge_hash},
-            'secretary_sdk': {'mount_source_name': sdk_root.name, 'mount_destination': sdk_mount.get('Destination'),
+            'secretary_sdk': {'mount_source_name': sdk_source.name, 'mount_destination': sdk_mount.get('Destination'),
+                              'consumer_device': sdk_root_identity['device'], 'consumer_inode': sdk_root_identity['inode'],
                               'entrypoint': sdk_entry.relative_to(sdk_root).as_posix(), 'entrypoint_sha256': sdk_hash,
                               'tree_sha256': sdk_tree_hash, 'tree_files': len(sdk_tree), 'tree_bytes': sdk_tree_bytes},
             'effective_config': {'redacted_fingerprint_sha256': config_fingerprint,
                                  'captured_files': sorted(config_bytes),
+                                 'mount_views': config_mount_views,
                                  'secret_values_stored_only_in_root_snapshot': True},
             'rollback': rollback,
             'snapshot_files_sha256': file_hashes,
@@ -832,7 +956,7 @@ def _archive_voice_locked(receipt_directory: Path):
         sums = ''.join(f'{digest}  {name}\n' for name, digest in sorted(file_hashes.items())).encode()
         sums_sha = _archive_write(temporary, 'SHA256SUMS', sums)
         for relative, expected_hash in file_hashes.items():
-            if _archive_hash((temporary / relative).read_bytes()) != expected_hash:
+            if not _archive_verify_file(temporary / relative, expected_hash):
                 raise RuntimeError('archive snapshot readback hash mismatch')
         for path in temporary.rglob('*'):
             expected_mode = 0o700 if path.is_dir() else 0o600
@@ -840,7 +964,7 @@ def _archive_voice_locked(receipt_directory: Path):
                 raise RuntimeError('archive snapshot is not root-only')
         if receipt_directory.exists() or receipt_directory.is_symlink():
             raise RuntimeError('archive destination appeared during capture')
-        os.replace(temporary, receipt_directory)
+        _archive_rename_noreplace(temporary, receipt_directory)
         directory = os.open(archive_root, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(directory)
