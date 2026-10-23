@@ -31,6 +31,7 @@ import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from
 import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
 import { SendAttemptLedger, attemptState } from "./send-attempts.mjs";
 import { attachmentResponseHeaders } from "./attachment-response.mjs";
+import { historyEvidence } from './history-evidence.mjs';
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { Transform, pipeline } from "node:stream";
@@ -663,6 +664,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
   const hasMore = messages.length === pageLimit && oldestId > 0;
   let posted = 0;
   const postedIds = [];
+  const messageEvidence = [];
   for (const message of messages) {
     if (!message || !message.date) continue;
     const value = await envelope(chatKey, label, message, client, self,
@@ -671,6 +673,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
     await postInbox(accountId, value);
     posted += 1;
     postedIds.push(Number(message.id));
+    messageEvidence.push(historyEvidence(message, value.attachments || []));
   }
   const unread = providerUnreadCount(dialog);
   const state = await postUserIO("/v1/telegram/mirror-state", {
@@ -698,7 +701,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
       {account_id:accountId, peer_id:chatKey, deleted_ids:deleted});
   }
   return { posted, fetched: messages.length, oldest_id: oldestId, has_more: hasMore,
-    message_ids: postedIds };
+    message_ids: postedIds, message_evidence: messageEvidence };
 }
 
 async function ingestProviderState(slot, client, accountId, update) {
@@ -1509,7 +1512,7 @@ http.createServer(async (req, res) => {
       res.writeHead(200, {"content-type":"application/json"});
       return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey,
             mirrored:page.posted, fetched:page.fetched, oldest_id:page.oldest_id,
-            has_more:page.has_more, message_ids:page.message_ids,
+            has_more:page.has_more, message_ids:page.message_ids, message_evidence:page.message_evidence,
             provider_read_acknowledged:false, scan}));
     } catch (error) {
       res.writeHead(400, {"content-type":"application/json"});

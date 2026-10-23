@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 
 
 def resolve_history(store, draft, *, conversation, account_ref, peer_id, reader,
@@ -44,22 +45,24 @@ def resolve_history(store, draft, *, conversation, account_ref, peer_id, reader,
         return unknown('receipt_message_ids_missing')
     matches = []
     dates = []
-    for native_id in ids:
-        # Only IDs in THIS provider response are eligible. Never accept a stale
-        # cached body or an unscoped message from another connected account.
+    records = page.get('message_evidence')
+    if (not isinstance(records, list) or len(records) != len(ids)
+            or any(not isinstance(m, dict) for m in records)
+            or {m.get('message_id') for m in records} != set(ids)):
+        return unknown('fresh_payload_fingerprints_missing')
+    expected_hash = hashlib.sha256(draft.body.encode('utf-8')).hexdigest()
+    for message in records:
+        native_id = message['message_id']
+        # Fingerprints are calculated directly from GetHistory's native objects.
+        # A retained mirror may have an old body, so it is never the authority.
         mid = f'{account_ref}|{peer_id}:{native_id}'
-        message = store.message(mid, source='telegram', user_id=user_id)
-        if not message or message.get('conversation_id') != draft.conversation_id:
-            continue
-        timestamp = float(message.get('received_at') or 0)
+        timestamp = float(message.get('date') or 0)
         if not math.isfinite(timestamp):
             continue
         dates.append(timestamp)
-        files = [a for a in message.get('attachments', [])
-                 if a.get('kind') not in ('telegram_routing', 'webpage')]
-        if (message.get('direction') == 'outgoing' and message.get('body') == draft.body
-                and start <= timestamp <= end and not message.get('edited_at') and not files
-                and not message.get('provider_reply_to') and not message.get('provider_thread_id')):
+        if (message.get('outgoing') is True and message.get('body_sha256') == expected_hash
+                and start <= timestamp <= end and message.get('edited') is False
+                and message.get('has_attachments') is False and message.get('has_reply_context') is False):
             matches.append(mid)
     evidence['fetched_message_count'] = len(ids)
     if len(matches) > 1:
@@ -73,7 +76,8 @@ def resolve_history(store, draft, *, conversation, account_ref, peer_id, reader,
             expected_conversation_id=draft.conversation_id)
         if not applied['applied']:
             return unknown('attempt_or_payload_changed')
-        evidence.update(reason='exact_outgoing_match', matched_message_id=mid)
+        evidence.update(reason='exact_outgoing_match', matched_message_id=mid,
+                        body_sha256=expected_hash, proof_source='fresh_native_provider_payload')
         return {'resolution': 'delivered', 'draft_id': draft.id, 'status': applied['status'],
                 'receipt': receipt, 'reason': 'provider_history_exact_outgoing_match',
                 'retry_allowed': False, 'evidence': {'history': evidence}}

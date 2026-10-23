@@ -1,5 +1,6 @@
 """Receipt-first, exact provider-history fallback; never replay an uncertain send."""
 import json
+import hashlib
 import io
 import time
 import urllib.error
@@ -23,12 +24,23 @@ class HistoryOutbox(_JournalOutbox):
 
     def reconcile_history(self, **kwargs):
         self.requests.append(kwargs)
-        return dict(self.page)
+        page = dict(self.page)
+        page['message_evidence'] = []
+        for native_id in page['message_ids']:
+            m = self.store.message('telegram:540308572|-1003724214344:' + str(native_id), source='telegram')
+            if m:
+                page['message_evidence'].append({'message_id': native_id, 'date': m['received_at'],
+                    'outgoing': m['direction'] == 'outgoing',
+                    'body_sha256': hashlib.sha256(m['body'].encode()).hexdigest(),
+                    'edited': bool(m.get('edited_at')), 'has_reply_context': bool(m.get('provider_reply_to') or m.get('provider_thread_id')),
+                    'has_attachments': any(a['kind'] not in ('telegram_routing', 'webpage') for a in m.get('attachments', []))})
+        return page
 
 
 def scenario(tmp_path, *, state='absent', direction='outgoing', body=None, age=1):
     outbox = HistoryOutbox(state)
     service, draft_id = _telegram_service(tmp_path, outbox)
+    outbox.store = service._store
     with pytest.raises(RuntimeError):
         service.approve(draft_id)
     draft = service._store.draft(draft_id)
@@ -156,3 +168,16 @@ def test_history_adapter_honors_429_without_leaking_response_text():
         outbox.reconcile_history(account_ref='telegram:1', peer_id='2')
     assert error.value.retry_after_seconds == 123
     assert 'private' not in str(error.value)
+
+
+def test_stale_cached_text_is_never_accepted_instead_of_fresh_provider_payload(tmp_path):
+    service, draft_id, outbox = scenario(tmp_path)
+    original = outbox.reconcile_history
+    def actual_provider_text_changed(**kwargs):
+        page = original(**kwargs)
+        page['message_evidence'][0]['body_sha256'] = hashlib.sha256(b'actual different text').hexdigest()
+        return page
+    outbox.reconcile_history = actual_provider_text_changed
+    TelegramDeliveryReconciliationWorker(service).run_once()
+    assert service._store.draft(draft_id).status == 'sending'
+    assert len(outbox.sent) == 1
