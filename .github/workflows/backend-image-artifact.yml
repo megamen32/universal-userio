@@ -69,9 +69,13 @@ jobs:
             exit 1
           }
           gh release download "$CONTEXT_TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern universal-userio-context.tar.gz --dir "$RUNNER_TEMP/userio-context"
-          tar -xzf "$RUNNER_TEMP/userio-context/universal-userio-context.tar.gz" \
-            -C "$RUNNER_TEMP/userio-context"
+            --pattern 'universal-userio-*-context.tar.gz' --dir "$RUNNER_TEMP/userio-context"
+          archives=("$RUNNER_TEMP"/userio-context/universal-userio-*-context.tar.gz)
+          [[ ${#archives[@]} == 1 && -f "${archives[0]}" ]] || {
+            echo '::error::Expected exactly one pinned build-context archive.'
+            exit 1
+          }
+          tar -xzf "${archives[0]}" -C "$RUNNER_TEMP/userio-context"
           context_commit="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' \
             "$RUNNER_TEMP/userio-context/deploy/containers/release.json")"
           [[ "$context_commit" == "$SOURCE_SHA" ]] || {
