@@ -2123,8 +2123,13 @@ class SQLiteUserIOStore:
                 FROM messages WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                 (user_id, message.source, message.message_id, conversation_id)).fetchone()
             if previous is not None:
+                edited_at = message.edited_at or None
+                if message.source == "telegram" and message.reconciliation and edited_at is not None:
+                    # Native history can arrive out of order. Never roll the
+                    # stored provider edit clock backwards on an older page.
+                    edited_at = max(float(previous["edited_at"] or 0.0), float(edited_at))
                 if (previous["direction"] != message.direction or previous["received_at"] != message.received_at
-                        or previous["edited_at"] != (message.edited_at or None)
+                        or previous["edited_at"] != edited_at
                         or (message.source=='sms' and message.reconciliation and previous['body']!=message.body)):
                     self._invalidate_message_summary(user_id, message.source, message.message_id)
                 self._connection.execute("""UPDATE messages SET direction=?,received_at=?,
@@ -2133,7 +2138,7 @@ class SQLiteUserIOStore:
                     provider_thread_id=CASE WHEN provider_thread_id='' THEN ? ELSE provider_thread_id END
                     WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                     (message.direction, message.received_at, message.provider_read, int(message.sender_is_bot),
-                     message.edited_at or None, message.provider_reply_to, message.provider_thread_id,
+                     edited_at, message.provider_reply_to, message.provider_thread_id,
                      user_id, message.source, message.message_id, conversation_id))
                 if message.source=='sms' and message.reconciliation and message.message_id.startswith('sms-native:'):
                     self._connection.execute("UPDATE messages SET body=? WHERE user_id=? AND source='sms' AND message_id=? AND conversation_id=?", (message.body,user_id,message.message_id,conversation_id))
@@ -2266,40 +2271,69 @@ class SQLiteUserIOStore:
                 # A genuine edit must overwrite the stale mirror body without
                 # becoming a new arrival: no workspace event, no triage.
                 existing = self._connection.execute(
-                    "SELECT body FROM messages WHERE user_id=? AND source=? AND message_id=?",
-                    (user_id, message.source, message.message_id),
+                    "SELECT body,edited_at FROM messages WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?",
+                    (user_id, message.source, message.message_id, conversation_id),
                 ).fetchone()
                 old_body = str(existing["body"] or "") if existing else ""
                 new_body = str(message.body or "")
-                if message.source not in {"telegram", "sms"}:
-                    new_body = new_body.strip()
-                old_placeholder = (not old_body.strip()) or (
-                    old_body.strip().startswith("[") and old_body.strip().endswith("]")
-                )
-                new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
-                if old_placeholder and new_is_text:
-                    self._invalidate_message_summary(user_id, message.source, message.message_id)
-                    self._connection.execute(
-                        "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
-                        (new_body, user_id, message.source, message.message_id),
+                if message.source == "telegram" and message.reconciliation:
+                    # Only a plain native-history edit can replace a Telegram
+                    # body. Preserve media/transcript enrichment, while still
+                    # allowing routing and webpage-preview metadata. This is
+                    # exact provider text: square brackets are valid content.
+                    text_attachment_kinds = {"telegram_routing", "webpage"}
+                    plain_text_reconciliation = all(
+                        isinstance(attachment, dict)
+                        and str(attachment.get("kind") or "").lower() in text_attachment_kinds
+                        and "transcript" not in attachment
+                        and not attachment.get("transcription_status")
+                        for attachment in (message.attachments or ())
                     )
-                    self._connection.execute(
-                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
-                        (now, user_id, conversation_id),
+                    incoming_edit_at = float(message.edited_at or 0.0)
+                    previous_edit_at = float(existing["edited_at"] or 0.0) if existing else 0.0
+                    if (existing is not None and plain_text_reconciliation and new_body
+                            and new_body != old_body and incoming_edit_at > 0
+                            and incoming_edit_at >= previous_edit_at):
+                        self._invalidate_message_summary(user_id, message.source, message.message_id)
+                        self._connection.execute(
+                            """UPDATE messages SET body=?,edited_at=?
+                               WHERE user_id=? AND source='telegram' AND message_id=? AND conversation_id=?""",
+                            (new_body, incoming_edit_at, user_id, message.message_id, conversation_id),
+                        )
+                        self._connection.execute(
+                            "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                            (now, user_id, conversation_id),
+                        )
+                else:
+                    if message.source not in {"telegram", "sms"}:
+                        new_body = new_body.strip()
+                    old_placeholder = (not old_body.strip()) or (
+                        old_body.strip().startswith("[") and old_body.strip().endswith("]")
                     )
-                elif new_is_text and new_body != old_body:
-                    self._invalidate_message_summary(user_id, message.source, message.message_id)
-                    edited_at = ((float(message.edited_at) if message.edited_at else None)
-                        if message.source == 'yandex' else float(message.edited_at or 0.0) or now)
-                    self._connection.execute(
-                        """UPDATE messages SET body=?,edited_at=?
-                           WHERE user_id=? AND source=? AND message_id=?""",
-                        (new_body, edited_at, user_id, message.source, message.message_id),
-                    )
-                    self._connection.execute(
-                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
-                        (now, user_id, conversation_id),
-                    )
+                    new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
+                    if old_placeholder and new_is_text:
+                        self._invalidate_message_summary(user_id, message.source, message.message_id)
+                        self._connection.execute(
+                            "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
+                            (new_body, user_id, message.source, message.message_id),
+                        )
+                        self._connection.execute(
+                            "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                            (now, user_id, conversation_id),
+                        )
+                    elif new_is_text and new_body != old_body:
+                        self._invalidate_message_summary(user_id, message.source, message.message_id)
+                        edited_at = ((float(message.edited_at) if message.edited_at else None)
+                            if message.source == 'yandex' else float(message.edited_at or 0.0) or now)
+                        self._connection.execute(
+                            """UPDATE messages SET body=?,edited_at=?
+                               WHERE user_id=? AND source=? AND message_id=?""",
+                            (new_body, edited_at, user_id, message.source, message.message_id),
+                        )
+                        self._connection.execute(
+                            "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                            (now, user_id, conversation_id),
+                        )
         return inserted
 
     def telegram_mirror_state(
