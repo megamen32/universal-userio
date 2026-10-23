@@ -1,6 +1,7 @@
 """Personal read-only credentials: explicit read operations, default deny."""
 
 READ_ONLY_TOOLS = frozenset({
+    'userio.messenger.has_contacted',
     'userio.meetings.telemost.get',
     'userio.calls.matrix.get',
     'userio.calls.telegram.get',

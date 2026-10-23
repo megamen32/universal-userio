@@ -372,6 +372,13 @@ TOOL_SPECS = (
 
 
 MESSENGER_SPECS = (
+    ToolSpec('userio.messenger.has_contacted',
+        'Check one exact existing direct contact conversation for historical outgoing. Metadata only; no sends, identity resolution or read ACK. '
+        'CONTACTED needs outgoing evidence; NOT_CONTACTED needs certified complete accessible scope; otherwise UNKNOWN. Other accounts/channels and deleted history are excluded.',
+        schema({'account_ref':{'type':'string'}, 'conversation_id':{'type':'string'},
+                'limit':{'type':'integer','minimum':1,'maximum':100,'default':100},
+                'max_pages':{'type':'integer','minimum':1,'maximum':10,'default':5},
+                'refresh':{'type':'boolean','default':False}}, ['account_ref','conversation_id'])),
     ToolSpec('userio.messenger.upload',
         'Stage a private file for one source-bound approved send. Telegram uses the selected account upload limit; other providers use their published limit. Bytes expire after 900s. No send, URLs or local paths. Returns upload_id and metadata only.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},
@@ -560,6 +567,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.events': 'read',
     'userio.messenger.capabilities': 'read',
     'userio.messenger.history': 'read',
+    'userio.messenger.has_contacted': 'read',
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
