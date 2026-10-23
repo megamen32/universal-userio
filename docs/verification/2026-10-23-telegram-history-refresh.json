@@ -1,0 +1,34 @@
+{
+  "date_utc": "2026-10-23",
+  "backend_source_revision": "baa27646a0f152e734bd3636976cb58fda51ffef",
+  "frontend_source_revision": "643e77b552a494857bf5b585f688c9df231b7095",
+  "scope": [
+    "Resolve uncertain Telegram delivery from exact native history evidence without resending",
+    "Wait at most two seconds for chat refresh, then return retained history while the same refresh continues",
+    "Reuse recent successful completion and update the web freshness state"
+  ],
+  "published_source_regression_tests": {"passed": 97, "failed": 0},
+  "installed_runtime_identity_verified": true,
+  "real_browser_history_read": {
+    "message_count": 50,
+    "provider_wait_budget_seconds": 2,
+    "completed_result_freshness_seconds": 10,
+    "samples": [
+      {"elapsed_ms": 2639, "http_status": 200, "fresh": false, "refreshing": true},
+      {"elapsed_ms": 306, "http_status": 200, "fresh": true, "refreshing": false, "reused": true},
+      {"elapsed_ms": 102, "http_status": 200, "fresh": true, "refreshing": false, "reused": true}
+    ],
+    "final_stale_banner_visible": false
+  },
+  "real_delivery_history_probe": {
+    "native_provider_history": true,
+    "isolated_matching_draft_approved": true,
+    "production_draft_unchanged": true,
+    "send_capability_available": false
+  },
+  "frontend_assets_readable_as_nginx_user": true,
+  "runtime_accounts_and_configuration_preserved": true,
+  "new_external_sends_performed": 0,
+  "provider_read_acknowledgements_allowed": false,
+  "private_chat_contents_published": false
+}
