@@ -27,7 +27,7 @@ FIXTURES = {
         "username": "lhc_voice_user_a_20261021",
         "matrix_id": "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
         "target": "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
-        "request_id": "lhc_matrixrtc_20261021_a2b_guestpeer1",
+        "request_id": "lhc_matrixrtc_20261023_a2b_mavis06",
     },
     "b": {
         "username": "lhc_voice_user_b_20261021",
@@ -87,6 +87,11 @@ def _fixture_state(store, alias):
     return fixture, str(row["id"]), str(row["account_id"])
 
 
+def _nonce(request_id):
+    """One short speakable code per run, so the answer can be attributed to it."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "voice-nonce:" + request_id).int % 1000000).zfill(6)
+
+
 def _payload(fixture, account_ref):
     return {
         "account_ref": account_ref,
@@ -98,7 +103,11 @@ def _payload(fixture, account_ref):
             "естественный разговор о задачах и инцидентах. Не выдумывай личные "
             "сведения и не предпринимай действий."
         ),
-        "greeting": "Привет. Расскажи, пожалуйста, какие у меня сейчас задачи?",
+        "greeting": (
+            "Привет. Проверка связи, код " + _nonce(fixture["request_id"]) + ". "
+            "Наблюдатель notify.bezrabotnyi.com отдаёт ошибку 502. "
+            "Что это значит и что следует проверить?"
+        ),
         "request_id": fixture["request_id"],
         "max_seconds": 240,
         "confirm": True,

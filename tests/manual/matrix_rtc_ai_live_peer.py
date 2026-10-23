@@ -101,7 +101,16 @@ def _fixture_identity_map(document, caller_id):
     uuid.UUID(scoped_id)
     if scoped_id == owner_id:
         raise PermissionError("fixture_identity_must_not_be_owner")
-    return {**document, mapping_key: scoped_id}
+    # Deny by default: the owner identity is never reachable through a matrix
+    # key in the scoped map, so a test bot can never resolve the owner.
+    scoped = {key: value for key, value in document.items()
+              if not (isinstance(key, str) and key.startswith("matrix:")
+                      and value == owner_id)}
+    scoped[mapping_key] = scoped_id
+    if any(isinstance(key, str) and key.startswith("matrix:") and value == owner_id
+           for key, value in scoped.items()):
+        raise PermissionError("fixture_identity_owner_matrix_binding")
+    return scoped
 
 
 class FixtureSecretaryScope:
@@ -242,7 +251,11 @@ async def run():
         context=call_context,
         agent_context={
             "call_mode": "qa_incoming", "voice_transport": "matrix",
-            "voice_target": FIXTURES[alias]["matrix_id"],
+            # An accepting engine targets the caller: brain_for_call resolves
+            # userId = identities["matrix:" + voice_target], that is the addressee
+            # whose Secretary answers this call. The fixture caller is never
+            # the owner identity, and never the local side by label.
+            "voice_target": caller_id,
             "qa_caller": peer["matrix_id"], "qa_room": room_id,
         },
         created_at=time.time(), wait_prompts=load_wait_prompts(),
