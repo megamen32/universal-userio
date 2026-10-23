@@ -84,7 +84,7 @@ def fixture_credentials(alias):
 
 
 def _fixture_identity_map(document, caller_id):
-    """Copy the owner mapping to only the active test caller, fail closed."""
+    """Keep the scoped fixture identity; never bind a test bot to the owner."""
     allowed = {item["matrix_id"] for item in FIXTURES.values()}
     if caller_id not in allowed or not isinstance(document, dict):
         raise PermissionError("fixture_identity_scope_invalid")
@@ -95,10 +95,13 @@ def _fixture_identity_map(document, caller_id):
     owner_id = next(iter(owner_ids))
     uuid.UUID(owner_id)
     mapping_key = "matrix:" + caller_id
-    existing = document.get(mapping_key)
-    if existing and existing != owner_id:
-        raise PermissionError("fixture_identity_already_bound_differently")
-    return {**document, mapping_key: owner_id}
+    scoped_id = document.get(mapping_key)
+    if not isinstance(scoped_id, str) or not scoped_id:
+        raise PermissionError("fixture_identity_not_scoped")
+    uuid.UUID(scoped_id)
+    if scoped_id == owner_id:
+        raise PermissionError("fixture_identity_must_not_be_owner")
+    return {**document, mapping_key: scoped_id}
 
 
 class FixtureSecretaryScope:
@@ -227,8 +230,9 @@ async def run():
         attention_text=config.attention_prompt, attention_pcm=attention_pcm,
         context=call_context,
         agent_context={
-            "call_mode": "incoming_guest", "voice_transport": "matrix",
+            "call_mode": "qa_incoming", "voice_transport": "matrix",
             "voice_target": peer["matrix_id"],
+            "qa_caller": peer["matrix_id"], "qa_room": room_id,
         },
         created_at=time.time(), wait_prompts=load_wait_prompts(),
         account_ref=account_id, peer_ref=room_id, peer_label="Matrix caller " + caller_id,
@@ -405,12 +409,15 @@ async def run():
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         log_handle = os.fdopen(fd, "w", encoding="utf-8")
         previous_stderr = sys.stderr
+        secretary_scope = None
         try:
             sys.stderr = log_handle
 
             async def fixture_answer_gate(_call_id, hung_up):
                 return not hung_up.is_set()
 
+            secretary_scope = FixtureSecretaryScope(caller_id)
+            secretary_scope.__enter__()
             engine = asyncio.create_task(handle_call(
                 audio_reader, writer, Broker(), config, {voice_call_id: prepared},
                 answer_gate=fixture_answer_gate,
@@ -424,6 +431,8 @@ async def run():
                 await asyncio.wait_for(engine, timeout=config.request_timeout + 15)
             await source.wait_for_playout()
         finally:
+            if secretary_scope is not None:
+                secretary_scope.__exit__(None, None, None)
             log_handle.flush()
             sys.stderr = previous_stderr
             log_handle.close()

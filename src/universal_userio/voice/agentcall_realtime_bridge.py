@@ -3648,6 +3648,78 @@ async def respond_after_ack(writer, broker, call_id, prompt, hung_up, prepare_an
         await asyncio.gather(task, return_exceptions=True)
 
 
+QA_TEST_SCOPE_ENV = 'AGENTCALL_QA_SCOPE'
+QA_TEST_SYSTEM_PROMPT = (
+    "Ты голосовой помощник в изолированном тестовом прогоне двух выданных владельцем "
+    "ботов. Ты не имеешь доступа к личным данным, истории владельца, инструментам "
+    "инцидентов, сессиям и телефону. Отвечай по существу на текущий вопрос, коротко "
+    "и по-русски, без Markdown. Называй точные домены, адреса и коды, если это часть "
+    "ответа. Не выдавай себя за владельца и не обещай действий, которых не было."
+)
+
+
+def _qa_owner_identity_ids():
+    """Owner identity ids from the live identities map (empty when unavailable)."""
+    path = (os.environ.get('EXMANAGER_VOICE_IDENTITIES_FILE')
+            or '/etc/agentcall-secretary-identities.json')
+    try:
+        if not path or not os.path.isfile(path):
+            return set()
+        with open(path, 'r', encoding='utf-8') as stream:
+            document = json.load(stream)
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(document, dict):
+        return set()
+    return {value for key, value in document.items()
+            if isinstance(key, str) and key.startswith('phone:') and isinstance(value, str)}
+
+
+def qa_test_admission(call_mode, prepared, now=None):
+    """Allow a scoped test session only for an explicit, short-lived binding.
+
+    The binding is caller+room+transport plus an expiry, held in the server-side
+    environment (never in caller-supplied context). Any mismatch denies.
+    """
+    if call_mode != 'qa_incoming' or prepared is None:
+        return {'allowed': False, 'reason': 'not_qa_mode'}
+    agent_context = prepared.agent_context or {}
+    caller = agent_context.get('qa_caller')
+    room = agent_context.get('qa_room')
+    transport = agent_context.get('voice_transport')
+    if not caller or not room or not transport:
+        return {'allowed': False, 'reason': 'qa_binding_incomplete'}
+    raw = os.environ.get(QA_TEST_SCOPE_ENV) or ''
+    try:
+        scope = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {'allowed': False, 'reason': 'qa_scope_unreadable'}
+    entries = scope.get('entries') if isinstance(scope, dict) else None
+    if not isinstance(entries, list):
+        return {'allowed': False, 'reason': 'qa_scope_missing'}
+    owner_ids = _qa_owner_identity_ids()
+    mapped = scope.get('identity_map') if isinstance(scope, dict) else None
+    if not isinstance(mapped, dict):
+        mapped = {}
+    resolved = mapped.get(caller)
+    if isinstance(resolved, str) and resolved in owner_ids:
+        return {'allowed': False, 'reason': 'qa_scope_is_owner_identity'}
+    moment = time.time() if now is None else float(now)
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if (entry.get('caller') != caller or entry.get('room') != room
+                or entry.get('transport') != transport):
+            continue
+        expires = entry.get('expires_at')
+        if not isinstance(expires, (int, float)) or float(expires) <= moment:
+            return {'allowed': False, 'reason': 'qa_scope_expired'}
+        return {'allowed': True, 'reason': 'qa_scope_admitted',
+                'caller': caller, 'room': room, 'transport': transport}
+    return {'allowed': False, 'reason': 'qa_scope_no_match'}
+
+
+
 async def handle_call(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
@@ -3685,8 +3757,12 @@ async def handle_call(
         _log(f"session call={call_id} prepared={prepared is not None}")
         call_config = config
         call_mode = prepared.agent_context.get('call_mode') if prepared is not None else ''
-        guest = call_mode == 'incoming_guest'
-        incoming = call_mode in {'incoming', 'incoming_guest'}
+        qa_admission = qa_test_admission(call_mode, prepared)
+        qa = call_mode == 'qa_incoming' and qa_admission['allowed']
+        guest = call_mode == 'incoming_guest' or (call_mode == 'qa_incoming' and not qa)
+        incoming = call_mode in {'incoming', 'incoming_guest'} or qa
+        if call_mode == 'qa_incoming':
+            _log(f"session call={call_id} qa_admission={qa_admission['reason']}")
         def recording_failed():
             nonlocal recording_failure_reported
             if recording is None or not recording.failure or recording_failure_reported:return
@@ -3709,6 +3785,14 @@ async def handle_call(
             # Use a new plain conversation per call, never the owner's prompt,
             # NoticePlace tools, Herder sessions or retained incident history.
             call_config = replace(config, system_prompt=GUEST_SYSTEM_PROMPT)
+        elif qa:
+            call_config = replace(
+                config,
+                system_prompt=(
+                    QA_TEST_SYSTEM_PROMPT
+                    + " Контекст тестового сценария: " + (prepared.context or '')
+                ),
+            )
         elif prepared is not None and prepared.context:
             call_config = replace(
                 config,
@@ -3738,7 +3822,7 @@ async def handle_call(
             FastAgentIncidentBrain(
                 call_config, prepared.agent_context, prepared.context
             )
-            if prepared is not None and not guest and (prepared.agent_context.get("session_id") or incoming)
+            if prepared is not None and not guest and not qa and (prepared.agent_context.get("session_id") or incoming)
             else None
         )
         if prepared is not None and not guest and (os.environ.get('EXMANAGER_VOICE_URL')
