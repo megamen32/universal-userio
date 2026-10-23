@@ -193,13 +193,6 @@ TOOL_SPECS = (
     ToolSpec("userio.draft.delete", "Delete a local unsent/rejected draft.", _schema({
         "draft_id": {"type": "string"},
     }, ["draft_id"])),
-    ToolSpec("userio.draft.approve_send", "Explicitly send one exact approved draft.", _schema({
-        "draft_id": {"type": "string"}, "confirm": {"type": "boolean"},
-        "expected_text": {"type": "string"},
-        "expected_chat_id": {"type": "string", "description": "Exact stored draft conversation_id."},
-        "expected_attachments": {"type": "array", "items": {"type": "string"},
-                                 "description": "Must be empty for text-only drafts."},
-    }, ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"])),
     ToolSpec("userio.draft.reconcile_delivery", "Resolve one in-flight Telegram delivery against the provider record.", _schema({
         "draft_id": {"type": "string"}, "confirm": {"type": "boolean"},
         "expected_text": {"type": "string"},
@@ -226,8 +219,8 @@ TOOL_SPECS = (
 
 
 
-from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS)
+from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS, MESSAGE_SEND_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS, *MESSAGE_SEND_SPECS)
 
 TOOL_CAPABILITIES = {
     "userio.messages.prepare": "send",
@@ -273,7 +266,7 @@ TOOL_CAPABILITIES = {
     "userio.messages.react": "send",
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
-    "userio.draft.approve_send": "send",
+    "userio.messages.send": "send",
     "userio.draft.reconcile_delivery": "send",
     "userio.conversation.delete_local": "read",
     "userio.accounts.list": "read",
@@ -561,10 +554,19 @@ class UserIOMcpSurface:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name == 'userio.messages.prepare':
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.send':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.contacts.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
-                return {'ok':False,'error':str(error).strip("'")}
+                payload={'ok':False,'error':str(error).strip("'")}
+                code=getattr(error,'code','')
+                if code:
+                    # A stable machine-readable reason. A consumer must branch
+                    # on the code, never on the localized message text.
+                    payload['code']=str(code)
+                    payload['retry_allowed']=False
+                return payload
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if (principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.'))
@@ -919,7 +921,7 @@ class UserIOMcpSurface:
                 return {"ok": True, "deleted": self._store.delete_draft(
                     self._required(arguments, "draft_id"), user_id=user_id
                 )}
-            if name == "userio.draft.approve_send":
+            if name == "userio.messages.send":
                 if not self._store.send_enabled(user_id=principal.user_id):
                     return {"ok": False, "error": "outbound_delivery_disabled"}
                 return self._approve(arguments, principal)

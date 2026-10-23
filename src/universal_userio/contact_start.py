@@ -284,7 +284,7 @@ class ContactStarter:
 
     def prepare(self, *, user_id: str, text: str, request_id: str,
                 conversation_id: str = '', account_ref: str = '', identifier: str = '',
-                notify: bool = True) -> dict[str, Any]:
+                notify: bool = True, reply_to: Any = None) -> dict[str, Any]:
         """Canonical recipient first, then one durable draft. Never send here."""
         body = str(text or '').strip()
         if not body:
@@ -306,10 +306,16 @@ class ContactStarter:
             resolved = self.resolve(user_id=user_id, account_ref=account_ref, identifier=identifier)
             conversation = self.conversation(resolved, user_id=user_id)
             peer = resolved.as_dict()
+        # The reply anchor is the source-bound object that names the incoming
+        # message this draft answers. It is never defaulted: without it the
+        # message is sent as an ordinary message. A malformed anchor is
+        # refused, never quietly dropped.
+        anchor = reply_to if reply_to else None
         draft = self._service.prepare_manual_message(str(conversation['id']), body=body,
-            request_id=request_id, user_id=user_id, notify=notify)
+            request_id=request_id, user_id=user_id, notify=notify, reply_to=anchor)
         from .delivery_receipt import delivery_fields
         return {'ok':True, 'conversation_id':str(conversation['id']),
             'channel':str(conversation.get('source') or ''), 'peer':peer,
             'draft_id':draft.id, 'body':draft.body, 'status':draft.status,
+            'reply_to':anchor,
             'approval_required':draft.status=='proposed', **delivery_fields(draft.receipt or '')}

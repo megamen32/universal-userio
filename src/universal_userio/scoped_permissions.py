@@ -119,6 +119,20 @@ def enforce(store, principal, name, args):
             if grant is None or grant['access'] != 'read_write' or grant['chats'] is not None:
                 raise PermissionError('account_scope_required_for_new_contact')
         return
+    if name == 'userio.messages.send':
+        if principal.read_only or not store.capability_enabled('send',user_id=principal.user_id):
+            raise PermissionError('send_capability_disabled')
+        draft_id = str(args.get('draft_id') or '').strip()
+        if not draft_id:
+            raise ValueError('draft_id is required')
+        # Ownership first, exactly as on the approve path: a principal that does
+        # not own the draft must not learn anything about it.
+        draft = store.draft(draft_id, user_id=principal.user_id)
+        _conversation, access = _scoped_conversation(store, principal, None,
+                                                     chat_id=draft.conversation_id)
+        if access != 'read_write':
+            raise PermissionError('chat_read_only_token')
+        return
     if name == 'userio.contacts.resolve':
         ref = str(args.get('account_ref') or '').strip()
         grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
@@ -373,6 +387,13 @@ def dispatch_scoped(store, service, principal, name, arguments):
     op = name.removeprefix('userio.messenger.')
     if name == 'userio.messages.prepare':
         return service.contact_starter.prepare(user_id=principal.user_id, **arguments)
+    if name == 'userio.messages.send':
+        if not store.send_enabled(user_id=principal.user_id):
+            return {'ok': False, 'error': 'outbound_delivery_disabled'}
+        # The same approved-send code path as the unscoped route, so a scoped
+        # token cannot reach weaker send semantics than an owner token.
+        from .mcp_surface import UserIOMcpSurface
+        return UserIOMcpSurface(store, service, principal)._approve(arguments, principal)
     if name.startswith('userio.channels.'):
         return _dispatch_scoped_channels(store,service,principal,name,arguments)
     if name.startswith('userio.contacts.'):

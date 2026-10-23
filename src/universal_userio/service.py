@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -10,11 +11,12 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from functools import partial
 
 from .contact_keys import is_email_source, mail_address, peer_conversation_key
+from .contact_start import ContactStartError
 from .contracts import DeliveryNotSubmittedError, DraftGenerator, InboxMessage, OutboxClient, ReplyDraft
 from .store import SQLiteUserIOStore
 
@@ -23,6 +25,25 @@ _LOG = logging.getLogger(__name__)
 _AI_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _AI_IMAGE_MAX_BYTES = 2 * 1024 * 1024
 _AI_IMAGE_MAX_COUNT = 4
+
+
+def _outbox_reply_capable(outbox: object) -> bool:
+    """Whether this delivery can carry a source-bound reply anchor.
+
+    The connector outbox accepts the anchor explicitly. The legacy in-process
+    Telethon outbox cannot, so an anchor must never be handed to it.
+    """
+    for candidate in (getattr(outbox, "fallback", None), outbox):
+        send = getattr(candidate, "send_reply", None)
+        if not callable(send):
+            continue
+        try:
+            parameters = inspect.signature(send).parameters
+        except (TypeError, ValueError):
+            continue
+        if "reply_to" in parameters:
+            return True
+    return False
 
 
 class DeliveryUnavailableError(ValueError):
@@ -1191,9 +1212,68 @@ class UserIOService:
 
 
 
+    def threaded_reply_supported(self, conversation: dict) -> bool:
+        """Whether this route can deliver a real provider-threaded reply.
+
+        Only a route that can carry the approved source anchor qualifies. The
+        relay route threads the approved source message itself; the connector
+        route carries the anchor explicitly. Every other route would drop it,
+        so an anchor is refused there instead of being accepted and ignored.
+        """
+        if str(conversation.get("source") or "") != "telegram":
+            return False
+        outbox = self.telegram_outbox
+        if outbox is None:
+            return False
+        scoped = getattr(outbox, "source_bound_pair", None)
+        if callable(scoped):
+            # A relay bridge threads its own exact pair and hands every other
+            # pair to a path that cannot carry the anchor.
+            return bool(scoped(str(conversation.get("account_ref") or ""),
+                               str(conversation.get("peer_id") or "")))
+        return _outbox_reply_capable(outbox)
+
+    def _reply_anchor(self, conversation: dict, *, user_id: str,
+                      reply_to: Mapping[str, object]) -> str:
+        """Resolve the approved reply anchor to its stored source message.
+
+        The anchor is immutable and bound to this account and chat: the stored
+        source message must be an incoming message of this very conversation,
+        and the reviewed source text must match it exactly.
+        """
+        if not isinstance(reply_to, Mapping) or set(reply_to) - {'message_id', 'expected_text', 'thread_id'}:
+            raise ContactStartError('reply_to_must_be_a_source_bound_object')
+        message_id = str(reply_to.get('message_id') or '').strip()
+        expected_text = reply_to.get('expected_text')
+        thread_id = str(reply_to.get('thread_id') or '').strip()
+        if not message_id or not isinstance(expected_text, str) or not expected_text:
+            raise ContactStartError('reply_to_requires_message_id_and_source_text')
+        if not re.fullmatch(r'[1-9][0-9]*', message_id):
+            raise ContactStartError('reply_to_message_id_must_be_a_provider_id')
+        account = str(conversation.get('account_ref') or '')
+        peer = str(conversation.get('peer_id') or '')
+        if not account or not peer:
+            raise ContactStartError('reply_to_requires_a_bound_conversation')
+        stored_id = f"{account}|{peer}:{message_id}"
+        source = self._store.message(stored_id, source=str(conversation.get('source') or ''),
+                                     user_id=user_id)
+        if source is None:
+            raise ContactStartError('reply_to_message_not_found')
+        if str(source.get('conversation_id') or '') != str(conversation.get('id') or ''):
+            raise ContactStartError('reply_to_not_in_conversation')
+        if str(source.get('direction') or '') != 'incoming':
+            raise ContactStartError('reply_to_must_be_incoming')
+        if str(source.get('body') or '') != expected_text:
+            raise ContactStartError('reply_to_source_text_mismatch')
+        source_thread = str(source.get('provider_thread_id') or '')
+        if thread_id and source_thread and thread_id != source_thread:
+            raise ContactStartError('reply_to_thread_mismatch')
+        return stored_id
+
     def prepare_manual_message(self, conversation_id: str, *, body: str,
                             request_id: str, user_id: str | None = None, upload_id: str = '',
-                               notify: bool = True) -> ReplyDraft:
+                               notify: bool = True,
+                               reply_to: Mapping[str, object] | None = None) -> ReplyDraft:
         """Prepare one durable draft; delivery always uses approve and its receipt."""
         conversation_id = self._store.resolve_conversation_id(conversation_id, user_id=user_id)
         if not re.fullmatch(r"[a-zA-Z0-9_-]{16,80}", request_id):
@@ -1205,6 +1285,13 @@ class UserIOService:
         conv=self._store.conversation(conversation_id,user_id=user)
         if conv is None:
             raise KeyError('conversation not found')
+        anchor = ''
+        if reply_to:
+            # There is no default reply target. An anchor is accepted only
+            # where the approved send can really thread it.
+            if not self.threaded_reply_supported(conv):
+                raise ContactStartError('reply_to_unsupported_for_route')
+            anchor = self._reply_anchor(conv, user_id=user, reply_to=reply_to)
         if upload_id and (not conv or conv['source'] not in {'vk','max'}):
             raise ValueError('Вложения поддерживаются в личных VK и MAX')
         draft_id = "draft_web_" + hashlib.sha256(f"{user}:{request_id}".encode()).hexdigest()
@@ -1214,10 +1301,15 @@ class UserIOService:
                 draft = self._store.draft(draft_id, user_id=user)
             except KeyError:
                 draft = ReplyDraft(draft_id, conversation_id, text, "proposed")
-                self._persist_reply_draft(draft, user_id=user)
+                self._persist_reply_draft(draft, user_id=user, reply_anchor=anchor)
                 created = True
             if draft.body != text or draft.conversation_id != conversation_id:
                 raise ValueError("Этот запрос уже относится к другому сообщению")
+            if anchor:
+                # The same request id must never change its approved source.
+                stored = self._store.draft_reply_anchor(draft.id, user_id=user)
+                if str(stored.get('message_key') or '') != anchor:
+                    raise ContactStartError('request_id_reused_with_different_reply_to')
             if draft.status == "sending":
                 raise DeliveryUnavailableError("Результат отправки уточняется. Не отправляйте это сообщение повторно.")
             if conv and conv['source']=='vk':
@@ -1431,13 +1523,27 @@ class UserIOService:
         return drafts
 
     def _persist_reply_draft(self, draft: ReplyDraft, *, user_id: str | None,
-                             source_message_id: str | None = None) -> None:
+                             source_message_id: str | None = None,
+                             reply_anchor: str | None = None) -> None:
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id) or {}
         scoped = getattr(self.telegram_outbox, "source_bound_pair", None)
         account, peer = str(conversation.get("account_ref") or ""), str(conversation.get("peer_id") or "")
         if conversation.get("source") == "telegram" and callable(scoped) and scoped(account, peer):
+            if reply_anchor or source_message_id:
+                # The relay route is a source-bound reply route: its approval
+                # envelope names the source message. An explicitly requested
+                # anchor wins over the proposed source.
+                self._store.add_source_bound_draft(draft, account_ref=account, peer_id=peer,
+                    user_id=user_id, source_message_id=reply_anchor or source_message_id)
+            else:
+                # A plain message must not be bound to the latest message.
+                self._store.add_draft(draft, user_id=user_id)
+        elif reply_anchor:
+            # Only an explicitly requested and validated reply anchor binds the
+            # draft to a source message. An ordinary draft keeps no anchor and
+            # stays on the plain send route.
             self._store.add_source_bound_draft(draft, account_ref=account, peer_id=peer,
-                user_id=user_id, source_message_id=source_message_id)
+                user_id=user_id, source_message_id=reply_anchor)
         else:
             self._store.add_draft(draft, user_id=user_id)
 
@@ -1898,15 +2004,44 @@ class UserIOService:
                 if ref.startswith("telegram-qr:"):
                     slot = ref.partition(":")[2]
             prepare = getattr(self.telegram_outbox, "prepare_reply", None)
+            anchor = self._store.draft_reply_anchor(draft.id, user_id=user_id)
             if callable(prepare):
+                scoped = getattr(self.telegram_outbox, "source_bound_pair", None)
+                if callable(scoped) and scoped(account_ref, chat_id):
+                    if not anchor:
+                        # The relay route is a source-bound reply route: it can
+                        # only deliver an approved source-bound reply. A plain
+                        # message must never be bound to the latest message.
+                        raise DeliveryUnavailableError(
+                            "This route sends source-bound replies only; prepare an explicit reply anchor",
+                            code="relay_requires_reply_anchor")
+                elif anchor:
+                    # The bridge hands every other pair to a path that cannot
+                    # carry the anchor, so it must fail loudly instead of
+                    # sending the message without it.
+                    raise DeliveryUnavailableError(
+                        "This delivery route cannot carry the approved reply anchor",
+                        code="reply_anchor_unsupported")
                 return prepare(chat=str(conversation["sender"]), chat_id=chat_id,
                     body=draft.body, draft_id=draft.id, user_id=user_id,
                     conversation_id=draft.conversation_id, slot=slot,
                     account_ref=account_ref)
-            send = partial(self.telegram_outbox.send_reply,
-                chat=str(conversation["sender"]), chat_id=chat_id, body=draft.body, draft_id=draft.id,
-                account_ref=account_ref, slot=slot,
-            )
+            send_kwargs = {
+                'chat': str(conversation["sender"]), 'chat_id': chat_id,
+                'body': draft.body, 'draft_id': draft.id,
+                'account_ref': account_ref, 'slot': slot,
+            }
+            if anchor:
+                if not _outbox_reply_capable(self.telegram_outbox):
+                    raise DeliveryUnavailableError(
+                        "This delivery route cannot carry the approved reply anchor",
+                        code="reply_anchor_unsupported")
+                send_kwargs['reply_to'] = {
+                    'message_id': str(anchor.get('provider_message_id') or ''),
+                    'expected_text': str(anchor.get('expected_text') or ''),
+                    'thread_id': str(anchor.get('thread_id') or ''),
+                }
+            send = partial(self.telegram_outbox.send_reply, **send_kwargs)
         elif conversation["source"] == "whatsapp" and self.whatsapp_outbox is not None:
             account_ref=str(conversation.get('account_ref') or '')
             personal=':account-' in account_ref

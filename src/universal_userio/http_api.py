@@ -1377,7 +1377,7 @@ def handler(
                     if not service._store.capability_enabled('send',user_id=user_id):
                         self._reply(403,{'error':'send_capability_disabled'});return
                     payload = self._json()
-                    if set(payload) - {'conversation_id','account_ref','identifier','text','request_id'}:
+                    if set(payload) - {'conversation_id','account_ref','identifier','text','reply_to','request_id'}:
                         self._reply(400,{'error':'unknown_prepare_field'});return
                     if principal.messenger_grants is not None:
                         from .scoped_permissions import enforce

@@ -311,27 +311,6 @@ TOOL_SPECS = (
         schema({"draft_id": {"type": "string"}}, ["draft_id"]),
     ),
     ToolSpec(
-        "userio.draft.approve_send",
-        "Explicitly send one exact approved draft.",
-        schema(
-            {
-                "draft_id": {"type": "string"},
-                "confirm": {"type": "boolean"},
-                "expected_text": {"type": "string"},
-                "expected_chat_id": {
-                    "type": "string",
-                    "description": "Exact stored draft conversation_id.",
-                },
-                "expected_attachments": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Must be empty for text-only drafts.",
-                },
-            },
-            ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"],
-        ),
-    ),
-    ToolSpec(
         "userio.draft.reconcile_delivery",
         "Resolve one in-flight Telegram delivery against the provider record.",
         schema(
@@ -504,18 +483,45 @@ TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
 MESSAGE_PREPARE_SPECS = (
     ToolSpec('userio.messages.prepare',
         'Prepare one message draft for either a known conversation_id or account_ref plus a new contact identifier. '
-        'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: approve the exact '
-        'returned draft with userio.draft.approve_send. Retries with the same request_id reuse the same draft. '
-        'This is the only public text-draft preparation entrypoint for known chats and new contacts.',
+        'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: send the exact '
+        'returned draft with userio.messages.send. Retries with the same request_id reuse the same draft. '
+        'Optional reply_to is a source-bound object {message_id, expected_text, thread_id?} that names the exact '
+        'incoming message this draft answers; it is validated against the stored message, stored immutably, '
+        'returned in the prepared draft and delivered as a real threaded reply. There is no default reply target: '
+        'without reply_to the message is sent as an ordinary message.',
         dict(schema({'conversation_id':{'type':'string','minLength':1},
             'account_ref':{'type':'string','maxLength':128},
             'identifier':{'type':'string','minLength':1,'maxLength':256},
             'text':{'type':'string','minLength':1,'maxLength':65536},
+            'reply_to':{'type':'object','additionalProperties':False,
+                'description':'Source-bound reply anchor. It names the exact incoming message this draft answers.',
+                'properties':{
+                    'message_id':{'type':'string','minLength':1,'maxLength':32,
+                        'description':'Provider message id of the incoming message.'},
+                    'expected_text':{'type':'string','minLength':1,'maxLength':65536,
+                        'description':'Exact text of that incoming message.'},
+                    'thread_id':{'type':'string','maxLength':32,
+                        'description':'Optional provider topic id of that incoming message.'}},
+                'required':['message_id','expected_text']},
             'request_id':{'type':'string','minLength':16,'maxLength':80}}, ['text','request_id']),
             oneOf=[{'required':['conversation_id'],'not':{'required':['identifier']}},
                    {'required':['account_ref','identifier'],'not':{'required':['conversation_id']}}])),
 )
-TOOL_SPECS = (*TOOL_SPECS, *MESSAGE_PREPARE_SPECS)
+
+MESSAGE_SEND_SPECS = (
+    ToolSpec('userio.messages.send',
+        'Send one exact approved draft. The reviewed snapshot is mandatory: expected_text, expected_chat_id and '
+        'expected_attachments must match the prepared draft exactly. Nothing is sent without confirm=true. '
+        'The send is durable and idempotent: a repeated call returns the stored receipt instead of sending twice. '
+        'This is the only public send action for a prepared message.',
+        schema({'draft_id':{'type':'string'},'confirm':{'type':'boolean'},
+            'expected_text':{'type':'string'},
+            'expected_chat_id':{'type':'string','description':'Exact stored draft conversation_id.'},
+            'expected_attachments':{'type':'array','items':{'type':'string'},
+                'description':'Must be empty for text-only drafts.'}},
+               ['draft_id','confirm','expected_text','expected_chat_id','expected_attachments'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *MESSAGE_PREPARE_SPECS, *MESSAGE_SEND_SPECS)
 
 TELEMOST_SPECS = (
     ToolSpec('userio.meetings.telemost.start',
@@ -591,7 +597,7 @@ TOOL_CAPABILITIES = {
     "userio.message.mark_seen": "read",
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
-    "userio.draft.approve_send": "send",
+    "userio.messages.send": "send",
     "userio.draft.reconcile_delivery": "send",
     "userio.conversation.delete_local": "read",
     "userio.accounts.list": "read",

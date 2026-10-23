@@ -2998,6 +2998,33 @@ class SQLiteUserIOStore:
             raise ValueError("immutable relay draft source changed or is missing")
         return {key: row[key] for key in ("conversation_id", "account_ref", "peer_id", "provider_message_id")}
 
+    def draft_reply_anchor(self, draft_id: str, *, user_id: str | None = None) -> dict[str, object]:
+        """The immutable source anchor of a draft, empty when it has none.
+
+        The anchor is the stored source-bound message the draft answers. Its
+        body hash proves the reviewed source text is still the same one, so a
+        delivered reply stays bound to exactly what was approved.
+        """
+        if not self._table_exists("draft_reply_origins"):
+            return {}
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT o.message_key,o.provider_message_id,o.source_body_sha256,"
+                "m.body AS current_body,m.provider_thread_id "
+                "FROM draft_reply_origins o LEFT JOIN messages m "
+                "ON m.user_id=o.user_id AND m.source='telegram' AND m.message_id=o.message_key "
+                "WHERE o.user_id=? AND o.draft_id=?",
+                (self._user(user_id), draft_id)).fetchone()
+        if row is None:
+            return {}
+        body = str(row["current_body"] or "")
+        if not body or hashlib.sha256(body.encode()).hexdigest() != str(row["source_body_sha256"] or ""):
+            raise ValueError("immutable relay draft source changed or is missing")
+        return {"message_key": str(row["message_key"] or ""),
+                "provider_message_id": str(row["provider_message_id"] or ""),
+                "expected_text": body,
+                "thread_id": str(row["provider_thread_id"] or "")}
+
     def update_draft(self, draft_id: str, *, body: str, user_id: str | None = None) -> ReplyDraft:
         text, user_id = body.strip(), self._user(user_id)
         if not text:

@@ -65,10 +65,19 @@ class UserIOToolDispatcher:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name == 'userio.messages.prepare':
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.send':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
-                return {'ok':False,'error':str(error).strip("'")}
+                payload={'ok':False,'error':str(error).strip("'")}
+                code=getattr(error,'code','')
+                if code:
+                    # A stable machine-readable reason. A consumer must branch
+                    # on the code, never on the localized message text.
+                    payload['code']=str(code)
+                    payload['retry_allowed']=False
+                return payload
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.')):
@@ -455,7 +464,7 @@ class UserIOToolDispatcher:
                         self._required(arguments, "draft_id"), user_id=user_id
                     ),
                 }
-            if name == "userio.draft.approve_send":
+            if name == "userio.messages.send":
                 if not self._store.send_enabled(user_id=user_id):
                     return {"ok": False, "error": "outbound_delivery_disabled"}
                 return self._approve(arguments, principal)
