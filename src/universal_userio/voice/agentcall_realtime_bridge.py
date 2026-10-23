@@ -1199,6 +1199,124 @@ _SPOKEN_LABELS = {
     'ai': 'ай', 'app': 'апп', 'dev': 'дев', 'www': 'ввв', 'co': 'ко',
 }
 
+# A number is said with words. The speech engine drops a bare digit token
+# without a sound, so a code or a time written as digits reaches the owner as
+# a gap. Words are heard by every engine.
+_RUSSIAN_DIGITS = (
+    'ноль', 'один', 'два', 'три', 'четыре',
+    'пять', 'шесть', 'семь', 'восемь', 'девять',
+)
+_RUSSIAN_TEENS = (
+    'десять', 'одиннадцать', 'двенадцать', 'тринадцать', 'четырнадцать',
+    'пятнадцать', 'шестнадцать', 'семнадцать', 'восемнадцать', 'девятнадцать',
+)
+_RUSSIAN_TENS = (
+    '', '', 'двадцать', 'тридцать', 'сорок', 'пятьдесят',
+    'шестьдесят', 'семьдесят', 'восемьдесят', 'девяносто',
+)
+_RUSSIAN_HUNDREDS = (
+    '', 'сто', 'двести', 'триста', 'четыреста', 'пятьсот',
+    'шестьсот', 'семьсот', 'восемьсот', 'девятьсот',
+)
+# A token of letters and digits is read part by part: an identifier is heard
+# the way a person says it, and a code is heard digit by digit.
+_NUMBER_TOKEN_RE = re.compile(r'[^\W_]+(?:[-_./][^\W_]+)*', re.UNICODE)
+_NUMBER_RUN_RE = re.compile(r'\d+')
+_CLOCK_RE = re.compile(r'(?<![\w:])(\d{1,2}):(\d{2})(?![\w:])')
+# A three-digit number after a code word is read digit by digit: that is how a
+# person says an error code. A number with a unit keeps its value instead.
+_CODE_CONTEXT_RE = re.compile(
+    r'(?:код\w*|ответ\w*|статус\w*|ошибк\w*|http)\s*$', re.IGNORECASE
+)
+_UNIT_AFTER_RE = re.compile(
+    r'^\s*(?:миллисекунд\w*|секунд\w*|процент\w*|минут\w*|час\w*|раз\w*|'
+    r'проверок\w*|запрос\w*|попыт\w*|пользовател\w*|дн\w*|строк\w*|байт\w*|'
+    r'экземпляр\w*|врем\w*)',
+    re.IGNORECASE,
+)
+
+
+def _cardinal_words(value: int) -> str:
+    """A number said the way a person says it in Russian."""
+    if value < 0:
+        return 'минус ' + _cardinal_words(-value)
+    if value < 10:
+        return _RUSSIAN_DIGITS[value]
+    if value < 20:
+        return _RUSSIAN_TEENS[value - 10]
+    if value < 100:
+        tens, unit = divmod(value, 10)
+        return _RUSSIAN_TENS[tens] + (' ' + _RUSSIAN_DIGITS[unit] if unit else '')
+    if value < 1000:
+        hundreds, rest = divmod(value, 100)
+        return _RUSSIAN_HUNDREDS[hundreds] + (' ' + _cardinal_words(rest) if rest else '')
+    if value < 1000000:
+        thousands, rest = divmod(value, 1000)
+        if thousands == 1:
+            head = 'одна тысяча'
+        elif 2 <= thousands <= 4:
+            head = _RUSSIAN_DIGITS[thousands] + ' тысячи'
+        else:
+            head = _cardinal_words(thousands) + ' тысяч'
+        return head + (' ' + _cardinal_words(rest) if rest else '')
+    millions, rest = divmod(value, 1000000)
+    if millions == 1:
+        head = 'один миллион'
+    elif 2 <= millions <= 4:
+        head = _RUSSIAN_DIGITS[millions] + ' миллиона'
+    else:
+        head = _cardinal_words(millions) + ' миллионов'
+    return head + (' ' + _cardinal_words(rest) if rest else '')
+
+
+def _digit_words(digits: str) -> str:
+    """Digits said one by one, the way a code is read out."""
+    return ' '.join(_RUSSIAN_DIGITS[int(digit)] for digit in digits)
+
+
+def _speak_numbers(text: str) -> str:
+    """Every number in the text becomes words, so it can be heard."""
+
+    def clock(match):
+        return _cardinal_words(int(match.group(1))) + ' ' + _digit_words(match.group(2))
+
+    text = _CLOCK_RE.sub(clock, text)
+
+    def token(match):
+        token = match.group(0)
+        if not any(character.isdigit() for character in token):
+            return token
+        identifier = any(character.isalpha() for character in token)
+        code = bool(_CODE_CONTEXT_RE.search(text[max(0, match.start() - 40):match.start()]))
+        unit = bool(_UNIT_AFTER_RE.match(text[match.end():match.end() + 40]))
+        pieces = []
+        for part in re.split(r'([-_./])', token):
+            if not part:
+                continue
+            if not any(character.isdigit() for character in part):
+                kind = 'separator' if part in '-_./' else 'word'
+                pieces.append((part, kind))
+                continue
+            for run in re.findall(r'\d+|[^\W\d_]+', part, re.UNICODE):
+                if not run.isdigit():
+                    pieces.append((run, 'word'))
+                    continue
+                if identifier or (len(run) == 3 and (code or not unit)):
+                    pieces.append((_digit_words(run), 'number'))
+                else:
+                    pieces.append((_cardinal_words(int(run)), 'number'))
+        result = ''
+        for index, (piece, kind) in enumerate(pieces):
+            if index:
+                previous = pieces[index - 1][1]
+                if {kind, previous} == {'word', 'number'}:
+                    result += ' '
+            result += piece
+        return result
+
+    return _NUMBER_TOKEN_RE.sub(token, text)
+
+
 # Symbols the speech engine cannot pronounce become words, so the owner hears
 # the same content instead of a gap where the character used to be.
 _SPOKEN_PUNCTUATION = (
@@ -1320,15 +1438,6 @@ def _readable_punctuation(text: str) -> str:
     return text
 
 
-def _spell_code_digits(text: str) -> str:
-    """A three-digit error code is read digit by digit, not as a number."""
-    return re.sub(
-        r'(?<![\d.])([0-9]{3})(?!\d)(?!\.\d)(?!\s(?:миллисекунд|секунд|процентов|минут))',
-        lambda match: ' ' + ' '.join(match.group(1)),
-        text,
-    )
-
-
 def text_for_speech(text: str) -> str:
     """Make the text speakable: presentation markup goes, content never does.
 
@@ -1408,10 +1517,10 @@ def text_for_speech(text: str) -> str:
     text = re.sub(r'(?<=\d)\s*(?:s|sec)\b', ' секунд', text, flags=re.IGNORECASE)
     # From here on nothing is dropped. An identifier, a path, a URL or an error
     # code is the part the owner needs, so it is spoken instead of deleted.
+    text = _speak_numbers(text)
     text = _readable_punctuation(text)
     text = _transliterate_latin(text)
     text = re.sub(r'(?<=[А-Яа-яЁё])\.(?=[А-Яа-яЁё])', ' точка ', text)
-    text = _spell_code_digits(text)
     text = re.sub(r'\bслужебн\w*\s+(?:обозначени\w*|параметр\w*|запис\w*|идентификатор\w*|адрес\w*)\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'\bтехнические подробности\b', ' ', text, flags=re.IGNORECASE)
     text = re.sub(r'(?<=[.!?])(?:\s*[,;:.!?])+\s*', ' ', text)
