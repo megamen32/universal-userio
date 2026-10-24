@@ -143,6 +143,11 @@ def enforce(store, principal, name, args):
         raise PermissionError('scoped_messenger_only')
     op = name.removeprefix('userio.messenger.')
     ref, cid = args.get('account_ref'), args.get('conversation_id')
+    if op == 'has_contacted' and args.get('telegram_username') and not cid:
+        grant = next((g for g in principal.messenger_grants if g['account_ref'] == ref), None)
+        if grant is None or grant['chats'] is not None:
+            raise PermissionError('account_scope_required_for_identity_history')
+        return
     admin = op in {'telegram_admin.create', 'telegram_admin.propose'}
     admin_operation = args.get('operation', '') if admin else ''
     if op in {'get','approve'}:

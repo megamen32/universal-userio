@@ -373,12 +373,14 @@ TOOL_SPECS = (
 
 MESSENGER_SPECS = (
     ToolSpec('userio.messenger.has_contacted',
-        'Check one exact existing direct contact conversation for historical outgoing. Metadata only; no sends, identity resolution or read ACK. '
+        'Check one direct contact conversation or strictly typed Telegram username for historical outgoing. Username requires refresh=true and account-wide read scope; provider username READ and local projection only, never phone import. Metadata only; no sends or read ACK. '
         'CONTACTED needs outgoing evidence; NOT_CONTACTED needs certified complete accessible scope; otherwise UNKNOWN. Other accounts/channels and deleted history are excluded.',
         schema({'account_ref':{'type':'string'}, 'conversation_id':{'type':'string'},
+                'telegram_username':{'type':'string','pattern':r'^@?[A-Za-z][A-Za-z0-9_]{4,31}$'},
                 'limit':{'type':'integer','minimum':1,'maximum':100,'default':100},
                 'max_pages':{'type':'integer','minimum':1,'maximum':10,'default':5},
-                'refresh':{'type':'boolean','default':False}}, ['account_ref','conversation_id'])),
+                'refresh':{'type':'boolean','default':False}}, ['account_ref'])
+                | {'oneOf':[{'required':['conversation_id']},{'required':['telegram_username']}]}),
     ToolSpec('userio.messenger.upload',
         'Stage a private file for one source-bound approved send. Telegram uses the selected account upload limit; other providers use their published limit. Bytes expire after 900s. No send, URLs or local paths. Returns upload_id and metadata only.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},
