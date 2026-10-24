@@ -94,6 +94,24 @@ def _source_identity(source: Path, remote_ref: str) -> str:
     return head
 
 
+def _pinned_identity(source: Path, remote_ref: str, revision: str) -> str:
+    """Resolve an explicitly pinned published commit.
+
+    The pinned commit replaces the working checkout as the source of truth: it
+    must name an immutable commit object that is exactly the fetched remote
+    tip, so no uncommitted file and no older commit can reach the release.
+    """
+    if not isinstance(revision, str) or not _COMMIT_RE.fullmatch(revision):
+        raise ReleaseError("pinned revision must be an immutable commit id")
+    kind = _git(source, "cat-file", "-t", revision).decode("ascii").strip()
+    if kind != "commit":
+        raise ReleaseError("pinned revision must name a commit object")
+    remote = _git(source, "rev-parse", remote_ref).decode("ascii").strip()
+    if revision != remote:
+        raise ReleaseError(f"pinned revision must equal {remote_ref}")
+    return revision
+
+
 def _manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": manifest.get("schema_version"),
@@ -145,9 +163,11 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
     return entries
 
 
-def build_manifest(source: str | Path, remote_ref: str = "origin/main") -> dict[str, Any]:
+def build_manifest(source: str | Path, remote_ref: str = "origin/main",
+                   revision: str | None = None) -> dict[str, Any]:
     source_root = Path(source).resolve(strict=True)
-    commit = _source_identity(source_root, remote_ref)
+    commit = (_source_identity(source_root, remote_ref) if revision is None
+              else _pinned_identity(source_root, remote_ref, revision))
     raw = _git(
         source_root,
         "ls-tree",

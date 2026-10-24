@@ -331,46 +331,97 @@ def assert_idle():
     command(ssh_args(remote_check))
 
 
-def build_context(destination: Path, *, portable_voice=False):
-    revision = output(['git', '-C', ROOT, 'rev-parse', 'HEAD'])
-    if revision != output(['git', '-C', ROOT, 'rev-parse', 'origin/main']):
-        raise RuntimeError('build requires published main')
-    archive = subprocess.check_output(['git', '-C', ROOT, 'archive', '--format=tar', revision])
-    if portable_voice:
-        from voice_container import build_context as portable_context
-        portable_context(ROOT, revision, archive, destination)
-        return
-    # Preserve the current published standalone dispatcher as a pinned input.
+def _published_tip() -> str:
+    """The fetched published main tip of the canonical repository."""
+    return output(['git', '-C', ROOT, 'rev-parse', 'origin/main'])
+
+
+def _resolve_published_revision(revision):
+    """Resolve the source revision of a build context.
+
+    Without an explicit revision the checkout itself must be the published
+    main commit, exactly as before. With one, the pinned revision replaces the
+    checkout as the source of truth: it must name an immutable commit object
+    that is exactly the fetched published tip, so no uncommitted file and no
+    older commit can reach the release.
+    """
+    if revision is None:
+        head = output(['git', '-C', ROOT, 'rev-parse', 'HEAD'])
+        if head != _published_tip():
+            raise RuntimeError('build requires published main')
+        return head, False
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise RuntimeError('revision must be an immutable commit id')
+    if output(['git', '-C', ROOT, 'cat-file', '-t', revision]) != 'commit':
+        raise RuntimeError('revision must name a commit object')
+    if revision != _published_tip():
+        raise RuntimeError('revision must equal the published origin/main tip')
+    return revision, True
+
+
+def _require_published_tip(revision: str) -> None:
+    """The published tip must not move while the context is generated."""
+    if _published_tip() != revision:
+        raise RuntimeError('origin/main moved while the release context was generated')
+
+
+def _dispatcher_input():
+    """The current published standalone dispatcher, as a pinned input."""
     foreign = Path('/home/roomhacker/agents-projects/hermes-unified-inbox')
     script = 'scripts/userio_hermes_dispatcher.py'
     payload = subprocess.check_output(['git', '-C', foreign, 'show', 'HEAD:' + script])
     if payload != (foreign / script).read_bytes():
         raise RuntimeError('dispatcher has uncommitted changes; its owner must supply a published input')
+    return payload, output(['git', '-C', foreign, 'rev-parse', 'HEAD'])
+
+
+def _host_additions():
+    """Host binaries the image carries next to the published source."""
+    additions = {
+        'deploy/containers/external/himalaya': Path('/home/roomhacker/.cargo/bin/himalaya').read_bytes(),
+        'deploy/containers/external/asterisk': Path('/usr/sbin/asterisk').read_bytes(),
+    }
+    # Preserve only the installed host PBX CLI, not another PBX daemon.
+    for row in output(['ldd', '/usr/sbin/asterisk']).splitlines():
+        parts = row.split()
+        if len(parts) > 2 and parts[1] == '=>' and parts[2].startswith('/'):
+            path = Path(parts[2])
+            if path.name.split('.so')[0] not in {'libc', 'libm', 'libpthread', 'librt', 'libdl'}:
+                additions['deploy/containers/external/asterisk-libs/' + path.name] = path.read_bytes()
+    return additions
+
+
+def build_context(destination: Path, *, portable_voice=False, revision=None):
+    revision, pinned = _resolve_published_revision(revision)
+    archive = subprocess.check_output(['git', '-C', ROOT, 'archive', '--format=tar', revision])
+    if portable_voice:
+        from voice_container import build_context as portable_context
+        if pinned:
+            _require_published_tip(revision)
+        portable_context(ROOT, revision, archive, destination)
+        return
+    # Preserve the current published standalone dispatcher as a pinned input.
+    payload, dispatcher_commit = _dispatcher_input()
     sys.path.insert(0, str(ROOT / 'scripts'))
     from runtime_release import build_manifest
-    manifest = build_manifest(ROOT)
+    # The manifest describes the very same committed tree the archive carries.
+    manifest = build_manifest(ROOT, revision=revision) if pinned else build_manifest(ROOT)
     identity = {key: manifest[key] for key in ('schema_version', 'commit', 'manifest_sha256')}
+    additions = {'deploy/containers/external/userio_hermes_dispatcher.py': payload,
+                 'deploy/containers/release.json': json.dumps(identity).encode()}
+    additions.update(_host_additions())
+    if pinned:
+        _require_published_tip(revision)
     mode = 'w:gz' if destination.suffix == '.gz' else 'w'
     with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as source, tarfile.open(destination, mode) as target:
         for member in source:
             if member.name.startswith(('src/', 'deploy/', 'scripts/')) or member.name in ('pyproject.toml', 'Dockerfile', '.dockerignore'):
                 target.addfile(member, source.extractfile(member) if member.isfile() else None)
-        additions = {'deploy/containers/external/userio_hermes_dispatcher.py': payload,
-                     'deploy/containers/external/himalaya': Path('/home/roomhacker/.cargo/bin/himalaya').read_bytes(),
-                     'deploy/containers/release.json': json.dumps(identity).encode()}
-        # Preserve only the installed host PBX CLI, not another PBX daemon.
-        additions['deploy/containers/external/asterisk'] = Path('/usr/sbin/asterisk').read_bytes()
-        for row in output(['ldd', '/usr/sbin/asterisk']).splitlines():
-            parts = row.split()
-            if len(parts) > 2 and parts[1] == '=>' and parts[2].startswith('/'):
-                path = Path(parts[2])
-                if path.name.split('.so')[0] not in {'libc', 'libm', 'libpthread', 'librt', 'libdl'}:
-                    additions['deploy/containers/external/asterisk-libs/' + path.name] = path.read_bytes()
         for name, data in additions.items():
             info = tarfile.TarInfo(name); info.size = len(data); info.mode = 0o755 if name.endswith('/himalaya') else 0o644
             target.addfile(info, io.BytesIO(data))
     print(json.dumps({'context': str(destination), 'commit': revision,
-        'dispatcher_commit': output(['git', '-C', foreign, 'rev-parse', 'HEAD']),
+        'dispatcher_commit': dispatcher_commit,
         'context_sha256': hashlib.sha256(destination.read_bytes()).hexdigest()}))
 
 
@@ -1340,7 +1391,7 @@ def main():
     if args.action == 'context':
         if not args.output:
             parser.error('context requires --output')
-        build_context(args.output, portable_voice=args.portable_voice)
+        build_context(args.output, portable_voice=args.portable_voice, revision=args.revision)
     else:
         globals()[args.action]()
 
