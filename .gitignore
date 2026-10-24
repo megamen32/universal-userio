@@ -20,7 +20,9 @@ build/
 *.egg-info/
 node_modules/
 extension.pem
-/graphify-out/.graphify_*
+# Артефакт графа знаний не в репозитории: 100+ МБ и абсолютные пути машин.
+# Восстановление: graphify update . (48 с, детерминированно)
+/graphify-out/
 
 # Local account credentials, sessions and operator evidence
 .env
