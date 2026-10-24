@@ -3276,7 +3276,17 @@ async def recognize_remote_audio(utterances, recognized, pipeline, broker, call_
                     ended_at=at if ended_at is None else max(ended_at,at)
                     oldest_at=at if oldest_at is None else min(oldest_at,at)
                 stt_started=time.monotonic()
-                text = await asyncio.to_thread(pipeline.transcribe, carry)
+                try:
+                    text = await asyncio.to_thread(pipeline.transcribe, carry)
+                except Exception as error:
+                    # A failed recognition is not a hangup: the caller's line is
+                    # still open and the next utterance must still be answered.
+                    # Report it, keep the audio as evidence and keep
+                    # recognizing instead of tearing the whole call down.
+                    _log(f'call={call_id} recognition failed={type(error).__name__}')
+                    await incomplete(carry,'recognition_failed')
+                    carry=b'';ended_at=oldest_at=None;stt_seconds=0.0
+                    continue
                 stt_seconds += time.monotonic()-stt_started
                 if not text:
                     if len(carry) > 640000:
@@ -3946,18 +3956,12 @@ async def handle_call(
         if prepared is not None:
             greeting_pcm = prepared.greeting_pcm
             greeting_text = prepared.greeting_text
-            attention_pcm = prepared.attention_pcm
-            attention_text = prepared.attention_text
         elif config.greeting_wav and Path(config.greeting_wav).exists():
             greeting_pcm = wav_to_native_pcm(Path(config.greeting_wav).read_bytes())
             greeting_text = config.greeting
-            attention_pcm = await speech._synthesize_with_fallback(config.attention_prompt)
-            attention_text = config.attention_prompt
         else:
             greeting_pcm = await speech._synthesize_with_fallback(config.greeting)
             greeting_text = config.greeting
-            attention_pcm = await speech._synthesize_with_fallback(config.attention_prompt)
-            attention_text = config.attention_prompt
         if prepared is not None:
             _t0 = time.monotonic()
             _answered = await (answer_gate or wait_for_sip_answer)(call_id, hung_up)
@@ -3968,8 +3972,13 @@ async def handle_call(
             # Give its RTP/audio setup one second, then speak the prepared
             # incident even when the answered party remains silent.
             _gate0 = time.monotonic()
-            await send_pcm_stream(writer, iter((attention_pcm,)), hung_up, speed=call_config.speech_speed)
             await asyncio.sleep(1.0)
+            # The first audible sound of a prepared call is the announced
+            # greeting itself.  The attention prompt is audible speech: the
+            # remote engine recognized it as a substantive turn (canary
+            # mavis08, 2026-10-24: turn 1 was "Алло, алло, алло."), so the
+            # caller's own question arrived as turn 2, and the transcript
+            # announced a text that was never audible.
             _audible = not hung_up.is_set()
             _log(f"call={call_id} audio_gate={_audible} held={time.monotonic() - _gate0:.1f}s")
             if hung_up.is_set():

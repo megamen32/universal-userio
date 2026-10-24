@@ -675,8 +675,8 @@ class RawOpeningFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         # Run the actual greeting consumer in memory; no phone, SIP or TTS calls.
         call_id = uuid.uuid4()
-        prepared = bridge.PreparedCall(greeting_text=opening, greeting_pcm=b'pcm',
-            attention_text='Алло', attention_pcm=b'pcm', context='Проверка голоса',
+        prepared = bridge.PreparedCall(greeting_text=opening, greeting_pcm=b'greeting-pcm',
+            attention_text='Алло', attention_pcm=b'attention-pcm', context='Проверка голоса',
             agent_context={'session_id': 'exact', 'session_harness': 'codex'}, created_at=0)
         pipelines, brains = [], []
         real_pipeline, real_brain = bridge.LocalSpeechPipeline, bridge.FastAgentIncidentBrain
@@ -690,8 +690,11 @@ class RawOpeningFallbackTests(unittest.IsolatedAsyncioTestCase):
             return True
         played = []
         async def play(writer, chunks, hung_up, **kwargs):
-            played.append(True)
-            if len(played) == 2:
+            for chunk in chunks:
+                played.append(chunk)
+            # The prepared greeting is the first audible sound of a prepared
+            # call; the call ends right after the greeting was consumed.
+            if played and played[-1] == b'greeting-pcm':
                 hung_up.set()
         async def noop(*args, **kwargs):
             pass
@@ -710,6 +713,9 @@ class RawOpeningFallbackTests(unittest.IsolatedAsyncioTestCase):
             await bridge.handle_call(object(), Writer(), Broker(), config, {str(call_id): prepared}, hangup=noop)
         self.assertEqual({'role': 'assistant', 'content': opening}, pipelines[0].history[1])
         self.assertEqual([('ассистент', opening)], brains[0].history)
+        # The first audible sound is the announced greeting; the attention
+        # prompt is never played (canary mavis08, 2026-10-24).
+        self.assertEqual([b'greeting-pcm'], played)
 
     async def test_raw_quota_after_available_probe_retries_only_tool_free_generation(self):
         import urllib.error
