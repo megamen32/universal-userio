@@ -36,6 +36,62 @@ FIXTURES = {
 MAX_SECONDS = 240
 MAX_INCOMING_AUDIO_BUFFER_BYTES = 1024 * 1024
 
+# The scoped QA binding the engine reads from AGENTCALL_QA_SCOPE.
+QA_SCOPE_ROOM = "!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com"
+QA_SCOPE_TRANSPORT = "matrix"
+QA_SCOPE_PARTICIPANTS = (
+    "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
+    "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
+)
+QA_SCOPE_IDENTITY_MAP = {
+    "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com":
+        "9b4ab5e7-546e-4df9-a4c9-5c28f850cd26",
+}
+QA_SCOPE_TTL_SECONDS = 900
+
+
+def build_qa_scope(caller, room=QA_SCOPE_ROOM, transport=QA_SCOPE_TRANSPORT,
+                   participants=QA_SCOPE_PARTICIPANTS,
+                   ttl_seconds=QA_SCOPE_TTL_SECONDS, now=None):
+    """Build the server-side QA scope for exactly the scoped test pair.
+
+    Deny by default: only the room, transport and participant pair issued for
+    this QA run are accepted, the caller must be one of them, and the expiry
+    is always computed live so a stale scope can never be replayed.
+    """
+    if room != QA_SCOPE_ROOM:
+        raise ValueError("qa_scope_room_not_allowed")
+    if transport != QA_SCOPE_TRANSPORT:
+        raise ValueError("qa_scope_transport_not_allowed")
+    pair = tuple(sorted(str(item) for item in participants))
+    if pair != tuple(sorted(QA_SCOPE_PARTICIPANTS)):
+        raise ValueError("qa_scope_pair_not_allowed")
+    if caller not in pair:
+        raise ValueError("qa_scope_caller_not_in_pair")
+    ttl = int(ttl_seconds)
+    if ttl <= 0 or ttl > 3600:
+        raise ValueError("qa_scope_ttl_out_of_range")
+    moment = time.time() if now is None else float(now)
+    expires_at = moment + ttl
+    return {
+        "entries": [
+            {"caller": caller, "room": room, "transport": transport,
+             "participants": list(pair), "expires_at": expires_at},
+            {"room": room, "transport": transport, "promote_guest": True,
+             "participants": list(pair), "expires_at": expires_at},
+        ],
+        "identity_map": dict(QA_SCOPE_IDENTITY_MAP),
+    }
+
+
+def qa_scope_readback(scope, ttl_seconds):
+    """Printable proof of the scope the engine is about to read."""
+    entry = scope["entries"][0]
+    return {"event": "qa_scope", "room": entry["room"], "transport": entry["transport"],
+            "participants": list(entry["participants"]),
+            "expires_at": entry["expires_at"], "ttl_seconds": int(ttl_seconds),
+            "identity_map_keys": sorted(scope.get("identity_map") or {})}
+
 
 def _request(server: str, token: str, method: str, path: str, payload=None):
     body = None if payload is None else json.dumps(payload).encode()
@@ -440,6 +496,23 @@ async def run():
             async def fixture_answer_gate(_call_id, hung_up):
                 return not hung_up.is_set()
 
+            # The engine reads AGENTCALL_QA_SCOPE in this same process at
+            # admission time, so the live scoped binding is installed right
+            # before the engine starts, with a freshly computed expiry.
+            context = prepared.agent_context or {}
+            missing = [field for field in ("call_mode", "qa_caller", "qa_room",
+                                           "voice_transport")
+                       if not context.get(field)]
+            if missing:
+                raise PermissionError("fixture_qa_binding_incomplete")
+            if (context.get("call_mode") != "qa_incoming"
+                    or context.get("qa_caller") != caller_id
+                    or context.get("qa_room") != room_id
+                    or context.get("voice_transport") != QA_SCOPE_TRANSPORT):
+                raise PermissionError("fixture_qa_binding_mismatch")
+            scope = build_qa_scope(caller_id, room=room_id)
+            os.environ["AGENTCALL_QA_SCOPE"] = json.dumps(scope, ensure_ascii=False)
+            print(json.dumps(qa_scope_readback(scope, QA_SCOPE_TTL_SECONDS)), flush=True)
             secretary_scope = FixtureSecretaryScope(caller_id)
             secretary_scope.__enter__()
             engine = asyncio.create_task(handle_call(

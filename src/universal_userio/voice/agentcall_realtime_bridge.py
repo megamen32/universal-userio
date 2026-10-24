@@ -3675,11 +3675,35 @@ def _qa_owner_identity_ids():
             if isinstance(key, str) and key.startswith('phone:') and isinstance(value, str)}
 
 
+def _qa_scope_pair(scope, room, transport, skip=None):
+    """Participants the scope declares for one room+transport.
+
+    The entry at ``skip`` is left out, so the pair is read from the scope
+    independently of the entry that admits the call.
+    """
+    entries = scope.get('entries') if isinstance(scope, dict) else None
+    participants = set()
+    for position, entry in enumerate(entries or []):
+        if skip is not None and position == skip:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get('room') != room or entry.get('transport') != transport:
+            continue
+        declared = entry.get('participants')
+        if not isinstance(declared, list):
+            continue
+        participants.update(item for item in declared if isinstance(item, str) and item)
+    return participants
+
+
 def qa_test_admission(call_mode, prepared, now=None):
     """Allow a scoped test session only for an explicit, short-lived binding.
 
     The binding is caller+room+transport plus an expiry, held in the server-side
-    environment (never in caller-supplied context). Any mismatch denies.
+    environment (never in caller-supplied context). The matched entry must also
+    name the scoped test pair, so a single caller alone never opens a session.
+    Any mismatch denies.
     """
     if call_mode != 'qa_incoming' or prepared is None:
         return {'allowed': False, 'reason': 'not_qa_mode'}
@@ -3705,7 +3729,7 @@ def qa_test_admission(call_mode, prepared, now=None):
     if isinstance(resolved, str) and resolved in owner_ids:
         return {'allowed': False, 'reason': 'qa_scope_is_owner_identity'}
     moment = time.time() if now is None else float(now)
-    for entry in entries:
+    for position, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         if (entry.get('caller') != caller or entry.get('room') != room
@@ -3714,6 +3738,15 @@ def qa_test_admission(call_mode, prepared, now=None):
         expires = entry.get('expires_at')
         if not isinstance(expires, (int, float)) or float(expires) <= moment:
             return {'allowed': False, 'reason': 'qa_scope_expired'}
+        # The pair binds the session to the scoped test participants: the scope
+        # must declare the pair for this room+transport, and the entry that
+        # admits this call must name the very same pair itself.
+        pair = _qa_scope_pair(scope, room, transport, skip=position)
+        declared = entry.get('participants')
+        declared_set = ({item for item in declared if isinstance(item, str)}
+                         if isinstance(declared, list) else set())
+        if (caller not in pair or not declared_set or not pair <= declared_set):
+            return {'allowed': False, 'reason': 'qa_scope_pair_incomplete'}
         return {'allowed': True, 'reason': 'qa_scope_admitted',
                 'caller': caller, 'room': room, 'transport': transport}
     return {'allowed': False, 'reason': 'qa_scope_no_match'}
