@@ -53,3 +53,14 @@ def test_native_primary_is_not_replaced_without_handoff(monkeypatch):
     with pytest.raises(RuntimeError,match='native idle handoff'):
         module.install(IMAGE,'calls-primary','userio-voice','/etc/config','/var/lib/data',9092)
     assert all(method=='GET' for method,_ in calls)
+
+
+def test_image_wires_fixed_matrix_and_fastagent_interpreters():
+    root=Path(__file__).resolve().parents[1]
+    portable=(root/'Dockerfile').read_text().split('AS portable-voice',1)[1]
+    # The canonical gateway spawns these exact paths; a clean host cannot provide them.
+    assert 'ln -s /usr/local /opt/universal-userio/.venv' in portable
+    assert '/opt/universal-userio/.venv/bin/python -c' in portable
+    module=load()
+    assert module.runtime_environment({})['AGENTCALL_FAST_AGENT_PYTHON']=='/usr/local/bin/python'
+    assert module.runtime_environment({})['AGENTCALL_FAST_AGENT_BIN']=='/usr/local/bin/fast-agent'

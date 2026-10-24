@@ -286,9 +286,13 @@ standby не становится их получателем. Автомати�
 Сборка: `container_release.py context --portable-voice --output <context.tar>`
 берёт только опубликованный main и exact adapter2178f365. Затем существующий
 shared builder `docker buildx build --builder k3s-ci-shared --target portable-voice
---build-arg USERIO_REVISION=<sha> --platform linux/amd64 --push -t <immutabletag> -`
-читает этот tar из stdin. Digest и module manifest — identity релиза. На всех
+--build-arg USERIO_REVISION=<sha> --platform linux/amd64 --push -t <immutabletag> <build-context-dir>`
+читает распакованный release tar (это buildartifact без Git, не новый checkout). Digest и module manifest — identity релиза. На всех
 узлах44→100→88last используется этот digest; повторных сборок/pipinstall нет.
 Existing unattended updater остаётся paused до доставки такого release; его
 старый source-build режим не должен включаться для portable image. Порядок,
 idlejoin и конечная реальная канарейка принадлежат текущей rolling-release задаче.
+
+Telegram native media пока не объявлен portablecapability: проверенный wheelpin
+и его workerinterpreter для текущего88 не установлены поmetadata; старый3.0.3
+не подмешивается в этот image. Matrix/phone engine и SDKadapter от этого не зависят.

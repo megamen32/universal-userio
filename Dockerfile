@@ -98,9 +98,11 @@ COPY scripts /opt/universal-userio/scripts
 COPY deploy/containers/external/agentcall_secretary_voice.py /usr/local/lib/agentcall/agentcall_secretary_voice.py
 COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
 RUN pip install --no-deps --no-cache-dir . \
+    && ln -s /usr/local /opt/universal-userio/.venv \
     && find /opt/universal-userio/src/universal_userio/voice -maxdepth 1 -name '*.py' \
         -exec ln -s '{}' /usr/local/lib/agentcall/ \; \
     && python -c 'import aiohttp,websockets,pydantic; from livekit import rtc; import agentcall_secretary_voice, agentcall_realtime_bridge' \
+    && /opt/universal-userio/.venv/bin/python -c 'from livekit import rtc; from fast_agent.core.fastagent import FastAgent' \
     && pip check
 ENTRYPOINT ["python", "/opt/universal-userio/scripts/voice_container.py"]
 CMD ["serve"]

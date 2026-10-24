@@ -140,6 +140,13 @@ def health():
     return 0
 
 
+def runtime_environment(settings):
+    result=dict(settings)
+    result.update(AGENTCALL_FAST_AGENT_PYTHON="/usr/local/bin/python",
+                  AGENTCALL_FAST_AGENT_BIN="/usr/local/bin/fast-agent")
+    return result
+
+
 def serve():
     path=Path('/etc/userio-voice/environment.json')
     metadata=path.stat()
@@ -148,7 +155,7 @@ def serve():
     if not isinstance(settings,dict) or any(not isinstance(v,str) for v in settings.values()):
         raise ValueError('environment.json must map strings to strings')
     role=os.environ['USERIO_VOICE_ROLE'];port=os.environ['USERIO_VOICE_PORT']
-    os.environ.update(settings)
+    os.environ.update(runtime_environment(settings))
     os.environ.update(AGENTCALL_FAST_AGENT_HOME='/var/lib/agentcall/fast-agent-home',
                       AGENTCALL_TTS_PHONE_FALLBACK='0')
     # A standby starts the same gateway, isolated from provider/account ingress.
