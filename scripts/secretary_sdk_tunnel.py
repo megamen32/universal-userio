@@ -14,6 +14,7 @@ import os
 import re
 from pathlib import Path
 import shlex
+import socket
 import subprocess
 import tempfile
 import time
@@ -103,10 +104,15 @@ def voice_idle():
 
 
 def start_forward(address):
+    reverse=os.environ.get('USERIO_PRIMARY_CONTROL_REVERSE_SOCKET','')
+    if reverse and (socket.gethostname()!='roomhacker-server-88'
+                    or reverse!='/run/agentcall/primary88/control.sock'):
+        raise ValueError('primary88 private reverse control route required')
+    extra=['-R',reverse+':/run/agentcall/control.sock'] if reverse else []
     return subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
                '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=10',
                '-o', 'ServerAliveCountMax=3', '-N', '-L',
-               f'127.0.0.1:{LOCAL_PORT}:{address}:8080', SSH_HOST])
+               f'127.0.0.1:{LOCAL_PORT}:{address}:8080', *extra, SSH_HOST])
 
 
 def stop_forward(child):

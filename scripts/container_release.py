@@ -71,7 +71,7 @@ BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
     'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
     'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
     'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
-    'matrix_calls.py', 'telemost/meetings.py', 'static/telemost.html')) + tuple(
+    'matrix_calls.py', 'noticeplace_calls.py', 'telemost/meetings.py', 'static/telemost.html')) + tuple(
     'deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs'))
 
 

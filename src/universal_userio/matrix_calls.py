@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import stat
 import threading
 import time
 from urllib.parse import quote
@@ -26,6 +27,31 @@ MEMBER = 'org.matrix.msc3401.call.member'
 RING = 'org.matrix.msc4075.rtc.notification'
 # In-process authority; HTTP/MCP JSON cannot supply a server admission namespace.
 _NOTICEPLACE_SCOPE_AUTHORITY = object()
+CONTROL_CONFIG = Path('/etc/userio-containers/matrix-call-control.json')
+
+
+def control_route(*, required=False):
+    """Resolve private primary IPC; invalid configured routes never use local voice."""
+    try:
+        metadata=CONTROL_CONFIG.stat()
+    except FileNotFoundError:
+        if not required:return None
+        raise PermissionError('primary Matrix voice control is not configured') from None
+    except OSError:
+        raise PermissionError('primary Matrix voice control is not authorized') from None
+    try:
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid not in {0,os.geteuid()}
+                or metadata.st_mode&0o077 or metadata.st_size>4096):
+            raise ValueError('private control configuration required')
+        value=json.loads(CONTROL_CONFIG.read_text())
+        if (not isinstance(value,dict) or set(value)!={'socket_path','execution_host'}
+                or value['execution_host']!='roomhacker-server-88'
+                or value['socket_path']!='/run/agentcall/primary88/control.sock'):
+            raise ValueError('primary88 private control route required')
+        return value
+    except (OSError,ValueError,TypeError):
+        raise PermissionError('primary Matrix voice control is not authorized') from None
+
 
 
 def settle_disconnected_call(record):
@@ -87,6 +113,7 @@ class MatrixCalls:
               participants=None, request_scope=None, _scope_authority=None):
         if request_scope is not None and _scope_authority is not _NOTICEPLACE_SCOPE_AUTHORITY:
             raise PermissionError('call request scope is server-controlled')
+        route=control_route(required=request_scope is not None)
         if confirm is not True: raise ValueError('explicit call confirmation required')
         if not self.service._store.capability_enabled('send', user_id=user_id):
             raise PermissionError('send capability disabled')
@@ -122,6 +149,7 @@ class MatrixCalls:
                   'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
                   **({'voice_model': ai_settings['model']} if isinstance(ai_settings, dict) and ai_settings.get('model') else {}),
                   **({'agent_context':effective_agent_context} if effective_agent_context else {})}
+        if route is not None:config['control_route']=route
         if participants is not None:config['participants']=sorted(participants)
         if request_scope is not None:
             if participants is None or not isinstance(request_scope,str) or not request_scope:
@@ -182,7 +210,7 @@ class MatrixCalls:
     async def _call(self, record, secret, identity, stop, voice_ai=None):
         # The existing voice service launches the fixed worker in its own
         # finite budget and effective environment. No voice settings live here.
-        reader, writer = await asyncio.open_unix_connection('/run/agentcall/control.sock', limit=65536)
+        reader, writer = await asyncio.open_unix_connection(record.get('control_route',{}).get('socket_path','/run/agentcall/control.sock'), limit=65536)
         request = {'action':'matrix_transport','call':record,'account':secret,'identity':identity,
                    'rtc_auth_url':os.environ['USERIO_MATRIX_RTC_AUTH_URL']}
         if voice_ai is not None:
@@ -229,7 +257,10 @@ class MatrixCalls:
                 except asyncio.TimeoutError: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
             else: await consumer
             settle_disconnected_call(record)
-            if record.get('voice_call_id'):
+            if record.get('control_route'):
+                # Media remains on the execution host; never infer remote audio from a local archive.
+                record['recording_host']=record['control_route']['execution_host']
+            elif record.get('voice_call_id'):
                 from .call_audio import recorded_track_bytes
                 from .call_audio import ARCHIVE
                 folder = ARCHIVE/record['voice_call_id']

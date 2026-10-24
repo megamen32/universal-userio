@@ -214,6 +214,8 @@ def test_explicit_policy_destination_requires_server_authorization_not_owner_def
 
 
 def test_scoped_bot_call_freezes_destination_and_uses_approved_account_owner(tmp_path,monkeypatch):
+    control=tmp_path/'control.json';control.write_text(json.dumps({'socket_path':'/run/agentcall/primary88/control.sock','execution_host':'roomhacker-server-88'}));control.chmod(0o600)
+    monkeypatch.setattr(matrix_calls,'CONTROL_CONFIG',control)
     route=tmp_path/'routes.json';route.write_text(json.dumps({'routes':[dict(POLICY_DESTINATION,user_id='qa-user')]}));route.chmod(0o600)
     monkeypatch.setenv('USERIO_MATRIX_NOTICE_ROUTES_FILE',str(route))
     service=Mock();service._store.default_user_id='owner';service._store.capability_enabled.return_value=True
@@ -276,3 +278,50 @@ def test_public_json_cannot_supply_machine_admission_scope(tmp_path):
                     participants=POLICY_DESTINATION['participants'],request_scope='owner',
                     _scope_authority='owner')
     assert not (tmp_path/'calls').exists()
+
+
+def test_scoped_call_requires_private_remote_control_configuration(tmp_path,monkeypatch):
+    monkeypatch.setattr(matrix_calls,'CONTROL_CONFIG',tmp_path/'missing.json',raising=False)
+    with pytest.raises(PermissionError):
+        matrix_calls.control_route(required=True)
+    config=tmp_path/'control.json';config.write_text(json.dumps({'socket_path':'/run/agentcall/primary88/control.sock','execution_host':'roomhacker-server-88'}));config.chmod(0o600)
+    monkeypatch.setattr(matrix_calls,'CONTROL_CONFIG',config)
+    assert matrix_calls.control_route(required=True)['execution_host']=='roomhacker-server-88'
+    config.chmod(0o644)
+    with pytest.raises(PermissionError):matrix_calls.control_route(required=True)
+    with pytest.raises(PermissionError):matrix_calls.control_route(required=False)
+
+
+def test_primary_control_stream_keeps_backend_receipt_and_transfers_account_snapshot(tmp_path,monkeypatch):
+    import asyncio
+    control={'socket_path':'/run/agentcall/primary88/control.sock','execution_host':'roomhacker-server-88'}
+    call_id=str(uuid.uuid4());voice_id=str(uuid.uuid4())
+    record={'call_id':call_id,'user_id':'qa-user','account_ref':'matrix:qa-a','history_account_ref':'matrix:qa-a',
+            'room_id':'!qa:hs','target':'@b:hs','purpose':'QA','greeting':'QA','max_seconds':30,
+            'status':'accepted','answered':False,'control_route':control}
+    account={'homeserver':'https://hs','access_token':'fixture-only','matrix_user_id':'@a:hs'}
+    identity={'user_id':'@a:hs'}
+    calls=matrix_calls.MatrixCalls(Mock(),tmp_path/'receipts');(calls.root/call_id).mkdir(parents=True)
+    monkeypatch.setattr(calls,'_emit',Mock())
+    monkeypatch.setenv('USERIO_MATRIX_RTC_AUTH_URL','https://rtc.example.org')
+    sent=[]
+    class Reader:
+        events=[{'event':'active','callId':voice_id},{'event':'ended'},None]
+        async def readline(self):
+            event=self.events.pop(0)
+            return (json.dumps(event)+'\n').encode() if event else b''
+    class Writer:
+        def write(self,value):sent.append(json.loads(value))
+        async def drain(self):pass
+        def close(self):pass
+        async def wait_closed(self):pass
+    async def connect(path,**kwargs):
+        assert path==control['socket_path']
+        return Reader(),Writer()
+    monkeypatch.setattr(matrix_calls.asyncio,'open_unix_connection',connect)
+    calls._run(record,account,identity,threading.Event())
+    assert sent[0]['call']['room_id']=='!qa:hs' and sent[0]['account']==account and sent[0]['identity']==identity
+    receipt=calls.get(call_id,'qa-user')
+    assert receipt['status']=='completed' and receipt['answered'] is True
+    assert receipt['recording_host']=='roomhacker-server-88'
+    assert 'received_audio_bytes' not in receipt  # Remote archive was not measured locally.

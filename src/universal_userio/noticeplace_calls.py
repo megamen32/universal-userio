@@ -63,7 +63,7 @@ def _binding(value):
 
 def _policy_destination(payload, actor_id, *, machine_authorized):
     binding=_binding(payload['destination'])
-    name=os.environ.get('USERIO_MATRIX_NOTICE_ROUTES_FILE','')
+    name=os.environ.get('USERIO_MATRIX_NOTICE_ROUTES_FILE','/etc/userio-containers/noticeplace-matrix-routes.json')
     if not name:raise PermissionError('Notice Place policy route is not authorized')
     try:
         path=Path(name);metadata=path.stat()

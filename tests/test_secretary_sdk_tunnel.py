@@ -101,3 +101,23 @@ def test_exact_zero_call_counts_allow_rebind(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(tunnel.subprocess, 'run', lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout='0 active channels\n0 active calls\n11 calls processed\n'))
     assert tunnel.voice_idle() is True
+
+
+def test_primary88_reverse_control_reuses_sdk_ssh_without_changing_forward(monkeypatch):
+    calls=[]
+    monkeypatch.setattr(tunnel.subprocess,'Popen',lambda command:calls.append(command))
+    monkeypatch.setenv('USERIO_PRIMARY_CONTROL_REVERSE_SOCKET','/run/agentcall/primary88/control.sock')
+    monkeypatch.setattr(tunnel.socket,'gethostname',lambda:'roomhacker-server-88',raising=False)
+    tunnel.start_forward('192.168.128.7')
+    assert len(calls)==1 and calls[0][-1]==tunnel.SSH_HOST
+    assert '127.0.0.1:18086:192.168.128.7:8080' in calls[0]
+    assert '/run/agentcall/primary88/control.sock:/run/agentcall/control.sock' in calls[0]
+    assert calls[0].count('-R')==1
+
+
+def test_standby_cannot_export_primary_control(monkeypatch):
+    monkeypatch.setenv('USERIO_PRIMARY_CONTROL_REVERSE_SOCKET','/run/agentcall/primary88/control.sock')
+    monkeypatch.setattr(tunnel.socket,'gethostname',lambda:'server-44')
+    calls=[];monkeypatch.setattr(tunnel.subprocess,'Popen',lambda command:calls.append(command))
+    with pytest.raises(ValueError):tunnel.start_forward('192.168.128.7')
+    assert not calls

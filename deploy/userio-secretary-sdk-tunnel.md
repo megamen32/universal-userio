@@ -68,3 +68,46 @@ Native SDK v0.8.1-alpha.12 compares the configured app bearer as an opaque
 value; it does not parse its JWT expiry on this direct endpoint. The transport
 does not impose a new expiry availability gate. Refresh follows actual native
 app replacement/token rotation, not an inferred JWT deadline.
+
+## Primary88 Matrix private control export
+
+The same existing SDK SSH transport may export the primary88 gateway Unix
+control socket to server100. Only on `roomhacker-server-88`, set the existing
+unit's environment `USERIO_PRIMARY_CONTROL_REVERSE_SOCKET=/run/agentcall/primary88/control.sock`.
+The published helper adds exactly one SSH `-R` to its existing process while
+preserving the SDK `-L` and protected references; no second caller, daemon or
+public port is created. Other hosts reject this setting.
+
+The runtime owner must first confirm the actual88 primary control socket and
+an idle resource join. On100 provision only `/run/agentcall/primary88` for the
+existing SSH service user, mode0700, inside the backend's existing `/run/agentcall`
+mount. Keep the forwarded socket private and validate its owner/mode after bind.
+Do not weaken `/run/agentcall` or replace its local100 socket. A stale forwarded
+socket is not proof of a live route: reconcile the existing SSH session, then
+remove only its owned stale socket at an idle handoff before one tunnel restart.
+Do not enable broad StreamLocalBindUnlink or overwrite foreign sockets.
+
+Backend private config `/etc/userio-containers/matrix-call-control.json` (root or
+backend service owner, mode0600, already-mounted directory):
+```json
+{"socket_path":"/run/agentcall/primary88/control.sock","execution_host":"roomhacker-server-88"}
+```
+Once configured, all new Matrix calls use it and invalid/unavailable remote IPC
+never falls back to100. Explicit Notice Place policy calls require this config.
+Their route file defaults to `/etc/userio-containers/noticeplace-matrix-routes.json`,
+so no backend environment/HostConfig change is necessary. Source support alone
+neither provisions these files nor authorizes any call.
+
+The typed request transfers the admitted record, account credential/identity
+snapshot, RTC endpoint and per-user AI settings over SSH;88 does not need a
+replica of UserIO SQLite or another account registry. The fixed worker uses88's
+existing installed voice config/adapter and writes media to88's existing archive.
+Events return to100, which owns the durable call receipt and normalized history.
+Remote receipts expose `recording_host`; backend100 does not infer audio bytes
+from an unrelated local archive. Serving those remote recordings through the
+backend audio UI is a separate archive-delivery concern, not answered-call ACK proof.
+
+Rollback: while idle, remove only this owned route configuration and reverse
+export from the existing transport, then restore the prior backend release via
+its existing receipt procedure. Explicit policy calls fail closed without the
+primary route; do not replay accepted/UNKNOWN receipts or flip to owner defaults.

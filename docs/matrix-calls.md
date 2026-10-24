@@ -66,3 +66,9 @@ starts the fixed media worker inside the existing AgentCall gateway budget
 (2GiB RAM, 512MiB swap, 2 CPUs, 128 tasks), inheriting its effective voice
 configuration. One Matrix call runs at a time, up to ten minutes of conversation.
 The existing bounded private recording archive and quota apply.
+
+Explicit policy calls also require the server-private primary88 control route.
+The existing SSH SDK transport can carry this existing Unix control protocol;
+see [primary88 private IPC](../deploy/userio-secretary-sdk-tunnel.md#primary88-matrix-private-control-export).
+No UserIO SQLite replica or copied developer code is needed on88. Admission and
+terminal receipts stay on the backend; voice execution and media archive stay88.

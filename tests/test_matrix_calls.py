@@ -5,6 +5,11 @@ from unittest.mock import Mock
 
 import pytest
 from universal_userio import matrix_calls, call_audio
+
+
+@pytest.fixture(autouse=True)
+def isolated_control_config(tmp_path,monkeypatch):
+    monkeypatch.setattr(matrix_calls,'CONTROL_CONFIG',tmp_path/'matrix-control.json')
 from universal_userio.matrix_calls import MEMBER, MatrixCalls, fresh_answer
 
 
