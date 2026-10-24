@@ -80,7 +80,7 @@ def create_spec(image, role, config, data, port):
     for path in (config,data):
         if not Path(path).is_absolute() or ':' in path or '..' in Path(path).parts:
             raise ValueError('absolute config/data paths required')
-    return {'Image':image,'Entrypoint':['python','/opt/universal-userio/scripts/voice_container.py'],
+    spec = {'Image':image,'Entrypoint':['python','/opt/universal-userio/scripts/voice_container.py'],
             'Cmd':['serve'],'Env':[f'USERIO_VOICE_ROLE={role}',f'USERIO_VOICE_PORT={port}'],
             'Labels':{LABEL:'1','com.userio.role':role},
             'Healthcheck':{'Test':['CMD','python','/opt/universal-userio/scripts/voice_container.py','health'],
@@ -89,6 +89,11 @@ def create_spec(image, role, config, data, port):
                           'Binds':[f'{config}:/etc/userio-voice:ro',f'{data}:/var/lib/agentcall'],
                           'Tmpfs':{'/run/agentcall':'mode=0755','/tmp':'mode=1777'},
                           'LogConfig':{'Type':'json-file','Config':{'max-size':'10m','max-file':'3'}}}}
+    if role == 'calls-primary':
+        # The existing backend reaches the typed gateway over this runtime IPC.
+        spec['HostConfig']['Binds'].append('/run/agentcall:/run/agentcall')
+        del spec['HostConfig']['Tmpfs']['/run/agentcall']
+    return spec
 
 
 def install(image,role,name,config,data,port, *, timeout=75):

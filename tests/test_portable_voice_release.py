@@ -76,7 +76,7 @@ def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch):
         return {'Id':'existing','Image':image_id,
                 'Config':{'Labels':{module.LABEL:'1','com.userio.role':'calls-primary'},
                           'Env':['USERIO_VOICE_ROLE=calls-primary','USERIO_VOICE_PORT=9092']},
-                'HostConfig':{'Binds':['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall']},
+                'HostConfig':{'Binds':['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']},
                 'State':{'Running':True,'Health':{'Status':'healthy'}}}
     monkeypatch.setattr(module,'api',api)
     assert module.install(IMAGE,'calls-primary','userio-voice','/etc/config','/var/lib/data',9092)['status']=='unchanged'
@@ -135,3 +135,12 @@ def test_only_owned_stopped_older_rollback_retires_after_health(monkeypatch):
     monkeypatch.setattr(module,'api',api)
     assert module.install(IMAGE,'standby','userio-voice-check','/etc/config','/var/lib/data',19095)['status']=='installed'
     assert calls[-1]==('DELETE','/containers/userio-voice-check-previous-older0123456')
+
+
+def test_primary_exports_existing_typed_gateway_ipc_but_standby_does_not():
+    module=load()
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert '/run/agentcall:/run/agentcall' in primary['HostConfig']['Binds']
+    assert '/run/agentcall' not in primary['HostConfig']['Tmpfs']
+    standby=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
+    assert '/run/agentcall:/run/agentcall' not in standby['HostConfig']['Binds']

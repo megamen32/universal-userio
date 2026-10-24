@@ -311,3 +311,9 @@ Docker init (как существующий Compose), timeout API40секунд
 не повторяет stop уже остановленного компонента. Тонкий target
 `portable-voice-controller` переиспользует проверенный runtime digest4c280012,
 заменяет только controller и опубликованный adapter5de41fd7; pip/apt не запускаются.
+
+Calls-primary также публикует существующий typed control/event IPC через
+`/run/agentcall:/run/agentcall` для штатного UserIO backend; standby оставляет
+эти sockets в private tmpfs. Это runtime IPC, не code mount. Native owner
+останавливает старый gateway до primary-перехода, чтобы не было двух владельцев
+одних sockets/9092. Входящий AudioSocket и Matrix control используют тот же image.
