@@ -200,6 +200,68 @@ class TelegramMirrorProvider:
                                'fetched':fetched,'terminal_empty':terminal},'observed_at':time.time(),
             'native_fetched':page.get('fetched'),'provider_read_acknowledged':False}
 
+    def message(self, *, peer_id, provider_message_id, conversation_id, read_media=False, attachment_index=0):
+        """Resolve one exact native message id, live-confirmed, and project it.
+
+        The provider view must still show this id for this peer: the stored row
+        is only the projected content of that confirmed native record, never a
+        stand-in for a message the provider no longer has.
+        """
+        if not isinstance(peer_id,str) or not re.fullmatch(r'-?[1-9][0-9]*',peer_id):
+            raise ValueError('exact_peer_required')
+        if not isinstance(provider_message_id,str) or not re.fullmatch(r'[1-9][0-9]*',provider_message_id):
+            raise ValueError('exact_provider_message_id_required')
+        if type(attachment_index) is not int or attachment_index<0:
+            raise ValueError('invalid_attachment_index')
+        native_id=int(provider_message_id)
+        token=os.environ.get('USERIO_API_TOKEN','')
+        if not token:raise ValueError('existing Telegram mirror credential unavailable')
+        url=os.environ.get('USERIO_TELEGRAM_QR_URL','http://127.0.0.1:18095').rstrip('/')+'/reconcile'
+        # The native offset is exclusive: the newest record below native_id+1 is
+        # the requested one when the provider still has it. A wider page would
+        # miss an old message and turn a live id into a false negative.
+        request=urllib.request.Request(url,data=canonical({'account_id':self.account_ref,
+            'peer_id':peer_id,'limit':1,'before_id':min(native_id+1,2147483647),'scan':True}),
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+        with self.opener(request,timeout=30) as response:
+            raw=response.read(65537)
+        if len(raw)>65536:raise ValueError('Telegram page receipt exceeds limit')
+        page=json.loads(raw)
+        if (page.get('account_id'),page.get('peer_id'))!=(self.account_ref,peer_id):
+            raise ValueError('Telegram page scope conflict')
+        if page.get('provider_read_acknowledged') is not False:
+            raise ValueError('invalid fresh Telegram receipt')
+        ids=page.get('message_ids')
+        if not isinstance(ids,list) or any(type(i) is not int or not 0<i<2**31 for i in ids):
+            raise ValueError('invalid fresh Telegram receipt')
+        fetched=page.get('fetched');oldest=page.get('oldest_id')
+        if not (native_id in ids or (type(fetched) is int and fetched>0 and oldest==native_id)):
+            raise ValueError('provider_source_not_live')
+        mid=self.account_ref+'|'+peer_id+':'+provider_message_id
+        message=self.service._store.message(mid,source='telegram',user_id=self.authorized_user)
+        if not message:raise ValueError('fresh Telegram projection missing')
+        api=Messenger(self.service._store,self.service,
+            UserPrincipal(self.authorized_user,'mirror-reader','user',read_only=True))
+        conv=api._conversation(self.account_ref,conversation_id)
+        if str(conv.get('peer_id'))!=peer_id:raise ValueError('Telegram projection scope conflict')
+        return self._validated_projection(api._project(conv,message),peer_id,conversation_id)
+
+    def _validated_projection(self, projected, peer_id, conversation_id):
+        """The same shape the relay provider publishes, with the same refusal codes."""
+        if not isinstance(projected,dict):raise ValueError('actual provider source missing')
+        s=projected.get('source') or {};a=projected.get('author') or {}
+        if (s.get('account_ref'),s.get('peer_id'),s.get('conversation_id'))!=(self.account_ref,peer_id,conversation_id):
+            raise ValueError('provider projection scope conflict')
+        raw_id=s.get('provider_message_id')
+        if (not isinstance(raw_id,str) or not raw_id.isdigit()
+                or s.get('message_id')!=self.account_ref+'|'+peer_id+':'+raw_id
+                or s.get('direction') not in {'incoming','outgoing'}
+                or not isinstance(projected.get('text'),str)
+                or type(projected.get('at')) not in (int,float) or projected['at']<=0):
+            raise ValueError('invalid provider projection origin')
+        if not a.get('id'):raise ValueError('provider_author_unavailable')
+        return projected
+
     def media(self, projected, *, attachment_index=0):
         """Return one stored Telegram message's native media through its owned bridge."""
         source=projected.get('source') or {}
