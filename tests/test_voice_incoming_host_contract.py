@@ -60,4 +60,39 @@ class IncomingHostContract(unittest.IsolatedAsyncioTestCase):
             result=controller.prepare_incoming('')
         self.assertTrue(controller.prepared_calls[result['call_id']].host_answered_incoming)
 
+    def test_incoming_greeting_follows_existing_asset_root(self):
+        import os
+        with patch.dict(os.environ,{'AGENTCALL_ASSET_ROOT':'/var/lib/agentcall'},clear=True):
+            self.assertEqual(fixtures.bridge.BackendConfig.from_environment().incoming_greeting_wav,
+                             '/var/lib/agentcall/incoming-greeting.wav')
+
+    def test_explicit_incoming_greeting_ref_takes_precedence(self):
+        import os
+        with patch.dict(os.environ,{'AGENTCALL_ASSET_ROOT':'/var/lib/agentcall',
+                                    'AGENTCALL_INCOMING_GREETING_WAV':'/etc/userio-voice/greeting.wav'},clear=True):
+            self.assertEqual(fixtures.bridge.BackendConfig.from_environment().incoming_greeting_wav,
+                             '/etc/userio-voice/greeting.wav')
+
+    def test_legacy_incoming_greeting_ref_is_preserved(self):
+        import os
+        with patch.dict(os.environ,{},clear=True):
+            self.assertEqual(fixtures.bridge.BackendConfig.from_environment().incoming_greeting_wav,
+                             '/usr/local/lib/agentcall/incoming-greeting.wav')
+
+    def test_prepare_incoming_reads_owner_and_guest_assets_from_data_root(self):
+        import os,tempfile,wave
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ('incoming-greeting.wav','incoming-guest-greeting.wav'):
+                with wave.open(str(Path(folder)/name),'wb') as wav:
+                    wav.setparams((1,2,8000,0,'NONE','not compressed'))
+                    wav.writeframes(b'\xe8\x03\x18\xfc'*16000)
+            with patch.dict(os.environ,{'AGENTCALL_ASSET_ROOT':folder,'AGENTCALL_OUTBOUND_TARGET':'+79990000001'},clear=True),patch.object(fixtures.bridge,'load_wait_prompts',return_value=(('Жду.',b'\xe8\x03'*30000),)):
+                controller=fixtures.bridge.CallController(fixtures.bridge.BackendConfig.from_environment(),{})
+                for caller,mode in (('+79990000001','incoming'),('','incoming_guest')):
+                    receipt=controller.prepare_incoming(caller)
+                    prepared=controller.prepared_calls[receipt['call_id']]
+                    self.assertEqual(prepared.agent_context['call_mode'],mode)
+                    self.assertTrue(prepared.greeting_pcm);self.assertTrue(prepared.host_answered_incoming)
+
 from test_voice_engine_fast_agent import isolate_voice_engine

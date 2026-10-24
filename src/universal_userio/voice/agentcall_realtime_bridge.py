@@ -329,6 +329,8 @@ class BackendConfig:
                 "AGENTCALL_ATTENTION_PROMPT", "Алло, алло, алло."
             ),
             greeting_wav=os.getenv("AGENTCALL_GREETING_WAV", ""),
+            incoming_greeting_wav=os.getenv('AGENTCALL_INCOMING_GREETING_WAV',
+                str(Path(os.getenv('AGENTCALL_ASSET_ROOT','/usr/local/lib/agentcall'))/'incoming-greeting.wav')),
             end_silence_seconds=float(
                 os.getenv("AGENTCALL_END_SILENCE_SECONDS", "0.3")
             ),
