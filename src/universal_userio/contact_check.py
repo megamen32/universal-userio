@@ -6,6 +6,7 @@ answer requires an explicit provider exhaustion certificate, never an empty page
 from __future__ import annotations
 
 import math
+import re
 import time
 
 
@@ -27,20 +28,54 @@ def _unreconciled_receipts(api, account_ref, conversation_id):
     return False
 
 
-def has_contacted(api, account_ref, conversation_id, *, limit=100, max_pages=5, refresh=False):
+def _username_conversation(api, account_ref, username):
+    """Read a strictly typed username; numeric input must never reach phone import."""
+    if not isinstance(username, str) or not re.fullmatch(r'@?[A-Za-z][A-Za-z0-9_]{4,31}', username):
+        raise ValueError('invalid_telegram_username')
+    if api._account(account_ref)['provider'] != 'telegram':
+        raise ValueError('telegram_account_required')
+    if api.principal.messenger_grants is not None:
+        grant = next((g for g in api.principal.messenger_grants if g['account_ref'] == account_ref), None)
+        if grant is None or grant['chats'] is not None:
+            raise PermissionError('account_scope_required_for_identity_history')
+    try:
+        provider = api._provider(account_ref)
+        peer = provider.resolve_username(username.lstrip('@'))
+        if (peer.get('account_ref') != account_ref
+                or not re.fullmatch(r'[1-9][0-9]{0,18}', peer.get('peer_id', ''))):
+            return None
+        # Reuse the ingress key and local projection; no draft or provider chat is created.
+        return api.store.ensure_contact_conversation('telegram', peer['peer_id'], user_id=api.user,
+            account_ref=account_ref, peer_id=peer['peer_id'], conversation_kind='direct', route_id='telegram')
+    except PermissionError:
+        raise
+    except Exception:
+        return None
+
+
+def has_contacted(api, account_ref, conversation_id='', *, telegram_username='', limit=100,
+                  max_pages=5, refresh=False):
     api._allow(account_ref, 'history')
-    conv = api._conversation(account_ref, conversation_id)
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('limit_must_be_1_to_100')
     if type(max_pages) is not int or not 1 <= max_pages <= 10:
         raise ValueError('max_pages_must_be_1_to_10')
     if type(refresh) is not bool:
         raise ValueError('refresh_must_be_boolean')
+    if bool(conversation_id) == bool(telegram_username):
+        raise ValueError('exactly_one_conversation_or_telegram_username_required')
+    if telegram_username and not refresh:
+        raise ValueError('username_history_requires_refresh')
+    conv = (_username_conversation(api, account_ref, telegram_username) if telegram_username
+            else api._conversation(account_ref, conversation_id))
+    identity_unavailable = conv is None
+    conv = conv or {'source': 'telegram', 'id': '', 'peer_id': '', 'conversation_kind': 'unknown'}
+    conversation_id = conv['id']
     result = {
         'schema': 'userio.contact-check.v1', 'status': 'UNKNOWN', 'reason': 'partial_history',
         'scope': {'principal_user_id': api.user, 'account_ref': account_ref, 'channel': conv['source'],
                   'conversation_id': conv['id'], 'peer_id': str(conv['peer_id']),
-                  'identity': 'exact_existing_conversation',
+                  'identity': 'resolved_telegram_username' if telegram_username else 'exact_existing_conversation',
                   'history': 'accessible_provider_history' if refresh else 'retained_history',
                   'other_accounts_channels_checked': False,
                   'team_history_checked': False,
@@ -50,10 +85,14 @@ def has_contacted(api, account_ref, conversation_id, *, limit=100, max_pages=5, 
         'fresh': False, 'observed_at': None, 'checked_at': time.time(),
         'provider_read_acknowledged': False,
     }
+    if identity_unavailable:
+        result['reason'] = 'identity_unavailable'
+        return result
     if conv['conversation_kind'] != 'direct' or not conv['peer_id']:
         result['reason'] = 'identity_not_exact_direct_contact'
         return result
     cursor, seen, all_fresh, uncertain_outgoing, all_provider = '', set(), True, False, True
+    all_projection_complete = True
     for _ in range(max_pages):
         try:
             page = api.history(account_ref, conversation_id, limit=limit, cursor=cursor, refresh=refresh)
@@ -67,6 +106,7 @@ def has_contacted(api, account_ref, conversation_id, *, limit=100, max_pages=5, 
         coverage['pages_checked'] += 1
         all_fresh = all_fresh and page.get('fresh') is True
         all_provider = all_provider and page.get('mode') == 'provider'
+        all_projection_complete = all_projection_complete and page.get('projection_complete') is True
         result['fresh'] = all_fresh
         result['observed_at'] = page.get('observed_at')
         # Validate the normalized page before accepting either evidence or a
@@ -116,7 +156,7 @@ def has_contacted(api, account_ref, conversation_id, *, limit=100, max_pages=5, 
         next_cursor = page['next_cursor']
         coverage['next_cursor'] = next_cursor
         if not next_cursor:
-            certified = (refresh and all_fresh and all_provider and not uncertain_outgoing
+            certified = (refresh and all_fresh and all_provider and all_projection_complete and not uncertain_outgoing
                          and page.get('partial') is False and page.get('exhausted') is True
                          and page.get('coverage') == 'accessible_provider_history')
             if certified:

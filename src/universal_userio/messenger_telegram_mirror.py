@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.request
 
@@ -80,6 +81,27 @@ class TelegramMirrorProvider:
                 'status':result['status'],'receipt':result['receipt'],
                 'result':{k:result[k] for k in ('title','conversation_kind','missing_invitees','participant_id') if k in result}}
 
+    def resolve_username(self, username):
+        """Use the existing connector's username READ, never its phone/import branch."""
+        if not isinstance(username,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}',username):
+            raise ValueError('invalid_telegram_username')
+        token=os.environ.get('USERIO_API_TOKEN','')
+        if not token:raise ValueError('existing Telegram mirror credential unavailable')
+        url=os.environ.get('USERIO_TELEGRAM_QR_URL','http://127.0.0.1:18095').rstrip('/')+'/resolve'
+        request=urllib.request.Request(url,data=canonical({'account_id':self.account_ref,'identifier':username}),
+            headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+        with self.opener(request,timeout=30) as response:
+            raw=response.read(65537)
+        if len(raw)>65536:raise ValueError('Telegram identity receipt exceeds limit')
+        result=json.loads(raw)
+        if (not isinstance(result,dict) or result.get('ok') is not True
+                or result.get('account_id')!=self.account_ref
+                or not isinstance(result.get('peer_id'),str)
+                or not re.fullmatch(r'[1-9][0-9]{0,18}',result['peer_id'])
+                or str(result.get('username') or '').casefold()!=username.casefold()):
+            raise ValueError('Telegram identity receipt conflict')
+        return {'account_ref':self.account_ref,'peer_id':result['peer_id']}
+
     def history(self, *, peer_id, conversation_id, limit=50, cursor=''):
         before=0
         if cursor:
@@ -105,7 +127,17 @@ class TelegramMirrorProvider:
         if (not isinstance(ids,list) or len(ids)>limit+1
                 or any(type(i) is not int or not 0<i<2**31 or before and i>=before for i in ids)
                 or page.get('provider_read_acknowledged') is not False):raise ValueError('invalid fresh Telegram receipt')
-        ids=sorted(set(ids),reverse=True)
+        unique_ids=sorted(set(ids),reverse=True)
+        fetched=page.get('fetched')
+        # A terminal empty native response is stronger than a short projected page.
+        # Never erase a skipped native record by declaring its projection exhaustive.
+        projection_complete=(type(fetched) is int and fetched==len(ids)==len(unique_ids)
+            and page.get('scan') is True and type(page.get('has_more')) is bool
+            and type(page.get('oldest_id')) is int
+            and page['oldest_id']==min(unique_ids,default=0)
+            and page['has_more']==(fetched==limit+1))
+        terminal=projection_complete and fetched==0 and page['has_more'] is False
+        ids=unique_ids
         api=Messenger(self.service._store,self.service,
             UserPrincipal(self.authorized_user,'mirror-reader','user',read_only=True))
         conv=api._conversation(self.account_ref,conversation_id)
@@ -114,15 +146,23 @@ class TelegramMirrorProvider:
             mid=self.account_ref+'|'+peer_id+':'+str(native_id)
             message=self.service._store.message(mid,source='telegram',user_id=self.authorized_user)
             if not message or message['conversation_id']!=conv['id']:raise ValueError('fresh Telegram projection missing')
-            projected.append(api._project(conv,message))
-        more=len(ids)>limit or page.get('has_more') is True
+            value=api._project(conv,message)
+            if value['source'].get('direction') not in {'incoming','outgoing'}:
+                projection_complete=False
+            projected.append(value)
+        # Even a short native page is followed to an explicit empty response.
+        # For lossy pages the cursor can continue, but the caller retains the loss.
+        more=bool(ids) or page.get('has_more') is True
         boundary=ids[limit-1] if len(ids)>limit else page.get('oldest_id')
         next_cursor=''
         if more and type(boundary) is int and boundary>0:
             next_cursor=base64.urlsafe_b64encode(canonical({'account_ref':self.account_ref,
                 'conversation_id':conversation_id,'peer_id':peer_id,'before':boundary})).decode()
         return {'messages':list(reversed(projected)),'next_cursor':next_cursor,
-            'partial':True,'coverage':'bounded_native_history_page','observed_at':time.time(),
+            'partial':not terminal,'exhausted':terminal,'projection_complete':projection_complete,
+            'coverage':'accessible_provider_history' if terminal else 'bounded_native_history_page',
+            'native_boundary':{'before_id':before,'oldest_id':page.get('oldest_id'),
+                               'fetched':fetched,'terminal_empty':terminal},'observed_at':time.time(),
             'native_fetched':page.get('fetched'),'provider_read_acknowledged':False}
 
     def media(self, projected, *, attachment_index=0):
