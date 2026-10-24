@@ -95,6 +95,12 @@ def install(image,role,name,config,data,port, *, timeout=75):
     old=api('GET','/containers/'+name+'/json',missing=True)
     if old and old['Config'].get('Labels',{}).get(LABEL)!='1':
         raise RuntimeError('existing component belongs to another release path; native idle handoff required')
+    if (old and old.get('Image') == info.get('Id') and info.get('Id')
+            and old['State'].get('Health', {}).get('Status') == 'healthy'
+            and all(value in old['Config'].get('Env', []) for value in spec['Env'])
+            and sorted(old.get('HostConfig', {}).get('Binds', [])) == sorted(spec['HostConfig']['Binds'])):
+        return {'status':'unchanged','name':name,'role':role,'image':image,
+                'container_id':old['Id'],'calls_tested':False}
     if old and old['State'].get('Running') and role=='calls-primary':
         raise RuntimeError('running primary needs native idle handoff before replacement; reconcile receipts then stop the exact component')
     previous=name+'-previous'

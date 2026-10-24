@@ -64,3 +64,20 @@ def test_image_wires_fixed_matrix_and_fastagent_interpreters():
     module=load()
     assert module.runtime_environment({})['AGENTCALL_FAST_AGENT_PYTHON']=='/usr/local/bin/python'
     assert module.runtime_environment({})['AGENTCALL_FAST_AGENT_BIN']=='/usr/local/bin/fast-agent'
+
+
+def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch):
+    module=load();calls=[]
+    image_id='sha256:'+'c'*64
+    def api(method,path,*args,**kwargs):
+        calls.append((method,path))
+        if path.startswith('/images/'):
+            return {'Id':image_id,'Config':{'Labels':{module.LABEL:'1'}}}
+        return {'Id':'existing','Image':image_id,
+                'Config':{'Labels':{module.LABEL:'1','com.userio.role':'calls-primary'},
+                          'Env':['USERIO_VOICE_ROLE=calls-primary','USERIO_VOICE_PORT=9092']},
+                'HostConfig':{'Binds':['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall']},
+                'State':{'Running':True,'Health':{'Status':'healthy'}}}
+    monkeypatch.setattr(module,'api',api)
+    assert module.install(IMAGE,'calls-primary','userio-voice','/etc/config','/var/lib/data',9092)['status']=='unchanged'
+    assert all(method=='GET' for method,_ in calls)
