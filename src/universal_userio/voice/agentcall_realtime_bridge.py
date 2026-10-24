@@ -2191,6 +2191,9 @@ class PreparedCall:
     peer_ref: str = ""
     outbound_target: str = ""  # Private dial target; never copied to events.
     peer_label: str = ""  # Owner-authorized full number on the private UserIO socket.
+    # Server-owned provenance, never read from agent_context/control request body.
+    # Host gateway-incoming executes Answer before connecting this prepared UUID.
+    host_answered_incoming: bool = False
 
 
 class CallController:
@@ -2786,7 +2789,7 @@ class CallController:
             'Владелец сам позвонил личному помощнику. Выясни его задачу, не предполагай цель звонка.' if owner else '',
             sanitize_agent_context({'call_mode':'incoming' if owner else 'incoming_guest'}), time.time(), wait_prompts,
             account_ref=account_ref, peer_ref=peer_ref,
-            peer_label=peer_label,
+            peer_label=peer_label, host_answered_incoming=True,
         )
         _log(f"incoming prepared call={call_id} mode={'owner' if owner else 'guest'}")
         return {'ok':True, 'call_id':call_id}
@@ -3851,6 +3854,7 @@ async def handle_call(
     recording_reports=[]
     warm_tasks = []
     termination_reason = 'audio_socket_closed'
+    host_answered_incoming = False
     peer_fields: dict[str, str] = {}
     try:
         kind, payload = await read_audiosocket_frame(reader)
@@ -3879,6 +3883,8 @@ async def handle_call(
             _log(f"session call={call_id} qa_promotion={promotion['reason']}")
         guest = call_mode in {'incoming_guest', 'qa_incoming'} and not qa
         incoming = call_mode in {'incoming', 'incoming_guest'} or qa
+        host_answered_incoming = (prepared is not None and prepared.host_answered_incoming
+                                  and call_mode in {'incoming', 'incoming_guest'})
         if call_mode == 'qa_incoming':
             _log(f"session call={call_id} qa_admission={qa_admission['reason']}")
         def recording_failed():
@@ -3997,7 +4003,11 @@ async def handle_call(
             greeting_text = config.greeting
         if prepared is not None:
             _t0 = time.monotonic()
-            _answered = await (answer_gate or wait_for_sip_answer)(call_id, hung_up)
+            # Only prepare_incoming stamps this provenance. The host dialplan
+            # already answered before AudioSocket; body call_mode is not authority.
+            # Explicit provider gates still take precedence (Matrix/Telegram).
+            _answered = (True if host_answered_incoming and answer_gate is None else
+                         await (answer_gate or wait_for_sip_answer)(call_id, hung_up))
             _log(f"call={call_id} sip_answer={_answered} waited={time.monotonic() - _t0:.1f}s")
             if not _answered:
                 return
@@ -4195,7 +4205,10 @@ async def handle_call(
         except (BrokenPipeError, ConnectionResetError):
             pass
         finally:
-            await (hangup or request_asterisk_hangup)(call_id)
+            # Host gateway-incoming returns from AudioSocket to Hangup when this
+            # stream closes. No container CLI or host control grant is necessary.
+            if hangup is not None or not host_answered_incoming:
+                await (hangup or request_asterisk_hangup)(call_id)
 
 
 def set_incoming_socket_permissions(path: Path, configured_gid: int | None) -> None:
