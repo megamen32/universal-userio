@@ -284,8 +284,15 @@ class ContactStarter:
 
     def prepare(self, *, user_id: str, text: str, request_id: str,
                 conversation_id: str = '', account_ref: str = '', identifier: str = '',
-                notify: bool = True, reply_to: Any = None) -> dict[str, Any]:
-        """Canonical recipient first, then one durable draft. Never send here."""
+                notify: bool = False, reply_to: Any = None) -> dict[str, Any]:
+        """Canonical recipient first, then one durable draft. Never send here.
+
+        Prepare is a local compose step: it stores exactly one draft and returns
+        it for review. Nothing reaches the provider through it - not the draft
+        itself and not an owner notification - because the only delivery path is
+        the reviewed approval of messages.send. An explicit notify=True asks for
+        the owner's approval notice; no public compose route asks for it.
+        """
         body = str(text or '').strip()
         if not body:
             raise ContactStartError('contact_message_required')
