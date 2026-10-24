@@ -92,6 +92,22 @@ def _envelope(scope: str, results: list[dict[str, Any]], options: Mapping[str, A
 def search_tool_response(store: Any, arguments: Mapping[str, Any], *, user_id: str | None,
                          source: str | None = None, ignored: Sequence[str] = (),
                          query: str | None = None) -> dict[str, Any]:
+    options = normalize_search_arguments(arguments)
+    if options['scope'] == 'conversation':
+        # This retained-only path also reads settings and coverage outside
+        # search_conversations. Serialize the whole SQLite projection so a
+        # parallel ingress/search cannot reuse its connection statements.
+        # Message semantic lookup may use network IO and stays outside here.
+        with store._lock:
+            return _search_tool_response(store, arguments, user_id=user_id,
+                                         source=source, ignored=ignored, query=query)
+    return _search_tool_response(store, arguments, user_id=user_id,
+                                 source=source, ignored=ignored, query=query)
+
+
+def _search_tool_response(store: Any, arguments: Mapping[str, Any], *, user_id: str | None,
+                          source: str | None = None, ignored: Sequence[str] = (),
+                          query: str | None = None) -> dict[str, Any]:
     """Run the shared core and return the agent-facing envelope.
 
     Three ways in, one shape out: free text, an exact conversation id, or an

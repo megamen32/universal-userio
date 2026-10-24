@@ -321,6 +321,15 @@ def set_meta(store: Any, name: str, value: str) -> None:
 def status(store: Any, *, user_id: str | None = None,
            conversation_ids: Sequence[str] = ()) -> dict[str, Any]:
     """Index readiness. With conversation_ids the numbers describe that scope."""
+    # The connection is shared with ingress, which invokes Python SQLite
+    # callbacks under this RLock. Serialize coverage reads in the same order
+    # instead of contending on SQLite's internal mutex outside the store lock.
+    with store._lock:
+        return _status_locked(store, user_id=user_id, conversation_ids=conversation_ids)
+
+
+def _status_locked(store: Any, *, user_id: str | None,
+                   conversation_ids: Sequence[str]) -> dict[str, Any]:
     uid = store._user(user_id)
     db = store._connection
     scope = [str(value).strip() for value in conversation_ids if str(value).strip()][:100]

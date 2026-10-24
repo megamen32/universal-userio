@@ -21,7 +21,7 @@ def direct(case):
 def page(ref, cid, messages=(), **kw):
     return dict(account_ref=ref, conversation_id=cid, messages=list(messages),
                 next_cursor='', fresh=True, partial=True, mode='provider',
-                provider_read_acknowledged=False, observed_at=42, **kw)
+                projection_complete=True, provider_read_acknowledged=False, observed_at=42, **kw)
 
 
 def outgoing(api, ref, cid):
