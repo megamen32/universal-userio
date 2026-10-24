@@ -271,8 +271,10 @@ Standby стартует тот же engine, без ingress/poller/caller, с lo
 порты он не занимает. Health проверяет pinned modules/adapter и Matrix imports,
 появление control/event sockets, без звонка или LLM-запроса. Окно75секунд;
 при неудаче прежний контейнер возвращается автоматически без восстановления БД.
-Ровно один `-previous` сохраняется для отката; перед следующим update его нужно
-сверить и освободить явно, старые результаты автоматически не удаляются.
+Ровно один `-previous` сохраняется для отката. При следующем update только
+собственный остановленный rollback временно архивируется; после health нового
+контейнера он удаляется без удаления volumes. Работающий или чужой rollback
+не трогается. При неудаче оба прежних контейнера возвращаются на свои места.
 
 Calls-primary использует тот же digest, `--role calls-primary --port 9092`.
 Перед заменой работающего primary его единственный runtime owner сверяет все
@@ -284,7 +286,7 @@ release path. На88 переход требует Root/native join. Primary con
 standby не становится их получателем. Автоматического failover/phonefallback нет.
 
 Сборка: `container_release.py context --portable-voice --output <context.tar>`
-берёт только опубликованный main и exact adapter2178f365. Затем существующий
+берёт только опубликованный release и exact published adapter из manifest. Затем существующий
 shared builder `docker buildx build --builder k3s-ci-shared --target portable-voice
 --build-arg USERIO_REVISION=<sha> --platform linux/amd64 --push -t <immutabletag> <build-context-dir>`
 читает распакованный release tar (это buildartifact без Git, не новый checkout). Digest и module manifest — identity релиза. На всех
@@ -303,3 +305,9 @@ FastAgent и NumPy) с frozen constraints из прежнего requirements.txt
 в image `/opt/userio-voice-dependencies.txt`; исходные dependencySHA входят
 в portable-release.json. Это ограничивает рабочий набор общей сборки без
 повышения лимитов Kubernetes.
+
+Проверка на44 выявила timeout старого installer; portable create теперь использует
+Docker init (как существующий Compose), timeout API40секунд при stop20секунд и
+не повторяет stop уже остановленного компонента. Тонкий target
+`portable-voice-controller` переиспользует проверенный runtime digest4c280012,
+заменяет только controller и опубликованный adapter5de41fd7; pip/apt не запускаются.

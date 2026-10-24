@@ -109,31 +109,45 @@ def install(image,role,name,config,data,port, *, timeout=75):
     if old and old['State'].get('Running') and role=='calls-primary':
         raise RuntimeError('running primary needs native idle handoff before replacement; reconcile receipts then stop the exact component')
     previous=name+'-previous'
-    if old and api('GET','/containers/'+previous+'/json',missing=True):
-        raise RuntimeError('previous rollback component exists; reconcile it before another update')
-    if old:
-        api('POST','/containers/'+name+'/stop?t='+str(STOP_TIMEOUT))
-        api('POST','/containers/'+name+'/rename?name='+previous)
-    created=False
+    prior=api('GET','/containers/'+previous+'/json',missing=True) if old else None
+    archive=None
+    if prior:
+        if prior['Config'].get('Labels',{}).get(LABEL)!='1' or prior['State'].get('Running'):
+            raise RuntimeError('rollback component is foreign or running; preserve it')
+        archive=previous+'-'+prior['Id'][:12]
+        if api('GET','/containers/'+archive+'/json',missing=True):
+            raise RuntimeError('owned rollback cleanup is pending; preserve its exact receipt')
+    created=renamed=archived=False
     try:
+        if archive:
+            api('POST','/containers/'+previous+'/rename?name='+archive);archived=True
+        if old:
+            if old['State'].get('Running'):
+                api('POST','/containers/'+name+'/stop?t='+str(STOP_TIMEOUT))
+            api('POST','/containers/'+name+'/rename?name='+previous);renamed=True
         api('POST','/containers/create?name='+name,spec);created=True
         api('POST','/containers/'+name+'/start')
         deadline=time.monotonic()+timeout
         while time.monotonic()<deadline:
             current=api('GET','/containers/'+name+'/json')
             if current['State'].get('Health',{}).get('Status')=='healthy':
-                return {'status':'installed','name':name,'role':role,'image':image,
-                        'container_id':current['Id'],'previous':previous if old else None,
-                        'revision':info['Config']['Labels'].get('org.opencontainers.image.revision'),
-                        'calls_tested':False}
+                receipt={'status':'installed','name':name,'role':role,'image':image,
+                         'container_id':current['Id'],'previous':previous if old else None,
+                         'revision':info['Config']['Labels'].get('org.opencontainers.image.revision'),
+                         'calls_tested':False}
+                if archived:
+                    try:api('DELETE','/containers/'+archive)
+                    except Exception:receipt['cleanup_pending']=archive
+                return receipt
             if not current['State'].get('Running'):break
             time.sleep(.5)
         raise RuntimeError('portable voice readiness deadline exceeded')
     except BaseException:
         if created:api('DELETE','/containers/'+name+'?force=true')
-        if old:
+        if renamed:
             api('POST','/containers/'+previous+'/rename?name='+name)
             if old['State'].get('Running'):api('POST','/containers/'+name+'/start')
+        if archived:api('POST','/containers/'+archive+'/rename?name='+previous)
         raise
 
 

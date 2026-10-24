@@ -99,3 +99,39 @@ def test_graceful_docker_stop_fits_inside_the_client_deadline():
     spec=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
     assert spec['HostConfig'].get('Init') is True, 'gateway must receive SIGTERM through Docker init'
     assert module.DOCKER_TIMEOUT >= module.STOP_TIMEOUT + 10
+
+
+def test_stopped_component_is_replaced_without_repeating_stop(monkeypatch):
+    module=load();calls=[];reads=0
+    def api(method,path,body=None,**kwargs):
+        nonlocal reads
+        calls.append((method,path))
+        if path.startswith('/images/'):return {'Config':{'Labels':{module.LABEL:'1'}}}
+        if method=='GET' and path.endswith('/json'):
+            if '-previous' in path:return None
+            reads+=1
+            if reads==1:return {'Config':{'Labels':{module.LABEL:'1'}},'State':{'Running':False}}
+            return {'Id':'candidate','State':{'Running':True,'Health':{'Status':'healthy'}}}
+        if '/stop?' in path:raise RuntimeError('Docker POST failed HTTP 304')
+        return {}
+    monkeypatch.setattr(module,'api',api)
+    assert module.install(IMAGE,'standby','userio-voice-check','/etc/config','/var/lib/data',19095)['status']=='installed'
+    assert not any('/stop?' in path for _,path in calls)
+
+
+def test_only_owned_stopped_older_rollback_retires_after_health(monkeypatch):
+    module=load();calls=[];reads=0
+    def api(method,path,body=None,**kwargs):
+        nonlocal reads
+        calls.append((method,path))
+        if path.startswith('/images/'):return {'Config':{'Labels':{module.LABEL:'1'}}}
+        if method=='GET' and path.endswith('/json'):
+            if '-previous-older' in path:return None
+            if '-previous/' in path:return {'Id':'older0123456789','Config':{'Labels':{module.LABEL:'1'}},'State':{'Running':False}}
+            reads+=1
+            if reads==1:return {'Config':{'Labels':{module.LABEL:'1'}},'State':{'Running':False}}
+            return {'Id':'candidate','State':{'Running':True,'Health':{'Status':'healthy'}}}
+        return {}
+    monkeypatch.setattr(module,'api',api)
+    assert module.install(IMAGE,'standby','userio-voice-check','/etc/config','/var/lib/data',19095)['status']=='installed'
+    assert calls[-1]==('DELETE','/containers/userio-voice-check-previous-older0123456')
