@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "image": "ghcr.io/megamen32/universal-userio-voice@sha256:36ae227964358da8316b1848bef91a107994637e168ce75d333af98ce31a3002",
+  "source_revision": "86f53b7e19f8b1d86e032bb2370c260d9d772cc2",
+  "build_target": "portable-voice-socket",
+  "verified_base": "ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317",
+  "adapter_revision": "5de41fd714910fc04f742c4a91dd5ce69401635c",
+  "adapter_sha256": "486a64879998962f43c090a9a199823e4f9779ba5db20c27b1461d062f820522",
+  "modules": {
+    "src/universal_userio/voice/__init__.py": "0682b4cd2d142edfc686051bfa3d46dacfb6f1ef4383a0cfe64d9837f6ddacae",
+    "src/universal_userio/voice/agentcall_fast_agent_voice_hooks.py": "47f352f6ab138ead8ea85a7b15eef6db895cea695a68bb7867b974b5c43c448f",
+    "src/universal_userio/voice/agentcall_fast_agent_worker.py": "1f2401cf120ae9335203dc57e64e9fbfa46ac65ebfa928e971fee68923e555d3",
+    "src/universal_userio/voice/agentcall_incoming_agi.py": "bc5d543606c16c6ff04941a3ff896487dc222cae7d3003c201f89397eb2e1d81",
+    "src/universal_userio/voice/agentcall_phone_tts.py": "5ecdcb63fce01fcc738db4b2be7e6b91982d6ac4260dd29e108f88173060ae86",
+    "src/universal_userio/voice/agentcall_realtime_bridge.py": "c594e63c7905a7e3c12b33bf856e6d2822cca4faac6efbe5249fa1982b5c632d",
+    "src/universal_userio/voice/agentcall_recording.py": "b159b6a0494e45a6a1cb6b381c8674ceab7bd238f49ef91071967911f49fe280",
+    "src/universal_userio/voice/agentcall_recording_transcribe.py": "0ff68fd1a0edfd38793ab8ee798a17763004bcd86bf9f5f82c0a5b3be9079398",
+    "src/universal_userio/voice/agentcall_secretary_api.py": "728d2b259bf88b20f60f58fba413683620beea7937272b57c6f9c1bc59325f0e",
+    "src/universal_userio/voice/agentcall_session_mcp.py": "0b7f82f84bd87d3bda09045b272dc805c8093d435105264a1ab075d674c4f34f",
+    "src/universal_userio/voice/noticeplace_voice_context.py": "9348c4962bb9a3910abf280fe3babfbec2d51435758807bb81b3b015d386ae88"
+  },
+  "dependency_inputs": {
+    "deploy/containers/requirements-portable-voice.txt": "13ada30441c426d6ef57b71e752f3fc2a9a3defd01d55b4fcea56805f28284d8",
+    "deploy/containers/requirements.txt": "61146aba635547e576d50275a36564b228df2465936931ead557eee2f1859f9b"
+  },
+  "acceptance": {
+    "offline_artifact": {
+      "kind": "offline_artifact_fixture_NOT_installed_phone_acceptance",
+      "module_matches": 11,
+      "revision": "86f53b7e19f8b1d86e032bb2370c260d9d772cc2",
+      "bridge_sha256": "c594e63c7905a7e3c12b33bf856e6d2822cca4faac6efbe5249fa1982b5c632d",
+      "payload": 0,
+      "asset_prompts": 30,
+      "prepare_incoming": [
+        "incoming",
+        "incoming_guest"
+      ],
+      "socket_gid": 147,
+      "fixture_health_exit": 0,
+      "asterisk_executable_present": false,
+      "s21_lease_present": false,
+      "provider_calls": 0,
+      "cached_greetings": {
+        "incoming-greeting.wav": "3d876032b494f1ed0485b0a88f1c50299cf9c2a20ec0d1d50ee08883de6cb8c8",
+        "incoming-guest-greeting.wav": "ea3aad3f48744d1bf05f5dcb59fba2e9b5f01dbf938ffb1856e6aca74f00c30b"
+      }
+    },
+    "runtime_install": "NOT_PERFORMED",
+    "real_call": "NOT_RUN",
+    "primary88": "ROOT_NATIVE_IDLE_JOIN_PENDING"
+  },
+  "required_environment": {
+    "AGENTCALL_ASSET_ROOT": "/var/lib/agentcall",
+    "AGENTCALL_INCOMING_SOCKET_GID": "147"
+  }
+}
