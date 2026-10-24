@@ -13,7 +13,15 @@ dependencies = []
 universal-userio = "universal_userio.runtime:main"
 
 [project.optional-dependencies]
-matrix-calls = ["livekit>=1.1.20,<2", "audioop-lts; python_version>='3.13'"]
+# LiveKit 1.1.20 does not declare all imports used by its MatrixRTC runtime.
+# Match the verified container/native release pins, including clean venv installs.
+matrix-calls = [
+    "livekit==1.1.20",
+    "aiohttp==3.14.4",
+    "websockets==15.0.1",
+    "pydantic==2.13.5",
+    "audioop-lts; python_version>='3.13'",
+]
 telegram = ["telethon>=1.42,<2", "pydantic>=2", "qrcode>=7,<9", "firecrawl-anydoc==0.2.4"]
 chatgpt = ["curl-cffi>=0.5"]
 max = ["websocket-client>=1.6", "qrcode>=7,<9", "msgpack==1.2.3", "lz4==4.4.5"]
