@@ -79,3 +79,28 @@ COPY deploy/containers/frontend.conf /etc/nginx/conf.d/default.conf
 # A build run under a private umask leaves 0700 directories; nginx runs as
 # uid 101 and would 404 every asset. Serve the tree, never execute it.
 RUN chmod -R a=rX /usr/share/nginx/html
+
+# Portable UserIO Voice: external STT/TTS/SDK endpoints, no host code mounts.
+FROM python:3.12-slim AS portable-voice
+ARG USERIO_REVISION
+LABEL com.userio.portable-voice="1" org.opencontainers.image.revision=$USERIO_REVISION
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/usr/local/lib/agentcall:/opt/universal-userio/src
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 163 asterisk && groupadd -g 994 notification-center \
+    && useradd -u 1000 -m roomhacker
+WORKDIR /opt/universal-userio
+COPY deploy/containers/requirements.txt /tmp/userio-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/userio-requirements.txt
+COPY pyproject.toml /opt/universal-userio/
+COPY src /opt/universal-userio/src
+COPY scripts /opt/universal-userio/scripts
+COPY deploy/containers/external/agentcall_secretary_voice.py /usr/local/lib/agentcall/agentcall_secretary_voice.py
+COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
+RUN pip install --no-deps --no-cache-dir . \
+    && find /opt/universal-userio/src/universal_userio/voice -maxdepth 1 -name '*.py' \
+        -exec ln -s '{}' /usr/local/lib/agentcall/ \; \
+    && python -c 'import aiohttp,websockets,pydantic; from livekit import rtc; import agentcall_secretary_voice, agentcall_realtime_bridge' \
+    && pip check
+ENTRYPOINT ["python", "/opt/universal-userio/scripts/voice_container.py"]
+CMD ["serve"]

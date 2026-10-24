@@ -235,3 +235,60 @@ SDK и bridge хэши, rollback-ссылки и SHA-256 файлов. Архи�
 внешнем изменении и полном откате байтов между двумя проверками. Эта операция
 фиксирует исходное состояние для восстановления; сама по себе она не является
 проверкой поведения звонков или приёмкой релиза.
+
+## Portable UserIO Voice (versioned image)
+
+Это режим существующего UserIO Voice, а не новый ExManager Voice. Notice Place
+сохраняет политику контакта; ExManager Secretary SDK остаётся внешним API.
+Один target `portable-voice` содержит canonical engine, MatrixRTC Python dependencies,
+FastAgent и опубликованный подписанный Secretary adapter. STT/TTS — существующие
+управляемые endpoint-сервисы: локальный Silero/Torch не скачивается при старте.
+В image нет аккаунтов, токенов, identity map, телефонных привязок или записей.
+
+На чистом Linux/amd64 нужны Docker Engine, обычный `docker login ghcr.io` для
+закрытого registry и root-owned защищённый каталог `/etc/userio-voice`.
+`environment.json` внутри него имеет права0600 и содержит стандартные
+`AGENTCALL_*`/`EXMANAGER_VOICE_*` настройки; защищённые file references должны
+указывать внутрь `/etc/userio-voice`. Ключи/identity map размещаются там же с0600.
+Постоянные записи и FastAgent state хранятся в `/var/lib/userio-voice`; при update
+не удаляются. Этот режим не переносит БД, OmniRoute, Asterisk или S21.
+
+После подготовки конфигурации установка и обновление standby — одна команда
+(IMAGE — точный `ghcr.io/megamen32/universal-userio-voice@sha256:...` из receipt):
+
+```bash
+sudo docker run --rm --pull=always --network none \
+  -v /var/run/docker.sock:/var/run/docker.sock --entrypoint python "$IMAGE" \
+  /opt/universal-userio/scripts/container_release.py install-voice \
+  --image "$IMAGE" --role standby --name userio-voice \
+  --config-dir /etc/userio-voice --data-dir /var/lib/userio-voice --port 19095
+```
+
+Installer из того же immutable image обращается к существующему Docker Engine;
+Git/checkout/Python/pip на целевом хосте не нужны. Он не печатает конфигурацию.
+Standby стартует тот же engine, без ingress/poller/caller, с loopback19095–19104,
+собственными Unix sockets и без PBX control mount. Ни9092, ни действующиеSTT/TTS
+порты он не занимает. Health проверяет pinned modules/adapter и Matrix imports,
+появление control/event sockets, без звонка или LLM-запроса. Окно75секунд;
+при неудаче прежний контейнер возвращается автоматически без восстановления БД.
+Ровно один `-previous` сохраняется для отката; перед следующим update его нужно
+сверить и освободить явно, старые результаты автоматически не удаляются.
+
+Calls-primary использует тот же digest, `--role calls-primary --port 9092`.
+Перед заменой работающего primary его единственный runtime owner сверяет все
+accepted/UNKNOWN receipts и idle, затем останавливает точный компонент; installer
+не останавливает работающий primary самостоятельно и не заменяет чужой native
+release path. На88 переход требует Root/native join. Primary config требует
+явныеSTT/TTS URL и `AGENTCALL_LLM_PROVIDER=openai-compatible` (никакого warm LLM
+при старте). Backend UserIO продолжает запускать штатные account-scoped workers;
+standby не становится их получателем. Автоматического failover/phonefallback нет.
+
+Сборка: `container_release.py context --portable-voice --output <context.tar>`
+берёт только опубликованный main и exact adapter2178f365. Затем существующий
+shared builder `docker buildx build --builder k3s-ci-shared --target portable-voice
+--build-arg USERIO_REVISION=<sha> --platform linux/amd64 --push -t <immutabletag> -`
+читает этот tar из stdin. Digest и module manifest — identity релиза. На всех
+узлах44→100→88last используется этот digest; повторных сборок/pipinstall нет.
+Existing unattended updater остаётся paused до доставки такого release; его
+старый source-build режим не должен включаться для portable image. Порядок,
+idlejoin и конечная реальная канарейка принадлежат текущей rolling-release задаче.

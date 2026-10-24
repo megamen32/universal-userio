@@ -331,11 +331,15 @@ def assert_idle():
     command(ssh_args(remote_check))
 
 
-def build_context(destination: Path):
+def build_context(destination: Path, *, portable_voice=False):
     revision = output(['git', '-C', ROOT, 'rev-parse', 'HEAD'])
     if revision != output(['git', '-C', ROOT, 'rev-parse', 'origin/main']):
         raise RuntimeError('build requires published main')
     archive = subprocess.check_output(['git', '-C', ROOT, 'archive', '--format=tar', revision])
+    if portable_voice:
+        from voice_container import build_context as portable_context
+        portable_context(ROOT, revision, archive, destination)
+        return
     # Preserve the current published standalone dispatcher as a pinned input.
     foreign = Path('/home/roomhacker/agents-projects/hermes-unified-inbox')
     script = 'scripts/userio_hermes_dispatcher.py'
@@ -1303,13 +1307,25 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend', 'archive-voice'))
+    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend', 'archive-voice', 'install-voice'))
+    parser.add_argument('--portable-voice', action='store_true')
+    parser.add_argument('--role', choices=('standby', 'calls-primary'))
+    parser.add_argument('--name', default='userio-voice')
+    parser.add_argument('--config-dir', default='/etc/userio-voice')
+    parser.add_argument('--data-dir', default='/var/lib/userio-voice')
+    parser.add_argument('--port', type=int, default=19095)
     parser.add_argument('--output', type=Path)
     parser.add_argument('--image')
     parser.add_argument('--revision')
     parser.add_argument('--expected-container')
     parser.add_argument('--receipt-directory', type=Path)
     args = parser.parse_args()
+    if args.action == 'install-voice':
+        from voice_container import install
+        if not args.role or not args.image:
+            parser.error('install-voice requires --role and immutable --image')
+        print(json.dumps(install(args.image, args.role, args.name, args.config_dir, args.data_dir, args.port)))
+        return
     if args.action == 'archive-voice':
         if not args.receipt_directory:
             parser.error('archive-voice requires --receipt-directory')
@@ -1324,7 +1340,7 @@ def main():
     if args.action == 'context':
         if not args.output:
             parser.error('context requires --output')
-        build_context(args.output)
+        build_context(args.output, portable_voice=args.portable_voice)
     else:
         globals()[args.action]()
 
