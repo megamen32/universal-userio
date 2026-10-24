@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "image": "ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317",
+  "source_revision": "b8b8a20c9cccdad67933423d2f442d4a6bfa5d4d",
+  "build_target": "portable-voice-socket",
+  "verified_base": "ghcr.io/megamen32/universal-userio-voice@sha256:f369fed158e9f91d2b636405cef5cfb62c04ed543f24993d928380ba15b12802",
+  "adapter_revision": "5de41fd714910fc04f742c4a91dd5ce69401635c",
+  "adapter_sha256": "486a64879998962f43c090a9a199823e4f9779ba5db20c27b1461d062f820522",
+  "modules": {
+    "src/universal_userio/voice/__init__.py": "0682b4cd2d142edfc686051bfa3d46dacfb6f1ef4383a0cfe64d9837f6ddacae",
+    "src/universal_userio/voice/agentcall_fast_agent_voice_hooks.py": "47f352f6ab138ead8ea85a7b15eef6db895cea695a68bb7867b974b5c43c448f",
+    "src/universal_userio/voice/agentcall_fast_agent_worker.py": "1f2401cf120ae9335203dc57e64e9fbfa46ac65ebfa928e971fee68923e555d3",
+    "src/universal_userio/voice/agentcall_incoming_agi.py": "bc5d543606c16c6ff04941a3ff896487dc222cae7d3003c201f89397eb2e1d81",
+    "src/universal_userio/voice/agentcall_phone_tts.py": "5ecdcb63fce01fcc738db4b2be7e6b91982d6ac4260dd29e108f88173060ae86",
+    "src/universal_userio/voice/agentcall_realtime_bridge.py": "6fbcee13b727e0f3b129f152846ecf44e25f86b236984aadb7d76a00493811ba",
+    "src/universal_userio/voice/agentcall_recording.py": "b159b6a0494e45a6a1cb6b381c8674ceab7bd238f49ef91071967911f49fe280",
+    "src/universal_userio/voice/agentcall_recording_transcribe.py": "0ff68fd1a0edfd38793ab8ee798a17763004bcd86bf9f5f82c0a5b3be9079398",
+    "src/universal_userio/voice/agentcall_secretary_api.py": "728d2b259bf88b20f60f58fba413683620beea7937272b57c6f9c1bc59325f0e",
+    "src/universal_userio/voice/agentcall_session_mcp.py": "0b7f82f84bd87d3bda09045b272dc805c8093d435105264a1ab075d674c4f34f",
+    "src/universal_userio/voice/noticeplace_voice_context.py": "9348c4962bb9a3910abf280fe3babfbec2d51435758807bb81b3b015d386ae88"
+  },
+  "dependency_inputs": {
+    "deploy/containers/requirements-portable-voice.txt": "13ada30441c426d6ef57b71e752f3fc2a9a3defd01d55b4fcea56805f28284d8",
+    "deploy/containers/requirements.txt": "61146aba635547e576d50275a36564b228df2465936931ead557eee2f1859f9b"
+  },
+  "roles": {
+    "standby": {
+      "port": 19095,
+      "call_ingress": false,
+      "private_ipc": true
+    },
+    "calls-primary": {
+      "port": 9092,
+      "ipc": "/run/agentcall",
+      "requires_existing_runtime_idle_handoff": true
+    }
+  },
+  "rolling_order": [
+    "44",
+    "100",
+    "88-last"
+  ],
+  "acceptance": {
+    "isolated_standby44": "healthy; exact module/adapter hashes; unchanged repeat; controlled bad-config rollback preserves exact CID/state",
+    "real_call": "not_run_by_packaging_owner",
+    "primary88": "pending_native_resource_join",
+    "telegram_native_media": "not_in_this_image"
+  },
+  "external_services": [
+    "Secretary SDK API",
+    "STT API",
+    "TTS API",
+    "UserIO backend",
+    "existing cellular transport when selected"
+  ],
+  "updater_release_templates": {
+    "standby": {
+      "image": "ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317",
+      "role": "standby",
+      "container_name": "userio-voice",
+      "config_dir": "/etc/userio-voice",
+      "data_dir": "/var/lib/userio-voice",
+      "port": 19095
+    },
+    "calls-primary": {
+      "image": "ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317",
+      "role": "calls-primary",
+      "container_name": "userio-voice",
+      "config_dir": "/etc/userio-voice",
+      "data_dir": "/var/lib/userio-voice",
+      "port": 9092
+    }
+  },
+  "host_incoming_socket_contract": {
+    "setting": "AGENTCALL_INCOMING_SOCKET_GID",
+    "host88_value": "147",
+    "legacy_image_default": 163,
+    "mode": "0660",
+    "numeric_uid141_gid147_actual44_access": true,
+    "wrong_gid163_denied147_socket": true,
+    "health_checks_actual_gid_mode": true,
+    "calls_tested": false
+  },
+  "standby_evidence": {
+    "host": "server-44",
+    "container_id": "62bf3c7bc012eedd570e8c75e333bbcb57ea53dcaef701b1b9ad058825087862",
+    "image_id": "sha256:52a5c881c21f61cece2731c498418bebaa72ac40c86bca5082adfa8c3933edae",
+    "health": "healthy",
+    "repeat_install": "unchanged sameCID",
+    "cleanup": "exactCID stopped2.660s/exit143 and removed; own QAconfig/data removed; no19095listener; image retained"
+  },
+  "rollback_evidence": {
+    "reuse": "f369 actual44 rollback retained; installer/create_spec unchanged by AST vs415a101; new health strictly adds socketgid/mode validation",
+    "new_image_phone_acceptance": false
+  }
+}

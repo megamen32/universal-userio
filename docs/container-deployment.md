@@ -320,10 +320,14 @@ Calls-primary также публикует существующий typed contr
 
 ## Проверенная portable версия
 
-Release: [voice-415a101.json](../deploy/containers/releases/voice-415a101.json).
-Образ закреплён digest, исходник415a101 и adapter5de41fd7. На44 доказаны
-чистый standby startup, exacthashes11modules+adapter, повтор без перезапуска и
-откат после неверной QAконфигурации с сохранением исходного containerID/данных.
+Release: [voice-b8b8a20.json](../deploy/containers/releases/voice-b8b8a20.json).
+Образ закреплён digest, исходникb8b8a20 и adapter5de41fd7. Новый тонкий слой
+поверхf369 исправляет host incoming socket GID и проверяет его вhealth, безpip/apt.
+На44 доказаны standby startup, exacthashes11modules+adapter, повтор без перезапуска,
+actualGID147/0660 и kernel-доступ UID141:GID147 безsocket.connect/звонка.
+Legacy163 отдельно сохранён и проверен. Исторический rollbackf369 остаётся
+доказательством неизменённого installer: сохранение containerID/данных после
+неверной QAконфигурации; новый образ не выдаётся за новую телефонную приёмку.
 Это приёмка поставки; реального разговора эта проверка не выполняла.
 
 После обычного доступа Docker к private registry и подготовки root-owned0600
@@ -332,9 +336,9 @@ Release: [voice-415a101.json](../deploy/containers/releases/voice-415a101.json).
 ```bash
 docker run --rm --pull=always --network none \
   -v /var/run/docker.sock:/var/run/docker.sock --entrypoint python \
-  ghcr.io/megamen32/universal-userio-voice@sha256:f369fed158e9f91d2b636405cef5cfb62c04ed543f24993d928380ba15b12802 \
+  ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317 \
   /opt/universal-userio/scripts/container_release.py install-voice \
-  --image ghcr.io/megamen32/universal-userio-voice@sha256:f369fed158e9f91d2b636405cef5cfb62c04ed543f24993d928380ba15b12802 \
+  --image ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317 \
   --role standby --name userio-voice --port 19095 \
   --config-dir /etc/userio-voice --data-dir /var/lib/userio-voice
 ```
