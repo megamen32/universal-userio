@@ -249,9 +249,14 @@ class BackendConfig:
     # before its terminal event arrives. Only the voice turn of a call
     # uses this deadline; every other path keeps the global one.
     voice_request_timeout: float = 120.0
+    incoming_socket_gid: int | None = None
 
     @classmethod
     def from_environment(cls) -> "BackendConfig":
+        incoming_gid=os.environ.get('AGENTCALL_INCOMING_SOCKET_GID')
+        if incoming_gid is not None and (not re.fullmatch(r'[1-9][0-9]{0,9}',incoming_gid)
+                                          or int(incoming_gid)>2147483647):
+            raise ValueError('incoming socket GID must be a positive numeric group ID')
         speech_speed = float(os.getenv('AGENTCALL_SPEECH_SPEED', str(DEFAULT_SPEECH_SPEED)))
         if not 0.5 <= speech_speed <= 2.0:
             raise ValueError('speech speed must be between 0.5 and 2.0')
@@ -343,6 +348,7 @@ class BackendConfig:
             ),
             request_timeout=float(os.getenv("AGENTCALL_REQUEST_TIMEOUT", "90")),
             voice_request_timeout=voice_timeout,
+            incoming_socket_gid=int(incoming_gid) if incoming_gid is not None else None,
             fast_agent_enabled=os.getenv("AGENTCALL_FAST_AGENT_ENABLED", "1") == "1",
             fast_agent_bin=os.getenv(
                 "AGENTCALL_FAST_AGENT_BIN", "/home/roomhacker/.local/bin/fast-agent"
@@ -4192,6 +4198,14 @@ async def handle_call(
             await (hangup or request_asterisk_hangup)(call_id)
 
 
+def set_incoming_socket_permissions(path: Path, configured_gid: int | None) -> None:
+    if configured_gid is not None and (type(configured_gid) is not int or not 1<=configured_gid<=2147483647):
+        raise ValueError('invalid incoming socket GID')
+    gid=grp.getgrnam('asterisk').gr_gid if configured_gid is None else configured_gid
+    os.chmod(path,0o660)
+    os.chown(path,-1,gid)
+
+
 async def run(host: str, port: int, socket_path: Path, control_socket_path: Path) -> None:
     config = BackendConfig.from_environment()
     await asyncio.to_thread(_cleanup_stale_call_channels)
@@ -4213,8 +4227,7 @@ async def run(host: str, port: int, socket_path: Path, control_socket_path: Path
     incoming_path = control_socket_path.with_name('incoming.sock')
     incoming_path.unlink(missing_ok=True)
     incoming_server = await asyncio.start_unix_server(controller.accept_incoming, path=str(incoming_path))
-    os.chmod(incoming_path, 0o660)
-    os.chown(incoming_path, -1, grp.getgrnam('asterisk').gr_gid)
+    set_incoming_socket_permissions(incoming_path,config.incoming_socket_gid)
     audio_server = await asyncio.start_server(
         lambda reader, writer: handle_call(
             reader, writer, broker, config, prepared_calls

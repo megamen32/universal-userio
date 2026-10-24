@@ -325,3 +325,14 @@ def test_primary_control_stream_keeps_backend_receipt_and_transfers_account_snap
     assert receipt['status']=='completed' and receipt['answered'] is True
     assert receipt['recording_host']=='roomhacker-server-88'
     assert 'received_audio_bytes' not in receipt  # Remote archive was not measured locally.
+
+
+@pytest.mark.parametrize('dangling',[False,True])
+def test_optional_control_config_symlink_never_falls_back_to_local_voice(tmp_path,monkeypatch,dangling):
+    target=tmp_path/'target.json'
+    if not dangling:
+        target.write_text(json.dumps({'socket_path':'/run/agentcall/primary88/control.sock','execution_host':'roomhacker-server-88'}));target.chmod(0o600)
+    link=tmp_path/'control.json';link.symlink_to(target)
+    monkeypatch.setattr(matrix_calls,'CONTROL_CONFIG',link)
+    with pytest.raises(PermissionError):matrix_calls.control_route(required=False)
+    with pytest.raises(PermissionError):matrix_calls.control_route(required=True)

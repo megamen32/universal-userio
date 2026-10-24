@@ -144,3 +144,16 @@ def test_primary_exports_existing_typed_gateway_ipc_but_standby_does_not():
     assert '/run/agentcall' not in primary['HostConfig']['Tmpfs']
     standby=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
     assert '/run/agentcall:/run/agentcall' not in standby['HostConfig']['Binds']
+
+
+def test_incoming_health_checks_actual_host_gid_and_mode():
+    from types import SimpleNamespace
+    module=load()
+    class Path:
+        gid=147;mode=0o140660
+        def stat(self):return SimpleNamespace(st_gid=self.gid,st_mode=self.mode)
+    path=Path();settings={'AGENTCALL_INCOMING_SOCKET_GID':'147'}
+    assert module.incoming_socket_ready(path,settings)
+    path.gid=163;assert not module.incoming_socket_ready(path,settings)
+    path.gid=147;path.mode=0o140666;assert not module.incoming_socket_ready(path,settings)
+    assert not module.incoming_socket_ready(path,{'AGENTCALL_INCOMING_SOCKET_GID':'147 '})

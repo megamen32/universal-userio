@@ -116,3 +116,12 @@ COPY scripts /opt/universal-userio/scripts
 COPY deploy/containers/external/agentcall_secretary_voice.py /usr/local/lib/agentcall/agentcall_secretary_voice.py
 COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
 RUN python /opt/universal-userio/scripts/voice_container.py payload
+
+# Host numeric socket group fix; reuse all verified dependencies and SDK adapter.
+FROM ghcr.io/megamen32/universal-userio-voice@sha256:f369fed158e9f91d2b636405cef5cfb62c04ed543f24993d928380ba15b12802 AS portable-voice-socket
+ARG USERIO_REVISION
+LABEL org.opencontainers.image.revision=$USERIO_REVISION
+COPY src/universal_userio/voice/agentcall_realtime_bridge.py /opt/universal-userio/src/universal_userio/voice/agentcall_realtime_bridge.py
+COPY scripts/voice_container.py /opt/universal-userio/scripts/voice_container.py
+COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
+RUN python /opt/universal-userio/scripts/voice_container.py payload

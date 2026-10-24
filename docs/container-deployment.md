@@ -356,3 +356,16 @@ data_dir,port (никаких секретов). На всех узлах image 
 `updater_release_templates.standby` и `.calls-primary`; это отдельные6полей,
 а не весь расширенный manifest. Они входят в обычную protectedconfigпоставку.
 QAконтейнеры/каталоги на44 после приёмки удалены; image остаётся в cache и registry.
+
+### Host Asterisk group for incoming calls
+
+Set `AGENTCALL_INCOMING_SOCKET_GID` as a string in protected
+`/etc/userio-voice/environment.json` when the host Asterisk numeric group differs
+from the image's legacy `asterisk` group. For the verified88 deployment it is
+`"147"`. Other hosts retain their own verified mapping; do not change all image
+or host groups to147. Only positive canonical decimal IDs1..2147483647 are
+accepted; whitespace, empty, zero and signed values fail before listeners start.
+Without the setting the existing named `asterisk` group remains the default
+(163 in the portable image). `incoming.sock` stays0660, never world writable.
+The existing health check now verifies its actual GID and mode, including a host
+numeric override. This is permission readiness, not a phone business acceptance.

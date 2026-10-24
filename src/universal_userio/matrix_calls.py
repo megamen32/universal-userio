@@ -33,7 +33,7 @@ CONTROL_CONFIG = Path('/etc/userio-containers/matrix-call-control.json')
 def control_route(*, required=False):
     """Resolve private primary IPC; invalid configured routes never use local voice."""
     try:
-        metadata=CONTROL_CONFIG.stat()
+        metadata=CONTROL_CONFIG.lstat()
     except FileNotFoundError:
         if not required:return None
         raise PermissionError('primary Matrix voice control is not configured') from None
@@ -43,7 +43,15 @@ def control_route(*, required=False):
         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid not in {0,os.geteuid()}
                 or metadata.st_mode&0o077 or metadata.st_size>4096):
             raise ValueError('private control configuration required')
-        value=json.loads(CONTROL_CONFIG.read_text())
+        descriptor=os.open(CONTROL_CONFIG,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(descriptor) as stream:
+            opened=os.fstat(stream.fileno())
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_uid not in {0,os.geteuid()}
+                    or opened.st_mode&0o077 or opened.st_size>4096):
+                raise ValueError('private control configuration required')
+            raw=stream.read(4097)
+            if len(raw)>4096:raise ValueError('control configuration exceeds limit')
+        value=json.loads(raw)
         if (not isinstance(value,dict) or set(value)!={'socket_path','execution_host'}
                 or value['execution_host']!='roomhacker-server-88'
                 or value['socket_path']!='/run/agentcall/primary88/control.sock'):

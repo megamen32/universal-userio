@@ -4,6 +4,7 @@ No dialer, poller or scheduler. Configuration and delivery journals stay externa
 """
 from __future__ import annotations
 import hashlib
+import grp
 import http.client
 import io
 import json
@@ -168,10 +169,21 @@ def verify_payload():
     return 0
 
 
+def incoming_socket_ready(path,settings):
+    value=settings.get('AGENTCALL_INCOMING_SOCKET_GID')
+    if value is None:gid=grp.getgrnam('asterisk').gr_gid
+    elif isinstance(value,str) and re.fullmatch(r'[1-9][0-9]{0,9}',value) and int(value)<=2147483647:gid=int(value)
+    else:return False
+    metadata=path.stat()
+    return metadata.st_gid==gid and metadata.st_mode&0o777==0o660
+
+
 def health():
     if verify_payload():return 1
     for name in ('control.sock','gatewayd.sock','incoming.sock'):
         if not (Path('/run/agentcall')/name).is_socket():return 1
+    settings=json.loads(Path('/etc/userio-voice/environment.json').read_text())
+    if not incoming_socket_ready(Path('/run/agentcall/incoming.sock'),settings):return 1
     return 0
 
 
