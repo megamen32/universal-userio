@@ -28,7 +28,7 @@ FIXTURES = {
         "username": "lhc_voice_user_a_20261021",
         "matrix_id": "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
         "target": "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
-        "request_id": "lhc_matrixrtc_20261024_b1c_mavis09",
+        "request_id": "lhc_matrixrtc_20261024_b2c_mavis09",
     },
     "b": {
         "username": "lhc_voice_user_b_20261021",
