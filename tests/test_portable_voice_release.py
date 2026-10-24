@@ -92,3 +92,10 @@ def test_portable_dependencies_use_constrained_voice_import_closure():
     portable=(root/'Dockerfile').read_text().split('AS portable-voice',1)[1]
     assert '-r /tmp/requirements-portable-voice.txt' in portable
     assert '-r /tmp/userio-requirements.txt' not in portable
+
+
+def test_graceful_docker_stop_fits_inside_the_client_deadline():
+    module=load()
+    spec=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
+    assert spec['HostConfig'].get('Init') is True, 'gateway must receive SIGTERM through Docker init'
+    assert module.DOCKER_TIMEOUT >= module.STOP_TIMEOUT + 10

@@ -107,3 +107,12 @@ RUN pip install --no-deps --no-cache-dir . \
     && pip check
 ENTRYPOINT ["python", "/opt/universal-userio/scripts/voice_container.py"]
 CMD ["serve"]
+
+# Reuse the verified portable runtime; only controller and published SDK adapter change.
+FROM ghcr.io/megamen32/universal-userio-voice@sha256:4c280012e94f4a19beea807cb056436053941e4ab1951266473d3ab3ef2dafcc AS portable-voice-controller
+ARG USERIO_REVISION
+LABEL org.opencontainers.image.revision=$USERIO_REVISION
+COPY scripts /opt/universal-userio/scripts
+COPY deploy/containers/external/agentcall_secretary_voice.py /usr/local/lib/agentcall/agentcall_secretary_voice.py
+COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
+RUN python /opt/universal-userio/scripts/voice_container.py payload

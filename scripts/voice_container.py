@@ -17,11 +17,13 @@ import tarfile
 import time
 from urllib.parse import quote
 
-ADAPTER_REVISION = '2178f3654ef83430237106135622857d156c24a3'
+ADAPTER_REVISION = '5de41fd714910fc04f742c4a91dd5ce69401635c'
 ADAPTER_PATH = 'integrations/agentcall/agentcall_secretary_voice.py'
-ADAPTER_SHA = 'b6c2a5903adac76041dbd9f1d48f4d6b79f6538ee581d88785c2d286066ac3cc'
+ADAPTER_SHA = '486a64879998962f43c090a9a199823e4f9779ba5db20c27b1461d062f820522'
 IMAGE = re.compile(r'ghcr\.io/megamen32/universal-userio-voice@sha256:[a-f0-9]{64}\Z')
 LABEL = 'com.userio.portable-voice'
+STOP_TIMEOUT = 20
+DOCKER_TIMEOUT = 40
 
 
 def build_context(root, revision, archive, destination):
@@ -54,7 +56,7 @@ def build_context(root, revision, archive, destination):
 class Docker(http.client.HTTPConnection):
     def connect(self):
         self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
-        self.sock.settimeout(15)
+        self.sock.settimeout(DOCKER_TIMEOUT)
         self.sock.connect('/var/run/docker.sock')
 
 
@@ -83,7 +85,7 @@ def create_spec(image, role, config, data, port):
             'Labels':{LABEL:'1','com.userio.role':role},
             'Healthcheck':{'Test':['CMD','python','/opt/universal-userio/scripts/voice_container.py','health'],
                            'Interval':2000000000,'Timeout':3000000000,'Retries':3,'StartPeriod':1000000000},
-            'HostConfig':{'NetworkMode':'host','RestartPolicy':{'Name':'unless-stopped'},
+            'HostConfig':{'Init':True,'NetworkMode':'host','RestartPolicy':{'Name':'unless-stopped'},
                           'Binds':[f'{config}:/etc/userio-voice:ro',f'{data}:/var/lib/agentcall'],
                           'Tmpfs':{'/run/agentcall':'mode=0755','/tmp':'mode=1777'},
                           'LogConfig':{'Type':'json-file','Config':{'max-size':'10m','max-file':'3'}}}}
@@ -110,7 +112,7 @@ def install(image,role,name,config,data,port, *, timeout=75):
     if old and api('GET','/containers/'+previous+'/json',missing=True):
         raise RuntimeError('previous rollback component exists; reconcile it before another update')
     if old:
-        api('POST','/containers/'+name+'/stop?t=20')
+        api('POST','/containers/'+name+'/stop?t='+str(STOP_TIMEOUT))
         api('POST','/containers/'+name+'/rename?name='+previous)
     created=False
     try:
@@ -135,7 +137,7 @@ def install(image,role,name,config,data,port, *, timeout=75):
         raise
 
 
-def health():
+def verify_payload():
     # Unix sockets, not audio/TTS/model requests; no accepted call can be created.
     import aiohttp, websockets, pydantic
     from livekit import rtc
@@ -144,6 +146,11 @@ def health():
     for name,digest in release['modules'].items():
         if hashlib.sha256((Path('/opt/universal-userio')/name).read_bytes()).hexdigest()!=digest:return 1
     if hashlib.sha256(Path('/usr/local/lib/agentcall/agentcall_secretary_voice.py').read_bytes()).hexdigest()!=release['adapter_sha256']:return 1
+    return 0
+
+
+def health():
+    if verify_payload():return 1
     for name in ('control.sock','gatewayd.sock','incoming.sock'):
         if not (Path('/run/agentcall')/name).is_socket():return 1
     return 0
@@ -178,6 +185,7 @@ def serve():
 
 
 if __name__=='__main__':
+    if sys.argv[1:] == ['payload']:sys.exit(verify_payload())
     if sys.argv[1:] == ['health']:sys.exit(health())
     if sys.argv[1:] == ['serve']:serve()
     else:raise SystemExit('use existing container_release.py install-voice')
