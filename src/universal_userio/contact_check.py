@@ -1,6 +1,6 @@
 """Metadata-only contact truth over authorized, normalized history.
 
-This does not resolve identities or inspect drafts/action attempts. A negative
+Typed username resolution is provider READ plus local projection only. A negative
 answer requires an explicit provider exhaustion certificate, never an empty page.
 """
 from __future__ import annotations
@@ -38,6 +38,7 @@ def _username_conversation(api, account_ref, username):
         grant = next((g for g in api.principal.messenger_grants if g['account_ref'] == account_ref), None)
         if grant is None or grant['chats'] is not None:
             raise PermissionError('account_scope_required_for_identity_history')
+    from .messenger_telegram_mirror import IdentityReadUnavailable
     try:
         provider = api._provider(account_ref)
         peer = provider.resolve_username(username.lstrip('@'))
@@ -48,6 +49,8 @@ def _username_conversation(api, account_ref, username):
         return api.store.ensure_contact_conversation('telegram', peer['peer_id'], user_id=api.user,
             account_ref=account_ref, peer_id=peer['peer_id'], conversation_kind='direct', route_id='telegram')
     except PermissionError:
+        raise
+    except IdentityReadUnavailable:
         raise
     except Exception:
         return None
@@ -66,8 +69,13 @@ def has_contacted(api, account_ref, conversation_id='', *, telegram_username='',
         raise ValueError('exactly_one_conversation_or_telegram_username_required')
     if telegram_username and not refresh:
         raise ValueError('username_history_requires_refresh')
-    conv = (_username_conversation(api, account_ref, telegram_username) if telegram_username
-            else api._conversation(account_ref, conversation_id))
+    from .messenger_telegram_mirror import IdentityReadUnavailable
+    identity_error = None
+    try:
+        conv = (_username_conversation(api, account_ref, telegram_username) if telegram_username
+                else api._conversation(account_ref, conversation_id))
+    except IdentityReadUnavailable as error:
+        conv, identity_error = None, error.receipt
     identity_unavailable = conv is None
     conv = conv or {'source': 'telegram', 'id': '', 'peer_id': '', 'conversation_kind': 'unknown'}
     conversation_id = conv['id']
@@ -86,7 +94,10 @@ def has_contacted(api, account_ref, conversation_id='', *, telegram_username='',
         'provider_read_acknowledged': False,
     }
     if identity_unavailable:
-        result['reason'] = 'identity_unavailable'
+        result['reason'] = identity_error['reason'] if identity_error else 'identity_unavailable'
+        result['scope']['identity'] = 'unresolved_telegram_username'
+        if identity_error:
+            result['availability'] = identity_error
         return result
     if conv['conversation_kind'] != 'direct' or not conv['peer_id']:
         result['reason'] = 'identity_not_exact_direct_contact'
