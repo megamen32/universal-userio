@@ -16,6 +16,23 @@ from .messenger import Messenger, canonical
 from .contracts import DeliveryNotSubmittedError, InboxMessage, UserPrincipal
 
 
+class IdentityReadUnavailable(ValueError):
+    """Safe typed availability receipt; never carries the username or raw provider error."""
+    def __init__(self, code='UNKNOWN_NATIVE_ERROR', *, seconds=None, observed_at=None):
+        reason = ('identity_rate_limited' if code in {'FLOOD_WAIT','FLOOD_PREMIUM_WAIT'} else
+                  'identity_source_unavailable' if code in {'USERNAME_NOT_OCCUPIED','USERNAME_INVALID'} else
+                  'identity_transport_unavailable' if code in {'TIMEOUT','ETIMEDOUT','ECONNRESET','ECONNREFUSED','TRANSPORT_ERROR'} else
+                  'identity_provider_unavailable')
+        observed = observed_at if type(observed_at) in (int,float) and 0<observed_at<1e12 else time.time()
+        wait = seconds if type(seconds) is int and 0<seconds<2**31 else None
+        self.receipt = {'reason':reason,'native_code':None if code=='TRANSPORT_ERROR' else code,
+                        'retryable':reason!='identity_source_unavailable' and code not in {
+                            'AUTH_KEY_UNREGISTERED','SESSION_REVOKED','USER_DEACTIVATED'},
+                        'retry_after_seconds':wait,'retry_at':observed+wait if wait else None,
+                        'observed_at':observed}
+        super().__init__(reason)
+
+
 class TelegramMirrorProvider:
     operations=frozenset({'history','download'})
 
@@ -90,8 +107,26 @@ class TelegramMirrorProvider:
         url=os.environ.get('USERIO_TELEGRAM_QR_URL','http://127.0.0.1:18095').rstrip('/')+'/resolve'
         request=urllib.request.Request(url,data=canonical({'account_id':self.account_ref,'identifier':username}),
             headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'})
-        with self.opener(request,timeout=30) as response:
-            raw=response.read(65537)
+        try:
+            with self.opener(request,timeout=30) as response:
+                raw=response.read(65537)
+        except urllib.error.HTTPError as error:
+            try:
+                body=json.loads(error.read(65537))
+                detail=json.loads(body.get('error',''))
+                allowed={'FLOOD_WAIT','FLOOD_PREMIUM_WAIT','USERNAME_NOT_OCCUPIED','USERNAME_INVALID',
+                         'TIMEOUT','ETIMEDOUT','ECONNRESET','ECONNREFUSED','AUTH_KEY_UNREGISTERED',
+                         'SESSION_REVOKED','USER_DEACTIVATED','INVALID_RESPONSE','UNKNOWN_NATIVE_ERROR'}
+                if detail.get('schema')=='userio.identity-read-error.v1' and detail.get('code') in allowed:
+                    raise IdentityReadUnavailable(detail['code'],seconds=detail.get('retry_after_seconds'),
+                                                  observed_at=detail.get('observed_at')) from None
+            except IdentityReadUnavailable:
+                raise
+            except (ValueError,TypeError,AttributeError):
+                pass
+            raise IdentityReadUnavailable() from None
+        except (OSError,urllib.error.URLError):
+            raise IdentityReadUnavailable('TRANSPORT_ERROR') from None
         if len(raw)>65536:raise ValueError('Telegram identity receipt exceeds limit')
         result=json.loads(raw)
         if (not isinstance(result,dict) or result.get('ok') is not True
