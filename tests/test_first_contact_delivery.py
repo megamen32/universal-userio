@@ -106,6 +106,13 @@ def register_gmail(store, user, *, can_reply=True):
                            user_id=user)
 
 
+def register_matrix(store, user):
+    """The reply-capable Matrix account the current compose contract requires."""
+    store.register_account(account_id="matrix:1", provider="matrix", display_name="Matrix",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="connector:matrix", user_id=user)
+
+
 # -- defect 1: a first contact is impossible while the connector is down ------------
 
 
@@ -121,7 +128,7 @@ def test_capabilities_report_that_the_connector_is_unreachable(tmp_path):
     assert first_contact["availability"] == "unavailable"
     assert first_contact["reason"] == "connector_unreachable"
     assert first_contact["operations"]["resolve"]["reason"] == "connector_unreachable"
-    assert first_contact["operations"]["start"]["reason"] == "connector_unreachable"
+    assert first_contact["operations"]["prepare"]["reason"] == "connector_unreachable"
 
 
 def test_capabilities_report_an_account_without_a_live_session(tmp_path):
@@ -155,8 +162,8 @@ def test_a_first_contact_without_reply_right_is_not_allowed(tmp_path):
 
     first_contact = capabilities_of(store, service, "telegram:5045123456")["first_contact"]
 
-    assert first_contact["operations"]["start"]["allowed"] is False
-    assert first_contact["operations"]["start"]["reason"] == "account_capability_disabled"
+    assert first_contact["operations"]["prepare"]["allowed"] is False
+    assert first_contact["operations"]["prepare"]["reason"] == "account_capability_disabled"
     assert first_contact["operations"]["resolve"]["allowed"] is True
 
 
@@ -270,12 +277,13 @@ def test_the_approved_mail_answers_with_the_honest_delivery_state(tmp_path):
         InboxMessage("gmail:test", "gmail-1", "person@example.com", "вопрос", 10.0),
         route_id="gmail", account_ref="gmail-test")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {
-        "conversation_id": conversation, "body": "ответ"})["draft"]
-    store.approve(draft["id"], "himalaya:airlock:draft_web_4:abc@userio.local:saved", user_id=user)
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "ответ",
+        "request_id": "first-contact-mail-0001"})["draft_id"]
+    store.approve(draft, "himalaya:airlock:draft_web_4:abc@userio.local:saved", user_id=user)
 
-    result = surface.dispatch("userio.draft.approve_send", {
-        "draft_id": draft["id"], "confirm": True, "expected_text": "ответ",
+    result = surface.dispatch("userio.messages.send", {
+        "draft_id": draft, "confirm": True, "expected_text": "ответ",
         "expected_chat_id": conversation, "expected_attachments": []})
 
     assert result["ok"] is True
@@ -292,16 +300,18 @@ def test_the_approved_mail_answers_with_the_honest_delivery_state(tmp_path):
 
 def test_a_second_approval_replays_the_outcome_instead_of_sending_again(tmp_path):
     store, service, outbox, user = build(tmp_path)
+    register_matrix(store, user)
     conversation, _ = service.receive(
-        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {
-        "conversation_id": conversation, "body": "exact reply"})["draft"]
-    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "second-approval-replay-0001"})["draft_id"]
+    args = {"draft_id": draft, "confirm": True, "expected_text": "exact reply",
             "expected_chat_id": conversation, "expected_attachments": []}
 
-    first = surface.dispatch("userio.draft.approve_send", args)
-    second = surface.dispatch("userio.draft.approve_send", args)
+    first = surface.dispatch("userio.messages.send", args)
+    second = surface.dispatch("userio.messages.send", args)
 
     assert first["ok"] is True and second["ok"] is True
     assert first["receipt"] == second["receipt"]
@@ -312,16 +322,18 @@ def test_a_second_approval_replays_the_outcome_instead_of_sending_again(tmp_path
 
 def test_a_replayed_approval_keeps_the_same_receipt_and_message_id(tmp_path):
     store, service, outbox, user = build(tmp_path)
+    register_matrix(store, user)
     conversation, _ = service.receive(
-        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {
-        "conversation_id": conversation, "body": "exact reply"})["draft"]
-    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "replayed-approval-0001"})["draft_id"]
+    args = {"draft_id": draft, "confirm": True, "expected_text": "exact reply",
             "expected_chat_id": conversation, "expected_attachments": []}
 
-    first = surface.dispatch("userio.draft.approve_send", args)
-    second = surface.dispatch("userio.draft.approve_send", args)
+    first = surface.dispatch("userio.messages.send", args)
+    second = surface.dispatch("userio.messages.send", args)
 
     assert first["idempotency_key"] == second["idempotency_key"]
     assert second["retry_allowed"] is False
@@ -332,21 +344,23 @@ def test_a_replayed_approval_keeps_the_same_receipt_and_message_id(tmp_path):
 
 def test_a_sent_draft_says_so_and_leaves_the_pending_list(tmp_path):
     store, service, outbox, user = build(tmp_path)
+    register_matrix(store, user)
     conversation, _ = service.receive(
-        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {
-        "conversation_id": conversation, "body": "exact reply"})["draft"]
-    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "sent-draft-leaves-pending-0001"})["draft_id"]
+    args = {"draft_id": draft, "confirm": True, "expected_text": "exact reply",
             "expected_chat_id": conversation, "expected_attachments": []}
-    surface.dispatch("userio.draft.approve_send", args)
+    surface.dispatch("userio.messages.send", args)
 
-    kept = store.draft(draft["id"])
+    kept = store.draft(draft)
     assert kept.status == "approved"
     assert kept.receipt == "receipt"
 
     listed = store.conversation(conversation, user_id=user)["drafts"]
-    assert [item["id"] for item in listed] == [draft["id"]]
+    assert [item["id"] for item in listed] == [draft]
     assert listed[0]["sent"] is True
     assert listed[0]["status"] == "approved"
 
@@ -355,27 +369,31 @@ def test_a_sent_draft_says_so_and_leaves_the_pending_list(tmp_path):
 
 def test_a_draft_that_is_not_sent_still_reads_as_pending(tmp_path):
     store, service, outbox, user = build(tmp_path)
+    register_matrix(store, user)
     conversation, _ = service.receive(
-        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {
-        "conversation_id": conversation, "body": "exact reply"})["draft"]
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "unsent-draft-stays-pending-0001"})["draft_id"]
 
     listed = store.conversation(conversation, user_id=user)["drafts"]
     assert listed[0]["sent"] is False
     assert listed[0]["status"] == "proposed"
-    assert [item["id"] for item in store.pending_drafts(user_id=user)] == [draft["id"]]
+    assert [item["id"] for item in store.pending_drafts(user_id=user)] == [draft]
 
 
 def test_the_receipt_of_a_sent_draft_is_never_empty(tmp_path):
     store, service, outbox, user = build(tmp_path)
+    register_matrix(store, user)
     conversation, _ = service.receive(
-        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+        InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {
-        "conversation_id": conversation, "body": "exact reply"})["draft"]
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "empty-receipt-0001"})["draft_id"]
 
-    assert read_receipt(store.draft(draft["id"]).receipt)["delivery_status"] == "unknown"
+    assert read_receipt(store.draft(draft).receipt)["delivery_status"] == "unknown"
 
 
 def test_a_sent_mail_letter_shows_up_in_its_own_chat(tmp_path):
@@ -385,16 +403,28 @@ def test_a_sent_mail_letter_shows_up_in_its_own_chat(tmp_path):
     store, service, outbox, user = build(tmp_path, gmail_outbox=gmail)
     register_gmail(store, user)
 
-    started = service.contact_starter.start(
+    # The current first-contact route: resolve the peer, prepare one draft and
+    # deliver it through the reviewed approval.
+    prepared = service.contact_starter.prepare(
         user_id=user, account_ref="gmail-test", identifier="person@example.com",
         text="Привет", request_id="contact-start-mirror")
+    surface = UserIOMcpSurface(store, service)
+    sent = surface.dispatch("userio.messages.send", {
+        "draft_id": prepared["draft_id"], "confirm": True,
+        "expected_text": prepared["body"], "expected_chat_id": prepared["conversation_id"],
+        "expected_attachments": []})
+    assert sent["ok"] is True
+    # The mail transport accepts the letter but cannot confirm delivery, so
+    # the honest state is an accepted, unconfirmed send.
+    assert sent["delivery_status"] == SMTP_ACCEPTED
+    assert sent["delivery_unconfirmed"] is True
 
-    conversation = store.conversation(started["conversation_id"], user_id=user)
+    conversation = store.conversation(prepared["conversation_id"], user_id=user)
     outgoing = [item for item in conversation["messages"] if item.get("direction") == "outgoing"]
     assert len(outgoing) == 1
     assert outgoing[0]["body"] == "Привет"
     assert outgoing[0]["message_id"] == HimalayaGmailOutbox.outgoing_message_id(
-        "test", started["draft_id"])
+        "test", prepared["draft_id"])
 
 
 def test_the_first_contact_answer_reports_what_the_transport_proved(tmp_path):
@@ -403,14 +433,19 @@ def test_the_first_contact_answer_reports_what_the_transport_proved(tmp_path):
     store, service, outbox, user = build(tmp_path, gmail_outbox=gmail)
     register_gmail(store, user)
 
-    started = service.contact_starter.start(
+    prepared = service.contact_starter.prepare(
         user_id=user, account_ref="gmail-test", identifier="person@example.com",
         text="Привет", request_id="contact-start-answer")
+    surface = UserIOMcpSurface(store, service)
+    sent = surface.dispatch("userio.messages.send", {
+        "draft_id": prepared["draft_id"], "confirm": True,
+        "expected_text": prepared["body"], "expected_chat_id": prepared["conversation_id"],
+        "expected_attachments": []})
 
-    assert started["ok"] is True
-    assert started["sent"] is False
-    assert started["delivery_status"] == SMTP_ACCEPTED
-    assert started["delivery_unconfirmed"] is True
-    assert started["message_id"] == HimalayaGmailOutbox.outgoing_message_id(
-        "test", started["draft_id"])
-    assert started["retry_allowed"] is False
+    assert sent["ok"] is True
+    assert sent["sent"] is False
+    assert sent["delivery_status"] == SMTP_ACCEPTED
+    assert sent["delivery_unconfirmed"] is True
+    assert sent["message_id"] == HimalayaGmailOutbox.outgoing_message_id(
+        "test", prepared["draft_id"])
+    assert sent["retry_allowed"] is False

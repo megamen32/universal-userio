@@ -211,45 +211,57 @@ def test_http_mcp_stream_emits_ready_before_waiting_for_updates(
 def test_approve_rejects_stale_snapshot_before_provider(tmp_path, field, value):
     store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
     service = UserIOService(store, Generator(), outbox)
-    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+    store.register_account(account_id="matrix:1", provider="matrix", display_name="Matrix",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="connector:matrix", user_id=store.default_user_id)
+    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0),
+                                      route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
-    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "mcp-stale-snapshot-0001"})["draft_id"]
+    args = {"draft_id": draft, "confirm": True, "expected_text": "exact reply",
             "expected_chat_id": conversation, "expected_attachments": []}
     args[field] = value
-    result = surface.dispatch("userio.draft.approve_send", args)
+    result = surface.dispatch("userio.messages.send", args)
     assert result == {"ok": False, "error": "draft_snapshot_conflict"}
     assert outbox.calls == []
-    assert store.draft(draft["id"]).status == "proposed"
+    assert store.draft(draft).status == "proposed"
 
 
 def test_matching_snapshot_claim_blocks_edit_and_duplicate_send(tmp_path):
     store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
     service = UserIOService(store, Generator(), outbox)
-    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+    store.register_account(account_id="matrix:1", provider="matrix", display_name="Matrix",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="connector:matrix", user_id=store.default_user_id)
+    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0),
+                                      route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
-    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "mcp-matching-snapshot-0001"})["draft_id"]
+    args = {"draft_id": draft, "confirm": True, "expected_text": "exact reply",
             "expected_chat_id": conversation, "expected_attachments": []}
     other_store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     def sending(**kwargs):
         with pytest.raises(ValueError):
-            other_store.update_draft(draft["id"], body="racing edit")
+            other_store.update_draft(draft, body="racing edit")
         with pytest.raises(ValueError):
-            other_store.delete_draft(draft["id"])
+            other_store.delete_draft(draft)
         with pytest.raises(ValueError):
             other_store.delete_conversation(conversation)
         assert other_store.set_conversation_account(conversation, "different-account") is False
-        again = surface.dispatch("userio.draft.approve_send", args)
+        again = surface.dispatch("userio.messages.send", args)
         assert again["ok"] is False
         outbox.calls.append(kwargs)
         return "receipt"
     outbox.send_reply = sending
-    sent = surface.dispatch("userio.draft.approve_send", args)
+    sent = surface.dispatch("userio.messages.send", args)
     assert sent["sent"] is True
     assert sent["receipt"] == "receipt"
     assert len(outbox.calls) == 1
-    assert surface.dispatch("userio.draft.approve_send", args)["sent"] is True
+    assert surface.dispatch("userio.messages.send", args)["sent"] is True
     assert len(outbox.calls) == 1
 
 
@@ -257,10 +269,16 @@ def test_matching_snapshot_claim_blocks_edit_and_duplicate_send(tmp_path):
 def test_uncertain_delivery_keeps_claim_and_blocks_retry(tmp_path, fail_receipt):
     store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
     service = UserIOService(store, Generator(), outbox)
-    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0), route_id="reply")
+    store.register_account(account_id="matrix:1", provider="matrix", display_name="Matrix",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="connector:matrix", user_id=store.default_user_id)
+    conversation, _ = service.receive(InboxMessage("matrix", "1", "anna", "hello", 1.0),
+                                      route_id="reply", account_ref="matrix:1")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
-    args = {"draft_id": draft["id"], "confirm": True, "expected_text": "exact reply",
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "mcp-uncertain-delivery-0001"})["draft_id"]
+    args = {"draft_id": draft, "confirm": True, "expected_text": "exact reply",
             "expected_chat_id": conversation, "expected_attachments": []}
     assert store.set_conversation_account(conversation, "different-account") is False
     def fail(*_args, **_kwargs):
@@ -272,40 +290,65 @@ def test_uncertain_delivery_keeps_claim_and_blocks_retry(tmp_path, fail_receipt)
             outbox.calls.append(kwargs)
             fail()
         outbox.send_reply = accepted_then_timeout
-    assert surface.dispatch("userio.draft.approve_send", args)["ok"] is False
-    assert store.draft(draft["id"]).status == "sending"
-    assert surface.dispatch("userio.draft.approve_send", args)["ok"] is False
+    assert surface.dispatch("userio.messages.send", args)["ok"] is False
+    assert store.draft(draft).status == "sending"
+    assert surface.dispatch("userio.messages.send", args)["ok"] is False
     assert len(outbox.calls) == 1
 
 
 def test_unconfigured_provider_releases_claim_before_io(tmp_path):
     store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
     service = UserIOService(store, Generator(), outbox)
-    conversation, _ = service.receive(InboxMessage("gmail", "1", "anna", "hello", 1.0), route_id="reply")
+    store.register_account(account_id="gmail-test", provider="gmail", display_name="Gmail",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="himalaya:gmail", user_id=store.default_user_id)
+    conversation, _ = service.receive(InboxMessage("gmail", "1", "anna", "hello", 1.0),
+                                      route_id="reply", account_ref="gmail-test")
     surface = UserIOMcpSurface(store, service)
-    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation, "body": "exact reply"})["draft"]
-    assert surface.dispatch("userio.draft.approve_send", {"draft_id": draft["id"], "confirm": True})["ok"] is False
-    assert store.draft(draft["id"]).status == "proposed"
+    draft = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation, "text": "exact reply",
+        "request_id": "mcp-unconfigured-provider-0001"})["draft_id"]
+    # The reviewed snapshot is mandatory, so an incomplete one is refused
+    # before the provider is even considered.
+    incomplete = surface.dispatch("userio.messages.send", {"draft_id": draft, "confirm": True})
+    assert incomplete["ok"] is False
+    assert incomplete["error"] == "complete_draft_snapshot_required"
+    assert store.draft(draft).status == "proposed"
+    assert outbox.calls == []
+
+    # With the complete snapshot the send is attempted, and an unconfigured
+    # provider releases the claim before any provider IO.
+    refused = surface.dispatch("userio.messages.send", {
+        "draft_id": draft, "confirm": True, "expected_text": "exact reply",
+        "expected_chat_id": conversation, "expected_attachments": []})
+    assert refused["ok"] is False
+    assert store.draft(draft).status == "proposed"
     assert outbox.calls == []
 
 
 def test_mcp_reads_edits_and_sends_only_after_exact_confirmation(tmp_path) -> None:
     store, outbox = SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Outbox()
     service = UserIOService(store, Generator(), outbox)
+    store.register_account(account_id="telegram:1", provider="telegram", display_name="Telegram",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="telegram-qr:account-1", user_id=store.default_user_id)
     message = InboxMessage("telegram", "1", "anna", "hello", 1.0)
-    conversation_id, _ = service.receive(message, route_id="telegram-reply")
+    conversation_id, _ = service.receive(message, route_id="telegram-reply", account_ref="telegram:1")
     surface = UserIOMcpSurface(store, service)
 
     listed = surface.dispatch("userio.inbox.list_new", {})
-    draft = surface.dispatch("userio.draft.create", {"conversation_id": conversation_id, "body": "manual reply"})["draft"]
-    edited = surface.dispatch("userio.draft.update", {"draft_id": draft["id"], "body": "edited reply"})
-    denied = surface.dispatch("userio.draft.approve_send", {"draft_id": draft["id"], "confirm": False})
+    prepared = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation_id, "text": "manual reply",
+        "request_id": "mcp-read-edit-send-0001"})
+    draft = prepared["draft_id"]
+    edited = surface.dispatch("userio.draft.update", {"draft_id": draft, "body": "edited reply"})
+    denied = surface.dispatch("userio.messages.send", {"draft_id": draft, "confirm": False})
     # An approved send carries the exact reviewed draft. A partial snapshot
     # cannot prove the draft did not change since it was reviewed.
-    incomplete = surface.dispatch("userio.draft.approve_send", {
-        "draft_id": draft["id"], "confirm": True, "expected_text": "edited reply"})
-    sent = surface.dispatch("userio.draft.approve_send", {
-        "draft_id": draft["id"], "confirm": True, "expected_text": "edited reply",
+    incomplete = surface.dispatch("userio.messages.send", {
+        "draft_id": draft, "confirm": True, "expected_text": "edited reply"})
+    sent = surface.dispatch("userio.messages.send", {
+        "draft_id": draft, "confirm": True, "expected_text": "edited reply",
         "expected_chat_id": conversation_id, "expected_attachments": []})
 
     assert listed["messages"][0]["sender"] == "anna"
@@ -337,7 +380,7 @@ def test_mcp_transport_advertises_tools_and_local_delete_is_explicit(tmp_path) -
     output_stream = StringIO()
     StdioJsonRpcTransport(UserIOMcpSurface(store, service), input_stream, output_stream).serve()
 
-    assert "userio.draft.approve_send" in output_stream.getvalue()
+    assert "userio.messages.send" in output_stream.getvalue()
     assert UserIOMcpSurface(store, service).dispatch("userio.conversation.delete_local", {"conversation_id": conversation_id, "confirm": True})["scope"] == "local_userio_only"
     assert store.conversation(conversation_id) is None
 
@@ -483,8 +526,8 @@ def test_send_tool_visibility_is_per_user(tmp_path) -> None:
     owner = store.owner()
     owner_tools = {t["name"] for t in surface.dispatch("tools/list", {}, principal=owner)["tools"]}
     reader_tools = {t["name"] for t in surface.dispatch("tools/list", {}, principal=user)["tools"]}
-    assert "userio.draft.approve_send" in owner_tools
-    assert "userio.draft.approve_send" not in reader_tools
+    assert "userio.messages.send" in owner_tools
+    assert "userio.messages.send" not in reader_tools
 
 
 def test_mcp2_resource_unsubscribe_stops_updates(tmp_path) -> None:
@@ -514,8 +557,8 @@ def test_mcp_user_capabilities_filter_tools_resources_and_subscribe(tmp_path) ->
     tools = {item["name"] for item in surface.dispatch("tools/list", {}, principal=user)["tools"]}
     assert "userio.channels.read" in tools
     assert "userio.channels.download" not in tools
-    assert "userio.draft.approve_send" not in tools
-    assert "userio.draft.create" not in tools
+    assert "userio.messages.send" not in tools
+    assert "userio.messages.prepare" not in tools
     assert "userio.workspace.policy.get" in tools
     assert "userio.workspace.policy.chats.list" in tools
     assert "userio.workspace.policy.set_default" not in tools
@@ -576,7 +619,7 @@ def test_matrix_is_a_first_class_userio_channel(tmp_path) -> None:
 class SmsGateway:
     def __init__(self): self.sent = []
     def inbound(self): return []
-    def send(self, *, to, body): self.sent.append((to, body)); return "sms-receipt-1"
+    def send(self, *, to, body, **_kwargs): self.sent.append((to, body)); return "sms-receipt-1"
 
 
 def test_mcp_send_draft_states_approval_need_and_approve_returns_receipt(tmp_path) -> None:
@@ -586,23 +629,30 @@ def test_mcp_send_draft_states_approval_need_and_approve_returns_receipt(tmp_pat
         store, Generator(), Outbox(), sms_gateway=gateway,
         sms_user_id=store.default_user_id, sms_route_id="sms", sms_manual_approve=True,
     )
+    store.register_account(account_id="sms:device", provider="sms", display_name="Телефон",
+                           enabled=True, can_read=True, can_reply=True,
+                           credential_ref="sms-native:default", user_id=store.default_user_id)
     conversation_id, _ = service.receive(
-        InboxMessage("sms", "sms-1", "+15551234567", "hello", 1.0), route_id="sms"
+        InboxMessage("sms", "sms-1", "+15551234567", "hello", 1.0), route_id="sms",
+        account_ref="sms:device",
     )
     surface = UserIOMcpSurface(store, service)
 
-    queued = surface.dispatch("userio.channels.send_draft", {
-        "chat_id": conversation_id, "text": "manual reply",
+    # The current compose contract: prepare states that approval is required
+    # and nothing reaches the provider before the reviewed send.
+    queued = surface.dispatch("userio.messages.prepare", {
+        "conversation_id": conversation_id, "text": "manual reply",
+        "request_id": "mcp-sms-approval-0001",
     })
-    assert queued["sent"] is False
+    assert queued["ok"] is True
+    assert queued["status"] == "proposed"
     assert queued["approval_required"] is True
-    assert queued["manual_approval_only"] is True
     assert queued["channel"] == "sms"
-    assert "Автоматическая отправка отключена" in queued["approval_hint"]
+    assert gateway.sent == []
 
-    sent = surface.dispatch("userio.draft.approve_send", {
-        "draft_id": queued["draft"]["id"], "confirm": True,
-        "expected_text": queued["draft"]["body"], "expected_chat_id": conversation_id,
+    sent = surface.dispatch("userio.messages.send", {
+        "draft_id": queued["draft_id"], "confirm": True,
+        "expected_text": queued["body"], "expected_chat_id": conversation_id,
         "expected_attachments": [],
     })
     assert sent["sent"] is True
@@ -673,31 +723,35 @@ def test_workspace_poll_is_durable_user_scoped_and_does_not_mark_seen(tmp_path) 
 
 @pytest.mark.parametrize("surface_kind", ["surface", "dispatcher"])
 @pytest.mark.parametrize("manual_lock", [True, False])
-def test_telegram_draft_hint_explains_approval_without_sms_label(
+def test_telegram_prepare_states_approval_needed_and_sends_nothing(
     tmp_path, monkeypatch, surface_kind, manual_lock,
 ):
-    """Fast unit: wrong-channel hint; expected 1s, maximum 10s, live sends0."""
+    """Fast unit: the current compose contract on a Telegram chat."""
     from universal_userio.mcp_dispatch import UserIOToolDispatcher
     store, outbox = SQLiteUserIOStore(tmp_path / "hint.sqlite3"), Outbox()
     try:
         service = UserIOService(store, Generator(), outbox)
+        store.register_account(account_id="telegram:1", provider="telegram", display_name="Telegram",
+                               enabled=True, can_read=True, can_reply=True,
+                               credential_ref="telegram-qr:account-1", user_id=store.default_user_id)
         conversation, _ = service.receive(
             InboxMessage("telegram", "fixture-1", "owned-peer", "hello", 1.0),
-            route_id="telegram",
+            route_id="telegram", account_ref="telegram:1",
         )
         monkeypatch.setattr(service, "manual_approval_required", lambda _chat: manual_lock)
         surface = (UserIOMcpSurface(store, service) if surface_kind == "surface"
                    else UserIOToolDispatcher(store, service))
-        result = surface.dispatch("userio.channels.send_draft", {
-            "chat_id": conversation, "text": "exact reply", "attachments": [],
+        result = surface.dispatch("userio.messages.prepare", {
+            "conversation_id": conversation, "text": "exact reply",
+            "request_id": "mcp-telegram-approval-0001",
         }, principal=store.owner())
         assert result["ok"] is True and result["channel"] == "telegram"
-        assert "SMS" not in result["approval_hint"]
-        assert "подтвердите" in result["approval_hint"]
-        assert result["manual_approval_only"] is manual_lock
-        assert result["approval_required"] is True and result["sent"] is False
-        assert result["draft"]["body"] == "exact reply"
-        assert store.draft(result["draft"]["id"]).status == "proposed"
+        # The reviewed compose path always waits for an explicit approval and
+        # never reaches the provider, whatever the automatic-approve lock says.
+        assert result["approval_required"] is True
+        assert result["status"] == "proposed"
+        assert result["body"] == "exact reply"
+        assert store.draft(result["draft_id"]).status == "proposed"
         assert outbox.calls == []
     finally:
         store.close()

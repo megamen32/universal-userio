@@ -185,7 +185,8 @@ def test_gmail_source_approves_through_its_himalaya_outbox(tmp_path) -> None:
     conversation_id, _ = service.receive(
         InboxMessage("gmail:careviolan", "m-1", "sender", "hello", 1.0), route_id="gmail-read-only"
     )
-    draft = service.create_manual_draft(conversation_id, body="reply")
+    draft = service.prepare_manual_message(
+        conversation_id, body="reply", request_id="service-gmail-outbox-0001")
 
     approved = service.approve(draft.id)
     assert approved.status == "approved"
@@ -215,7 +216,8 @@ def test_default_gmail_source_uses_registered_himalaya_account_for_approved_repl
         route_id="gmail-read-only",
     )
     store.set_conversation_account(conversation_id, "gmail")
-    draft = service.create_manual_draft(conversation_id, body="Verified result")
+    draft = service.prepare_manual_message(
+        conversation_id, body="Verified result", request_id="service-gmail-default-0001")
 
     approved = service.approve(draft.id)
     assert approved.status == "approved"
@@ -248,7 +250,8 @@ def test_default_gmail_approval_refuses_non_reply_account_or_mismatched_binding(
         route_id="gmail-read-only",
     )
     store.set_conversation_account(conversation_id, "gmail")
-    draft = service.create_manual_draft(conversation_id, body="reply")
+    draft = service.prepare_manual_message(
+        conversation_id, body="reply", request_id="service-gmail-mismatch-0001")
     with pytest.raises(DeliveryUnavailableError, match="Gmail account is not configured"):
         service.approve(draft.id)
 
@@ -259,7 +262,8 @@ def test_default_gmail_approval_refuses_non_reply_account_or_mismatched_binding(
     assert not store.set_conversation_account(conversation_id, "careviolan")
     store.delete_draft(draft.id)
     assert store.set_conversation_account(conversation_id, "careviolan")
-    draft = service.create_manual_draft(conversation_id, body="reply")
+    draft = service.prepare_manual_message(
+        conversation_id, body="reply", request_id="service-gmail-mismatch-0002")
     with pytest.raises(DeliveryUnavailableError, match="does not match source"):
         service.approve(draft.id)
     assert gmail_outbox.calls == []
@@ -387,7 +391,8 @@ def test_send_policy_blocks_approval_but_keeps_drafts(tmp_path) -> None:
     store.set_user_preference("send_enabled", "0")
     message = InboxMessage("telegram", "m-policy", "alice", "hello", 1.0)
     conversation_id, _ = service.receive(message, route_id="telegram")
-    draft = service.create_manual_draft(conversation_id, body="reply")
+    draft = service.prepare_manual_message(
+        conversation_id, body="reply", request_id="service-send-policy-0001")
     assert draft.status == "proposed"
     import pytest
     with pytest.raises(DeliveryUnavailableError):
@@ -484,7 +489,7 @@ class _DraftNotifier:
         return "notice-receipt"
 
 
-def test_manual_draft_notifies_when_approval_is_required(tmp_path) -> None:
+def test_the_manual_draft_helper_notifies_when_asked(tmp_path) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     notifier = _DraftNotifier()
     service = UserIOService(
@@ -493,7 +498,11 @@ def test_manual_draft_notifies_when_approval_is_required(tmp_path) -> None:
     message = InboxMessage("telegram", "m-notify", "alice", "hello", 1.0)
     conversation_id, _ = service.receive(message, route_id="telegram")
 
-    draft = service.create_manual_draft(conversation_id, body="reply")
+    # The helper still supports an explicit owner notification. The public
+    # compose route does not ask for one: userio.messages.prepare must never
+    # reach the provider (see tests/test_messages_prepare_no_send.py).
+    draft = service.prepare_manual_message(
+        conversation_id, body="reply", request_id="service-manual-notify-0001", notify=True)
 
     assert draft.status == "proposed"
     assert len(notifier.calls) == 1
