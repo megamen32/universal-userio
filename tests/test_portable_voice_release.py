@@ -81,3 +81,14 @@ def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch):
     monkeypatch.setattr(module,'api',api)
     assert module.install(IMAGE,'calls-primary','userio-voice','/etc/config','/var/lib/data',9092)['status']=='unchanged'
     assert all(method=='GET' for method,_ in calls)
+
+
+def test_portable_dependencies_use_constrained_voice_import_closure():
+    root=Path(__file__).resolve().parents[1]
+    text=(root/'deploy/containers/requirements-portable-voice.txt').read_text()
+    assert '-c requirements.txt' in text
+    for value in ('livekit==1.1.20','aiohttp==3.14.4','websockets==15.0.1','pydantic==2.13.5','fast-agent-mcp==0.10.43','numpy==2.5.4'):
+        assert value in text
+    portable=(root/'Dockerfile').read_text().split('AS portable-voice',1)[1]
+    assert '-r /tmp/requirements-portable-voice.txt' in portable
+    assert '-r /tmp/userio-requirements.txt' not in portable

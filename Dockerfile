@@ -90,8 +90,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak c
     && groupadd -g 163 asterisk && groupadd -g 994 notification-center \
     && useradd -u 1000 -m roomhacker
 WORKDIR /opt/universal-userio
-COPY deploy/containers/requirements.txt /tmp/userio-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/userio-requirements.txt
+COPY deploy/containers/requirements.txt deploy/containers/requirements-portable-voice.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-portable-voice.txt
+RUN pip freeze > /opt/userio-voice-dependencies.txt
 COPY pyproject.toml /opt/universal-userio/
 COPY src /opt/universal-userio/src
 COPY scripts /opt/universal-userio/scripts

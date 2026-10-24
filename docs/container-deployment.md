@@ -296,3 +296,10 @@ idlejoin и конечная реальная канарейка принадл�
 Telegram native media пока не объявлен portablecapability: проверенный wheelpin
 и его workerinterpreter для текущего88 не установлены поmetadata; старый3.0.3
 не подмешивается в этот image. Matrix/phone engine и SDKadapter от этого не зависят.
+
+Portable target устанавливает только requirements-portable-voice.txt (Matrix,
+FastAgent и NumPy) с frozen constraints из прежнего requirements.txt. Он не
+наследует backend/Telemost/browser/Torch слои. Результат pip freeze находится
+в image `/opt/userio-voice-dependencies.txt`; исходные dependencySHA входят
+в portable-release.json. Это ограничивает рабочий набор общей сборки без
+повышения лимитов Kubernetes.

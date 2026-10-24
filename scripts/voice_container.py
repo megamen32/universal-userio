@@ -31,15 +31,18 @@ def build_context(root, revision, archive, destination):
     if hashlib.sha256(payload).hexdigest() != ADAPTER_SHA:
         raise RuntimeError('published SDK adapter digest differs')
     modules = {}
+    dependency_inputs = {}
     with tarfile.open(fileobj=io.BytesIO(archive)) as source, tarfile.open(destination, 'w') as target:
         for member in source:
             if member.name.startswith(('src/', 'scripts/', 'deploy/containers/')) or member.name in ('Dockerfile', 'pyproject.toml'):
                 data = source.extractfile(member).read() if member.isfile() else None
                 target.addfile(member, io.BytesIO(data) if data is not None else None)
+                if member.isfile() and member.name in ('deploy/containers/requirements.txt','deploy/containers/requirements-portable-voice.txt'):
+                    dependency_inputs[member.name]=hashlib.sha256(data).hexdigest()
                 if member.isfile() and member.name.startswith('src/universal_userio/voice/') and member.name.endswith('.py'):
                     modules[member.name] = hashlib.sha256(data).hexdigest()
         release = {'revision':revision, 'adapter_revision':ADAPTER_REVISION, 'adapter_sha256':ADAPTER_SHA,
-                   'modules': modules, 'external_services':['Secretary SDK', 'STT', 'TTS', 'UserIO API/MCP']}
+                   'modules': modules, 'dependency_inputs':dependency_inputs, 'external_services':['Secretary SDK', 'STT', 'TTS', 'UserIO API/MCP']}
         for name, data in {'deploy/containers/external/agentcall_secretary_voice.py':payload,
                            'deploy/containers/portable-release.json':json.dumps(release, sort_keys=True).encode()}.items():
             info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o644
