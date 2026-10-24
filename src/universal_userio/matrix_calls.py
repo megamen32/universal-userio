@@ -24,6 +24,8 @@ from .contracts import InboxMessage
 ROOT = Path('/var/lib/universal-userio/matrix-calls')
 MEMBER = 'org.matrix.msc3401.call.member'
 RING = 'org.matrix.msc4075.rtc.notification'
+# In-process authority; HTTP/MCP JSON cannot supply a server admission namespace.
+_NOTICEPLACE_SCOPE_AUTHORITY = object()
 
 
 def settle_disconnected_call(record):
@@ -81,7 +83,10 @@ class MatrixCalls:
         return record
 
     def start(self, *, user_id, account_ref, room_id, target, purpose, request_id,
-              greeting='', max_seconds=120, confirm=False, agent_context=None):
+              greeting='', max_seconds=120, confirm=False, agent_context=None,
+              participants=None, request_scope=None, _scope_authority=None):
+        if request_scope is not None and _scope_authority is not _NOTICEPLACE_SCOPE_AUTHORITY:
+            raise PermissionError('call request scope is server-controlled')
         if confirm is not True: raise ValueError('explicit call confirmation required')
         if not self.service._store.capability_enabled('send', user_id=user_id):
             raise PermissionError('send capability disabled')
@@ -98,6 +103,13 @@ class MatrixCalls:
         secret = ConnectorSecrets().load(account['credential_ref'], user_id=user_id, provider='matrix')
         identity = request_json(secret['homeserver']+'/_matrix/client/v3/account/whoami', secret['access_token'])
         if identity.get('user_id') != secret['matrix_user_id']: raise ValueError('Matrix identity changed')
+        if participants is not None:
+            if (not isinstance(participants,list) or len(participants)!=2 or len(set(participants))!=2
+                    or set(participants)!={identity.get('user_id'),target}):
+                raise ValueError('Matrix policy participants mismatch')
+            members=request_json(secret['homeserver']+'/_matrix/client/v3/rooms/'+quote(room_id,safe='')+'/joined_members',secret['access_token'])
+            if not isinstance(members.get('joined'),dict) or set(members['joined'])!=set(participants):
+                raise PermissionError('Matrix policy room membership mismatch')
         display_account = next((a['id'] for a in self.service._store.accounts(user_id=user_id)
                                 if a['provider']=='matrix' and a['enabled'] and a['display_name']==target), account_ref)
         ai_settings = self.service._store.ai_settings(user_id=user_id)
@@ -110,14 +122,22 @@ class MatrixCalls:
                   'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
                   **({'voice_model': ai_settings['model']} if isinstance(ai_settings, dict) and ai_settings.get('model') else {}),
                   **({'agent_context':effective_agent_context} if effective_agent_context else {})}
-        call_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id+'\0'+request_id))
+        if participants is not None:config['participants']=sorted(participants)
+        if request_scope is not None:
+            if participants is None or not isinstance(request_scope,str) or not request_scope:
+                raise ValueError('invalid server call request scope')
+            config['request_scope']=request_scope
+        call_id = str(uuid.uuid5(uuid.NAMESPACE_URL, (request_scope or user_id)+'\0'+request_id))
         fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
         # Same request after a restart returns its receipt; it never rings twice.
         with self.lock:
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
             folder = self.root/call_id
             if (folder/'call.json').exists():
-                record = self.get(call_id, user_id)
+                try:
+                    record = self.get(call_id, user_id)
+                except KeyError:
+                    raise ValueError('call request conflict') from None
                 if record['fingerprint'] != fingerprint: raise ValueError('call request conflict')
                 return record
             if self.active: raise ValueError('another Matrix voice call is active')

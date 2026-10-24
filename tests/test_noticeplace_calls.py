@@ -188,6 +188,7 @@ def test_http_both_noticeplace_routes_reuse_protected_token_and_send_capability(
             assert request(channel, 'wrong')[0] == 401
             assert request(channel, 'test-notice-token')[0] == 200
             assert deliver.call_args.kwargs['channel'] == channel
+            assert deliver.call_args.kwargs['machine_authorized'] is True
         assert deliver.call_count == 2
         service._store.set_user_capability('send', False)
         for channel in ('matrix', 'telegram'):
@@ -198,3 +199,80 @@ def test_http_both_noticeplace_routes_reuse_protected_token_and_send_capability(
         server.server_close()
         thread.join(2)
         temporary.cleanup()
+
+
+POLICY_DESTINATION = {'account_ref':'matrix:qa-a','room_id':'!qa:hs','target':'@b:hs',
+                      'participants':['@a:hs','@b:hs']}
+
+
+def test_explicit_policy_destination_requires_server_authorization_not_owner_defaults(setup, monkeypatch):
+    ledger=setup([('unknown',False,False,{})])
+    monkeypatch.delenv('USERIO_MATRIX_NOTICE_ROUTES_FILE',raising=False)
+    with pytest.raises(PermissionError):
+        noticeplace_calls.noticeplace_call(Mock(),'owner',dict(PAYLOAD,destination=POLICY_DESTINATION))
+    assert not ledger.starts
+
+
+def test_scoped_bot_call_freezes_destination_and_uses_approved_account_owner(tmp_path,monkeypatch):
+    route=tmp_path/'routes.json';route.write_text(json.dumps({'routes':[dict(POLICY_DESTINATION,user_id='qa-user')]}));route.chmod(0o600)
+    monkeypatch.setenv('USERIO_MATRIX_NOTICE_ROUTES_FILE',str(route))
+    service=Mock();service._store.default_user_id='owner';service._store.capability_enabled.return_value=True
+    service._store.accounts.side_effect=lambda *,user_id:[{'id':'matrix:qa-a','provider':'matrix','enabled':True,'display_name':'QA A','credential_ref':'connector:qa'}] if user_id in {'qa-user','other-qa-owner'} else []
+    monkeypatch.setattr(matrix_calls.ConnectorSecrets,'load',lambda *a,**k:{'homeserver':'https://hs','access_token':'not-real','matrix_user_id':'@a:hs'})
+    monkeypatch.setattr(matrix_calls,'request_json',lambda url,*a,**k: {'joined':{'@a:hs':{},'@b:hs':{}}} if url.endswith('/joined_members') else {'user_id':'@a:hs'})
+    calls=matrix_calls.MatrixCalls(service,tmp_path/'calls');monkeypatch.setattr(matrix_calls,'calls_for',lambda _:calls)
+    started=[]
+    def answer(record,*_):
+        started.append(record['call_id']);record.update(status='active',answered=True);calls._save(record)
+    monkeypatch.setattr(calls,'_run',answer)
+    monkeypatch.setattr(matrix_calls.threading.Thread,'start',lambda thread:thread._target(*thread._args))
+    payload=dict(PAYLOAD,destination=POLICY_DESTINATION,delivery_key='scoped-once')
+    with pytest.raises(PermissionError):
+        noticeplace_calls.noticeplace_call(service,'owner',payload)
+    monkeypatch.setattr(matrix_calls,'request_json',lambda url,*a,**k: {'joined':{'@a:hs':{},'@b:hs':{},'@extra:hs':{}}} if url.endswith('/joined_members') else {'user_id':'@a:hs'})
+    with pytest.raises(PermissionError,match='membership mismatch'):
+        noticeplace_calls.noticeplace_call(service,'owner',payload,machine_authorized=True)
+    assert not started and not list((tmp_path/'calls').glob('*/call.json'))
+    monkeypatch.setattr(matrix_calls,'request_json',lambda url,*a,**k: {'joined':{'@a:hs':{},'@b:hs':{}}} if url.endswith('/joined_members') else {'user_id':'@a:hs'})
+    first=noticeplace_calls.noticeplace_call(service,'owner',payload,machine_authorized=True)
+    assert first['answered'] and first['destination']==POLICY_DESTINATION
+    record=calls.get(first['call_id'],'qa-user');assert record['user_id']=='qa-user'
+    assert first['call_id']==str(uuid.uuid5(uuid.NAMESPACE_URL,'owner\0'+noticeplace_calls._request(payload)[0]))
+    assert record['participants']==POLICY_DESTINATION['participants']
+    assert record['agent_context']=={'call_mode':'incoming_guest'}
+    assert noticeplace_calls.noticeplace_call(service,'owner',payload,machine_authorized=True)['call_id']==first['call_id']
+    assert len(started)==1
+    route.write_text(json.dumps({'routes':[dict(POLICY_DESTINATION,user_id='other-qa-owner')]}))
+    with pytest.raises(ValueError,match='request conflict'):
+        noticeplace_calls.noticeplace_call(service,'owner',payload,machine_authorized=True)
+    assert len(started)==1
+    changed=dict(POLICY_DESTINATION,target='@c:hs',participants=['@a:hs','@c:hs'])
+    route.write_text(json.dumps({'routes':[dict(changed,user_id='qa-user')]}))
+    with pytest.raises(ValueError,match='destination changed'):
+        noticeplace_calls.noticeplace_call(service,'owner',dict(payload,destination=changed),machine_authorized=True)
+    assert len(started)==1
+
+
+@pytest.mark.parametrize('mutation', ['other-target','public-config','send-disabled'])
+def test_scoped_route_authorization_rejects_before_call_admission(tmp_path,monkeypatch,mutation):
+    binding=dict(POLICY_DESTINATION)
+    route=tmp_path/'routes.json'
+    route.write_text(json.dumps({'routes':[dict(binding,user_id='qa-user')]}));route.chmod(0o600)
+    monkeypatch.setenv('USERIO_MATRIX_NOTICE_ROUTES_FILE',str(route))
+    service=Mock();service._store.capability_enabled.return_value=mutation!='send-disabled'
+    if mutation=='public-config':route.chmod(0o644)
+    if mutation=='other-target':binding.update(target='@c:hs',participants=['@a:hs','@c:hs'])
+    calls=Mock();monkeypatch.setattr(matrix_calls,'calls_for',lambda _:calls)
+    with pytest.raises(PermissionError):
+        noticeplace_calls.noticeplace_call(service,'owner',dict(PAYLOAD,destination=binding),machine_authorized=True)
+    calls.start.assert_not_called();calls.get.assert_not_called()
+
+
+def test_public_json_cannot_supply_machine_admission_scope(tmp_path):
+    calls=matrix_calls.MatrixCalls(Mock(),tmp_path/'calls')
+    with pytest.raises(PermissionError,match='server-controlled'):
+        calls.start(user_id='qa-user',account_ref='matrix:qa-a',room_id='!qa:hs',target='@b:hs',
+                    purpose='QA',request_id='stable-qa-request-0001',confirm=True,
+                    participants=POLICY_DESTINATION['participants'],request_scope='owner',
+                    _scope_authority='owner')
+    assert not (tmp_path/'calls').exists()

@@ -534,10 +534,12 @@ def handler(
                 })
                 return
             principal = self._principal(allow_proxy=path != "/mcp")
+            noticeplace_machine=False
             matrix_notice_token = os.environ.get('USERIO_MATRIX_NOTICE_TOKEN','')
             if (principal is None and path in {'/v1/calls/matrix/noticeplace', '/v1/calls/telegram/noticeplace'} and matrix_notice_token
                     and hmac.compare_digest(self.headers.get('Authorization',''),'Bearer '+matrix_notice_token)):
                 principal = service._store.owner()
+                noticeplace_machine=True
             if principal is None:
                 if path == "/mcp":
                     self._mcp_unauthorized()
@@ -1008,7 +1010,8 @@ def handler(
                     if not service._store.capability_enabled('send', user_id=user_id):
                         self._reply(403, {'error':'send_capability_disabled'})
                         return
-                    self._reply(200, noticeplace_call(service,user_id,self._json(),channel=path.split('/')[3]))
+                    self._reply(200, noticeplace_call(service,user_id,self._json(),channel=path.split('/')[3],
+                                                     machine_authorized=noticeplace_machine))
                     return
                 if path.startswith('/v1/calls/matrix/') and path.endswith('/stop'):
                     if not service._store.capability_enabled('send', user_id=user_id):
