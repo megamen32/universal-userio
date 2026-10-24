@@ -244,12 +244,20 @@ class BackendConfig:
     # Opt in with the registered UserIO phone account ID, e.g. phone100.
     peer_account_ref: str = ""
     speech_speed: float = DEFAULT_SPEECH_SPEED
+    # The voice turn streams a model answer from the Secretary SDK and
+    # can stay silent for longer than the global per-request deadline
+    # before its terminal event arrives. Only the voice turn of a call
+    # uses this deadline; every other path keeps the global one.
+    voice_request_timeout: float = 120.0
 
     @classmethod
     def from_environment(cls) -> "BackendConfig":
         speech_speed = float(os.getenv('AGENTCALL_SPEECH_SPEED', str(DEFAULT_SPEECH_SPEED)))
         if not 0.5 <= speech_speed <= 2.0:
             raise ValueError('speech speed must be between 0.5 and 2.0')
+        voice_timeout = float(os.getenv("AGENTCALL_VOICE_REQUEST_TIMEOUT", "120"))
+        if voice_timeout <= 0:
+            raise ValueError('voice request timeout must be positive')
         effort = os.getenv("AGENTCALL_LLM_REASONING_EFFORT", "low")
         deep_effort = os.getenv("AGENTCALL_LLM_REASONING_DEEP_EFFORT", "high")
         if effort not in {"low", "medium", "high", "xhigh", "max"} or deep_effort not in {"low", "medium", "high", "xhigh", "max"}:
@@ -334,6 +342,7 @@ class BackendConfig:
                 "AGENTCALL_CONTROL_GROUP", "notification-center"
             ),
             request_timeout=float(os.getenv("AGENTCALL_REQUEST_TIMEOUT", "90")),
+            voice_request_timeout=voice_timeout,
             fast_agent_enabled=os.getenv("AGENTCALL_FAST_AGENT_ENABLED", "1") == "1",
             fast_agent_bin=os.getenv(
                 "AGENTCALL_FAST_AGENT_BIN", "/home/roomhacker/.local/bin/fast-agent"
@@ -3325,6 +3334,18 @@ class NativeTurnUnsettled(RuntimeError):
     pass
 
 
+def call_error_detail(error):
+    """Describe an error and the cause that `from None` would hide."""
+    detail = f"{type(error).__name__}: {error}"
+    cause = getattr(error, "__context__", None)
+    if cause is not None and isinstance(error, NativeTurnUnsettled):
+        # The Secretary client masks the reason of an unsettled turn with
+        # `from None`: the real cause is only reachable through the
+        # implicit exception chain, so it is written out here.
+        detail += f"; cause={type(cause).__name__}: {str(cause)[:200]}"
+    return detail
+
+
 class SpeechChunkBudget:
     """Size ready speech from observed render time and playable audio, not tokens."""
     def __init__(self):
@@ -3919,7 +3940,13 @@ async def handle_call(
         if prepared is not None and not guest and (os.environ.get('EXMANAGER_VOICE_URL')
                 or Path(os.environ.get('EXMANAGER_VOICE_CONFIG_FILE', '/etc/agentcall-secretary-voice.json')).is_file()):
             from agentcall_secretary_voice import brain_for_call
-            secretary = brain_for_call(call_config, prepared, call_id, incoming=incoming, guest=guest)
+            # The Secretary voice turn streams a model answer from the SDK and
+            # can stay silent for longer than the global per-request deadline
+            # before its terminal event arrives. The voice turn therefore gets
+            # its own deadline; the global deadline of the other paths of this
+            # call is not touched.
+            voice_config = replace(call_config, request_timeout=call_config.voice_request_timeout)
+            secretary = brain_for_call(voice_config, prepared, call_id, incoming=incoming, guest=guest)
             if secretary is not None:
                 fast_agent = secretary
         # No LLM generation here: initialize call-owned SDK/MCP and the phone
@@ -4102,7 +4129,7 @@ async def handle_call(
     except (asyncio.IncompleteReadError, ConnectionResetError):
         pass
     except Exception as error:
-        _log(f"call={call_id} ERROR {type(error).__name__}: {error}")
+        _log(f"call={call_id} ERROR {call_error_detail(error)}")
         await broker.emit(safe_event("error", call_id, reason=f"{type(error).__name__}: {error}", **peer_fields))
     finally:
         if reader_task is not None and not reader_task.done():
