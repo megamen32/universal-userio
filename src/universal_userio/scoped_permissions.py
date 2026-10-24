@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 
-READ_TOOLS = {'capabilities', 'history', 'get', 'resolve', 'media', 'events'}
+READ_TOOLS = {'capabilities', 'history', 'has_contacted', 'get', 'resolve', 'media', 'events'}
 
 
 def validate_grants(store, user_id, grants):
@@ -119,29 +119,35 @@ def enforce(store, principal, name, args):
             if grant is None or grant['access'] != 'read_write' or grant['chats'] is not None:
                 raise PermissionError('account_scope_required_for_new_contact')
         return
-    if name == 'userio.channels.send_draft':
-        conversation, access = _scoped_conversation(
-            store, principal, None, chat_id=args.get('chat_id'))
+    if name == 'userio.messages.send':
+        if principal.read_only or not store.capability_enabled('send',user_id=principal.user_id):
+            raise PermissionError('send_capability_disabled')
+        draft_id = str(args.get('draft_id') or '').strip()
+        if not draft_id:
+            raise ValueError('draft_id is required')
+        # Ownership first, exactly as on the approve path: a principal that does
+        # not own the draft must not learn anything about it.
+        draft = store.draft(draft_id, user_id=principal.user_id)
+        _conversation, access = _scoped_conversation(store, principal, None,
+                                                     chat_id=draft.conversation_id)
         if access != 'read_write':
             raise PermissionError('chat_read_only_token')
         return
-    if name in {'userio.contacts.resolve', 'userio.contacts.start'}:
+    if name == 'userio.contacts.resolve':
         ref = str(args.get('account_ref') or '').strip()
         grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
         if grant is None:
             raise PermissionError('chat_or_account_outside_token_scope')
-        if name == 'userio.contacts.start':
-            if grant['access'] != 'read_write':
-                raise PermissionError('chat_read_only_token')
-            if grant['chats'] is not None:
-                # A token limited to named chats may not open a conversation
-                # with a contact that is not in the history yet.
-                raise PermissionError('account_scope_required_for_new_contact')
         return
     if not name.startswith('userio.messenger.'):
         raise PermissionError('scoped_messenger_only')
     op = name.removeprefix('userio.messenger.')
     ref, cid = args.get('account_ref'), args.get('conversation_id')
+    if op == 'has_contacted' and args.get('telegram_username') and not cid:
+        grant = next((g for g in principal.messenger_grants if g['account_ref'] == ref), None)
+        if grant is None or grant['chats'] is not None:
+            raise PermissionError('account_scope_required_for_identity_history')
+        return
     admin = op in {'telegram_admin.create', 'telegram_admin.propose'}
     admin_operation = args.get('operation', '') if admin else ''
     if op in {'get','approve'}:
@@ -359,11 +365,6 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
             'size':len(file.data),'sha256':hashlib.sha256(file.data).hexdigest(),
             'encoding':'base64','data':base64.b64encode(file.data).decode('ascii')}}
 
-    if name == 'userio.channels.send_draft':
-        draft = channels.send(chat_id=arguments['chat_id'],text=arguments['text'],
-                              attachments=arguments.get('attachments'))
-        return {'ok':True,'draft':{'id':draft.id,'conversation_id':draft.conversation_id,
-            'body':draft.body,'status':draft.status,'approval_required':True,'sent':False}}
     raise KeyError('unknown_scoped_channel_operation')
 
 
@@ -380,12 +381,7 @@ def _dispatch_scoped_contacts(store, service, principal, name, arguments):
             resolved = starter.resolve(user_id=principal.user_id, account_ref=account_ref,
                                        identifier=identifier, need_send=False)
             return {'ok': True, 'peer': resolved.as_dict()}
-        text = str(arguments.get('text') or '').strip()
-        request_id = str(arguments.get('request_id') or '').strip()
-        if not text or not request_id:
-            raise ValueError('text and request_id are required')
-        return starter.start(user_id=principal.user_id, account_ref=account_ref,
-                             identifier=identifier, text=text, request_id=request_id)
+        raise KeyError('unknown_contact_operation')
     except ContactStartError as error:
         return {'ok': False, 'error': str(error), 'code': error.code}
 
@@ -396,6 +392,13 @@ def dispatch_scoped(store, service, principal, name, arguments):
     op = name.removeprefix('userio.messenger.')
     if name == 'userio.messages.prepare':
         return service.contact_starter.prepare(user_id=principal.user_id, **arguments)
+    if name == 'userio.messages.send':
+        if not store.send_enabled(user_id=principal.user_id):
+            return {'ok': False, 'error': 'outbound_delivery_disabled'}
+        # The same approved-send code path as the unscoped route, so a scoped
+        # token cannot reach weaker send semantics than an owner token.
+        from .mcp_surface import UserIOMcpSurface
+        return UserIOMcpSurface(store, service, principal)._approve(arguments, principal)
     if name.startswith('userio.channels.'):
         return _dispatch_scoped_channels(store,service,principal,name,arguments)
     if name.startswith('userio.contacts.'):
@@ -404,7 +407,7 @@ def dispatch_scoped(store, service, principal, name, arguments):
         result = dispatch(store,service,principal,name,arguments)
         if op == 'capabilities' and result.get('ok') and grant_for(principal, arguments.get('account_ref')) == 'read_only':
             for operation, value in result['operations'].items():
-                if operation not in {'read','history','download'}:
+                if operation not in {'read','history','has_contacted','download'}:
                     value.update(allowed=False, reason='chat_read_only_token')
         return result
     api = Messenger(store,service,principal)

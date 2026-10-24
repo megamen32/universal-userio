@@ -32,6 +32,7 @@ from . import chatgpt_sessions
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 from .contracts import ChannelFile, ContactResolutionUnavailable, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
+from .telegram_history_refresh import TELEGRAM_HISTORY_REFRESH
 
 if TYPE_CHECKING:
     from .service import UserIOService
@@ -463,9 +464,31 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("Telegram admin status identity conflict")
         return result
 
-    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "", slot: str = "") -> str:
-        if not chat or not body:
+    def send_reply(self, *, chat: str, body: str, draft_id: str, chat_id: str = "", account_ref: str = "",
+                   slot: str = "", reply_to: Mapping[str, object] | None = None) -> str:
+        if not body or (reply_to is None and not chat):
             raise ValueError("Telegram delivery requires chat and body")
+        if reply_to is not None:
+            # A source-bound reply answers one exact message: the source id
+            # and the text that source carried when it was picked are both
+            # required, so the answer can never land under another message.
+            if (not isinstance(reply_to, Mapping)
+                    or set(reply_to) - {"message_id", "expected_text", "thread_id"}):
+                raise ValueError("Telegram reply_to must be a source-bound reply object")
+            message_id = reply_to.get("message_id")
+            expected_text = reply_to.get("expected_text")
+            thread_id = reply_to.get("thread_id", "")
+            if (not isinstance(message_id, str) or not isinstance(expected_text, str)
+                    or not isinstance(thread_id, str)):
+                raise ValueError("Telegram reply_to requires source message id and exact source text")
+            receipt = self.reply_message(
+                chat_id=chat_id, account_ref=account_ref, message_id=message_id,
+                thread_id=thread_id, expected_text=expected_text, text=body, request_id=draft_id,
+            )
+            # The durable receipt names the source the answer is bound to, so
+            # the binding survives in UserIO and not only in the connector.
+            return (f"telegram-qr:{slot or '?'}:{receipt['message_id']}:{draft_id}"
+                    f":reply_to:{receipt['reply_to_id']}:thread:{receipt['thread_id']}")
         # The attempt id binds this exact approval to the provider receipt the
         # connector records, so an uncertain outcome can be resolved later
         # without ever replaying the message.
@@ -491,7 +514,8 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("telegram-qr connector is unreachable") from error
         return f"telegram-qr:{data.get('slot', '?')}:{data.get('message_id', 'sent')}:{draft_id}"
 
-    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200) -> dict[str, object]:
+    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200,
+                          before_id: int = 0) -> dict[str, object]:
         """Read the provider's authoritative history for one peer.
 
         The connector fetches the peer's history from Telegram and mirrors it
@@ -499,21 +523,24 @@ class TelegramQrHttpOutbox:
         """
         if not account_ref or not re.fullmatch(r"-?[1-9][0-9]*", peer_id):
             raise ValueError("Telegram history reconciliation requires an exact account and peer")
+        if type(before_id) is not int or not 0 <= before_id <= 2147483647:
+            raise ValueError('Telegram history cursor is invalid')
         payload = json.dumps({"account_id": account_ref, "peer_id": peer_id,
-                              "limit": max(1, min(200, int(limit)))}).encode()
+                              "limit": max(1, min(200, int(limit))), "before_id": before_id}).encode()
         request = urllib.request.Request(  # noqa: S310
             f"{self._base_url}/reconcile", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
         )
         try:
-            with self._runner(request, timeout=max(self._timeout, 60)) as response:
+            with self._runner(request, timeout=20) as response:
                 result = json.loads(response.read().decode() or "{}")
         except urllib.error.HTTPError as error:
-            detail = error.read().decode(errors="replace")[:200]
-            raise RuntimeError(f"telegram-qr history reconciliation failed: HTTP {error.code} {detail}") from error
+            retry_after = _telegram_retry_after(error.headers) if error.code == 429 else None
+            raise TelegramQrHttpError(error.code, retry_after) from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr connector is unreachable") from error
-        if not isinstance(result, dict) or str(result.get("account_id") or "") != account_ref:
+        if (not isinstance(result, dict) or str(result.get("account_id") or "") != account_ref
+                or str(result.get('peer_id') or '') != peer_id):
             raise RuntimeError("telegram-qr history reconciliation identity mismatch")
         return result
 
@@ -625,6 +652,10 @@ class TelegramQrHttpOutbox:
             raise RuntimeError(f"telegram-qr reply outcome is unknown: HTTP {error.code}") from error
         except (OSError, urllib.error.URLError) as error:
             raise RuntimeError("telegram-qr reply outcome is unknown: connector is unreachable") from error
+        # A repeated approval answers from the connector journal. That
+        # receipt carries no body, so only the body check is relaxed: every
+        # binding (account, peer, source, topic) is still verified.
+        duplicate = result.get("duplicate") is True
         if (result.get("ok") is not True or result.get("account_id") != account_ref
                 or str(result.get("peer_id")) != chat_id
                 or not isinstance(result.get("message_id"), str)
@@ -632,7 +663,7 @@ class TelegramQrHttpOutbox:
                 or int(result["message_id"]) > 0x7FFFFFFF
                 or str(result.get("reply_to_id")) != message_id
                 or str(result.get("thread_id") or "") != thread_id
-                or result.get("text") != text or result.get("out") is not True
+                or (not duplicate and (result.get("text") != text or result.get("out") is not True))
                 or type(result.get("date")) not in (int, float) or result["date"] <= 0):
             raise RuntimeError("Telegram reply receipt could not be verified")
         return result
@@ -908,15 +939,6 @@ class StoredChannelAdapter:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
 
-    def send(
-        self, *, chat_id: str, text: str, attachments: list[str] | None = None
-    ) -> ReplyDraft:
-        if attachments:
-            raise AdapterNotSupported("attachments are not supported by adapter")
-        record = self._store.conversation(chat_id, user_id=self._user_id)
-        if record is None or not self._matches(str(record["source"])):
-            raise KeyError("chat not found")
-        return self._service.create_manual_draft(chat_id, body=text, user_id=self._user_id)
 
     def _matches(self, source: str) -> bool:
         if self.channel is None:
@@ -1055,6 +1077,24 @@ class TelegramChannelAdapter(StoredChannelAdapter):
         return result
 
     def _refresh_history(
+        self, chat: dict[str, Any], *, before_id: int | None = None,
+        history_limit: int = 50,
+    ) -> dict[str, Any]:
+        key = (
+            self._user_id,
+            str(chat.get("account_ref") or ""),
+            str(chat.get("peer_id") or ""),
+            before_id,
+            history_limit,
+        )
+        return TELEGRAM_HISTORY_REFRESH.refresh(
+            key,
+            lambda: self._refresh_history_now(
+                chat, before_id=before_id, history_limit=history_limit,
+            ),
+        )
+
+    def _refresh_history_now(
         self, chat: dict[str, Any], *, before_id: int | None = None,
         history_limit: int = 50,
     ) -> dict[str, Any]:
@@ -1681,25 +1721,6 @@ class ChatGPTCDPChannelAdapter:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
 
-    def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
-        if attachments:
-            raise AdapterNotSupported("attachments are not supported by adapter")
-        exported = self.read(chat_id=chat_id)["chat"]
-        messages = exported.get("messages")
-        if not isinstance(messages, list) or not messages:
-            raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
-        latest = messages[-1]
-        if not isinstance(latest, Mapping):
-            raise RuntimeError("chatgpt-cdp-mcp returned an invalid message export")
-        body = str(latest.get("text") or latest.get("body") or "").strip()
-        message_ref = str(latest.get("messageRef") or latest.get("id") or "").strip()
-        if not body or not message_ref:
-            raise RuntimeError("chatgpt-cdp-mcp returned a message without text or reference")
-        conversation_id, _ = self._service.receive(
-            InboxMessage("chatgpt", message_ref, chat_id, body, time.time()),
-            route_id="chatgpt", user_id=self._user_id,
-        )
-        return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
 
     @classmethod
     def _chat_summary(cls, chat: Mapping[str, Any]) -> dict[str, Any]:
@@ -1860,22 +1881,6 @@ class ChatGPTWebChannelAdapter:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
 
-    def send(self, *, chat_id: str, text: str, attachments: list[str] | None = None) -> ReplyDraft:
-        if attachments:
-            raise AdapterNotSupported("attachments are not supported by adapter")
-        slug = _chatgpt_resolve_account(self._username, chat_id)
-        chat = _chatgpt_conversation(self._username, slug, chat_id)
-        messages = chat.get("messages") or []
-        if not messages:
-            raise ValueError("ChatGPT chat has no message to anchor a UserIO draft")
-        latest = messages[-1]
-        message_ref = f"{chat_id}:{latest.get('created_at', 0)}:{len(messages)}"
-        conversation_id, _ = self._service.receive(
-            InboxMessage("chatgpt", message_ref, chat_id, str(latest.get("text", ""))[:8000], time.time()),
-            route_id="chatgpt", user_id=self._user_id,
-        )
-        self._store.set_conversation_account(conversation_id, slug, user_id=self._user_id)
-        return self._service.create_manual_draft(conversation_id, body=text, user_id=self._user_id)
 
     @classmethod
     def _chat_summary(cls, chat: Mapping[str, Any]) -> dict[str, Any]:

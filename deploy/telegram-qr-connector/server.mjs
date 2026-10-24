@@ -11,6 +11,8 @@ import { EditedMessage } from "telegram/events/EditedMessage.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import QRCode from "qrcode";
 import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcribeTelegramAudio } from "./transcription.mjs";
+import { bodyWithOrigin, forwardOrigin } from "./forward-origin.mjs";
+import { duplicateReceipt, replyAttemptFields } from "./send-receipt.mjs";
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
@@ -31,6 +33,7 @@ import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from
 import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
 import { SendAttemptLedger, attemptState } from "./send-attempts.mjs";
 import { attachmentResponseHeaders } from "./attachment-response.mjs";
+import { historyEvidence } from './history-evidence.mjs';
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { Transform, pipeline } from "node:stream";
@@ -645,7 +648,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     ...(entityName(chatEntity) ? { sender_name: entityName(chatEntity) } : {}),
-    body: normalized.body.slice(0, 8000),
+    body: bodyWithOrigin(normalized.body, forwardOrigin(message)),
     ...(attachments.length ? { attachments: attachments.map((attachment, idx) => ({ ...attachment, idx })) } : {}),
   };
 }
@@ -663,6 +666,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
   const hasMore = messages.length === pageLimit && oldestId > 0;
   let posted = 0;
   const postedIds = [];
+  const messageEvidence = [];
   for (const message of messages) {
     if (!message || !message.date) continue;
     const value = await envelope(chatKey, label, message, client, self,
@@ -671,6 +675,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
     await postInbox(accountId, value);
     posted += 1;
     postedIds.push(Number(message.id));
+    messageEvidence.push(historyEvidence(message, value.attachments || []));
   }
   const unread = providerUnreadCount(dialog);
   const state = await postUserIO("/v1/telegram/mirror-state", {
@@ -698,7 +703,7 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
       {account_id:accountId, peer_id:chatKey, deleted_ids:deleted});
   }
   return { posted, fetched: messages.length, oldest_id: oldestId, has_more: hasMore,
-    message_ids: postedIds };
+    message_ids: postedIds, message_evidence: messageEvidence };
 }
 
 async function ingestProviderState(slot, client, accountId, update) {
@@ -1509,7 +1514,7 @@ http.createServer(async (req, res) => {
       res.writeHead(200, {"content-type":"application/json"});
       return res.end(JSON.stringify({account_id:item.accountId, peer_id:chatKey,
             mirrored:page.posted, fetched:page.fetched, oldest_id:page.oldest_id,
-            has_more:page.has_more, message_ids:page.message_ids,
+            has_more:page.has_more, message_ids:page.message_ids, message_evidence:page.message_evidence,
             provider_read_acknowledged:false, scan}));
     } catch (error) {
       res.writeHead(400, {"content-type":"application/json"});
@@ -1642,9 +1647,7 @@ http.createServer(async (req, res) => {
           const state = attemptState(recorded);
           if (state === "sent") {
             res.writeHead(200, { "content-type": "application/json" });
-            return res.end(JSON.stringify({ ok: true, duplicate: true, slot: recorded.slot,
-              account_id: recorded.account_id, peer_id: recorded.peer_id,
-              message_id: String(recorded.message_id), date: recorded.date }));
+            return res.end(JSON.stringify(duplicateReceipt(recorded)));
           }
           if (state === "pending" || state === "unknown") {
             res.writeHead(502, { "content-type": "application/json" });
@@ -1696,7 +1699,8 @@ http.createServer(async (req, res) => {
               threadId, expectedText, text });
             console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
             sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
-              peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply" });
+              peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply",
+              ...replyAttemptFields(sent) });
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id: chatId,
               message_id: sent.messageId, reply_to_id: sent.replyToId, thread_id: sent.threadId,

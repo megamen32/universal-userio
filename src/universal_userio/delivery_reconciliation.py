@@ -68,7 +68,7 @@ class TelegramDeliveryReconciliationWorker:
                 delay = RETRY_DELAYS_SECONDS[min(attempts, len(RETRY_DELAYS_SECONDS) - 1)]
                 next_check = self.clock() + delay
                 result = self.service.reconcile_draft_delivery(
-                    draft_id, user_id=user_id, automatic=True,
+                    draft_id, user_id=user_id, automatic=True, provider_history=True,
                     automatic_next_check_at=next_check,
                     automatic_terminal_unknown=terminal,
                     expected_generation=int(item["delivery_attempt_generation"]),

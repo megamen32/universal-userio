@@ -46,7 +46,7 @@ to `head` without processing the returned page.
 1. Discover available accounts with `userio.accounts.list`.
 2. Poll `userio.workspace.poll`, or list chats with `userio.channels.list`.
 3. Read the exact chat ID with `userio.channels.read`.
-4. Create text with `userio.channels.send_draft`. This never sends.
+4. Create text with `userio.messages.prepare`. This never sends.
 5. Show the exact stored draft to the human.
 6. After explicit approval, call `userio.draft.approve_send` with `confirm=true`
    and the complete snapshot: `draft_id`, `expected_text`,

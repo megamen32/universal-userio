@@ -26,6 +26,7 @@ import uuid
 
 DB = "/var/lib/universal-userio/userio.sqlite3"
 ROOM = "!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com"
+OWNER_MATRIX_ID = "@bezrabotnyi:chat.bezrabotnyi.com"
 FIXTURES = {
     "a": {"username": "lhc_voice_user_a_20261021",
           "matrix_id": "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com"},
@@ -83,7 +84,7 @@ def fixture_credentials(alias):
 
 
 def _fixture_identity_map(document, caller_id):
-    """Copy the owner mapping to only the active test caller, fail closed."""
+    """Keep the scoped fixture identity; never bind a test bot to the owner."""
     allowed = {item["matrix_id"] for item in FIXTURES.values()}
     if caller_id not in allowed or not isinstance(document, dict):
         raise PermissionError("fixture_identity_scope_invalid")
@@ -94,10 +95,13 @@ def _fixture_identity_map(document, caller_id):
     owner_id = next(iter(owner_ids))
     uuid.UUID(owner_id)
     mapping_key = "matrix:" + caller_id
-    existing = document.get(mapping_key)
-    if existing and existing != owner_id:
-        raise PermissionError("fixture_identity_already_bound_differently")
-    return {**document, mapping_key: owner_id}
+    scoped_id = document.get(mapping_key)
+    if not isinstance(scoped_id, str) or not scoped_id:
+        raise PermissionError("fixture_identity_not_scoped")
+    uuid.UUID(scoped_id)
+    if scoped_id == owner_id:
+        raise PermissionError("fixture_identity_must_not_be_owner")
+    return {**document, mapping_key: scoped_id}
 
 
 class FixtureSecretaryScope:
@@ -151,6 +155,17 @@ def _modes_seen(log_text: str) -> list[str]:
 
 
 async def run():
+    import hashlib as _hashlib
+    import importlib as _importlib
+    _engine = _importlib.import_module('agentcall_realtime_bridge')
+    _engine_path = str(getattr(_engine, '__file__', '') or '')
+    try:
+        with open(_engine_path, 'rb') as _stream:
+            _engine_md5 = _hashlib.md5(_stream.read()).hexdigest()
+    except OSError:
+        _engine_md5 = ''
+    print(json.dumps({"event": "engine_module", "file": _engine_path,
+                      "md5": _engine_md5}), flush=True)
     from livekit import rtc
     from universal_userio.matrix_calls import MEMBER
     from universal_userio.matrix_call_worker import (
@@ -159,21 +174,33 @@ async def run():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("fixture", choices=tuple(FIXTURES))
-    alias = parser.parse_args().fixture
+    parser.add_argument("--room-id", default=ROOM)
+    parser.add_argument("--caller-id", default="")
+    parser.add_argument("--reply-turns", type=int, choices=(1, 2), default=2)
+    args = parser.parse_args()
+    alias = args.fixture
     fixture = FIXTURES[alias]
-    peer = FIXTURES["b" if alias == "a" else "a"]
+    room_id = str(args.room_id)
+    if not re.fullmatch(r"![A-Za-z0-9]+:chat\.bezrabotnyi\.com", room_id):
+        raise ValueError("fixture_room_id_invalid")
+    default_caller = FIXTURES["b" if alias == "a" else "a"]["matrix_id"]
+    caller_id = str(args.caller_id or default_caller)
+    allowed_callers = {item["matrix_id"] for item in FIXTURES.values()} | {OWNER_MATRIX_ID}
+    if caller_id not in allowed_callers or caller_id == fixture["matrix_id"]:
+        raise PermissionError("fixture_caller_identity_not_allowed")
+    peer = {"matrix_id": caller_id}
     user_id, account_id, account, voice_ai = fixture_credentials(alias)
     homeserver, access = account["homeserver"], account["access_token"]
     identity = _request(homeserver, access, "GET", "/_matrix/client/v3/account/whoami")
     if identity.get("user_id") != fixture["matrix_id"]:
         raise PermissionError("fixture_matrix_whoami_mismatch")
 
-    room_path = "/_matrix/client/v3/rooms/" + urllib.parse.quote(ROOM, safe="")
+    room_path = "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
     state = _request(homeserver, access, "GET", room_path + "/state")
     members = {event.get("state_key"): event.get("content", {}).get("membership")
                for event in state if event.get("type") == "m.room.member"}
     joined = {member for member, membership in members.items() if membership == "join"}
-    if joined != {FIXTURES["a"]["matrix_id"], FIXTURES["b"]["matrix_id"]}:
+    if joined != {fixture["matrix_id"], caller_id}:
         raise PermissionError("fixture_room_membership_changed")
     if any(event.get("type") == "m.room.encryption" for event in state):
         raise ValueError("encrypted_room_not_supported")
@@ -214,11 +241,12 @@ async def run():
         attention_text=config.attention_prompt, attention_pcm=attention_pcm,
         context=call_context,
         agent_context={
-            "call_mode": "incoming_guest", "voice_transport": "matrix",
-            "voice_target": peer["matrix_id"],
+            "call_mode": "qa_incoming", "voice_transport": "matrix",
+            "voice_target": FIXTURES[alias]["matrix_id"],
+            "qa_caller": peer["matrix_id"], "qa_room": room_id,
         },
         created_at=time.time(), wait_prompts=load_wait_prompts(),
-        account_ref=account_id, peer_ref=ROOM, peer_label="fixture caller A",
+        account_ref=account_id, peer_ref=room_id, peer_label="Matrix caller " + caller_id,
     )
 
     rtc_url = os.environ.get("USERIO_MATRIX_RTC_AUTH_URL", "").rstrip("/")
@@ -231,7 +259,6 @@ async def run():
     transport_ready = asyncio.Event()
     media_tasks: set[asyncio.Task] = set()
     summaries = {"assistant_turns": 0, "caller_turns": 0, "errors": 0, "modes": []}
-    room_id = ROOM
     room_path = "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
 
     async def api(method, path, payload=None):
@@ -281,6 +308,15 @@ async def run():
                     summaries["caller_turns"] += 1
                 else:
                     summaries["assistant_turns"] += 1
+                # The first assistant transcript is the prepared greeting.
+                # End only after the owner has spoken one reply to B's one
+                # generated answer; never let B answer the owner's reply.
+                if (summaries["caller_turns"] >= args.reply_turns + 1
+                        and summaries["assistant_turns"] >= args.reply_turns + 1
+                        and not stop.is_set()):
+                    stop.set()
+                    audio_reader.feed_data(pack_audiosocket_frame(voice.HANGUP_KIND, b""))
+                    await asyncio.sleep(0)
             elif kind == "error":
                 summaries["errors"] += 1
             elif kind == "voice_mode":
@@ -329,7 +365,8 @@ async def run():
         deadline = time.monotonic() + 180
         caller_event = None
         print(json.dumps({"event": "ready", "fixture": alias,
-                          "room": ROOM, "model": voice_ai["model"]}), flush=True)
+                          "caller": caller_id, "room": room_id,
+                          "reply_turns": args.reply_turns, "model": voice_ai["model"]}), flush=True)
         while time.monotonic() < deadline:
             current = await api("GET", room_path + "/state")
             candidates = [event for event in current
@@ -355,7 +392,7 @@ async def run():
         )
         sfu = await asyncio.to_thread(
             _request, rtc_url, "", "POST", "/sfu/get",
-            {"room": ROOM, "openid_token": openid, "device_id": device},
+            {"room": room_id, "openid_token": openid, "device_id": device},
         )
         await room.connect(sfu["url"], sfu["jwt"], rtc.RoomOptions(connect_timeout=15))
         joined_rtc = True
@@ -383,12 +420,15 @@ async def run():
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         log_handle = os.fdopen(fd, "w", encoding="utf-8")
         previous_stderr = sys.stderr
+        secretary_scope = None
         try:
             sys.stderr = log_handle
 
             async def fixture_answer_gate(_call_id, hung_up):
                 return not hung_up.is_set()
 
+            secretary_scope = FixtureSecretaryScope(caller_id)
+            secretary_scope.__enter__()
             engine = asyncio.create_task(handle_call(
                 audio_reader, writer, Broker(), config, {voice_call_id: prepared},
                 answer_gate=fixture_answer_gate,
@@ -402,6 +442,8 @@ async def run():
                 await asyncio.wait_for(engine, timeout=config.request_timeout + 15)
             await source.wait_for_playout()
         finally:
+            if secretary_scope is not None:
+                secretary_scope.__exit__(None, None, None)
             log_handle.flush()
             sys.stderr = previous_stderr
             log_handle.close()
@@ -411,7 +453,9 @@ async def run():
                           "voice_call_id": voice_call_id,
                           "engine_log": str(log_path), "modes_seen": modes,
                           **summaries}), flush=True)
-        return 0 if (summaries["caller_turns"] >= 2 and summaries["assistant_turns"] >= 2) else 3
+        return 0 if (summaries["caller_turns"] >= args.reply_turns + 1
+                     and summaries["assistant_turns"] >= args.reply_turns + 1
+                     and summaries["errors"] == 0) else 3
     finally:
         stop.set()
         if engine is not None and not engine.done():

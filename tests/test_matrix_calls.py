@@ -150,8 +150,17 @@ def test_non_owner_uses_its_owned_matrix_account_and_model_alias(tmp_path, monke
     record=MatrixCalls(service,tmp_path).start(user_id='other',account_ref='matrix:other',room_id='!r:hs',
         target='@b:hs',purpose='Проверить голос',request_id='other-unique-request',confirm=True)
     assert record['user_id']=='other'
+    assert record['agent_context']['call_mode']=='incoming_guest'
+    from types import SimpleNamespace
+    from universal_userio.voice.agentcall_realtime_bridge import FastAgentIncidentBrain
+    guest_brain=object.__new__(FastAgentIncidentBrain)
+    guest_brain.config=SimpleNamespace(fast_agent_enabled=True, fast_agent_bin='/bin/true',
+        fast_agent_python='/bin/true', fast_agent_mcp_script='/bin/true', llm_api_key='test-key')
+    guest_brain.agent_context=record['agent_context']
+    assert guest_brain.available is False
     assert record['voice_model']=='omniroute/minimax-combo-m3.1'
     durable=json.loads((tmp_path/record['call_id']/'call.json').read_text())
+    assert durable['agent_context']['call_mode']=='incoming_guest'
     assert sentinel not in json.dumps(record)
     assert sentinel not in json.dumps(durable)
     assert len(created)==1 and created[0]._args[-1]['token']==sentinel
@@ -166,6 +175,50 @@ def test_non_owner_cannot_inject_owner_secretary_or_agent_session_context(tmp_pa
             purpose='Test',request_id='non-owner-injected-context',confirm=True,
             agent_context={'call_mode':'incoming','session_id':'owner-private-session'})
     assert service._store.accounts.call_count == 0
+
+
+def test_owner_matrix_call_uses_existing_secretary_context(tmp_path, monkeypatch):
+    service=Mock();service._store.default_user_id='owner'
+    service._store.capability_enabled.return_value=True
+    service._store.accounts.return_value=[{'id':'matrix:owner','provider':'matrix','enabled':True,
+        'display_name':'@bezrabotnyi:chat.bezrabotnyi.com','credential_ref':'connector:owner'}]
+    monkeypatch.setattr(matrix_calls.ConnectorSecrets,'load',lambda *a,**k:
+        {'homeserver':'https://hs','access_token':'private','matrix_user_id':'@bezrabotnyi:chat.bezrabotnyi.com'})
+    monkeypatch.setattr(matrix_calls,'request_json',lambda *a,**k:{'user_id':'@bezrabotnyi:chat.bezrabotnyi.com'})
+    monkeypatch.setattr(matrix_calls.threading.Thread,'start',lambda self:None)
+    record=MatrixCalls(service,tmp_path).start(user_id='owner',account_ref='matrix:owner',room_id='!r:hs',
+        target='@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com',purpose='Секретарский QA',
+        request_id='owner-secretary-unique-call',confirm=True)
+    assert record['agent_context']=={'call_mode':'incoming'}
+    durable=json.loads((tmp_path/record['call_id']/'call.json').read_text())
+    assert durable['agent_context']=={'call_mode':'incoming'}
+    from types import SimpleNamespace
+    from universal_userio.voice.agentcall_realtime_bridge import FastAgentIncidentBrain
+    brain=object.__new__(FastAgentIncidentBrain)
+    brain.config=SimpleNamespace(fast_agent_enabled=True,fast_agent_bin='/bin/true',
+        fast_agent_python='/bin/true',fast_agent_mcp_script='/bin/true',llm_api_key='test-key')
+    brain.agent_context=record['agent_context']
+    assert brain.available is True
+
+
+def test_matrix_start_schema_does_not_expose_agent_context():
+    from universal_userio.mcp_catalog import MATRIX_CALL_SPECS
+    spec=next(item for item in MATRIX_CALL_SPECS if item.name=='userio.calls.matrix.start')
+    assert 'agent_context' not in spec.input_schema['properties']
+
+
+def test_explicit_stop_after_answer_is_recorded_and_not_misclassified_as_unknown(tmp_path):
+    call_id=str(uuid.uuid4());folder=tmp_path/call_id;folder.mkdir()
+    record={'call_id':call_id,'user_id':'owner','status':'active','answered':True}
+    (folder/'call.json').write_text(json.dumps(record))
+    calls=MatrixCalls(Mock(),tmp_path)
+    stopped=matrix_calls.threading.Event();calls.active[call_id]=stopped
+    result=calls.stop(call_id,'owner')
+    assert stopped.is_set()
+    assert result['stop_requested'] is True
+    assert json.loads((folder/'call.json').read_text())['stop_requested'] is True
+    matrix_calls.settle_disconnected_call(result)
+    assert result['status']=='completed'
 
 
 def test_voice_config_for_record_applies_only_model_alias():

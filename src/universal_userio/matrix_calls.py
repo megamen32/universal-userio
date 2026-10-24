@@ -26,6 +26,15 @@ MEMBER = 'org.matrix.msc3401.call.member'
 RING = 'org.matrix.msc4075.rtc.notification'
 
 
+def settle_disconnected_call(record):
+    if record.get('status') in {'accepted', 'ringing', 'active'}:
+        if record.get('stop_requested') is True and record.get('answered') is True and not record.get('error'):
+            record['status'] = 'completed'
+            return record
+        raise RuntimeError('voice transport outcome unknown; do not replay')
+    return record
+
+
 def request_json(url, token='', payload=None, method='GET'):
     request = urllib.request.Request(url, method=method,
         data=json.dumps(payload).encode() if payload is not None else None,
@@ -65,7 +74,10 @@ class MatrixCalls:
         record = self.get(call_id, user_id)
         with self.lock:
             stop = self.active.get(record['call_id'])
-            if stop: stop.set()
+            if stop:
+                record['stop_requested'] = True
+                self._save(record)
+                stop.set()
         return record
 
     def start(self, *, user_id, account_ref, room_id, target, purpose, request_id,
@@ -89,10 +101,15 @@ class MatrixCalls:
         display_account = next((a['id'] for a in self.service._store.accounts(user_id=user_id)
                                 if a['provider']=='matrix' and a['enabled'] and a['display_name']==target), account_ref)
         ai_settings = self.service._store.ai_settings(user_id=user_id)
+        effective_agent_context = (
+            {'call_mode':'incoming_guest'} if user_id != self.service._store.default_user_id
+            else dict(agent_context) if agent_context is not None
+            else {'call_mode':'incoming'}
+        )
         config = {'user_id': user_id, 'account_ref': account_ref, 'history_account_ref':display_account, 'room_id': room_id,
                   'target': target, 'purpose': purpose, 'greeting': greeting, 'max_seconds': max_seconds,
                   **({'voice_model': ai_settings['model']} if isinstance(ai_settings, dict) and ai_settings.get('model') else {}),
-                  **({'agent_context':dict(agent_context)} if agent_context else {})}
+                  **({'agent_context':effective_agent_context} if effective_agent_context else {})}
         call_id = str(uuid.uuid5(uuid.NAMESPACE_URL, user_id+'\0'+request_id))
         fingerprint = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
         # Same request after a restart returns its receipt; it never rings twice.
@@ -191,8 +208,7 @@ class MatrixCalls:
                 try: await asyncio.wait_for(consumer,timeout=70)
                 except asyncio.TimeoutError: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
             else: await consumer
-            if record['status'] in {'accepted','ringing','active'}:
-                raise RuntimeError('voice transport outcome unknown; do not replay')
+            settle_disconnected_call(record)
             if record.get('voice_call_id'):
                 from .call_audio import recorded_track_bytes
                 from .call_audio import ARCHIVE

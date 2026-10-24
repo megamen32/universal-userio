@@ -2123,8 +2123,13 @@ class SQLiteUserIOStore:
                 FROM messages WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                 (user_id, message.source, message.message_id, conversation_id)).fetchone()
             if previous is not None:
+                edited_at = message.edited_at or None
+                if message.source == "telegram" and message.reconciliation and edited_at is not None:
+                    # Native history can arrive out of order. Never roll the
+                    # stored provider edit clock backwards on an older page.
+                    edited_at = max(float(previous["edited_at"] or 0.0), float(edited_at))
                 if (previous["direction"] != message.direction or previous["received_at"] != message.received_at
-                        or previous["edited_at"] != (message.edited_at or None)
+                        or previous["edited_at"] != edited_at
                         or (message.source=='sms' and message.reconciliation and previous['body']!=message.body)):
                     self._invalidate_message_summary(user_id, message.source, message.message_id)
                 self._connection.execute("""UPDATE messages SET direction=?,received_at=?,
@@ -2133,7 +2138,7 @@ class SQLiteUserIOStore:
                     provider_thread_id=CASE WHEN provider_thread_id='' THEN ? ELSE provider_thread_id END
                     WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?""",
                     (message.direction, message.received_at, message.provider_read, int(message.sender_is_bot),
-                     message.edited_at or None, message.provider_reply_to, message.provider_thread_id,
+                     edited_at, message.provider_reply_to, message.provider_thread_id,
                      user_id, message.source, message.message_id, conversation_id))
                 if message.source=='sms' and message.reconciliation and message.message_id.startswith('sms-native:'):
                     self._connection.execute("UPDATE messages SET body=? WHERE user_id=? AND source='sms' AND message_id=? AND conversation_id=?", (message.body,user_id,message.message_id,conversation_id))
@@ -2266,40 +2271,69 @@ class SQLiteUserIOStore:
                 # A genuine edit must overwrite the stale mirror body without
                 # becoming a new arrival: no workspace event, no triage.
                 existing = self._connection.execute(
-                    "SELECT body FROM messages WHERE user_id=? AND source=? AND message_id=?",
-                    (user_id, message.source, message.message_id),
+                    "SELECT body,edited_at FROM messages WHERE user_id=? AND source=? AND message_id=? AND conversation_id=?",
+                    (user_id, message.source, message.message_id, conversation_id),
                 ).fetchone()
                 old_body = str(existing["body"] or "") if existing else ""
                 new_body = str(message.body or "")
-                if message.source not in {"telegram", "sms"}:
-                    new_body = new_body.strip()
-                old_placeholder = (not old_body.strip()) or (
-                    old_body.strip().startswith("[") and old_body.strip().endswith("]")
-                )
-                new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
-                if old_placeholder and new_is_text:
-                    self._invalidate_message_summary(user_id, message.source, message.message_id)
-                    self._connection.execute(
-                        "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
-                        (new_body, user_id, message.source, message.message_id),
+                if message.source == "telegram" and message.reconciliation:
+                    # Only a plain native-history edit can replace a Telegram
+                    # body. Preserve media/transcript enrichment, while still
+                    # allowing routing and webpage-preview metadata. This is
+                    # exact provider text: square brackets are valid content.
+                    text_attachment_kinds = {"telegram_routing", "webpage"}
+                    plain_text_reconciliation = all(
+                        isinstance(attachment, dict)
+                        and str(attachment.get("kind") or "").lower() in text_attachment_kinds
+                        and "transcript" not in attachment
+                        and not attachment.get("transcription_status")
+                        for attachment in (message.attachments or ())
                     )
-                    self._connection.execute(
-                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
-                        (now, user_id, conversation_id),
+                    incoming_edit_at = float(message.edited_at or 0.0)
+                    previous_edit_at = float(existing["edited_at"] or 0.0) if existing else 0.0
+                    if (existing is not None and plain_text_reconciliation and new_body
+                            and new_body != old_body and incoming_edit_at > 0
+                            and incoming_edit_at >= previous_edit_at):
+                        self._invalidate_message_summary(user_id, message.source, message.message_id)
+                        self._connection.execute(
+                            """UPDATE messages SET body=?,edited_at=?
+                               WHERE user_id=? AND source='telegram' AND message_id=? AND conversation_id=?""",
+                            (new_body, incoming_edit_at, user_id, message.message_id, conversation_id),
+                        )
+                        self._connection.execute(
+                            "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                            (now, user_id, conversation_id),
+                        )
+                else:
+                    if message.source not in {"telegram", "sms"}:
+                        new_body = new_body.strip()
+                    old_placeholder = (not old_body.strip()) or (
+                        old_body.strip().startswith("[") and old_body.strip().endswith("]")
                     )
-                elif new_is_text and new_body != old_body:
-                    self._invalidate_message_summary(user_id, message.source, message.message_id)
-                    edited_at = ((float(message.edited_at) if message.edited_at else None)
-                        if message.source == 'yandex' else float(message.edited_at or 0.0) or now)
-                    self._connection.execute(
-                        """UPDATE messages SET body=?,edited_at=?
-                           WHERE user_id=? AND source=? AND message_id=?""",
-                        (new_body, edited_at, user_id, message.source, message.message_id),
-                    )
-                    self._connection.execute(
-                        "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
-                        (now, user_id, conversation_id),
-                    )
+                    new_is_text = bool(new_body) and not (new_body.startswith("[") and new_body.endswith("]"))
+                    if old_placeholder and new_is_text:
+                        self._invalidate_message_summary(user_id, message.source, message.message_id)
+                        self._connection.execute(
+                            "UPDATE messages SET body=? WHERE user_id=? AND source=? AND message_id=?",
+                            (new_body, user_id, message.source, message.message_id),
+                        )
+                        self._connection.execute(
+                            "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                            (now, user_id, conversation_id),
+                        )
+                    elif new_is_text and new_body != old_body:
+                        self._invalidate_message_summary(user_id, message.source, message.message_id)
+                        edited_at = ((float(message.edited_at) if message.edited_at else None)
+                            if message.source == 'yandex' else float(message.edited_at or 0.0) or now)
+                        self._connection.execute(
+                            """UPDATE messages SET body=?,edited_at=?
+                               WHERE user_id=? AND source=? AND message_id=?""",
+                            (new_body, edited_at, user_id, message.source, message.message_id),
+                        )
+                        self._connection.execute(
+                            "UPDATE conversations SET updated_at=? WHERE user_id=? AND id=?",
+                            (now, user_id, conversation_id),
+                        )
         return inserted
 
     def telegram_mirror_state(
@@ -2964,6 +2998,33 @@ class SQLiteUserIOStore:
             raise ValueError("immutable relay draft source changed or is missing")
         return {key: row[key] for key in ("conversation_id", "account_ref", "peer_id", "provider_message_id")}
 
+    def draft_reply_anchor(self, draft_id: str, *, user_id: str | None = None) -> dict[str, object]:
+        """The immutable source anchor of a draft, empty when it has none.
+
+        The anchor is the stored source-bound message the draft answers. Its
+        body hash proves the reviewed source text is still the same one, so a
+        delivered reply stays bound to exactly what was approved.
+        """
+        if not self._table_exists("draft_reply_origins"):
+            return {}
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT o.message_key,o.provider_message_id,o.source_body_sha256,"
+                "m.body AS current_body,m.provider_thread_id "
+                "FROM draft_reply_origins o LEFT JOIN messages m "
+                "ON m.user_id=o.user_id AND m.source='telegram' AND m.message_id=o.message_key "
+                "WHERE o.user_id=? AND o.draft_id=?",
+                (self._user(user_id), draft_id)).fetchone()
+        if row is None:
+            return {}
+        body = str(row["current_body"] or "")
+        if not body or hashlib.sha256(body.encode()).hexdigest() != str(row["source_body_sha256"] or ""):
+            raise ValueError("immutable relay draft source changed or is missing")
+        return {"message_key": str(row["message_key"] or ""),
+                "provider_message_id": str(row["provider_message_id"] or ""),
+                "expected_text": body,
+                "thread_id": str(row["provider_thread_id"] or "")}
+
     def update_draft(self, draft_id: str, *, body: str, user_id: str | None = None) -> ReplyDraft:
         text, user_id = body.strip(), self._user(user_id)
         if not text:
@@ -3116,15 +3177,44 @@ class SQLiteUserIOStore:
                 (user_id, draft_id),
             )
 
+    def telegram_delivery_history_context(self, draft_id: str, *, user_id: str,
+                                         account_ref: str, peer_id: str, after: float) -> dict[str, object]:
+        """Choose a local pagination hint, never local proof of delivery."""
+        with self._lock:
+            draft = self._connection.execute(
+                'SELECT conversation_id,body FROM drafts WHERE user_id=? AND id=?',
+                (self._user(user_id), draft_id),
+            ).fetchone()
+            if draft is None:
+                raise KeyError('draft not found')
+            competing = self._connection.execute(
+                "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND body=? "
+                "AND id<>? AND status IN ('sending','delivery_unknown','approved') LIMIT 1",
+                (self._user(user_id), draft['conversation_id'], draft['body'], draft_id),
+            ).fetchone()
+            row = self._connection.execute(
+                "SELECT message_id FROM messages WHERE user_id=? AND conversation_id=? "
+                "AND source='telegram' AND received_at>? AND deleted_at IS NULL "
+                "ORDER BY received_at,message_id LIMIT 1",
+                (self._user(user_id), draft['conversation_id'], after),
+            ).fetchone()
+        prefix = f'{account_ref}|{peer_id}:'
+        suffix = str(row['message_id'])[len(prefix):] if row and str(row['message_id']).startswith(prefix) else ''
+        anchor = int(suffix) + 1 if suffix.isascii() and suffix.isdigit() else 0
+        return {'before_id': anchor if 0 < anchor <= 2147483647 else 0,
+                'competing_draft': bool(competing)}
+
     def approve_reconciled_delivery(self, draft_id: str, receipt: str, *, user_id: str,
                                    expected_generation: int,
-                                   expected_lease_owner: str | None = None) -> dict[str, object]:
-        """Apply only an exact journal receipt to the still-current claimed attempt."""
+                                   expected_lease_owner: str | None = None,
+                                   expected_text: str | None = None,
+                                   expected_conversation_id: str | None = None) -> dict[str, object]:
+        """Apply reviewed journal/history evidence to the still-current payload."""
         user = self._user(user_id)
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
-                "SELECT status,outbox_receipt,delivery_attempt_generation FROM drafts WHERE user_id=? AND id=?",
+                "SELECT status,outbox_receipt,delivery_attempt_generation,body,conversation_id FROM drafts WHERE user_id=? AND id=?",
                 (user, draft_id),
             ).fetchone()
             if row is None:
@@ -3136,7 +3226,15 @@ class SQLiteUserIOStore:
             lease_matches = expected_lease_owner is None or bool(
                 lease and lease["worker_id"] == expected_lease_owner and float(lease["lease_until"]) > time.time())
             applied = False
-            if (lease_matches and int(row["delivery_attempt_generation"] or 0) == int(expected_generation)
+            payload_matches = (expected_text is None or row['body'] == expected_text) and (
+                expected_conversation_id is None or row['conversation_id'] == expected_conversation_id)
+            if expected_text is not None:
+                payload_matches = payload_matches and not self._connection.execute(
+                    "SELECT 1 FROM drafts WHERE user_id=? AND conversation_id=? AND body=? "
+                    "AND id<>? AND status IN ('sending','delivery_unknown','approved') LIMIT 1",
+                    (user, row['conversation_id'], row['body'], draft_id),
+                ).fetchone()
+            if (payload_matches and lease_matches and int(row["delivery_attempt_generation"] or 0) == int(expected_generation)
                     and row["status"] in ("sending", "delivery_unknown")):
                 self._connection.execute(
                     """UPDATE drafts SET status='approved',approved_at=?,outbox_receipt=?,
@@ -3529,6 +3627,17 @@ class SQLiteUserIOStore:
             with self._connection:
                 self._connection.execute("BEGIN IMMEDIATE")
                 return self._expire_proposed_drafts_locked(user_id=user, now=instant)
+
+    def conversation_identity(self, conversation_id: str, *, user_id: str | None = None) -> dict[str, object] | None:
+        """Read one owned chat identity without building an inbox listing."""
+        user = self._user(user_id)
+        conversation_id = self.resolve_conversation_id(conversation_id, user_id=user)
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT id,source,account_ref,peer_id FROM conversations WHERE user_id=? AND id=?",
+                (user, conversation_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def conversation(
         self, conversation_id: str, *, user_id: str | None = None, text_limit: int | None = None

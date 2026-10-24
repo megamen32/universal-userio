@@ -10,8 +10,8 @@ These cases pin the repaired contract:
 - a connector that is provably not accepting connections is a proven
   non-submission, so the claim is released and the exact retry is possible;
 - every other transport failure stays uncertain and is never replayed;
-- an uncertain attempt is resolved against the connector's durable journal of
-  approved attempts, never against a message body.
+- an uncertain attempt uses the journal first, then exact fresh account/peer
+  scoped provider history. A cached body alone is never delivery evidence.
 """
 
 from __future__ import annotations
@@ -110,7 +110,8 @@ class _JournalOutbox:
         self.attempt_reads.append(attempt_id)
         return dict(self.record, attempt_id=attempt_id)
 
-    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200) -> dict:
+    def reconcile_history(self, *, account_ref: str, peer_id: str, limit: int = 200,
+                          before_id: int = 0) -> dict:
         self.history_reads.append(peer_id)
         return dict(self.history)
 
@@ -190,13 +191,13 @@ def test_mcp_requires_the_complete_draft_snapshot(tmp_path):
     body = service._store.draft(draft_id).body
     conversation = service._store.draft(draft_id).conversation_id
     # A partial snapshot cannot prove the draft did not change.
-    partial = surface.dispatch("userio.draft.approve_send", {
+    partial = surface.dispatch("userio.messages.send", {
         "draft_id": draft_id, "confirm": True, "expected_text": body,
         "expected_chat_id": conversation})
     assert partial["ok"] is False
     assert partial["error"] == "complete_draft_snapshot_required"
     # An absent snapshot would approve whatever the draft says now.
-    absent = surface.dispatch("userio.draft.approve_send", {
+    absent = surface.dispatch("userio.messages.send", {
         "draft_id": draft_id, "confirm": True})
     assert absent["ok"] is False
     assert absent["error"] == "complete_draft_snapshot_required"
@@ -234,7 +235,7 @@ def test_mcp_approve_reports_an_unknown_outcome_with_a_stable_code(tmp_path):
         service.approve(draft_id)
     except RuntimeError:
         pass
-    result = surface.dispatch("userio.draft.approve_send", {
+    result = surface.dispatch("userio.messages.send", {
         "draft_id": draft_id, "confirm": True, "expected_text": body,
         "expected_chat_id": conversation, "expected_attachments": []})
     assert result["ok"] is False
@@ -270,12 +271,12 @@ def test_provider_history_absence_does_not_release_a_legacy_claim(tmp_path):
         draft_id, provider_history=True,
         connector_available_since=float(claimed["created_at"]) + 3600)
     assert result["resolution"] == "unknown"
-    assert result["reason"] == "provider_history_no_match_is_not_final_submission_evidence"
+    assert result["reason"] == "provider_history_receipt_identity_or_freshness_missing"
     assert service._store.draft(draft_id).status == "sending"
     assert outbox.history_reads == ["-1003724214344"]
 
 
-def test_provider_history_needs_the_connector_availability_attestation(tmp_path):
+def test_provider_history_needs_fresh_scoped_provider_evidence(tmp_path):
     outbox = _JournalOutbox({"state": "absent", "epoch": 2 ** 31},
                              history={"mirrored": 200, "fetched": 200, "oldest_id": "100"})
     service, draft_id = _telegram_service(tmp_path, outbox)
@@ -285,9 +286,9 @@ def test_provider_history_needs_the_connector_availability_attestation(tmp_path)
         pass
     result = service.reconcile_draft_delivery(draft_id, provider_history=True)
     assert result["resolution"] == "unknown"
-    assert result["reason"] == "connector_availability_not_attested"
+    assert result["reason"] == "provider_history_receipt_identity_or_freshness_missing"
     assert service._store.draft(draft_id).status == "sending"
-    assert outbox.history_reads == []
+    assert outbox.history_reads == ['-1003724214344']
 
 
 def test_provider_history_that_does_not_cover_the_attempt_stays_unknown(tmp_path):
@@ -305,7 +306,7 @@ def test_provider_history_that_does_not_cover_the_attempt_stays_unknown(tmp_path
         draft_id, provider_history=True,
         connector_available_since=float(claimed["created_at"]) + 3600)
     assert result["resolution"] == "unknown"
-    assert result["reason"] == "provider_history_does_not_cover_the_attempt"
+    assert result["reason"] == "provider_history_receipt_identity_or_freshness_missing"
     assert service._store.draft(draft_id).status == "sending"
 
 
@@ -327,7 +328,7 @@ def test_provider_history_with_a_matching_message_stays_unknown(tmp_path):
         draft_id, provider_history=True,
         connector_available_since=float(claimed["created_at"]) + 3600)
     assert result["resolution"] == "unknown"
-    assert result["reason"] == "provider_has_a_matching_message"
+    assert result["reason"] == "provider_history_receipt_identity_or_freshness_missing"
     assert service._store.draft(draft_id).status == "sending"
 
 
@@ -373,8 +374,10 @@ def test_background_check_persists_exact_reason_and_does_not_send_again(tmp_path
     assert state["status"] == "sending"
     assert state["delivery_state"] == "legacy_unknown"
     assert state["attempts"] == 1
-    assert state["reason"] == "journal_absence_is_not_final_submission_evidence"
-    assert state["evidence"] == {"attempt_id": draft_id, "epoch": 2 ** 31, "state": "absent"}
+    assert state["reason"] == "provider_history_receipt_identity_or_freshness_missing"
+    assert state["evidence"]["attempt_id"] == draft_id
+    assert state["evidence"]["state"] == "absent"
+    assert state["evidence"]["history"]["reason"] == "receipt_identity_or_freshness_missing"
     assert len(outbox.sent) == 1
     assert len(outbox.attempt_reads) == 1
     draft = service._store.conversation(service._store.draft(draft_id).conversation_id)["drafts"][0]

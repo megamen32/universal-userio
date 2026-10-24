@@ -11,9 +11,11 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -22,6 +24,19 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = Path('/etc/userio-containers')
 BACKUP = Path('/var/backups/universal-userio/containers-20261015')
+VOICE_ARCHIVE_ROOT = Path('/var/backups/universal-userio')
+VOICE_ARCHIVE_LOCK = Path('/run/lock/userio-voice-archive.lock')
+VOICE_PROC_ROOT = Path('/proc')
+VOICE_CONTAINER = 'userio-voice'
+VOICE_IMAGE_REPOSITORY = 'ghcr.io/megamen32/universal-userio-voice'
+VOICE_ROLLBACK_PREFIX = 'userio-voice-prev-'
+VOICE_CONFIG_FILES = ('compose.host.json', 'voice.json', 'processes.json')
+VOICE_CONFIG_DESTINATION = '/etc/userio-containers'
+VOICE_SECRETARY_CONFIGS = {
+    '/etc/agentcall-secretary-voice.json',
+    '/etc/agentcall-secretary-identities.json',
+}
+SECRET_FIELD = re.compile(r'(?:pass(?:word)?|secret|token|api[_-]?key|credential|authorization|private[_-]?key|access[_-]?key|client[_-]?secret|(?:^|[_-])key(?:$|[_-]))', re.I)
 REMOTE = 'roomhacker@192.168.2.5'
 ASTERISK_HOSTS = (
     ('roomhacker@192.168.2.75', 'roomhacker-server-88'),
@@ -50,6 +65,14 @@ VOICE = {
     'agentcall-tts-shim.service': ('tts-fallback', ['python', '/usr/local/lib/agentcall/tts_shim.py']),
 }
 PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-container-platform.conf')
+BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
+    'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
+    'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
+    'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
+    'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
+    'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
+    'matrix_calls.py', 'telemost/meetings.py', 'static/telemost.html')) + tuple(
+    'deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs'))
 
 
 def install_platform_helper():
@@ -482,6 +505,595 @@ def replace_backend(*, image: str, revision: str, expected_container: str, recei
                                 receipt_directory=receipt_directory)
 
 
+def _backend_replacement_config(previous: dict, *, image: str, revision: str) -> dict:
+    """Keep runtime settings exact while recording the reviewed image revision."""
+    labels = dict(previous.get('Labels') or {})
+    labels['org.opencontainers.image.revision'] = revision
+    return dict(previous, Image=image, Labels=labels)
+
+
+def _archive_docker_json(args, description):
+    """Read one Docker JSON response without ever surfacing daemon error text."""
+    try:
+        result = subprocess.run(['docker', *args], capture_output=True, check=False, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f'cannot read {description} from Docker') from error
+    if result.returncode:
+        raise RuntimeError(f'cannot read {description} from Docker')
+    try:
+        return result.stdout, json.loads(result.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f'invalid Docker {description} response') from error
+
+
+def _archive_docker_text(args, description):
+    """Read bounded plain-text Docker output without exposing daemon errors."""
+    try:
+        result = subprocess.run(['docker', *args], capture_output=True, check=False, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f'cannot read {description} from Docker') from error
+    if result.returncode:
+        raise RuntimeError(f'cannot read {description} from Docker')
+    return result.stdout
+
+
+def _archive_container(name):
+    raw, rows = _archive_docker_json(['inspect', '--type', 'container', name], f'container {name}')
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError(f'container {name} is missing or ambiguous')
+    return raw, rows[0]
+
+
+def _archive_image(image_id):
+    raw, rows = _archive_docker_json(['image', 'inspect', image_id], 'image metadata')
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise RuntimeError('image metadata is missing or ambiguous')
+    return raw, rows[0]
+
+
+def _redacted_config(value, key=None):
+    """Build a non-secret projection for the manifest fingerprint only."""
+    if key and SECRET_FIELD.search(str(key)):
+        return '<redacted>'
+    if isinstance(value, dict):
+        return {str(k): _redacted_config(v, str(k)) for k, v in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        result = []
+        for item in value:
+            if isinstance(item, str) and '=' in item:
+                name, raw = item.split('=', 1)
+                result.append(name + ('=<redacted>' if SECRET_FIELD.search(name) else '=' + raw))
+            else:
+                result.append(_redacted_config(item))
+        return result
+    if isinstance(value, str):
+        text = re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1<redacted>', value)
+        text = re.sub(r'(://)[^/@\s]+@', r'\1<redacted>@', text)
+        return text
+    return value
+
+
+def _archive_hash(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _archive_canonical_mounts(container):
+    """Normalize Docker's unordered Mounts array without dropping any fields."""
+    mounts = container.get('Mounts')
+    if not isinstance(mounts, list) or any(not isinstance(mount, dict) for mount in mounts):
+        raise RuntimeError('live Voice container mount metadata is invalid')
+    try:
+        return sorted(mounts, key=lambda mount: json.dumps(
+            mount, sort_keys=True, ensure_ascii=False, separators=(',', ':')))
+    except (TypeError, ValueError) as error:
+        raise RuntimeError('live Voice container mount metadata is invalid') from error
+
+
+def _archive_read_file(path: Path, *, max_bytes=512 * 1024 * 1024):
+    """Read through the process mount namespace and bind the bytes to an inode."""
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise RuntimeError('mounted archive input is not a regular file')
+            data = stream.read(max_bytes + 1)
+    except OSError as error:
+        raise RuntimeError('mounted archive input is unavailable') from error
+    if len(data) > max_bytes:
+        raise RuntimeError('mounted archive input exceeds archive bounds')
+    identity = {'device': info.st_dev, 'inode': info.st_ino, 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
+    return data, identity
+
+
+def _archive_read_container_file(process_identity, container_path, *, max_bytes=512 * 1024 * 1024):
+    """Read a container path with openat-style traversal confined to its root."""
+    logical = PurePosixPath(str(container_path))
+    if not logical.is_absolute() or any(part == '..' for part in logical.parts):
+        raise RuntimeError('container file path is not a safe absolute path')
+    root_path = VOICE_PROC_ROOT / str(process_identity['pid']) / 'root'
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, 'O_CLOEXEC', 0)
+    nofollow = getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        root_fd = os.open(root_path, directory_flags)
+    except OSError as error:
+        raise RuntimeError('container root is unavailable') from error
+
+    dir_fds = [root_fd]
+    resolved = []
+    pending = [part for part in logical.parts[1:] if part not in {'', '.'}]
+    links = []
+    link_count = 0
+    try:
+        if not pending:
+            raise RuntimeError('container file path has no filename')
+        while pending:
+            component = pending.pop(0)
+            if component in {'', '.'}:
+                continue
+            if component == '..' or '/' in component:
+                raise RuntimeError('container symlink escapes its root')
+            parent_fd = dir_fds[-1]
+            try:
+                before = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError as error:
+                raise RuntimeError('container mounted file is unavailable') from error
+            if stat.S_ISLNK(before.st_mode):
+                link_count += 1
+                if link_count > 40:
+                    raise RuntimeError('container path has too many symlinks')
+                target = os.readlink(component, dir_fd=parent_fd)
+                if not target or '\x00' in target:
+                    raise RuntimeError('container symlink target is invalid')
+                links.append({'path': '/' + '/'.join([*resolved, component]), 'target': target})
+                target_path = PurePosixPath(target)
+                target_parts = [part for part in target_path.parts if part not in {'', '.', '/'}]
+                if any(part == '..' for part in target_parts):
+                    raise RuntimeError('container symlink escapes its root')
+                if target_path.is_absolute():
+                    for descriptor in dir_fds[1:]:
+                        os.close(descriptor)
+                    dir_fds = [root_fd]
+                    resolved = []
+                pending = target_parts + pending
+                continue
+
+            final = not pending
+            if final:
+                if not stat.S_ISREG(before.st_mode):
+                    raise RuntimeError('container mounted input is not a regular file')
+                flags = os.O_RDONLY | nofollow | getattr(os, 'O_CLOEXEC', 0)
+            else:
+                if not stat.S_ISDIR(before.st_mode):
+                    raise RuntimeError('container path parent is not a directory')
+                flags = directory_flags | nofollow
+            try:
+                descriptor = os.open(component, flags, dir_fd=parent_fd)
+                opened = os.fstat(descriptor)
+            except OSError as error:
+                raise RuntimeError('container mounted path changed during traversal') from error
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                os.close(descriptor)
+                raise RuntimeError('container mounted path changed during traversal')
+            if final:
+                try:
+                    with os.fdopen(descriptor, 'rb') as stream:
+                        data = stream.read(max_bytes + 1)
+                        after = os.fstat(stream.fileno())
+                except OSError as error:
+                    raise RuntimeError('container mounted file is unavailable') from error
+                if len(data) > max_bytes:
+                    raise RuntimeError('container mounted file exceeds archive bounds')
+                identity = {'device': opened.st_dev, 'inode': opened.st_ino, 'size': opened.st_size,
+                            'mtime_ns': opened.st_mtime_ns,
+                            'resolved_container_path': '/' + '/'.join([*resolved, component])}
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                        opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns):
+                    raise RuntimeError('container mounted file changed while being read')
+                return data, identity, links
+            dir_fds.append(descriptor)
+            resolved.append(component)
+        raise RuntimeError('container mounted file path did not resolve to a file')
+    finally:
+        for descriptor in reversed(dir_fds):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _archive_directory_identity(path: Path):
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise RuntimeError('mounted archive directory is unavailable') from error
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError('mounted archive path is not a directory')
+    return {'device': info.st_dev, 'inode': info.st_ino}
+
+
+def _archive_verify_file(path: Path, expected_hash: str):
+    try:
+        data, _ = _archive_read_file(path)
+    except RuntimeError:
+        return False
+    return _archive_hash(data) == expected_hash
+
+
+def _archive_rename_noreplace(source: Path, destination: Path):
+    """Publish a completed archive atomically, refusing any existing target."""
+    import ctypes
+    import errno
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, 'renameat2', None)
+    if renameat2 is None:
+        raise RuntimeError('atomic no-overwrite archive publication is unsupported')
+    renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1)  # AT_FDCWD, RENAME_NOREPLACE
+    if result != 0:
+        code = ctypes.get_errno()
+        if code == errno.EEXIST:
+            raise RuntimeError('archive destination already exists; reconcile before retrying')
+        raise RuntimeError('cannot atomically publish completed Voice archive')
+
+
+def _archive_process_identity(container):
+    """Identify the exact init process and mount namespace exposed by Docker."""
+    pid = container.get('State', {}).get('Pid')
+    if type(pid) is not int or pid <= 1:
+        raise RuntimeError('running Voice container has no usable init PID')
+    proc = VOICE_PROC_ROOT / str(pid)
+    try:
+        raw = (proc / 'stat').read_bytes()
+        close = raw.rfind(b')')
+        fields = raw[close + 2:].split()
+        start_time = int(fields[19])
+        mount_namespace_inode = (proc / 'ns' / 'mnt').stat().st_ino
+        if not (proc / 'root').is_dir():
+            raise OSError('container root is unavailable')
+    except (OSError, ValueError, IndexError) as error:
+        raise RuntimeError('cannot identify the live Voice mount namespace') from error
+    return {'pid': pid, 'start_time': start_time, 'mount_namespace_inode': mount_namespace_inode}
+
+
+def _archive_container_view_path(container, destination):
+    """Return a lexical /proc/PID/root path; never realpath proc's magic link."""
+    identity = _archive_process_identity(container)
+    logical = PurePosixPath(str(destination))
+    if not logical.is_absolute() or any(part in {'.', '..'} for part in logical.parts):
+        raise RuntimeError('container mount destination is not a safe absolute path')
+    return VOICE_PROC_ROOT / str(identity['pid']) / 'root' / Path(*logical.parts[1:])
+
+
+def _archive_has_owner_mode(path: Path, mode: int):
+    info = path.stat()
+    return info.st_uid == 0 and info.st_gid == 0 and stat.S_IMODE(info.st_mode) == mode
+
+
+def _archive_root_is_safe(path: Path):
+    info = path.stat()
+    return info.st_uid == 0 and info.st_gid == 0 and not (info.st_mode & 0o022)
+
+
+def _archive_write(root: Path, relative: str, data: bytes):
+    path = root / relative
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chown(path.parent, 0, 0)
+    os.chmod(path.parent, 0o700)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.fchown(descriptor, 0, 0)
+    with os.fdopen(descriptor, 'wb') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(path, 0o600)
+    return _archive_hash(data)
+
+
+def _archive_write_json(root: Path, relative: str, value):
+    data = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode()
+    return _archive_write(root, relative, data)
+
+
+def _archive_tree(root: Path):
+    """Hash a mounted source tree without copying its source or executing it."""
+    if not root.is_dir():
+        raise RuntimeError('mounted SDK source is not a directory')
+    entries = []
+    byte_count = 0
+    root_identity = _archive_directory_identity(root)
+    for path in sorted(root.rglob('*')):
+        if '.git' in path.relative_to(root).parts:
+            continue
+        if len(entries) >= 10000:
+            raise RuntimeError('mounted SDK source exceeds archive bounds')
+        if path.is_symlink():
+            entries.append({'path': path.relative_to(root).as_posix(), 'symlink': os.readlink(path)})
+        elif path.is_file():
+            data, identity = _archive_read_file(path)
+            byte_count += len(data)
+            if byte_count > 512 * 1024 * 1024:
+                raise RuntimeError('mounted SDK source exceeds archive bounds')
+            entries.append({'path': path.relative_to(root).as_posix(), 'sha256': _archive_hash(data),
+                            'size': len(data), 'device': identity['device'], 'inode': identity['inode']})
+    if not entries:
+        raise RuntimeError('mounted SDK source is empty')
+    encoded = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    return entries, _archive_hash(encoded), byte_count, root_identity
+
+
+def _archive_mount(container, destination_prefix, *, exact=False):
+    mounts = [m for m in container.get('Mounts', []) if isinstance(m, dict)
+              and (str(m.get('Destination', '')) == destination_prefix if exact
+                   else str(m.get('Destination', '')).startswith(destination_prefix))]
+    if len(mounts) != 1:
+        raise RuntimeError(f'expected one mounted source for {destination_prefix}')
+    mount = mounts[0]
+    source = Path(str(mount.get('Source', '')))
+    if not source.is_absolute():
+        raise RuntimeError(f'mounted source unavailable for {destination_prefix}')
+    return mount, source
+
+
+def _archive_config_sources(container):
+    sources = {}
+    for mount in container.get('Mounts', []):
+        if not isinstance(mount, dict):
+            continue
+        destination = str(mount.get('Destination', ''))
+        source = Path(str(mount.get('Source', '')))
+        if not source.is_absolute():
+            continue
+        if destination == VOICE_CONFIG_DESTINATION:
+            mounted_root = _archive_container_view_path(container, destination)
+            _archive_directory_identity(mounted_root)
+            for name in VOICE_CONFIG_FILES:
+                path = mounted_root / name
+                if not path.is_file() or path.is_symlink():
+                    raise RuntimeError(f'required mounted config is missing: {name}')
+                sources[f'userio-containers/{name}'] = {
+                    'path': path, 'mount_source': str(source), 'mount_destination': destination}
+        elif destination in VOICE_SECRETARY_CONFIGS:
+            path = _archive_container_view_path(container, destination)
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeError('mounted Secretary configuration is unavailable')
+            sources[destination.rsplit('/', 1)[1]] = {
+                'path': path, 'mount_source': str(source), 'mount_destination': destination}
+    if not all(f'userio-containers/{name}' in sources for name in VOICE_CONFIG_FILES):
+        raise RuntimeError('effective UserIO Voice config mount is incomplete')
+    return sources
+
+
+def archive_voice(receipt_directory: Path):
+    """Serialize archive-only snapshots; never stop or recreate userio-voice."""
+    import fcntl
+
+    if os.geteuid() != 0:
+        raise RuntimeError('archive-voice requires root')
+    descriptor = os.open(VOICE_ARCHIVE_LOCK, os.O_WRONLY | os.O_CREAT, 0o600)
+    os.fchown(descriptor, 0, 0)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, 'w') as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError('another Voice archive operation is active') from error
+        return _archive_voice_locked(receipt_directory)
+
+
+def _archive_voice_locked(receipt_directory: Path):
+    """Archive the live Voice image/config/source identities without stopping it."""
+    import datetime
+    import tempfile
+
+    receipt_directory = Path(receipt_directory)
+    archive_root = VOICE_ARCHIVE_ROOT.resolve(strict=True)
+    if receipt_directory.parent.resolve() != archive_root or not receipt_directory.name.startswith('voice-'):
+        raise RuntimeError('archive directory must be a direct voice-* child of the canonical archive root')
+    if not _archive_root_is_safe(archive_root):
+        raise RuntimeError('canonical voice archive root is not protected root-owned storage')
+    if receipt_directory.exists() or receipt_directory.is_symlink():
+        raise RuntimeError('archive directory already exists; reconcile before retrying')
+
+    container_raw, container = _archive_container(VOICE_CONTAINER)
+    if container.get('State', {}).get('Running') is not True:
+        raise RuntimeError('canonical userio-voice container is not running')
+    process_identity = _archive_process_identity(container)
+    container_id = str(container.get('Id', ''))
+    image_id = str(container.get('Image', ''))
+    if not container_id or not image_id.startswith('sha256:'):
+        raise RuntimeError('live voice container identity is incomplete')
+    image_raw, image = _archive_image(image_id)
+    image_reference = container.get('Config', {}).get('Image')
+    if not isinstance(image_reference, str) or not image_reference.startswith(
+            (VOICE_IMAGE_REPOSITORY + ':', VOICE_IMAGE_REPOSITORY + '@')):
+        raise RuntimeError('live voice container does not use the canonical UserIO Voice image')
+    repo_digests = sorted(d for d in image.get('RepoDigests', [])
+                          if isinstance(d, str) and d.startswith(VOICE_IMAGE_REPOSITORY + '@sha256:'))
+    if not repo_digests:
+        raise RuntimeError('live voice image has no immutable registry digest')
+    labels = image.get('Config', {}).get('Labels') or container.get('Config', {}).get('Labels') or {}
+    revision = labels.get('org.opencontainers.image.revision') if isinstance(labels, dict) else None
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise RuntimeError('live voice image has no source revision label')
+
+    bridge_mount, bridge_source = _archive_mount(container, '/usr/local/lib/agentcall', exact=True)
+    bridge_root = _archive_container_view_path(container, bridge_mount.get('Destination'))
+    bridge_root_identity = _archive_directory_identity(bridge_root)
+    bridge_path = str(PurePosixPath(str(bridge_mount.get('Destination'))) / 'agentcall_realtime_bridge.py')
+    bridge_bytes, bridge_identity, bridge_symlinks = _archive_read_container_file(process_identity, bridge_path)
+    bridge_hash = _archive_hash(bridge_bytes)
+
+    sdk_mount, sdk_source = _archive_mount(container, '/opt/exmanager-voice/')
+    sdk_root = _archive_container_view_path(container, sdk_mount.get('Destination'))
+    sdk_root_identity = _archive_directory_identity(sdk_root)
+    sdk_candidates = [p for p in sdk_root.rglob('agentcall_secretary_voice.py')
+                      if p.is_file() and not p.is_symlink()]
+    if len(sdk_candidates) != 1:
+        raise RuntimeError('mounted Secretary SDK entrypoint is missing or ambiguous')
+    sdk_entry = sdk_candidates[0]
+    try:
+        sdk_entry.relative_to(sdk_root)
+    except ValueError as error:
+        raise RuntimeError('mounted Secretary SDK entrypoint escapes its source tree') from error
+    sdk_tree, sdk_tree_hash, sdk_tree_bytes, sdk_tree_root_identity = _archive_tree(sdk_root)
+    sdk_entry_bytes, sdk_entry_identity = _archive_read_file(sdk_entry)
+    sdk_hash = _archive_hash(sdk_entry_bytes)
+
+    config_sources = _archive_config_sources(container)
+    config_bytes = {}
+    config_identities = {}
+    config_mount_views = {}
+    for logical, mounted in sorted(config_sources.items()):
+        data, identity = _archive_read_file(mounted['path'])
+        config_bytes[logical] = data
+        config_identities[logical] = identity
+        config_mount_views[logical] = {
+            'mount_source_name': Path(mounted['mount_source']).name,
+            'mount_destination': mounted['mount_destination'],
+            'consumer_device': identity['device'],
+            'consumer_inode': identity['inode'],
+        }
+    try:
+        redacted_files = {name: _redacted_config(json.loads(data)) for name, data in config_bytes.items()}
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError('mounted Voice config is not valid JSON') from error
+    runtime_fields = {key: container.get(key) for key in ('Config', 'HostConfig')}
+    runtime_fields['Mounts'] = _archive_canonical_mounts(container)
+    runtime_fields['network_names'] = sorted((container.get('NetworkSettings', {}).get('Networks') or {}).keys())
+    safe_config = _redacted_config({'runtime': runtime_fields, 'mounted_config': redacted_files})
+    config_fingerprint = _archive_hash(json.dumps(safe_config, sort_keys=True, separators=(',', ':')).encode())
+
+    rollback_ids_raw = _archive_docker_text(
+        ['ps', '-aq', '--no-trunc', '--filter', f'name=^/{VOICE_ROLLBACK_PREFIX}'], 'rollback container list')
+    rollback_names = sorted(set(line.strip() for line in rollback_ids_raw.decode().splitlines() if line.strip()))
+    if not rollback_names:
+        raise RuntimeError('no retained previous userio-voice container is available for rollback')
+    rollback = []
+    rollback_raw = {}
+    for index, identifier in enumerate(rollback_names):
+        raw, old = _archive_container(identifier)
+        if old.get('State', {}).get('Running') is True:
+            raise RuntimeError('previous userio-voice rollback container is unexpectedly running')
+        old_image_id = str(old.get('Image', ''))
+        if not old_image_id.startswith('sha256:'):
+            raise RuntimeError('rollback voice image identity is incomplete')
+        old_image_raw, old_image = _archive_image(old_image_id)
+        rollback_raw[f'rollback/container-{index}.json'] = raw
+        rollback_raw[f'rollback/image-{index}.json'] = old_image_raw
+        old_digests = sorted(d for d in old_image.get('RepoDigests', []) if isinstance(d, str) and '@sha256:' in d)
+        rollback.append({'container_name': old.get('Name', '').lstrip('/'), 'container_id': old.get('Id'),
+                         'image': old.get('Config', {}).get('Image'), 'image_id': old_image_id,
+                         'repo_digests': old_digests, 'state': old.get('State', {}).get('Status')})
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    temporary = Path(tempfile.mkdtemp(prefix='.voice-archive-', dir=archive_root))
+    os.chmod(temporary, 0o700)
+    os.chown(temporary, 0, 0)
+    try:
+        file_hashes = {}
+        file_hashes['container-inspect.json'] = _archive_write(temporary, 'container-inspect.json', container_raw)
+        file_hashes['image-inspect.json'] = _archive_write(temporary, 'image-inspect.json', image_raw)
+        file_hashes['sdk-tree.json'] = _archive_write_json(temporary, 'sdk-tree.json', sdk_tree)
+        for relative, raw in sorted(rollback_raw.items()):
+            file_hashes[relative] = _archive_write(temporary, relative, raw)
+        for logical, raw in sorted(config_bytes.items()):
+            file_hashes['config/' + logical.replace('/', '--')] = _archive_write(
+                temporary, 'config/' + logical.replace('/', '--'), raw)
+
+        # Re-read mutable inputs before publishing the completed directory.
+        _, current = _archive_container(VOICE_CONTAINER)
+        if (current.get('Id') != container_id or current.get('Image') != image_id
+                or current.get('State', {}).get('Running') is not True
+                or current.get('State', {}).get('Pid') != process_identity['pid']
+                or current.get('Config') != container.get('Config')
+                or current.get('HostConfig') != container.get('HostConfig')
+                or _archive_canonical_mounts(current) != _archive_canonical_mounts(container)):
+            raise RuntimeError('live Voice container changed during archive capture')
+        if _archive_process_identity(current) != process_identity:
+            raise RuntimeError('live Voice process or mount namespace changed during archive capture')
+        bridge_now, bridge_identity_now, bridge_symlinks_now = _archive_read_container_file(
+            process_identity, bridge_path)
+        if (_archive_hash(bridge_now) != bridge_hash or bridge_identity_now != bridge_identity
+                or bridge_symlinks_now != bridge_symlinks):
+            raise RuntimeError('mounted AgentCall bridge changed during archive capture')
+        _, verify_tree_hash, _, verify_sdk_root_identity = _archive_tree(sdk_root)
+        sdk_entry_now, sdk_entry_identity_now = _archive_read_file(sdk_entry)
+        if (verify_tree_hash != sdk_tree_hash or verify_sdk_root_identity != sdk_tree_root_identity
+                or _archive_hash(sdk_entry_now) != sdk_hash or sdk_entry_identity_now != sdk_entry_identity):
+            raise RuntimeError('mounted Secretary SDK changed during archive capture')
+        for logical, mounted in config_sources.items():
+            config_now, identity_now = _archive_read_file(mounted['path'])
+            if (_archive_hash(config_now) != _archive_hash(config_bytes[logical])
+                    or identity_now != config_identities[logical]):
+                raise RuntimeError('mounted Voice config changed during archive capture')
+
+        manifest = {
+            'schema': 'userio-voice-archive/v1',
+            'status': 'archive_only',
+            'captured_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'container': {'name': VOICE_CONTAINER, 'id': container_id, 'state': 'running'},
+            'image': {'reference': container.get('Config', {}).get('Image'), 'image_id': image_id,
+                      'immutable_repo_digests': repo_digests, 'revision': revision},
+            'container_process': process_identity,
+            'bridge': {'mount_source_name': bridge_source.name, 'mount_destination': bridge_mount.get('Destination'),
+                       'consumer_device': bridge_identity['device'], 'consumer_inode': bridge_identity['inode'],
+                       'file': 'agentcall_realtime_bridge.py',
+                       'resolved_container_path': bridge_identity['resolved_container_path'],
+                       'symlinks': bridge_symlinks, 'sha256': bridge_hash},
+            'secretary_sdk': {'mount_source_name': sdk_source.name, 'mount_destination': sdk_mount.get('Destination'),
+                              'consumer_device': sdk_root_identity['device'], 'consumer_inode': sdk_root_identity['inode'],
+                              'entrypoint': sdk_entry.relative_to(sdk_root).as_posix(), 'entrypoint_sha256': sdk_hash,
+                              'tree_sha256': sdk_tree_hash, 'tree_files': len(sdk_tree), 'tree_bytes': sdk_tree_bytes},
+            'effective_config': {'redacted_fingerprint_sha256': config_fingerprint,
+                                 'captured_files': sorted(config_bytes),
+                                 'mount_views': config_mount_views,
+                                 'secret_values_stored_only_in_root_snapshot': True},
+            'rollback': rollback,
+            'snapshot_files_sha256': file_hashes,
+        }
+        manifest_sha = _archive_write_json(temporary, 'manifest.json', manifest)
+        receipt = {'status': 'archived_only', 'archive': str(receipt_directory), 'container_id': container_id,
+                   'image_id': image_id, 'image_digest': repo_digests[0], 'source_revision': revision,
+                   'bridge_sha256': bridge_hash, 'sdk_entrypoint_sha256': sdk_hash,
+                   'config_fingerprint_sha256': config_fingerprint, 'rollback_container_ids': [r['container_id'] for r in rollback],
+                   'manifest_sha256': manifest_sha, 'no_runtime_changes': True}
+        receipt_sha = _archive_write_json(temporary, 'receipt.json', receipt)
+        file_hashes['manifest.json'] = manifest_sha
+        file_hashes['receipt.json'] = receipt_sha
+        sums = ''.join(f'{digest}  {name}\n' for name, digest in sorted(file_hashes.items())).encode()
+        sums_sha = _archive_write(temporary, 'SHA256SUMS', sums)
+        for relative, expected_hash in file_hashes.items():
+            if not _archive_verify_file(temporary / relative, expected_hash):
+                raise RuntimeError('archive snapshot readback hash mismatch')
+        for path in temporary.rglob('*'):
+            expected_mode = 0o700 if path.is_dir() else 0o600
+            if not _archive_has_owner_mode(path, expected_mode):
+                raise RuntimeError('archive snapshot is not root-only')
+        if receipt_directory.exists() or receipt_directory.is_symlink():
+            raise RuntimeError('archive destination appeared during capture')
+        _archive_rename_noreplace(temporary, receipt_directory)
+        directory = os.open(archive_root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        os.chmod(receipt_directory, 0o700)
+        if not _archive_has_owner_mode(receipt_directory, 0o700):
+            raise RuntimeError('archive ownership is not root:root')
+        for relative in [*file_hashes, 'manifest.json', 'receipt.json', 'SHA256SUMS']:
+            if not _archive_has_owner_mode(receipt_directory / relative, 0o600):
+                raise RuntimeError('archive file permissions or ownership are not root-only')
+        return dict(receipt, archive=str(receipt_directory), sums_sha256=sums_sha)
+    except BaseException:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+
 def _replace_backend_locked(*, image: str, revision: str, expected_container: str, receipt_directory: Path):
     """Routine replacement of the canonical backend; never replay migration cutover."""
     import http.client
@@ -587,14 +1199,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         raise RuntimeError('release receipt already exists; reconcile before another replacement')
     if receipt_directory.exists():
         raise RuntimeError('release directory already exists; reconcile incomplete intent')
-    paths = ['src/universal_userio/' + f for f in (
-        'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
-        'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
-        'delivery_reconciliation.py', 'store.py', 'adapters.py', 'runtime.py',
-        'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
-        'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
-        'telemost/meetings.py', 'static/telemost.html')]
-    paths += ['deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs')]
+    paths = BACKEND_SOURCE_HASH_PATHS
     expected_hashes = {}
     for path in paths:
         pinned = subprocess.check_output(['git', '-C', ROOT, 'show', full_revision + ':' + path])
@@ -641,7 +1246,8 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         api('POST', 'containers/userio-backend/stop?t=40')
         api('DELETE', 'containers/userio-backend')
         removed = True
-        body = dict(old['Config'], Image=image, HostConfig=old['HostConfig'])
+        expected_config = _backend_replacement_config(old['Config'], image=image, revision=full_revision)
+        body = dict(expected_config, HostConfig=old['HostConfig'])
         api('POST', 'containers/create?name=userio-backend', body)
         now = inspect('userio-backend')
         save(receipt_directory / 'candidate.json', now)
@@ -649,7 +1255,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
             raise RuntimeError('replacement image or HostConfig changed')
         if sorted(now['Mounts'], key=lambda mount: mount['Destination']) != sorted(old['Mounts'], key=lambda mount: mount['Destination']):
             raise RuntimeError('replacement mounts changed')
-        if dict(now['Config'], Image=old['Config']['Image']) != old['Config']:
+        if now['Config'] != expected_config:
             raise RuntimeError('replacement Config/Env changed')
         api('POST', 'containers/userio-backend/start')
         health()
@@ -697,13 +1303,18 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend'))
+    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend', 'archive-voice'))
     parser.add_argument('--output', type=Path)
     parser.add_argument('--image')
     parser.add_argument('--revision')
     parser.add_argument('--expected-container')
     parser.add_argument('--receipt-directory', type=Path)
     args = parser.parse_args()
+    if args.action == 'archive-voice':
+        if not args.receipt_directory:
+            parser.error('archive-voice requires --receipt-directory')
+        print(json.dumps(archive_voice(args.receipt_directory), sort_keys=True))
+        return
     if args.action == 'replace-backend':
         if not all((args.image, args.revision, args.expected_container, args.receipt_directory)):
             parser.error('replace-backend requires --image, --revision, --expected-container and --receipt-directory')

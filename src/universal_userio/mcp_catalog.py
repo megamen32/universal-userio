@@ -127,25 +127,6 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
-        "userio.contacts.start",
-        "Start a conversation with a contact that is not in the history yet and send the first message. The "
-        "identifier is resolved to a provider-native peer (Telegram username or phone number, phone number for SMS "
-        "or WhatsApp, mail address, VK profile, Yandex user id), the canonical chat is opened, and the text is "
-        "delivered through the same durable path as every other outbound message. The request_id makes a retry "
-        "reuse the same message instead of sending it twice. The answer reports what the transport really proved: "
-        "delivery_status=delivered only with a provider confirmation, delivery_status=smtp_accepted when the mail "
-        "transport merely took the letter.",
-        schema(
-            {
-                "account_ref": {"type": "string", "maxLength": 128},
-                "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
-                "text": {"type": "string", "minLength": 1, "maxLength": 65536},
-                "request_id": {"type": "string", "minLength": 16, "maxLength": 80},
-            },
-            ["account_ref", "identifier", "text", "request_id"],
-        ),
-    ),
-    ToolSpec(
         "userio.channels.read",
         "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.",
         schema(
@@ -166,18 +147,6 @@ TOOL_SPECS = (
         schema({"file_ref": {"type": "string"},
                 "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
                 "include_images":{"type":"boolean","default":True}}, ["file_ref"]),
-    ),
-    ToolSpec(
-        "userio.channels.send_draft",
-        "Queue a draft; never send or bypass approval.",
-        schema(
-            {
-                "chat_id": {"type": "string"},
-                "text": {"type": "string"},
-                "attachments": {"type": "array", "items": {"type": "string"}},
-            },
-            ["chat_id", "text"],
-        ),
     ),
     ToolSpec(
         "userio.workspace.poll",
@@ -329,17 +298,6 @@ TOOL_SPECS = (
         ),
     ),
     ToolSpec(
-        "userio.draft.create",
-        "Create a reply draft; does not send.",
-        schema(
-            {
-                "conversation_id": {"type": "string"},
-                "body": {"type": "string"},
-            },
-            ["conversation_id", "body"],
-        ),
-    ),
-    ToolSpec(
         "userio.draft.update",
         "Edit a proposed user-owned draft.",
         schema(
@@ -351,27 +309,6 @@ TOOL_SPECS = (
         "userio.draft.delete",
         "Delete a local unsent/rejected draft.",
         schema({"draft_id": {"type": "string"}}, ["draft_id"]),
-    ),
-    ToolSpec(
-        "userio.draft.approve_send",
-        "Explicitly send one exact approved draft.",
-        schema(
-            {
-                "draft_id": {"type": "string"},
-                "confirm": {"type": "boolean"},
-                "expected_text": {"type": "string"},
-                "expected_chat_id": {
-                    "type": "string",
-                    "description": "Exact stored draft conversation_id.",
-                },
-                "expected_attachments": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Must be empty for text-only drafts.",
-                },
-            },
-            ["draft_id", "confirm", "expected_text", "expected_chat_id", "expected_attachments"],
-        ),
     ),
     ToolSpec(
         "userio.draft.reconcile_delivery",
@@ -435,6 +372,15 @@ TOOL_SPECS = (
 
 
 MESSENGER_SPECS = (
+    ToolSpec('userio.messenger.has_contacted',
+        'Check one direct contact conversation or strictly typed Telegram username for historical outgoing. Username requires refresh=true and account-wide read scope; provider username READ and local projection only, never phone import. Metadata only; no sends or read ACK. '
+        'CONTACTED needs outgoing evidence; NOT_CONTACTED needs certified complete accessible scope; otherwise UNKNOWN. Other accounts/channels and deleted history are excluded.',
+        schema({'account_ref':{'type':'string'}, 'conversation_id':{'type':'string'},
+                'telegram_username':{'type':'string','pattern':r'^@?[A-Za-z][A-Za-z0-9_]{4,31}$'},
+                'limit':{'type':'integer','minimum':1,'maximum':100,'default':100},
+                'max_pages':{'type':'integer','minimum':1,'maximum':10,'default':5},
+                'refresh':{'type':'boolean','default':False}}, ['account_ref'])
+                | {'oneOf':[{'required':['conversation_id']},{'required':['telegram_username']}]}),
     ToolSpec('userio.messenger.upload',
         'Stage a private file for one source-bound approved send. Telegram uses the selected account upload limit; other providers use their published limit. Bytes expire after 900s. No send, URLs or local paths. Returns upload_id and metadata only.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},
@@ -546,18 +492,45 @@ TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
 MESSAGE_PREPARE_SPECS = (
     ToolSpec('userio.messages.prepare',
         'Prepare one message draft for either a known conversation_id or account_ref plus a new contact identifier. '
-        'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: approve the exact '
-        'returned draft with userio.draft.approve_send. Retries with the same request_id reuse the same draft. '
-        'Use this as the default text preparation tool; contacts.start is a legacy explicit-send compatibility call.',
+        'Resolve new recipients to a canonical peer before storing the draft. Nothing is sent: send the exact '
+        'returned draft with userio.messages.send. Retries with the same request_id reuse the same draft. '
+        'Optional reply_to is a source-bound object {message_id, expected_text, thread_id?} that names the exact '
+        'incoming message this draft answers; it is validated against the stored message, stored immutably, '
+        'returned in the prepared draft and delivered as a real threaded reply. There is no default reply target: '
+        'without reply_to the message is sent as an ordinary message.',
         dict(schema({'conversation_id':{'type':'string','minLength':1},
             'account_ref':{'type':'string','maxLength':128},
             'identifier':{'type':'string','minLength':1,'maxLength':256},
             'text':{'type':'string','minLength':1,'maxLength':65536},
+            'reply_to':{'type':'object','additionalProperties':False,
+                'description':'Source-bound reply anchor. It names the exact incoming message this draft answers.',
+                'properties':{
+                    'message_id':{'type':'string','minLength':1,'maxLength':32,
+                        'description':'Provider message id of the incoming message.'},
+                    'expected_text':{'type':'string','minLength':1,'maxLength':65536,
+                        'description':'Exact text of that incoming message.'},
+                    'thread_id':{'type':'string','maxLength':32,
+                        'description':'Optional provider topic id of that incoming message.'}},
+                'required':['message_id','expected_text']},
             'request_id':{'type':'string','minLength':16,'maxLength':80}}, ['text','request_id']),
             oneOf=[{'required':['conversation_id'],'not':{'required':['identifier']}},
                    {'required':['account_ref','identifier'],'not':{'required':['conversation_id']}}])),
 )
-TOOL_SPECS = (*TOOL_SPECS, *MESSAGE_PREPARE_SPECS)
+
+MESSAGE_SEND_SPECS = (
+    ToolSpec('userio.messages.send',
+        'Send one exact approved draft. The reviewed snapshot is mandatory: expected_text, expected_chat_id and '
+        'expected_attachments must match the prepared draft exactly. Nothing is sent without confirm=true. '
+        'The send is durable and idempotent: a repeated call returns the stored receipt instead of sending twice. '
+        'This is the only public send action for a prepared message.',
+        schema({'draft_id':{'type':'string'},'confirm':{'type':'boolean'},
+            'expected_text':{'type':'string'},
+            'expected_chat_id':{'type':'string','description':'Exact stored draft conversation_id.'},
+            'expected_attachments':{'type':'array','items':{'type':'string'},
+                'description':'Must be empty for text-only drafts.'}},
+               ['draft_id','confirm','expected_text','expected_chat_id','expected_attachments'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *MESSAGE_PREPARE_SPECS, *MESSAGE_SEND_SPECS)
 
 TELEMOST_SPECS = (
     ToolSpec('userio.meetings.telemost.start',
@@ -596,6 +569,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.events': 'read',
     'userio.messenger.capabilities': 'read',
     'userio.messenger.history': 'read',
+    'userio.messenger.has_contacted': 'read',
     'userio.messenger.resolve': 'read',
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
@@ -608,10 +582,8 @@ TOOL_CAPABILITIES = {
     "userio.channels.search": "read",
     "userio.channels.export": "read",
     "userio.contacts.resolve": "read",
-    "userio.contacts.start": "send",
     "userio.channels.read": "read",
     "userio.channels.download": "download",
-    "userio.channels.send_draft": "send",
     "userio.workspace.poll": "read",
     "userio.workspace.claim": "read",
     "userio.workspace.renew": "read",
@@ -633,10 +605,9 @@ TOOL_CAPABILITIES = {
     "userio.inbox.list_new": "read",
     "userio.conversation.get": "read",
     "userio.message.mark_seen": "read",
-    "userio.draft.create": "send",
     "userio.draft.update": "send",
     "userio.draft.delete": "send",
-    "userio.draft.approve_send": "send",
+    "userio.messages.send": "send",
     "userio.draft.reconcile_delivery": "send",
     "userio.conversation.delete_local": "read",
     "userio.accounts.list": "read",

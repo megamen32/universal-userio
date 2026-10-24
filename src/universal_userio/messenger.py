@@ -15,8 +15,8 @@ from .contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequired
 from .source_projection import canonical_author, canonical_source
 
 SCHEMA = 'userio.messenger.v1'
-OPERATIONS = ('read', 'history', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
-READ_OPERATIONS = frozenset({'read', 'history', 'download'})
+OPERATIONS = ('read', 'history', 'has_contacted', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
+READ_OPERATIONS = frozenset({'read', 'history', 'has_contacted', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
 TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
@@ -80,7 +80,7 @@ class Messenger:
                     'reason': 'provider_not_supported'} if starter is None else
                    starter.resolution_support(user_id=self.user, account_ref=account_ref))
         operations = {}
-        for name in ('resolve', 'start'):
+        for name in ('resolve', 'prepare'):
             reason = ''
             if not support['supported']:
                 reason = support['reason']
@@ -88,17 +88,17 @@ class Messenger:
                 reason = 'account_disabled'
             elif self.principal.read_only:
                 reason = 'read_only_token'
-            elif name == 'start' and 'reply' not in account['capabilities']:
+            elif name == 'prepare' and 'reply' not in account['capabilities']:
                 reason = 'account_capability_disabled'
             elif not self.store.capability_enabled(
-                    'send' if name == 'start' else 'read', user_id=self.user):
+                    'send' if name == 'prepare' else 'read', user_id=self.user):
                 reason = 'user_capability_disabled'
             elif self.principal.messenger_grants is not None:
                 grant = next((g for g in self.principal.messenger_grants
                               if g['account_ref'] == account_ref), None)
                 if grant is None:
                     reason = 'account_outside_credential_scope'
-                elif name == 'start' and (grant.get('access') != 'read_write'
+                elif name == 'prepare' and (grant.get('access') != 'read_write'
                                           or grant.get('chats') is not None):
                     reason = 'account_scope_required_for_new_contact'
             operations[name] = {
@@ -121,7 +121,7 @@ class Messenger:
         for name in OPERATIONS:
             # All registered accounts have bounded stored reading; live
             # history/media and mutations require an actual configured route.
-            supported = name in {'read', 'history'} or name in ops
+            supported = name in {'read', 'history', 'has_contacted'} or name in ops
             reason = ''
             if not supported: reason = 'provider_not_supported'
             elif not account['enabled']: reason = 'account_disabled'
@@ -795,10 +795,13 @@ def dispatch(store, service, principal, name, arguments):
     api = Messenger(store,service,principal)
     op = name.removeprefix('userio.messenger.')
     try:
-        if principal.read_only and op not in {'capabilities','history','get','resolve','media','events'}:
+        if principal.read_only and op not in {'capabilities','history','has_contacted','get','resolve','media','events'}:
             raise PermissionError('read_only_token')
         if op == 'capabilities': return {'ok':True,**api.capabilities(**arguments)}
         if op == 'history': return {'ok':True,**api.history(**arguments)}
+        if op == 'has_contacted':
+            from .contact_check import has_contacted
+            return {'ok':True, **has_contacted(api, **arguments)}
         if op == 'resolve': return {'ok':True,**api.resolve(**arguments)}
         if op == 'media': return {'ok':True,**api.media(**arguments)}
         if op == 'events': return {'ok':True,**api.events(**arguments)}

@@ -65,10 +65,19 @@ class UserIOToolDispatcher:
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name == 'userio.messages.prepare':
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
+                if name == 'userio.messages.send':
+                    return dispatch_scoped(self._store,self._service,principal,name,arguments)
                 if name.startswith('userio.channels.'):
                     return dispatch_scoped(self._store,self._service,principal,name,arguments)
             except (PermissionError,ValueError,KeyError) as error:
-                return {'ok':False,'error':str(error).strip("'")}
+                payload={'ok':False,'error':str(error).strip("'")}
+                code=getattr(error,'code','')
+                if code:
+                    # A stable machine-readable reason. A consumer must branch
+                    # on the code, never on the localized message text.
+                    payload['code']=str(code)
+                    payload['retry_allowed']=False
+                return payload
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
         if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.')):
@@ -265,36 +274,6 @@ class UserIOToolDispatcher:
                         "data": base64.b64encode(file.data).decode(),
                     },
                 }
-            if name == "userio.channels.send_draft":
-                attachments = arguments.get("attachments")
-                if attachments is not None and not isinstance(attachments, list):
-                    raise ValueError("attachments must be an array")
-                draft = channels.send(
-                    chat_id=self._required(arguments, "chat_id"),
-                    text=self._required(arguments, "text"),
-                    attachments=attachments,
-                )
-                conversation = self._store.conversation(
-                    draft.conversation_id, user_id=user_id
-                ) or {}
-                manual_lock = self._service.manual_approval_required(conversation)
-                hint = (
-                    "Автоматическая отправка отключена. Чтобы отправить сообщение, "
-                    "подтвердите этот черновик."
-                    if manual_lock else
-                    "Черновик сохранён. Чтобы отправить сообщение, "
-                    "подтвердите этот текст и получателя."
-                )
-                return {
-                    "ok": True,
-                    "draft": self._draft(draft),
-                    "sent": False,
-                    "approval_required": True,
-                    "channel": str(conversation.get("source") or ""),
-                    "response_mode": str(conversation.get("response_mode") or ""),
-                    "manual_approval_only": manual_lock,
-                    "approval_hint": hint,
-                }
             if name == "userio.workspace.poll":
                 page = self._store.workspace_events(
                     after=arguments.get("after", 0),
@@ -471,13 +450,6 @@ class UserIOToolDispatcher:
                         user_id=user_id,
                     ),
                 }
-            if name == "userio.draft.create":
-                draft = self._service.create_manual_draft(
-                    self._required(arguments, "conversation_id"),
-                    body=self._required(arguments, "body"),
-                    user_id=user_id,
-                )
-                return {"ok": True, "draft": self._draft(draft)}
             if name == "userio.draft.update":
                 draft = self._store.update_draft(
                     self._required(arguments, "draft_id"),
@@ -492,7 +464,7 @@ class UserIOToolDispatcher:
                         self._required(arguments, "draft_id"), user_id=user_id
                     ),
                 }
-            if name == "userio.draft.approve_send":
+            if name == "userio.messages.send":
                 if not self._store.send_enabled(user_id=user_id):
                     return {"ok": False, "error": "outbound_delivery_disabled"}
                 return self._approve(arguments, principal)
