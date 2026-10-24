@@ -207,12 +207,16 @@ def test_workspace_events_http_is_authenticated_user_scoped_and_read_only(tmp_pa
 def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path) -> None:
     outbox = Outbox()
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), outbox)
+    service._store.register_account(account_id="telegram:1", provider="telegram",
+                                   display_name="Telegram", enabled=True, can_read=True,
+                                   can_reply=True, credential_ref="telegram-qr:account-1",
+                                   user_id=service._store.default_user_id)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
     try:
-        payload = {"route_id": "telegram-reply", "message": {"schema": "universal.inbox.message.v1", "source": "telegram", "message_id": "1", "sender": "chat", "body": "hello"}}
+        payload = {"route_id": "telegram-reply", "account_id": "telegram:1", "message": {"schema": "universal.inbox.message.v1", "source": "telegram", "message_id": "1", "sender": "chat", "body": "hello"}}
         request = Request(base + "/v1/messages", data=json.dumps(payload).encode(), method="POST", headers={"Content-Type": "application/json"})
         try:
             urlopen(request)
@@ -232,7 +236,10 @@ def test_http_business_path_requires_auth_and_only_sends_after_approval(tmp_path
         with urlopen(propose) as response:
             draft = json.loads(response.read())["drafts"][0]
 
-        manual = Request(base + f"/v1/conversations/{accepted['conversation_id']}/drafts", data=b'{"body":"manual answer"}', method="POST", headers={"Authorization": "Bearer test-token"})
+        manual = Request(base + "/v1/messages/prepare", data=json.dumps({
+            "conversation_id": accepted["conversation_id"], "text": "manual answer",
+            "request_id": "http-manual-answer-0001"}).encode(), method="POST",
+            headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
         with urlopen(manual) as response:
             assert json.loads(response.read())["body"] == "manual answer"
 
@@ -618,7 +625,9 @@ def test_http_mcp_surface_is_bearer_protected_and_advertises_userio_tools(tmp_pa
         request = Request(f"http://127.0.0.1:{server.server_port}/mcp", data=b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}', method="POST", headers={"Authorization": "Bearer test-token", "Content-Type": "application/json"})
         with urlopen(request) as response:
             result = json.loads(response.read())["result"]
-        assert "userio.draft.approve_send" in [tool["name"] for tool in result["tools"]]
+        names = [tool["name"] for tool in result["tools"]]
+        assert "userio.messages.prepare" in names
+        assert "userio.messages.send" in names
     finally:
         server.shutdown()
         server.server_close()
@@ -1024,8 +1033,10 @@ def test_capability_preferences_are_per_user_and_enforced_for_reads(tmp_path) ->
 def test_pending_drafts_endpoint_lists_only_proposed_with_chat_context(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     cid, _ = service.receive(InboxMessage("telegram", "1", "alice", "hello", 1.0), route_id="telegram")
-    pending = service.create_manual_draft(cid, body="needs approval")
-    sent = service.create_manual_draft(cid, body="already sent")
+    pending = service.prepare_manual_message(
+        cid, body="needs approval", request_id="http-pending-draft-0001")
+    sent = service.prepare_manual_message(
+        cid, body="already sent", request_id="http-pending-draft-0002")
     service._store.approve(sent.id, "receipt-1")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
@@ -1051,8 +1062,10 @@ def test_pending_drafts_endpoint_lists_only_proposed_with_chat_context(tmp_path)
 def test_browser_notification_ack_marks_only_proposed_draft(tmp_path) -> None:
     service = UserIOService(SQLiteUserIOStore(tmp_path / "userio.sqlite3"), Generator(), Outbox())
     cid, _ = service.receive(InboxMessage("telegram", "browser-1", "alice", "hello", 1.0), route_id="telegram")
-    pending = service.create_manual_draft(cid, body="needs approval")
-    sent = service.create_manual_draft(cid, body="sent")
+    pending = service.prepare_manual_message(
+        cid, body="needs approval", request_id="http-browser-ack-0001")
+    sent = service.prepare_manual_message(
+        cid, body="sent", request_id="http-browser-ack-0002")
     service._store.approve(sent.id, "receipt")
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="test-token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
