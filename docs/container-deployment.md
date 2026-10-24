@@ -317,3 +317,42 @@ Calls-primary также публикует существующий typed contr
 эти sockets в private tmpfs. Это runtime IPC, не code mount. Native owner
 останавливает старый gateway до primary-перехода, чтобы не было двух владельцев
 одних sockets/9092. Входящий AudioSocket и Matrix control используют тот же image.
+
+## Проверенная portable версия
+
+Release: [voice-415a101.json](../deploy/containers/releases/voice-415a101.json).
+Образ закреплён digest, исходник415a101 и adapter5de41fd7. На44 доказаны
+чистый standby startup, exacthashes11modules+adapter, повтор без перезапуска и
+откат после неверной QAконфигурации с сохранением исходного containerID/данных.
+Это приёмка поставки; реального разговора эта проверка не выполняла.
+
+После обычного доступа Docker к private registry и подготовки root-owned0600
+`/etc/userio-voice/environment.json` на выбранном хосте:
+
+```bash
+docker run --rm --pull=always --network none \
+  -v /var/run/docker.sock:/var/run/docker.sock --entrypoint python \
+  ghcr.io/megamen32/universal-userio-voice@sha256:f369fed158e9f91d2b636405cef5cfb62c04ed543f24993d928380ba15b12802 \
+  /opt/universal-userio/scripts/container_release.py install-voice \
+  --image ghcr.io/megamen32/universal-userio-voice@sha256:f369fed158e9f91d2b636405cef5cfb62c04ed543f24993d928380ba15b12802 \
+  --role standby --name userio-voice --port 19095 \
+  --config-dir /etc/userio-voice --data-dir /var/lib/userio-voice
+```
+
+Docker CLI и registry login должны принадлежать одной вызывающей учётной записи.
+Для remote Docker operator можно использовать существующий Docker SSH context;
+cookies/ключи в команду не копируются. Для primary используются тот же digest,
+`--role calls-primary --port 9092` и защищённая рабочая конфигурация; старый
+gateway останавливает его runtime owner после сверки idle/неопределённых
+квитанций. На88 это отдельный согласованный переход, не часть standbyтеста.
+
+Existing updaters выбирают image-mode только при root-owned
+`/etc/userio-voice/release.json` с полями image,role,container_name,config_dir,
+data_dir,port (никаких секретов). На всех узлах image одинаков, role различается.
+Их hold/timer не включаются установщиком; legacy source-build mode не нужен
+этому release. Ни SDK, ни БД, ни SIPpin/HA не обновляются этой командой.
+
+Готовые точные public payload для updater находятся в release artifact:
+`updater_release_templates.standby` и `.calls-primary`; это отдельные6полей,
+а не весь расширенный manifest. Они входят в обычную protectedconfigпоставку.
+QAконтейнеры/каталоги на44 после приёмки удалены; image остаётся в cache и registry.
