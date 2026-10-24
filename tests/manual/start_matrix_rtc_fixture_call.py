@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -20,14 +21,14 @@ import uuid
 
 
 DB = "/var/lib/universal-userio/userio.sqlite3"
-API = "https://msg.bezrabotnyi.com"
+API = os.environ.get("USERIO_QA_API_BASE", "https://msg.bezrabotnyi.com")
 ROOM = "!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com"
 FIXTURES = {
     "a": {
         "username": "lhc_voice_user_a_20261021",
         "matrix_id": "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
         "target": "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
-        "request_id": "lhc_matrixrtc_20261023_a2b_mavis06",
+        "request_id": "lhc_matrixrtc_20261024_b1c_mavis09",
     },
     "b": {
         "username": "lhc_voice_user_b_20261021",
@@ -97,15 +98,23 @@ def _payload(fixture, account_ref):
         "account_ref": account_ref,
         "room_id": ROOM,
         "target": fixture["target"],
+        # D3 (mavis09): the purpose is the context of the caller's own turns
+        # (matrix_call_worker.py:205), so it has to keep the caller talking
+        # about the same subject after the greeting.
         "purpose": (
             "Закрытый тестовый разговор двух выданных владельцем Matrix-ботов. "
-            "Проверь, что собеседник тебя слышит; затем поддержи короткий "
-            "естественный разговор о задачах и инцидентах. Не выдумывай личные "
-            "сведения и не предпринимай действий."
+            "Наблюдатель notify.bezrabotnyi.com отдаёт ошибку 502: спроси "
+            "собеседника, что это значит и что следует проверить, и держи "
+            "разговор об этом. Не выдумывай личные сведения и не предпринимай "
+            "действий."
         ),
+        # D3 (mavis09): the opening is cut to the first two sentences by
+        # short_opening (bridge:1645-1657), so the question has to come first.
+        # The spoken code stays in the first sentence so the answer can still
+        # be attributed to this run.
         "greeting": (
-            "Привет. Проверка связи, код " + _nonce(fixture["request_id"]) + ". "
-            "Наблюдатель notify.bezrabotnyi.com отдаёт ошибку 502. "
+            "Наблюдатель notify.bezrabotnyi.com отдаёт ошибку 502, код "
+            + _nonce(fixture["request_id"]) + ". "
             "Что это значит и что следует проверить?"
         ),
         "request_id": fixture["request_id"],
