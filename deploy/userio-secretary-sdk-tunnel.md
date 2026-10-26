@@ -82,6 +82,10 @@ The runtime owner must first confirm the actual88 primary control socket and
 an idle resource join. On100 provision only `/run/agentcall/primary88` for the
 existing SSH service user, mode0700, inside the backend's existing `/run/agentcall`
 mount. Keep the forwarded socket private and validate its owner/mode after bind.
+The tunnel process on88 also needs the existing `notification-center` group to
+connect to its local `root:notification-center` mode0660 AgentCall socket. Add
+that group only as a supplementary group on this unit; do not widen the socket
+mode or add the login user to the group globally.
 Do not weaken `/run/agentcall` or replace its local100 socket. A stale forwarded
 socket is not proof of a live route: reconcile the existing SSH session, then
 remove only its owned stale socket at an idle handoff before one tunnel restart.
