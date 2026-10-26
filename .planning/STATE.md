@@ -66,6 +66,32 @@ Exmanager97 independently finishes fresh external inbound/rich SDK parity and
 business/memory checkpoints; transport retirement is a later separate step.
 Typing awaits a second recipient test account, not a password for this account.
 
+### Owner-directed Telegram inline-button action — 2026-10-26
+
+Related to the existing capability/source-receipt contract (CAP-01/02 and
+REPLY-02); this is an additional bounded UserIO action and does not change the
+Exmanager97 MAX next step above.
+
+- Source `92f98df7f9d2014e745c88629f2f82e12c0340ad` is on `main` and installed
+  in the UserIO backend and account-owned Telegram QR connector. Focused source
+  checks pass; live MCP `tools/list` returned `userio.messenger.button_click`
+  to a temporary token restricted to account `telegram:540308572` and QA chat
+  `conv_470a1ac2d40fb1a82528a1c0`; that token was revoked after readback.
+- Live capabilities report the operation supported and allowed on the selected
+  Telegram account. No provider callback was submitted in this task.
+- Real callback canary remains pending: a provider refresh of the authorized QA
+  chat found only the existing SecretNotifyBot native-request message, whose
+  body already says “Выбрано: Разрешить” and links to a different active
+  session. That message was not pressed or reused. The Notice Place
+  `question_result` read for request `7d8bf5b8-e85b-4b19-b595-47921e142d37`
+  returned `token is not allowed for this project`; no action was taken on it.
+- The next required artifact is a new, owned bot-authored inline callback in the
+  QA chat (or its exact safe test-bot command). UserIO's authorized user account
+  cannot author inline keyboards. Creating a new Herder/Notice request to
+  manufacture one crosses the task's explicit ownership boundary. Resume with
+  that owned callback, then press it once through the new UserIO MCP action and
+  read the same request receipt; never replay an accepted or UNKNOWN request.
+
 Latest protected proof root: `.tmp/native-max-final-20261013/` (delivery, both
 same-ID edits, 68-test bounded GREEN, installed manifest and real auth/cached
 history read). Recovered ordinary tests and auth/MCP consumers completed with exact cleanup; old refusals remain separate. The handed browser is returned to Root97 as the original blank page, and all own plaintext credential/PNG copies are removed.
