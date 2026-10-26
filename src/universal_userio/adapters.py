@@ -427,7 +427,7 @@ class TelegramQrHttpOutbox:
             return
 
     def _telegram_admin_call(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
-        request=urllib.request.Request(f"{self._base_url}/{endpoint}",data=json.dumps(payload).encode(),method="POST",
+        request=urllib.request.Request(f"{self._base_url}/{endpoint.lstrip('/')}",data=json.dumps(payload).encode(),method="POST",
             headers={"Content-Type":"application/json","Authorization":f"Bearer {self._token}"})
         try:
             with self._runner(request,timeout=self._timeout) as response:

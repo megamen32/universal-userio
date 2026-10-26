@@ -129,6 +129,20 @@ def test_pinned_slot_is_sent_with_the_account():
     assert sent["slot"] == "account-1"
 
 
+def test_telegram_admin_prepare_posts_to_single_slash_endpoint():
+    def run(request, **_kwargs):
+        captured["request"] = request
+        return _Response(json.dumps({"ok": True, "account_id": "telegram:540308572",
+            "operation": "group_invite", "resolved": {"peer_id": "-4832374378"}}).encode())
+
+    outbox = TelegramQrHttpOutbox("http://127.0.0.1:18095/", "token-1", runner=run, probe=reachable_probe)
+    result = outbox.telegram_admin_prepare(account_ref="telegram:540308572", operation="group_invite",
+        payload={"conversation_id": "conv_fixture", "participant_id": "999000001"})
+
+    assert captured["request"].full_url == "http://127.0.0.1:18095/admin/prepare"
+    assert result["resolved"]["peer_id"] == "-4832374378"
+
+
 def test_edit_posts_exact_source_snapshot_to_account_bound_connector():
     def run(request, **_kwargs):
         captured["request"] = request
