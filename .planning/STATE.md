@@ -78,19 +78,18 @@ Exmanager97 MAX next step above.
   to a temporary token restricted to account `telegram:540308572` and QA chat
   `conv_470a1ac2d40fb1a82528a1c0`; that token was revoked after readback.
 - Live capabilities report the operation supported and allowed on the selected
-  Telegram account. No provider callback was submitted in this task.
-- Real callback canary remains pending: a provider refresh of the authorized QA
-  chat found only the existing SecretNotifyBot native-request message, whose
-  body already says “Выбрано: Разрешить” and links to a different active
-  session. That message was not pressed or reused. The Notice Place
-  `question_result` read for request `7d8bf5b8-e85b-4b19-b595-47921e142d37`
-  returned `token is not allowed for this project`; no action was taken on it.
-- The next required artifact is a new, owned bot-authored inline callback in the
-  QA chat (or its exact safe test-bot command). UserIO's authorized user account
-  cannot author inline keyboards. Creating a new Herder/Notice request to
-  manufacture one crosses the task's explicit ownership boundary. Resume with
-  that owned callback, then press it once through the new UserIO MCP action and
-  read the same request receipt; never replay an accepted or UNKNOWN request.
+  Telegram account. The owner then provided the fresh, owned message4 for the
+  exact harmless QA command `HF26_USERIO_BUTTON_QA`. The installed MCP action
+  pressed row0/column0, label “Разрешить”, and returned `accepted`. Durable
+  UserIO action `action_79746085a3c5d09baa81ad43344eb4700801251528d8b42263f327b43c43f372`
+  has provider receipt
+  `telegram-qr-button:account-5:4:action_79746085a3c5d09baa81ad43344eb4700801251528d8b42263f327b43c43f372`.
+  A fresh provider read of message4 shows `✅ Выбрано: Разрешить`; readback of
+  the same action is `accepted`. Old message3 was not pressed or reused. The
+  Notice Place `question_result` read for request
+  `7d8bf5b8-e85b-4b19-b595-47921e142d37` returned
+  `token is not allowed for this project`; no action was taken on that card.
+  No provider action was repeated after acceptance.
 
 Latest protected proof root: `.tmp/native-max-final-20261013/` (delivery, both
 same-ID edits, 68-test bounded GREEN, installed manifest and real auth/cached
