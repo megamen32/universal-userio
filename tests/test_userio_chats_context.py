@@ -107,6 +107,19 @@ class ScopedChatsReadTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def test_default_http_runner_returns_a_context_managed_response(self) -> None:
+        response = Response({"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch(
+            "universal_userio.voice.userio_chats_context.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            status, payload, session = self.store._post({"jsonrpc": "2.0"})
+        self.assertEqual(200, status)
+        self.assertIn('"ok": true', payload)
+        self.assertEqual("sess-1", session)
+
     def test_the_scoped_history_read_returns_messages(self) -> None:
         content = {"ok": True, "schema": "userio.messenger.v1", "messages": [
             {"direction": "incoming", "sender": "qa deusexcode", "text": "рш"}]}

@@ -187,6 +187,7 @@ class UserIOChatsStore:
 
 def _direct_post(request, timeout=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=timeout or 20) as response:
-        return (response.status, response.read().decode("utf-8", "replace"),
-                response.headers.get("Mcp-Session-Id"))
+    # UserIOChatsStore._post owns response consumption and closing. Returning
+    # the HTTPResponse keeps the default runner contract aligned with injected
+    # runners and lets HTTPError be handled by _post's existing error path.
+    return opener.open(request, timeout=timeout or 20)
