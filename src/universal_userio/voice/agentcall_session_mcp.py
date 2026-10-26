@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from universal_userio.voice.secretary_chat_projection import secretary_message_text
 
 
 AGENT_HERDER_URL = os.environ.get("AGENTCALL_HERDER_URL", "http://127.0.0.1:18787").rstrip('/')
@@ -484,7 +485,7 @@ def build_incoming_server(context: dict[str, str], store=None, userio_chats=None
                     'messages': [{'direction': item.get('direction'),
                                   'sender': item.get('sender'),
                                   'date': item.get('date'),
-                                  'text': item.get('text')}
+                                  'text': secretary_message_text(item)}
                                  for item in (header.get('messages') or [])]}
         return audited('secretary_chats_read', read)
 
