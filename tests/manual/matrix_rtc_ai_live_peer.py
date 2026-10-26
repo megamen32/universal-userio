@@ -57,7 +57,11 @@ QA_SCOPE_IDENTITY_MAP = {
     "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com":
         "9b4ab5e7-546e-4df9-a4c9-5c28f850cd26",
     "@aiadmin:chat.bezrabotnyi.com":
-        "f61b49d0-d33e-4fe7-8bc2-bd395db7307c",
+        # ExManager admits this existing ordinary QA app member. Keep this
+        # test-only Matrix binding on an admitted QA principal; a fabricated
+        # identity passes the local scope checks but is rejected by the live
+        # Secretary turn endpoint.
+        "9b4ab5e7-546e-4df9-a4c9-5c28f850cd26",
 }
 QA_SCOPE_TTL_SECONDS = 900
 

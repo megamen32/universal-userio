@@ -27,6 +27,8 @@ def test_secretary_identity_gate_requires_exact_fixture_caller(tmp_path, monkeyp
 
     scoped_aiadmin = PEER._fixture_identity_map(base, aiadmin)
     assert scoped_aiadmin["matrix:" + aiadmin] == PEER.QA_SCOPE_IDENTITY_MAP[aiadmin]
+    assert PEER.QA_SCOPE_IDENTITY_MAP[aiadmin] == PEER.QA_SCOPE_IDENTITY_MAP[caller_a]
+    assert PEER.QA_SCOPE_IDENTITY_MAP[aiadmin] == "9b4ab5e7-546e-4df9-a4c9-5c28f850cd26"
     assert scoped_aiadmin["matrix:" + aiadmin] != owner_id
 
     with pytest.raises(PermissionError):
