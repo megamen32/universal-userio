@@ -398,9 +398,11 @@ def build_server(context: dict[str, str]) -> MCPServer:
     return server
 
 
-def build_incoming_server(context: dict[str, str], store=None) -> MCPServer:
+def build_incoming_server(context: dict[str, str], store=None, userio_chats=None) -> MCPServer:
     from noticeplace_voice_context import NoticePlaceVoiceStore, asks_recent_repair, service_search
+    from userio_chats_context import UserIOChatsStore
     store = store or NoticePlaceVoiceStore(owner_audiences=True)
+    userio_chats = userio_chats or UserIOChatsStore()
     server = MCPServer('agentcall-incidents', instructions=(
         'Read owner audiences me and health only, including recent resolved incidents when discussing past repairs, '
         'and their actually linked Agent Herder sessions. '
@@ -459,6 +461,32 @@ def build_incoming_server(context: dict[str, str], store=None) -> MCPServer:
             record.update(session_id=session_id, harness=harness)
             return session_read_for({'session_id':session_id,'session_harness':harness})
         return audited('agent_session_read', read)
+
+    @server.tool(description='Search the Secretary\'s own assigned UserIO chats (Telegram, Max, Gmail) by title or content. Read-only scoped access; other accounts and sending are excluded by the token grants. Use a conversation id from the results for secretary_chats_read.')
+    def secretary_chats_search(query: str = '', limit: int = 10) -> dict[str, Any]:
+        def read(record):
+            results = userio_chats.search(query, limit=limit)
+            return {'count': len(results), 'chats': [
+                {'conversation_id': item.get('id'), 'account_ref': item.get('account_ref'),
+                 'title': item.get('display_name') or item.get('sender'),
+                 'preview': item.get('preview'), 'unread': item.get('unread_count'),
+                 'last_at': item.get('last_at')} for item in results]}
+        return audited('secretary_chats_search', read)
+
+    @server.tool(description='Read one of the Secretary\'s own assigned UserIO chats with recent messages. Read-only scoped access; use a conversation_id from secretary_chats_search. Never marks the chat as read and cannot send.')
+    def secretary_chats_read(conversation_id: str, history_limit: int = 20) -> dict[str, Any]:
+        def read(record):
+            chat = userio_chats.read(conversation_id, history_limit=history_limit)
+            header = chat.get('chat') or {}
+            return {'conversation_id': header.get('id') or conversation_id,
+                    'account_ref': header.get('account_ref'),
+                    'title': header.get('title') or header.get('name'),
+                    'messages': [{'direction': item.get('direction'),
+                                  'sender': item.get('sender'),
+                                  'date': item.get('date'),
+                                  'text': item.get('text')}
+                                 for item in (header.get('messages') or [])]}
+        return audited('secretary_chats_read', read)
 
     return server
 
