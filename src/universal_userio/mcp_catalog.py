@@ -420,6 +420,18 @@ MESSENGER_SPECS = (
                                     schema({'active':{'type':'boolean'}}, ['active'])]},
                 'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
+    ToolSpec('userio.messenger.button_click',
+        'Press one callback button on an exact Telegram message in an account-scoped conversation. '
+        'Select its current visible row and column and supply the exact button label; UserIO resolves and '
+        'rechecks the provider callback-data before submitting. Idempotent by request_id; an accepted or '
+        'unknown submission must never be retried under a new request_id.',
+        schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},
+                'source_message_id':{'type':'string'},'row':{'type':'integer','minimum':0,'maximum':99},
+                'column':{'type':'integer','minimum':0,'maximum':99},
+                'button_text':{'type':'string','minLength':1,'maxLength':256},
+                'request_id':{'type':'string','minLength':16,'maxLength':128,
+                              'pattern':r'^[a-zA-Z0-9:_-]+$'}},
+               ['account_ref','conversation_id','source_message_id','row','column','button_text','request_id'])),
     ToolSpec('userio.messenger.propose',
         'Propose a source-bound reply/edit/media operation for explicit approval. Does not execute. Use safe_action for reactions and typing. Keep request_id for dedup.',
         schema({'account_ref':{'type':'string'},'conversation_id':{'type':'string'},'source_message_id':{'type':'string'},

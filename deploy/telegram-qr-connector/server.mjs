@@ -2124,6 +2124,78 @@ http.createServer(async (req, res) => {
     });
     return;
   }
+  if ((url.pathname === "/button/prepare" || url.pathname === "/button") && req.method === "POST") {
+    const expected = `Bearer ${process.env.USERIO_API_TOKEN || ""}`;
+    if (!process.env.USERIO_API_TOKEN || req.headers.authorization !== expected) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    try {
+      const payload = await readJsonBody(req);
+      const accountId = String(payload.account_id || "").trim();
+      const peerId = String(payload.peer_id || "").trim();
+      const messageId = String(payload.message_id || "").trim();
+      const row = payload.row, column = payload.column;
+      const buttonText = payload.button_text;
+      const requestId = String(payload.request_id || "");
+      if (!accountId || !/^-?[1-9][0-9]*$/.test(peerId) || !/^[1-9][0-9]*$/.test(messageId)
+          || !Number.isSafeInteger(row) || row < 0 || row > 99
+          || !Number.isSafeInteger(column) || column < 0 || column > 99
+          || typeof buttonText !== "string" || !buttonText.trim() || buttonText.length > 256
+          || url.pathname === "/button" && !/^[a-zA-Z0-9:_-]{16,128}$/.test(requestId)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "exact Telegram button identity is required", submitted: false }));
+      }
+      const selected = [...liveSlots].find(([, item]) => item.accountId === accountId);
+      const item = selected?.[1];
+      const peer = item?.labelPeers?.idPeers?.get(peerId);
+      if (!item?.client || !peer) {
+        res.writeHead(404, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "account does not own the selected Telegram peer", submitted: false }));
+      }
+      const messages = await item.client.getMessages(peer, { ids: [Number(messageId)] });
+      const message = Array.isArray(messages) ? messages[0] : messages;
+      const buttons = message?.replyMarkup?.rows?.[row]?.buttons;
+      const button = Array.isArray(buttons) ? buttons[column] : null;
+      if (!button || button.className !== "KeyboardButtonCallback" || button.text !== buttonText
+          || !(button.data instanceof Uint8Array) || button.data.length < 1 || button.data.length > 64) {
+        res.writeHead(409, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "visible callback button identity changed or not found", submitted: false }));
+      }
+      const callbackDataBase64 = Buffer.from(button.data).toString("base64");
+      if (url.pathname === "/button/prepare") {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ ok: true, account_id: accountId, peer_id: peerId,
+          message_id: messageId, row, column, button_text: buttonText,
+          callback_data_base64: callbackDataBase64 }));
+      }
+      if (payload.callback_data_base64 !== callbackDataBase64) {
+        res.writeHead(409, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "callback data no longer matches selected visible button", submitted: false }));
+      }
+      let answer;
+      try {
+        answer = await item.client.invoke(new Api.messages.GetBotCallbackAnswer({
+          peer, msgId: Number(messageId), data: Buffer.from(callbackDataBase64, "base64")
+        }));
+      } catch {
+        res.writeHead(502, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "button outcome unknown; do not replay", submitted: "unknown" }));
+      }
+      const providerReceipt = `telegram-qr-button:${selected[0]}:${messageId}:${requestId}`;
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ ok: true, account_id: accountId, peer_id: peerId,
+        message_id: messageId, row, column, button_text: buttonText, status: "accepted",
+        provider_receipt: providerReceipt, callback_answer: {
+          class_name: answer?.className || "MessagesBotCallbackAnswer", alert: answer?.alert === true,
+          has_url: answer?.hasUrl === true, cache_time: Number(answer?.cacheTime || 0)
+        }}));
+    } catch {
+      res.writeHead(502, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: url.pathname === "/button" ?
+        "button outcome unknown; do not replay" : "button preflight unavailable", submitted: url.pathname === "/button" ? "unknown" : false }));
+    }
+  }
   if (url.pathname === "/login/phone" && req.method === "POST") {
     if (!loginAuthorized(req.headers, process.env.USERIO_API_TOKEN)) {
       res.writeHead(401, { "content-type": "application/json" });

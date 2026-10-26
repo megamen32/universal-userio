@@ -336,6 +336,25 @@ Telegram uses [messages.sendReaction](https://core.telegram.org/method/messages.
 including an empty reaction vector for removal. Secretary policy/automatic use
 belongs to its SDK consumer; provider support alone is not native consumer proof.
 
+## Telegram inline callback buttons
+
+`userio.messenger.button_click` presses one callback button on a stored Telegram
+message. The caller supplies the exact `account_ref`, `conversation_id`, stored
+`source_message_id`, keyboard `row` and `column`, visible `button_text`, and a
+stable `request_id`. UserIO checks account/chat grants, send capability, route
+policy and message ownership. It resolves callback bytes from the current
+provider keyboard, then the connector fetches the same message again and checks
+the same button coordinates, type, label and bytes before invoking
+`messages.getBotCallbackAnswer`. URL, game, web-app and other non-callback
+buttons are refused. Callback bytes are never accepted as arbitrary caller
+input.
+
+Accepted calls return the durable UserIO action and provider receipt. A request
+that may have reached Telegram remains `sending` (UNKNOWN); retrying the same
+request only reads that receipt, and a new request ID must not be used to repeat
+the click. The callback target is only that exact button on that exact
+user-owned Telegram message; this action cannot select another account or chat.
+
 
 Live13October reaction acceptance: fresh Telegram881 and MAX498 lifecycles,
 and personal VK200000000106 nativecmid1 👍→🔥→removed. All original baselines

@@ -43,6 +43,8 @@ class TelegramMirrorProvider:
         outbox=getattr(service,'telegram_outbox',None)
         operations={'history','download'}
         if callable(getattr(outbox,'react',None)): operations.add('react')
+        if callable(getattr(outbox,'button_click',None)) and callable(getattr(outbox,'prepare_button_click',None)):
+            operations.add('button_click')
         self.reaction_remove_supported=getattr(outbox,'reaction_remove_supported',False) is True
         if callable(getattr(outbox,'typing',None)): operations.add('typing')
         if callable(getattr(outbox,'edit_message',None)): operations.add('edit')
@@ -61,6 +63,8 @@ class TelegramMirrorProvider:
 
     def supports_action(self, action, conversation):
         outbox=getattr(self.service,'telegram_outbox',None)
+        if action=='button_click':
+            return callable(getattr(outbox,'button_click',None)) and callable(getattr(outbox,'prepare_button_click',None))
         if action=='file':return callable(getattr(outbox,'send_file',None))
         if action=='reply':
             supports=getattr(outbox,'supports_reply',None)
@@ -72,6 +76,20 @@ class TelegramMirrorProvider:
         if callable(supports):
             return supports(self.account_ref,str(conversation.get('peer_id') or ''))
         return callable(getattr(outbox,'edit_message',None))
+
+    def prepare_button_click(self, *, conversation, message, row, column, button_text):
+        outbox=getattr(self.service,'telegram_outbox',None)
+        prepare=getattr(outbox,'prepare_button_click',None)
+        if not callable(prepare):
+            raise DeliveryNotSubmittedError('Telegram button preflight route unavailable')
+        if conversation.get('source')!='telegram' or conversation.get('account_ref')!=self.account_ref:
+            raise DeliveryNotSubmittedError('Telegram button conversation identity conflict')
+        messenger=Messenger(self.service._store,self.service,
+            UserPrincipal(self.authorized_user,'telegram-messenger-action','user'))
+        projected=messenger._project(conversation,message)
+        return prepare(account_ref=self.account_ref,peer_id=str(conversation['peer_id']),
+            message_id=str(projected['source']['provider_message_id']),row=row,column=column,
+            button_text=button_text)
 
     def execute_telegram_admin(self, envelope):
         if (envelope.get('action')!='telegram_admin' or envelope.get('channel')!='telegram'
@@ -291,7 +309,7 @@ class TelegramMirrorProvider:
     def execute(self, envelope):
         action=envelope.get('action')
         if (envelope.get('account_ref'), envelope.get('user_id')) != (
-                self.account_ref, self.authorized_user) or action not in {'react','edit','reply','file','typing'}:
+                self.account_ref, self.authorized_user) or action not in {'react','edit','reply','file','typing','button_click'}:
             raise DeliveryNotSubmittedError('Telegram account operation conflict')
         conversation = self.service._store.conversation(
             envelope['conversation_id'], user_id=self.authorized_user)
@@ -362,6 +380,28 @@ class TelegramMirrorProvider:
             return {'account_ref':self.account_ref, 'peer_id':str(envelope['peer_id']),
                 'provider_message_id':str(envelope['source_provider_message_id']),
                 'receipt':result}
+
+        if action=='button_click':
+            click=getattr(outbox,'button_click',None)
+            if not callable(click):
+                raise DeliveryNotSubmittedError('Telegram button route unavailable')
+            p=envelope['payload']
+            result=click(account_ref=self.account_ref,peer_id=str(envelope['peer_id']),
+                message_id=str(envelope['source_provider_message_id']),row=p['row'],column=p['column'],
+                button_text=p['button_text'],callback_data_base64=p['callback_data_base64'],
+                request_id=str(envelope['action_id']))
+            if (not isinstance(result,dict) or result.get('ok') is not True
+                    or result.get('account_id')!=self.account_ref
+                    or str(result.get('peer_id'))!=str(envelope['peer_id'])
+                    or str(result.get('message_id'))!=str(envelope['source_provider_message_id'])
+                    or result.get('button_text')!=p['button_text']
+                    or result.get('row')!=p['row'] or result.get('column')!=p['column']
+                    or result.get('status')!='accepted' or not result.get('provider_receipt')):
+                raise RuntimeError('Telegram button receipt identity conflict')
+            return {'account_ref':self.account_ref,'peer_id':str(envelope['peer_id']),
+                'provider_message_id':str(envelope['source_provider_message_id']),
+                'receipt':result['provider_receipt'],'button_text':p['button_text'],
+                'row':p['row'],'column':p['column'],'callback_answer':result.get('callback_answer')}
 
         if action=='edit':
             if projected['source']['direction']!='outgoing' or projected['text']!=envelope['payload']['expected_text']:

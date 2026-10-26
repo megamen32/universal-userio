@@ -232,6 +232,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.media': 'download',
     'userio.messenger.get': 'read',
     'userio.messenger.safe_action': 'send',
+    'userio.messenger.button_click': 'send',
     'userio.messenger.propose': 'send',
     'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',

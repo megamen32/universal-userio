@@ -443,6 +443,48 @@ class TelegramQrHttpOutbox:
         if not isinstance(result,dict): raise RuntimeError("Telegram admin response is invalid")
         return result
 
+    def _button_call(self, endpoint: str, payload: dict[str, object]) -> dict[str, object]:
+        request=urllib.request.Request(f"{self._base_url}/{endpoint.lstrip('/')}",
+            data=json.dumps(payload).encode(),method='POST',
+            headers={'Content-Type':'application/json','Authorization':f'Bearer {self._token}'})
+        try:
+            with self._runner(request,timeout=self._timeout) as response:
+                result=json.loads(response.read().decode() or '{}')
+        except urllib.error.HTTPError as error:
+            try: body=json.loads(error.read().decode(errors='replace'))
+            except (TypeError,ValueError): body={}
+            if isinstance(body,dict) and body.get('submitted') is False:
+                raise DeliveryNotSubmittedError('Telegram button refused before submission') from error
+            raise RuntimeError('Telegram button outcome may be unknown') from error
+        except (OSError,urllib.error.URLError) as error:
+            raise RuntimeError('Telegram button outcome may be unknown: connector is unreachable') from error
+        if not isinstance(result,dict): raise RuntimeError('Telegram button response is invalid')
+        return result
+
+    def prepare_button_click(self, *, account_ref: str, peer_id: str, message_id: str,
+                             row: int, column: int, button_text: str) -> dict[str, object]:
+        result=self._button_call('/button/prepare',{'account_id':account_ref,'peer_id':peer_id,
+            'message_id':message_id,'row':row,'column':column,'button_text':button_text})
+        if (result.get('ok') is not True or result.get('account_id')!=account_ref
+                or str(result.get('peer_id'))!=peer_id or str(result.get('message_id'))!=message_id
+                or result.get('button_text')!=button_text or not result.get('callback_data_base64')):
+            raise DeliveryNotSubmittedError('Telegram button preflight refused')
+        return result
+
+    def button_click(self, *, account_ref: str, peer_id: str, message_id: str, row: int,
+                     column: int, button_text: str, callback_data_base64: str,
+                     request_id: str) -> dict[str, object]:
+        result=self._button_call('/button',{'account_id':account_ref,'peer_id':peer_id,
+            'message_id':message_id,'row':row,'column':column,'button_text':button_text,
+            'callback_data_base64':callback_data_base64,'request_id':request_id})
+        if (result.get('ok') is not True or result.get('account_id')!=account_ref
+                or str(result.get('peer_id'))!=peer_id or str(result.get('message_id'))!=message_id
+                or result.get('button_text')!=button_text or result.get('row')!=row
+                or result.get('column')!=column or result.get('status')!='accepted'
+                or not result.get('provider_receipt')):
+            raise RuntimeError('Telegram button provider receipt identity conflict')
+        return result
+
     def telegram_admin_prepare(self, *, account_ref: str, operation: str,
                                payload: dict[str, object]) -> dict[str, object]:
         result=self._telegram_admin_call("/admin/prepare",{"account_id":account_ref,

@@ -15,12 +15,12 @@ from .contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequired
 from .source_projection import canonical_author, canonical_source
 
 SCHEMA = 'userio.messenger.v1'
-OPERATIONS = ('read', 'history', 'has_contacted', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing')
+OPERATIONS = ('read', 'history', 'has_contacted', 'download', 'reply', 'edit', 'react', 'sticker', 'file', 'file_upload', 'typing', 'button_click')
 READ_OPERATIONS = frozenset({'read', 'history', 'has_contacted', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
 TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
-SAFE_ACTIONS = frozenset({'react', 'typing'})
+SAFE_ACTIONS = frozenset({'react', 'typing', 'button_click'})
 
 
 def canonical(value) -> bytes:
@@ -406,7 +406,7 @@ class Messenger:
         if not isinstance(payload,dict): raise ValueError('payload_must_be_object')
         keys = {'reply':{'text'},'edit':{'text','expected_text'},'react':{'emoji'},
                 'sticker':{'media_message_id','attachment_index'},'file':{'media_message_id','attachment_index','caption'},
-                'typing':{'active'}}
+                'typing':{'active'},'button_click':{'row','column','button_text','callback_data_base64'}}
         if action=='file' and 'upload_id' in payload:
             if set(payload)-{'upload_id','caption','force_document'} or not isinstance(payload['upload_id'],str) or not re.fullmatch(r'upload_[0-9a-f]{64}',payload['upload_id']):
                 raise ValueError('invalid_upload_payload')
@@ -430,6 +430,18 @@ class Messenger:
             if action=='file' and ('caption' in payload and (not isinstance(payload['caption'],str) or len(payload['caption'])>4096)):
                 raise ValueError('invalid_caption')
         if action=='typing' and type(payload.get('active')) is not bool: raise ValueError('active_boolean_required')
+        if action=='button_click':
+            import base64
+            if (type(payload.get('row')) is not int or not 0<=payload['row']<=99
+                    or type(payload.get('column')) is not int or not 0<=payload['column']<=99
+                    or not isinstance(payload.get('button_text'),str) or not payload['button_text'].strip()
+                    or len(payload['button_text'])>256
+                    or not isinstance(payload.get('callback_data_base64'),str)):
+                raise ValueError('invalid_button_click')
+            try: data=base64.b64decode(payload['callback_data_base64'],validate=True)
+            except (ValueError,base64.binascii.Error): raise ValueError('invalid_callback_data') from None
+            if not data or len(data)>64 or base64.b64encode(data).decode('ascii')!=payload['callback_data_base64']:
+                raise ValueError('invalid_callback_data')
         return dict(payload)
 
     def _binding(self, conv, message_id):
@@ -513,6 +525,55 @@ class Messenger:
             raise ValueError('safe_action_required')
         prepared = self._prepare_action(account_ref, conversation_id, source_message_id, action, payload, request_id)
         return self._execute_action(prepared)
+
+    def click_button(self, account_ref, conversation_id, source_message_id, row, column, button_text, request_id):
+        """Resolve and press one exact visible callback button, once."""
+        if type(row) is not int or not 0 <= row <= 99 or type(column) is not int or not 0 <= column <= 99:
+            raise ValueError('invalid_button_position')
+        if not isinstance(button_text, str) or not button_text.strip() or len(button_text) > 256:
+            raise ValueError('button_text_required')
+        if not isinstance(request_id, str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}', request_id):
+            raise ValueError('request_id_required')
+        self._init_actions()
+        with self.store._lock:
+            old = self.store._connection.execute(
+                'SELECT id,envelope FROM messenger_actions WHERE user_id=? AND request_id=?',
+                (self.user, request_id)).fetchone()
+        intent = {'account_ref':account_ref, 'conversation_id':conversation_id,
+                  'source_message_id':source_message_id, 'row':row, 'column':column,
+                  'button_text':button_text}
+        if old:
+            envelope = json.loads(old['envelope'])
+            prior = {k:envelope[k] for k in ('account_ref','conversation_id','source_message_id') if k in envelope}
+            payload = envelope.get('payload') or {}
+            prior |= {k:payload[k] for k in ('row','column','button_text') if k in payload}
+            if prior != intent or envelope.get('action') != 'button_click':
+                raise ValueError('idempotency_conflict')
+            return self.get(old['id'])
+        if self._account(account_ref)['provider'] != 'telegram':
+            raise PermissionError('telegram_account_required')
+        self._allow(account_ref, 'button_click')
+        conv = self._conversation(account_ref, conversation_id)
+        if conv['source'] != 'telegram' or not self.store.route_allowed(
+                user_id=self.user, source=conv['source'], route_id=conv['route_id']):
+            raise PermissionError('telegram_conversation_not_allowed')
+        msg = self._message(conv, source_message_id)
+        if not self.store.send_enabled(user_id=self.user):
+            raise PermissionError('outbound_delivery_disabled')
+        provider = self._provider(account_ref)
+        prepare = getattr(provider, 'prepare_button_click', None)
+        if not callable(prepare):
+            raise PermissionError('provider_not_supported')
+        resolved = prepare(conversation=conv, message=msg, row=row, column=column,
+                           button_text=button_text)
+        if (not isinstance(resolved, dict) or resolved.get('button_text') != button_text
+                or not isinstance(resolved.get('callback_data_base64'), str)
+                or not resolved['callback_data_base64']):
+            raise RuntimeError('telegram_button_preflight_identity_conflict')
+        payload = {'row':row, 'column':column, 'button_text':button_text,
+                   'callback_data_base64':resolved['callback_data_base64']}
+        return self.safe_action(account_ref, conversation_id, source_message_id,
+                                'button_click', payload, request_id)
 
     def propose(self, account_ref, conversation_id, source_message_id, action, payload, request_id):
         if action in SAFE_ACTIONS:
@@ -807,6 +868,7 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'events': return {'ok':True,**api.events(**arguments)}
         if op == 'upload': return {'ok':True,'upload':api.upload(**arguments)}
         if op == 'safe_action': return {'ok':True,'action':api.safe_action(**arguments)}
+        if op == 'button_click': return {'ok':True,'action':api.click_button(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
         if op == 'telegram_admin.create': return {'ok':True,'action':api.create_telegram(**arguments)}
         if op == 'telegram_admin.propose': return {'ok':True,'action':api.propose_telegram_admin(**arguments)}

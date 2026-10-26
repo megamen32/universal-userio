@@ -89,12 +89,15 @@ base64-режим и оставьте включёнными исходные by
 | `userio.messages.prepare` | Один черновик для готового чата или нового контакта; ничего не отправляет |
 | `userio.contacts.resolve` | Резолв контакта, которого ещё нет в истории, в peer провайдера |
 | `userio.draft.approve_send` | Подтверждение и отправка точного черновика |
+| `userio.messenger.button_click` | Нажать точную видимую callback-кнопку в принадлежащем аккаунту сообщении Telegram; итог и UNKNOWN сверяются по `request_id` |
 | `userio.messenger.telegram_admin.propose` | Предложение создать группу/канал или изменить участников Telegram; исполнение только через отдельное подтверждение |
 | `userio.workspace.policy.*` | Политика автоматической обработки |
 | `userio.workspace.poll` | События для обработчика с явным курсором |
 | `userio.workspace.triage.*` | Настройки разбора и обратная связь |
 
 Таблица является навигатором по инструментам. Полная схема параметров берётся через `tools/list`.
+Правила callback-кнопок, сверки сообщения и запрета повторного UNKNOWN описаны в
+[контракте действий Messenger](../messenger-contract.md#telegram-inline-callback-buttons).
 
 ## Новый контакт: начать переписку
 
