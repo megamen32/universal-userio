@@ -43,9 +43,21 @@ QA_SCOPE_PARTICIPANTS = (
     "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com",
     "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
 )
+# Explicit second fixture: the owner-approved service test bot and fixture B.
+# Both rooms remain exact-pair allowlists; the live member set is still checked
+# immediately before joining.
+QA_SCOPE_BINDINGS = {
+    QA_SCOPE_ROOM: QA_SCOPE_PARTICIPANTS,
+    "!WcdQRAMzHhrxcZzQad:chat.bezrabotnyi.com": (
+        "@aiadmin:chat.bezrabotnyi.com",
+        "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
+    ),
+}
 QA_SCOPE_IDENTITY_MAP = {
     "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com":
         "9b4ab5e7-546e-4df9-a4c9-5c28f850cd26",
+    "@aiadmin:chat.bezrabotnyi.com":
+        "f61b49d0-d33e-4fe7-8bc2-bd395db7307c",
 }
 QA_SCOPE_TTL_SECONDS = 900
 
@@ -59,12 +71,13 @@ def build_qa_scope(caller, room=QA_SCOPE_ROOM, transport=QA_SCOPE_TRANSPORT,
     this QA run are accepted, the caller must be one of them, and the expiry
     is always computed live so a stale scope can never be replayed.
     """
-    if room != QA_SCOPE_ROOM:
+    expected_participants = QA_SCOPE_BINDINGS.get(room)
+    if expected_participants is None:
         raise ValueError("qa_scope_room_not_allowed")
     if transport != QA_SCOPE_TRANSPORT:
         raise ValueError("qa_scope_transport_not_allowed")
     pair = tuple(sorted(str(item) for item in participants))
-    if pair != tuple(sorted(QA_SCOPE_PARTICIPANTS)):
+    if pair != tuple(sorted(expected_participants)):
         raise ValueError("qa_scope_pair_not_allowed")
     if caller not in pair:
         raise ValueError("qa_scope_caller_not_in_pair")
@@ -80,7 +93,8 @@ def build_qa_scope(caller, room=QA_SCOPE_ROOM, transport=QA_SCOPE_TRANSPORT,
             {"room": room, "transport": transport, "promote_guest": True,
              "participants": list(pair), "expires_at": expires_at},
         ],
-        "identity_map": dict(QA_SCOPE_IDENTITY_MAP),
+        "identity_map": {caller: QA_SCOPE_IDENTITY_MAP[caller]}
+            if caller in QA_SCOPE_IDENTITY_MAP else {},
     }
 
 
@@ -141,7 +155,7 @@ def fixture_credentials(alias):
 
 def _fixture_identity_map(document, caller_id):
     """Keep the scoped fixture identity; never bind a test bot to the owner."""
-    allowed = {item["matrix_id"] for item in FIXTURES.values()}
+    allowed = set(QA_SCOPE_IDENTITY_MAP)
     if caller_id not in allowed or not isinstance(document, dict):
         raise PermissionError("fixture_identity_scope_invalid")
     owner_ids = {value for key, value in document.items()
@@ -151,10 +165,18 @@ def _fixture_identity_map(document, caller_id):
     owner_id = next(iter(owner_ids))
     uuid.UUID(owner_id)
     mapping_key = "matrix:" + caller_id
-    scoped_id = document.get(mapping_key)
+    scoped_id = QA_SCOPE_IDENTITY_MAP.get(caller_id)
     if not isinstance(scoped_id, str) or not scoped_id:
         raise PermissionError("fixture_identity_not_scoped")
     uuid.UUID(scoped_id)
+    existing_id = document.get(mapping_key)
+    if existing_id is not None:
+        try:
+            uuid.UUID(str(existing_id))
+        except ValueError:
+            raise PermissionError("fixture_identity_mapping_invalid") from None
+        if existing_id not in {owner_id, scoped_id}:
+            raise PermissionError("fixture_identity_mapping_mismatch")
     if scoped_id == owner_id:
         raise PermissionError("fixture_identity_must_not_be_owner")
     # Deny by default: the owner identity is never reachable through a matrix
@@ -250,9 +272,13 @@ async def run():
         raise ValueError("fixture_room_id_invalid")
     default_caller = FIXTURES["b" if alias == "a" else "a"]["matrix_id"]
     caller_id = str(args.caller_id or default_caller)
-    allowed_callers = {item["matrix_id"] for item in FIXTURES.values()} | {OWNER_MATRIX_ID}
+    allowed_callers = set(QA_SCOPE_IDENTITY_MAP) | {OWNER_MATRIX_ID}
     if caller_id not in allowed_callers or caller_id == fixture["matrix_id"]:
         raise PermissionError("fixture_caller_identity_not_allowed")
+    expected_participants = QA_SCOPE_BINDINGS.get(room_id)
+    if expected_participants is None or set(expected_participants) != {
+            fixture["matrix_id"], caller_id}:
+        raise PermissionError("fixture_room_pair_not_allowed")
     peer = {"matrix_id": caller_id}
     user_id, account_id, account, voice_ai = fixture_credentials(alias)
     homeserver, access = account["homeserver"], account["access_token"]
@@ -265,7 +291,7 @@ async def run():
     members = {event.get("state_key"): event.get("content", {}).get("membership")
                for event in state if event.get("type") == "m.room.member"}
     joined = {member for member, membership in members.items() if membership == "join"}
-    if joined != {fixture["matrix_id"], caller_id}:
+    if joined != set(expected_participants):
         raise PermissionError("fixture_room_membership_changed")
     if any(event.get("type") == "m.room.encryption" for event in state):
         raise ValueError("encrypted_room_not_supported")
@@ -483,7 +509,9 @@ async def run():
         })
         joined_matrix = True
         print(json.dumps({"event": "answered", "voice_call_id": voice_call_id}), flush=True)
-        log_dir = Path("/tmp/lhc-matrixrtc-live-peer")
+        log_dir = Path(os.environ.get(
+            "AGENTCALL_QA_LOG_DIR", "/var/lib/agentcall/qa-matrixrtc-live-peer",
+        ))
         log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         log_path = log_dir / (voice_call_id + ".engine.log")
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -510,7 +538,10 @@ async def run():
                     or context.get("qa_room") != room_id
                     or context.get("voice_transport") != QA_SCOPE_TRANSPORT):
                 raise PermissionError("fixture_qa_binding_mismatch")
-            scope = build_qa_scope(caller_id, room=room_id)
+            scope = build_qa_scope(
+                caller_id, room=room_id,
+                participants=expected_participants,
+            )
             os.environ["AGENTCALL_QA_SCOPE"] = json.dumps(scope, ensure_ascii=False)
             print(json.dumps(qa_scope_readback(scope, QA_SCOPE_TTL_SECONDS)), flush=True)
             secretary_scope = FixtureSecretaryScope(caller_id)
