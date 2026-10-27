@@ -40,7 +40,7 @@ import wave
 from pathlib import Path
 
 DB = "/var/lib/universal-userio/userio.sqlite3"
-ROOM = "!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com"
+ROOM = os.environ.get("CALLER_ROOM", "!ZatzpywRZSemgAaPju:chat.bezrabotnyi.com")
 RTC_URL = os.environ.get("USERIO_MATRIX_RTC_AUTH_URL", "https://rtc.chat.bezrabotnyi.com").rstrip("/")
 MEMBER = "org.matrix.msc3401.call.member"
 RING = "org.matrix.msc4075.rtc.notification"
