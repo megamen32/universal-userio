@@ -24,6 +24,7 @@ ADAPTER_SHA = '486a64879998962f43c090a9a199823e4f9779ba5db20c27b1461d062f820522'
 IMAGE = re.compile(r'ghcr\.io/megamen32/universal-userio-voice@sha256:[a-f0-9]{64}\Z')
 LABEL = 'com.userio.portable-voice'
 STOP_TIMEOUT = 20
+SECRETARY_STATE = '/etc/agentcall-secretary'
 DOCKER_TIMEOUT = 40
 
 
@@ -94,6 +95,13 @@ def create_spec(image, role, config, data, port):
         # The existing backend reaches the typed gateway over this runtime IPC.
         spec['HostConfig']['Binds'].append('/run/agentcall:/run/agentcall')
         del spec['HostConfig']['Tmpfs']['/run/agentcall']
+        # The supervised Secretary transport owns the native app credential and
+        # republishes it on every app-token rotation. A static copy of that
+        # credential dies with the next rotation, so the primary reads the
+        # supervised file itself instead of a private copy of it. The bind is
+        # added only where that protected state actually exists.
+        if Path(SECRETARY_STATE).is_dir():
+            spec['HostConfig']['Binds'].append(SECRETARY_STATE + ':' + SECRETARY_STATE + ':ro')
     return spec
 
 

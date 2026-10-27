@@ -52,6 +52,9 @@ QA_SCOPE_BINDINGS = {
         "@aiadmin:chat.bezrabotnyi.com",
         "@lhc_voice_tester_b_20261021:chat.bezrabotnyi.com",
     ),
+    # Strictly two test bots: no owner, no @aiadmin, no people. The room is
+    # created by fixture A with fixture B as the only invitee.
+    "!vmxuOOunnmTUeuEdvi:chat.bezrabotnyi.com": QA_SCOPE_PARTICIPANTS,
 }
 QA_SCOPE_IDENTITY_MAP = {
     "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com":

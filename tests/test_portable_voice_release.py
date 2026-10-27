@@ -157,3 +157,24 @@ def test_incoming_health_checks_actual_host_gid_and_mode():
     path.gid=163;assert not module.incoming_socket_ready(path,settings)
     path.gid=147;path.mode=0o140666;assert not module.incoming_socket_ready(path,settings)
     assert not module.incoming_socket_ready(path,{'AGENTCALL_INCOMING_SOCKET_GID':'147 '})
+
+
+def test_primary_reads_the_supervised_secretary_credential_and_standby_never(monkeypatch,tmp_path):
+    """The app credential rotates; a private copy of it dies with the rotation."""
+    module=load()
+    state=tmp_path/'agentcall-secretary'
+    state.mkdir()
+    monkeypatch.setattr(module,'SECRETARY_STATE',str(state))
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert f'{state}:{state}:ro' in primary['HostConfig']['Binds']
+    standby=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
+    assert f'{state}:{state}:ro' not in standby['HostConfig']['Binds']
+
+
+def test_primary_keeps_its_binds_when_no_supervised_state_exists(monkeypatch,tmp_path):
+    """A host without the supervised transport keeps exactly the previous binds."""
+    module=load()
+    missing=tmp_path/'absent'
+    monkeypatch.setattr(module,'SECRETARY_STATE',str(missing))
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
