@@ -62,6 +62,9 @@ SCRIPT_WAVS = [item for item in os.environ.get("CALLER_SCRIPT_WAVS", "").split("
 SCRIPT_QUIET_SECONDS = float(os.environ.get("CALLER_SCRIPT_QUIET_SECONDS", "4") or "4")
 # The form of a real client: the call membership of the caller and no ring.
 CALLER_CLIENT_FORM = os.environ.get("CALLER_CLIENT_FORM", "") not in ("", "0", "false")
+# The canary caller is a listener: it must not end the call because its own
+# recognition of the callee was late. The Secretary may need a minute to think.
+CALLER_IDLE_TIMEOUT_SECONDS = float(os.environ.get("CALLER_IDLE_TIMEOUT_SECONDS", "150") or "150")
 # The fixed second question, served by the local LLM stub of the canary.
 SECOND_PHRASE = ("Проверь, что означает код пять ноль два в ответе наблюдателя "
                  "безработный точка ком, и назови первую проверку.")
@@ -154,6 +157,7 @@ async def run():
 
     config = voice_config_for_request(
         server_voice_config(voice.BackendConfig.from_environment()), None)
+    config = voice.replace(config, idle_timeout_seconds=CALLER_IDLE_TIMEOUT_SECONDS)
     # The first phrase is fixed TTS; the second turn is served by the local
     # fixed-phrase stub, so no LLM ever rewrites the caller's own question.
     first_pcm, first_rate = _load_wav(FIRST_WAV)
