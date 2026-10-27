@@ -428,3 +428,121 @@ def test_the_transport_receipt_follows_the_broker_contract():
         assert empty["callId"] == "c2"
 
     asyncio.run(check())
+
+
+def test_a_setup_failure_clears_the_call_member_and_disconnects(monkeypatch):
+    """A failure after the membership is published must not leave it behind."""
+    import types
+
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+
+    class Participant:
+        async def publish_track(self, track, options):
+            return None
+
+    class Room:
+        def __init__(self):
+            self.disconnected = False
+            self.local_participant = Participant()
+
+        async def connect(self, url, jwt, options):
+            return None
+
+        async def disconnect(self):
+            self.disconnected = True
+
+        def on(self, event):
+            return lambda function: function
+
+    class Source:
+        async def wait_for_playout(self):
+            return None
+
+        async def aclose(self):
+            return None
+
+    class AudioSource:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class LocalAudioTrack:
+        @staticmethod
+        def create_audio_track(name, source):
+            return object()
+
+    class TrackPublishOptions:
+        def __init__(self, source=None):
+            pass
+
+    class TrackSource:
+        SOURCE_MICROPHONE = "microphone"
+
+    class RoomOptions:
+        def __init__(self, connect_timeout=15):
+            pass
+
+    rooms = []
+
+    class TrackedRoom(Room):
+        def __init__(self):
+            super().__init__()
+            rooms.append(self)
+
+    livekit = types.ModuleType("livekit")
+    livekit.rtc = types.SimpleNamespace(
+        Room=TrackedRoom, AudioSource=AudioSource, LocalAudioTrack=LocalAudioTrack,
+        TrackPublishOptions=TrackPublishOptions, TrackSource=TrackSource, RoomOptions=RoomOptions)
+    monkeypatch.setitem(sys.modules, "livekit", livekit)
+
+    class BrokenPipeline:
+        def __init__(self, config):
+            pass
+
+        def synthesize(self, text):
+            raise RuntimeError("speech synthesis failed")
+
+    monkeypatch.setattr(worker, "LocalSpeechPipeline", BrokenPipeline)
+
+    requests = []
+
+    def fake_request(server, token, method, path, payload=None):
+        requests.append((method, path, payload))
+        if path.endswith("/_matrix/client/v3/devices"):
+            return {"devices": [{"device_id": "DEV"}]}
+        if path.endswith("/state"):
+            return [{"type": "m.room.member", "state_key": "@aiadmin:chat.bezrabotnyi.com",
+                     "content": {"membership": "join"}},
+                    {"type": "m.room.member", "state_key": CALLER,
+                     "content": {"membership": "join"}}]
+        if path.endswith("/sfu/get"):
+            return {"url": "wss://rtc.example", "jwt": "jwt"}
+        return {}
+
+    monkeypatch.setattr(worker, "_request", fake_request)
+
+    request = {
+        "call": {"room_id": "!room:chat.bezrabotnyi.com", "caller": CALLER,
+                 "focus": {"type": "livekit", "livekit_service_url": "https://rtc.example/sfu/get"},
+                 "expires_ms": 240000, "max_seconds": 120},
+        "account": {"id": "matrix:1", "homeserver": "https://matrix.example",
+                    "access_token": "t", "matrix_user_id": "@aiadmin:chat.bezrabotnyi.com"},
+        "identity": {"device_id": "DEV"},
+        "rtc_auth_url": "https://rtc.example/sfu/get",
+    }
+
+    async def check():
+        with pytest.raises(RuntimeError):
+            await worker.answer_incoming_call(request, bridge.BackendConfig.from_environment(),
+                                             broker=None, writer=None,
+                                             identities={"matrix:" + CALLER: OWNER})
+
+    asyncio.run(check())
+    # The published membership is cleared and the room is disconnected.
+    published = [item for item in requests
+                 if item[0] == "PUT" and isinstance(item[2], dict) and item[2]]
+    cleared = [item for item in requests
+               if item[0] == "PUT" and isinstance(item[2], dict) and not item[2]]
+    assert published, "the membership was published"
+    assert cleared, "the membership was cleared"
+    assert rooms and rooms[0].disconnected

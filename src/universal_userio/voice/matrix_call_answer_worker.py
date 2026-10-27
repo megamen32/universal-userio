@@ -305,41 +305,44 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
             media_tasks.add(task)
             task.add_done_callback(media_tasks.discard)
 
-    await room.connect(sfu["url"], sfu["jwt"], rtc.RoomOptions(connect_timeout=15))
-    # The membership is published only after the media is ready, so a failed
-    # setup never leaves a stale call member behind.
-    _request(server, token, "PUT", membership_path, content)
-    published = True
-    await room.local_participant.publish_track(
-        rtc.LocalAudioTrack.create_audio_track("UserIO Secretary", source),
-        rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-    )
-
-    pipeline = LocalSpeechPipeline(config)
-    greeting_pcm, attention_pcm = await asyncio.gather(
-        asyncio.to_thread(pipeline.synthesize, "Здравствуйте. Я голосовой секретарь. Слушаю вас."),
-        asyncio.to_thread(pipeline.synthesize, config.attention_prompt),
-    )
-    prepared = PreparedCall(
-        "Здравствуйте. Я голосовой секретарь. Слушаю вас.", greeting_pcm,
-        config.attention_prompt, attention_pcm,
-        "Владелец звонит личному помощнику через Matrix. Выясни его задачу, не предполагай цель звонка.",
-        {"call_mode": "incoming", "voice_transport": "matrix", "voice_target": caller},
-        time.time(), load_wait_prompts(),
-        account_ref=str(account.get("id") or ""), peer_ref=room_id, peer_label=caller,
-        host_answered_incoming=True,
-    )
     control_broker = _ControlBroker(broker, writer)
     # The engine expects the call id as the first audio frame.
     engine_call_id = str(call.get("engine_call_id") or uuid.uuid4())
-    audio_reader.feed_data(pack_audiosocket_frame(UUID_KIND, uuid.UUID(engine_call_id).bytes))
-    # The call id is the first frame of the reader; only now may the incoming
-    # audio follow it.
-    transport_ready.set()
     max_seconds = int(call.get("max_seconds") or 120)
     if not 30 <= max_seconds <= 600:
         max_seconds = 120
     try:
+        # The whole setup belongs to the cleanup: a failure after the
+        # membership is published must not leave a stale call member, a
+        # connected room or a running capture behind.
+        await room.connect(sfu["url"], sfu["jwt"], rtc.RoomOptions(connect_timeout=15))
+        # The membership is published only after the media is ready, so a failed
+        # setup never leaves a stale call member behind.
+        _request(server, token, "PUT", membership_path, content)
+        published = True
+        await room.local_participant.publish_track(
+            rtc.LocalAudioTrack.create_audio_track("UserIO Secretary", source),
+            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+        )
+
+        pipeline = LocalSpeechPipeline(config)
+        greeting_pcm, attention_pcm = await asyncio.gather(
+            asyncio.to_thread(pipeline.synthesize, "Здравствуйте. Я голосовой секретарь. Слушаю вас."),
+            asyncio.to_thread(pipeline.synthesize, config.attention_prompt),
+        )
+        prepared = PreparedCall(
+            "Здравствуйте. Я голосовой секретарь. Слушаю вас.", greeting_pcm,
+            config.attention_prompt, attention_pcm,
+            "Владелец звонит личному помощнику через Matrix. Выясни его задачу, не предполагай цель звонка.",
+            {"call_mode": "incoming", "voice_transport": "matrix", "voice_target": caller},
+            time.time(), load_wait_prompts(),
+            account_ref=str(account.get("id") or ""), peer_ref=room_id, peer_label=caller,
+            host_answered_incoming=True,
+        )
+        audio_reader.feed_data(pack_audiosocket_frame(UUID_KIND, uuid.UUID(engine_call_id).bytes))
+        # The call id is the first frame of the reader; only now may the incoming
+        # audio follow it.
+        transport_ready.set()
         await asyncio.wait_for(
             handle_call(
                 audio_reader, _RtcWriter(source, stopped), control_broker, config,
@@ -356,6 +359,12 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
                 _request(server, token, "PUT", membership_path, {})
             except Exception:
                 pass
-        await room.disconnect()
-        await source.aclose()
+        try:
+            await room.disconnect()
+        except Exception:
+            pass
+        try:
+            await source.aclose()
+        except Exception:
+            pass
     return transport_receipt(control_broker, person, engine_call_id)
