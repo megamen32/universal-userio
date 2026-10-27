@@ -208,3 +208,22 @@ def test_primary_keeps_its_binds_without_a_fast_agent_home(monkeypatch,tmp_path)
     monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent-secretary'))
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
     assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
+
+
+def test_primary_mounts_the_fast_agent_tool_and_its_interpreter(monkeypatch,tmp_path):
+    """The incident worker is a host tool; the primary needs its environment."""
+    module=load()
+    tool=tmp_path/'fast-agent-mcp'
+    tool.mkdir()
+    python_home=tmp_path/'uv-python'
+    python_home.mkdir()
+    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent-home'))
+    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
+    monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent-secretary'))
+    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tool))
+    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(python_home))
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert f'{tool}:{tool}:ro' in primary['HostConfig']['Binds']
+    assert f'{python_home}:{python_home}:ro' in primary['HostConfig']['Binds']
+    standby=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
+    assert f'{tool}:{tool}:ro' not in standby['HostConfig']['Binds']

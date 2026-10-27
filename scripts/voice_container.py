@@ -28,6 +28,9 @@ SECRETARY_STATE = '/etc/agentcall-secretary'
 # The incident brain runs from the deployed fast agent home of this host.
 FAST_AGENT_HOME = '/usr/local/lib/agentcall/fast-agent-home'
 FAST_AGENT_STATE = '/var/lib/noticeplace-phone'
+# The incident brain runs from the deployed fast agent tool of this host.
+FAST_AGENT_TOOL = '/home/roomhacker/.local/share/uv/tools/fast-agent-mcp'
+FAST_AGENT_PYTHON_HOME = '/home/roomhacker/.local/share/uv/python'
 DOCKER_TIMEOUT = 40
 
 
@@ -112,6 +115,13 @@ def create_spec(image, role, config, data, port):
             spec['HostConfig']['Binds'].append(FAST_AGENT_HOME + ':' + FAST_AGENT_HOME + ':ro')
             if Path(FAST_AGENT_STATE).is_dir():
                 spec['HostConfig']['Binds'].append(FAST_AGENT_STATE + ':' + FAST_AGENT_STATE + ':rw')
+        # The worker itself is a host tool: without its environment and its
+        # interpreter the incidents mode cannot start at all.
+        if Path(FAST_AGENT_TOOL).is_dir():
+            spec['HostConfig']['Binds'].append(FAST_AGENT_TOOL + ':' + FAST_AGENT_TOOL + ':ro')
+            if Path(FAST_AGENT_PYTHON_HOME).is_dir():
+                spec['HostConfig']['Binds'].append(
+                    FAST_AGENT_PYTHON_HOME + ':' + FAST_AGENT_PYTHON_HOME + ':ro')
     return spec
 
 
