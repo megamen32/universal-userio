@@ -198,3 +198,44 @@ def test_the_local_contract_from_the_request_to_the_engine_prepared_call():
     assert str(uuid_module.UUID(bytes=payload)) in prepared
     # And the request never carries a person: the voice host resolves it.
     assert "person" not in request["call"]
+
+
+def test_the_control_broker_reads_the_real_safe_event_contract():
+    """The engine emits safe_event: the name in 'event', the text in 'text'."""
+    import asyncio
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+
+    class Inner:
+        def __init__(self):
+            self.events = []
+
+        async def accept(self, reader, writer):
+            return None
+
+        async def emit(self, event):
+            self.events.append(event)
+
+    async def check():
+        inner = Inner()
+        broker = worker._ControlBroker(inner, None)
+        # The greeting arrives first, then the answer of the Secretary.
+        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
+                                           text="Здравствуйте. Я голосовой секретарь."))
+        assert broker.answer == ""
+        assert broker.answered is False
+        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
+                                           text="Здравствуйте! Я веду ваши личные дела."))
+        assert broker.answered is True
+        assert broker.answer == "Здравствуйте! Я веду ваши личные дела."
+        # A progress phrase is never the answer.
+        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
+                                           text="Секунду, пожалуйста.", phase="progress"))
+        assert broker.answer == "Здравствуйте! Я веду ваши личные дела."
+        # The remote side is never the answer either.
+        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="remote",
+                                           text="Алло?"))
+        assert broker.answer == "Здравствуйте! Я веду ваши личные дела."
+        assert len(inner.events) == 4
+
+    asyncio.run(check())
