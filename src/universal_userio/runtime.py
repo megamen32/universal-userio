@@ -248,6 +248,21 @@ def main() -> None:
     from .account_connections import UserAccountPoller
     connected_poller = UserAccountPoller(service)
     connected_poller.start()
+    # The connected-account lifecycle also owns the inbound Matrix call intake:
+    # an incoming call for an allowed account is answered on the voice host.
+    inbound_calls = None
+    allowed_accounts = tuple(
+        item.strip() for item in
+        (environment.get("USERIO_MATRIX_INBOUND_ACCOUNTS", "") or "").split(",") if item.strip())
+    if allowed_accounts:
+        from .matrix_inbound_calls import MatrixInboundCallWorker
+        inbound_calls = MatrixInboundCallWorker(
+            service,
+            allowed_accounts=allowed_accounts,
+            rtc_auth_url=environment.get("USERIO_MATRIX_RTC_AUTH_URL", ""),
+            call_root=environment.get("USERIO_MATRIX_INBOUND_CALL_ROOT", "/var/lib/universal-userio/matrix-calls"),
+        )
+        inbound_calls.start()
     telegram_delivery_reconciliation = TelegramDeliveryReconciliationWorker(
         service,
         interval_seconds=float(environment.get("USERIO_TELEGRAM_DELIVERY_RECONCILE_POLL_SECONDS", "5") or "5"),
@@ -268,6 +283,8 @@ def main() -> None:
         webhook_delivery.close()
         telegram_delivery_reconciliation.close()
         connected_poller.stop.set()
+        if inbound_calls is not None:
+            inbound_calls.stop.set()
         server.RequestHandlerClass.max_connections.close()
         with service._max_owned_lock:
             for _ref, client in service._max_owned_clients.values():

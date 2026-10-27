@@ -2632,6 +2632,9 @@ class CallController:
             if request.get('action') == 'matrix_transport':
                 await self.stream_matrix_transport(request, reader, writer)
                 return
+            if request.get('action') == 'matrix_answer_transport':
+                await self.stream_matrix_answer_transport(request, reader, writer)
+                return
             if request.get('action') == 'telegram_transport':
                 await self.stream_telegram_transport(request, reader, writer)
                 return
@@ -2709,6 +2712,35 @@ class CallController:
             writer.close()
             try: await writer.wait_closed()
             except (BrokenPipeError, ConnectionResetError): pass
+
+    async def stream_matrix_answer_transport(self, request, reader, writer):
+        """Answer one admitted incoming Matrix call with the Secretary SDK.
+
+        The runtime detected the call and handed it over this private control
+        stream. This host answers as the called account, joins the call and
+        runs the existing Secretary brain; the terminal receipt goes back to
+        the runtime. No dialing, no second caller, no incident context.
+        """
+        if getattr(self, '_matrix_transport_busy', False) or getattr(self, '_telegram_transport_busy', False):
+            raise RuntimeError('a voice transport is already active')
+        self._matrix_transport_busy = True
+        try:
+            from .matrix_call_answer_worker import answer_incoming_call
+            receipt = await answer_incoming_call(
+                request, self.config, broker=EventBroker(Path('/run/agentcall/gatewayd.sock')),
+                writer=writer)
+            writer.write((json.dumps(receipt, ensure_ascii=False) + '\n').encode())
+            await writer.drain()
+        except Exception as error:
+            writer.write((json.dumps({'type': 'error', 'error': type(error).__name__}) + '\n').encode())
+            await writer.drain()
+        finally:
+            self._matrix_transport_busy = False
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     async def stream_telegram_transport(self, request, reader, writer):
         """Fixed native Telegram worker, bidirectional private JSONL control.
