@@ -36,6 +36,17 @@ MEMBER = "org.matrix.msc3401.call.member"
 CALLEE_ACTION = "matrix_answer_transport"
 
 
+def server_voice_config(config):
+    """Matrix never needs a device: reuse the deployed server speech profile.
+
+    The voice host may run the telephone profile, whose synthesis needs the
+    physical phone. Matrix calls must never depend on that device, so the
+    existing Matrix transport profile is applied before anything is spoken.
+    """
+    from ..matrix_call_worker import server_voice_config as existing_profile
+    return existing_profile(config)
+
+
 def _request(server: str, token: str, method: str, path: str, payload=None) -> Any:
     body = None if payload is None else json.dumps(payload).encode()
     headers = {"Authorization": "Bearer " + token}
@@ -153,6 +164,10 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
                                identities: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Answer the admitted call, run the Secretary and return the terminal receipt."""
     from livekit import rtc
+
+    # The speech profile is fixed before the greeting and the conversation:
+    # a Matrix call never waits for the telephone device.
+    config = server_voice_config(config)
 
     call = dict(request.get("call") or {})
     account = dict(request.get("account") or {})

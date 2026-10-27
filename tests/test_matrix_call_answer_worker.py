@@ -237,3 +237,28 @@ def test_the_control_broker_reads_the_real_safe_event_contract():
         assert len(inner.events) == 4
 
     asyncio.run(check())
+
+
+def test_the_answer_leg_uses_the_server_speech_profile():
+    """A Matrix call must never wait for the telephone device.
+
+    The voice host may run the telephone profile, whose synthesis needs the
+    physical phone. The callee leg reuses the existing Matrix transport
+    profile, so the greeting and the conversation both speak on the server.
+    """
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+    transport = load("matrix_call_worker", "universal_userio.matrix_call_worker")
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+
+    telephone = bridge.BackendConfig.from_environment()
+    telephone = bridge.replace(telephone, tts_provider='android-phone',
+                                tts_engine='silero',
+                                tts_url='http://127.0.0.1:30802/synthesize')
+    server = worker.server_voice_config(telephone)
+    # The same existing profile the working Matrix caller uses.
+    assert server == transport.server_voice_config(telephone)
+    assert server.tts_provider == 'qwen-warm'
+    assert server.tts_engine == 'silero'
+    assert server.tts_url == 'http://127.0.0.1:30802/synthesize'
+    # A server profile stays untouched.
+    assert worker.server_voice_config(server) == server
