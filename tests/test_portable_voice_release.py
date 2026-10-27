@@ -66,8 +66,10 @@ def test_image_wires_fixed_matrix_and_fastagent_interpreters():
     assert module.runtime_environment({})['AGENTCALL_FAST_AGENT_BIN']=='/usr/local/bin/fast-agent'
 
 
-def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch):
+def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch,tmp_path):
     module=load();calls=[]
+    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent-home'))
+    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
     image_id='sha256:'+'c'*64
     def api(method,path,*args,**kwargs):
         calls.append((method,path))
@@ -176,6 +178,8 @@ def test_primary_keeps_its_binds_when_no_supervised_state_exists(monkeypatch,tmp
     module=load()
     missing=tmp_path/'absent'
     monkeypatch.setattr(module,'SECRETARY_STATE',str(missing))
+    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(missing))
+    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(missing))
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
     assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
 

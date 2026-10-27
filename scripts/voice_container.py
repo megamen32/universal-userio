@@ -105,13 +105,13 @@ def create_spec(image, role, config, data, port):
         # added only where that protected state actually exists.
         if Path(SECRETARY_STATE).is_dir():
             spec['HostConfig']['Binds'].append(SECRETARY_STATE + ':' + SECRETARY_STATE + ':ro')
-    # The incident brain of the voice host reads its config from the deployed
-    # fast agent home and keeps its sessions in the host state. Without these
-    # the incidents mode cannot run a turn on this host.
-    if Path(FAST_AGENT_HOME).is_dir():
-        spec['HostConfig']['Binds'].append(FAST_AGENT_HOME + ':' + FAST_AGENT_HOME + ':ro')
-        if Path(FAST_AGENT_STATE).is_dir():
-            spec['HostConfig']['Binds'].append(FAST_AGENT_STATE + ':' + FAST_AGENT_STATE + ':rw')
+        # The incident brain of the voice host reads its config from the
+        # deployed fast agent home and keeps its sessions in the host state.
+        # Without these the incidents mode cannot run a turn on this host.
+        if Path(FAST_AGENT_HOME).is_dir():
+            spec['HostConfig']['Binds'].append(FAST_AGENT_HOME + ':' + FAST_AGENT_HOME + ':ro')
+            if Path(FAST_AGENT_STATE).is_dir():
+                spec['HostConfig']['Binds'].append(FAST_AGENT_STATE + ':' + FAST_AGENT_STATE + ':rw')
     return spec
 
 
