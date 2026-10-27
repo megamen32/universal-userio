@@ -574,7 +574,7 @@ def test_every_mcp_server_of_the_worker_keeps_the_module_path():
     servers = settings["mcp"]["servers"]
     python_path = bridge.worker_environment("key")["PYTHONPATH"]
     worker.server_environments(servers, python_path)
-    # The command servers carry the module path; the http server is untouched.
+    # The dependent server carries the module path; the others are untouched.
     assert servers["agentcall"]["env"]["PYTHONPATH"] == python_path
     assert servers["agentcall"]["env"]["HERDER"] == "x"
     assert "env" not in servers["AgentHerder"]

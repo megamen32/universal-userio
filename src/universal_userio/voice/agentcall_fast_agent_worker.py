@@ -130,23 +130,22 @@ def private_path(value):
     return path
 
 
-async def server_environments(servers, python_path):
-    """Give every MCP server of the worker the module path of this package.
+def server_environments(servers, python_path):
+    """Give the dependent MCP server the module path of this package.
 
-    The servers are started with their own environment only; without the
-    module path the server dies before its first answer and the incidents turn
-    ends as an unknown outcome.
+    The servers are started with their own environment only. The agentcall
+    server imports the UserIO voice package, so without the module path it
+    dies before its first answer and the incidents turn ends as unknown.
     """
-    for name, server in list(servers.items()):
-        if not isinstance(server, dict) or 'command' not in server:
-            continue
+    server = servers.get('agentcall')
+    if isinstance(server, dict) and 'command' in server:
         environment = dict(server.get('env') or {})
         environment.setdefault('PYTHONPATH', python_path)
         server['env'] = environment
     return servers
 
 
-def serve(wire):
+async def serve(wire):
     from fast_agent.core.fastagent import FastAgent
     from fast_agent.mcp.prompt_serialization import load_messages, to_json_bytes
     from fast_agent.types import RequestParams
