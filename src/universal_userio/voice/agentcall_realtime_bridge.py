@@ -571,8 +571,7 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                 with os.fdopen(fd,'w') as handle:handle.write(content)
             entry=Path(self.config.fast_agent_bin).read_text().splitlines()
             python=entry[0][2:].strip() if entry and entry[0].startswith('#!/') else self.config.fast_agent_python
-            environment={'PATH':os.environ.get('PATH','/usr/local/bin:/usr/bin:/bin'),'HOME':'/root',
-                         'LANG':os.environ.get('LANG','C.UTF-8'),'GENERIC_API_KEY':api_key}
+            environment=worker_environment(api_key)
             started=time.monotonic()
             try:
                 self._worker=VoiceWorker(python,{'config':str(config),'card':str(card),'home':self.config.fast_agent_home,

@@ -557,3 +557,7 @@ def test_the_incident_worker_environment_carries_the_module_path():
     # The child processes of the worker import the voice package by path.
     assert "PYTHONPATH" in environment
     assert "PATH" in environment and "LANG" in environment
+    # The worker is really created with this environment.
+    bridge_source = (ROOT / "src/universal_userio/voice/agentcall_realtime_bridge.py").read_text(
+        encoding="utf-8")
+    assert "environment=worker_environment(api_key)" in bridge_source
