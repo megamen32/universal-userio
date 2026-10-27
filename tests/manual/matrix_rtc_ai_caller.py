@@ -110,6 +110,19 @@ def _caller_credentials():
     return str(user["id"]), str(account["id"]), secret
 
 
+def write_wav(path: str, pcm) -> None:
+    """Write the speech of the fixture with the rate of the audio itself.
+
+    The synthesizer returns its own rate; a header with another rate plays the
+    speech faster and the recognizer returns nothing.
+    """
+    with wave.open(path, "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(int(pcm.sample_rate))
+        target.writeframes(bytes(pcm))
+
+
 def _load_wav(path: str):
     """Read a mono PCM16 WAV into native engine PCM."""
     with wave.open(path, "rb") as source:
