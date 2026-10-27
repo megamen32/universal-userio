@@ -70,6 +70,8 @@ def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch,tmp_path):
     module=load();calls=[]
     monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent-home'))
     monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
+    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tmp_path/'absent-tool'))
+    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(tmp_path/'absent-python'))
     image_id='sha256:'+'c'*64
     def api(method,path,*args,**kwargs):
         calls.append((method,path))
@@ -225,6 +227,8 @@ def test_primary_mounts_the_fast_agent_tool_and_its_interpreter(monkeypatch,tmp_
     python_home.mkdir()
     monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent-home'))
     monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
+    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tmp_path/'absent-tool'))
+    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(tmp_path/'absent-python'))
     monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent-secretary'))
     monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tool))
     monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(python_home))
