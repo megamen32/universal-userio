@@ -116,10 +116,20 @@ class MatrixCallReader:
             raise RuntimeError("invalid Matrix joined members response")
         return tuple(sorted(str(key) for key in members))
 
-    def _call_members(self, room_id: str, room: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-        """The call memberships of the room: the delta first, the room state after.
+    def _event(self, room_id: str, event_id: str) -> Mapping[str, Any]:
+        """Read one room event by its identifier."""
+        request = urllib.request.Request(
+            self.homeserver + "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
+            + "/event/" + urllib.parse.quote(event_id, safe=""),
+            headers={"Authorization": "Bearer " + self.token})
+        with self.runner(request, timeout=20) as response:
+            data = json.loads(response.read())
+        return data if isinstance(data, dict) else {}
 
-        A call membership is a state event. It is published before the ring, so
+    def _call_members(self, room_id: str, room: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+        """The call memberships of the room: the delta plus the room state.
+
+        A call membership is a state event and is published before the ring, so
         it is usually not part of the delta that carries the ring; the room
         state is the persistent source of the member set.
         """
@@ -129,8 +139,6 @@ class MatrixCallReader:
         for event in events:
             if isinstance(event, dict) and event.get("type") == MEMBER:
                 members[str(event.get("state_key") or "")] = event
-        if members:
-            return members
         request = urllib.request.Request(
             self.homeserver + "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
             + "/state", headers={"Authorization": "Bearer " + self.token})
@@ -140,6 +148,28 @@ class MatrixCallReader:
             if isinstance(event, dict) and event.get("type") == MEMBER:
                 members[str(event.get("state_key") or "")] = event
         return members
+
+    def _call_member(self, room_id: str, room: Mapping[str, Any],
+                     ring: Mapping[str, Any], caller: str) -> Mapping[str, Any] | None:
+        """The call membership of this ring.
+
+        The ring references its own membership event, and that exact event is
+        the call of this ring. The room state is the fallback for a ring
+        without a reference; the newest membership of the caller wins.
+        """
+        relates = (ring.get("content") or {}).get("m.relates_to") or {}
+        event_id = str(relates.get("event_id") or "")
+        if event_id:
+            event = self._event(room_id, event_id)
+            if event.get("type") == MEMBER and str(event.get("sender") or "") == caller:
+                return event
+        members = self._call_members(room_id, room)
+        return next((value for key, value in sorted(
+            members.items(),
+            key=lambda item: int(item[1].get("origin_server_ts") or 0),
+            reverse=True)
+            if key.startswith("_" + caller + "_")
+            and str(value.get("sender") or "") == caller), None)
 
     def poll(self, cursor: str | None, *, limit: int = DEFAULT_LIMIT) -> tuple[list[InboundMatrixCall], str]:
         query = {"timeout": "0", "filter": json.dumps({"types": [MEMBER, RING]}, separators=(",", ":"))}
@@ -169,18 +199,12 @@ class MatrixCallReader:
                     rings.append(event)
             if not rings:
                 continue
-            members = self._call_members(room_id, room)
             joined = self._joined_members(room_id, room)
             for ring in rings:
                 # The call notification names the caller; the call membership
                 # belongs to that same caller and to no one else.
                 caller = str(ring.get("sender") or "")
-                member = next((value for key, value in sorted(
-                    members.items(),
-                    key=lambda item: int(item[1].get("origin_server_ts") or 0),
-                    reverse=True)
-                    if key.startswith("_" + caller + "_")
-                    and str(value.get("sender") or "") == caller), None)
+                member = self._call_member(room_id, room, ring, caller)
                 if member is None:
                     continue
                 content = member.get("content") or {}

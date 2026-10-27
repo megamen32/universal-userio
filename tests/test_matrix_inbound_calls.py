@@ -346,3 +346,89 @@ def test_the_reader_finds_the_call_membership_in_the_room_state():
     assert call.caller == CALLER
     assert call.focus["livekit_service_url"] == "https://rtc.example/sfu/get"
     assert call.joined == tuple(sorted((OWN, CALLER)))
+
+
+def test_the_reader_answers_a_ring_that_arrives_after_its_call_membership():
+    """The call membership and the ring need not arrive in the same batch.
+
+    The membership is a state event published before the ring, so a sync may
+    carry it in one batch and the ring in the next one. The ring references
+    its own membership event, so the reader resolves the exact membership of
+    that ring instead of dropping it with the batch that carried it.
+    """
+    module = load()
+    member_event = {
+        "type": "org.matrix.msc3401.call.member", "event_id": "$m1",
+        "state_key": "_" + CALLER + "_DEV_m.call", "sender": CALLER,
+        "origin_server_ts": 1700000000000,
+        "content": {"call_id": "mcall1", "expires": 240000,
+                    "membershipID": "session-1",
+                    "foci_preferred": [{"type": "livekit",
+                                        "livekit_service_url": "https://rtc.example/sfu/get"}]},
+    }
+    ring_event = {
+        "type": "org.matrix.msc4075.rtc.notification", "event_id": "$r1",
+        "sender": CALLER, "origin_server_ts": 1700000001000,
+        "content": {"m.mentions": {"user_ids": [OWN]},
+                    "m.relates_to": {"event_id": "$m1", "rel_type": "m.reference"},
+                    "notification_type": "ring"},
+    }
+    room_state = [
+        {"type": "m.room.member", "state_key": OWN, "sender": OWN,
+         "content": {"membership": "join"}},
+        {"type": "m.room.member", "state_key": CALLER, "sender": CALLER,
+         "content": {"membership": "join"}},
+    ]
+    batches = {
+        "s1": {"next_batch": "s2", "rooms": {"join": {ROOM: {
+            "timeline": {"events": [member_event]}, "state": {"events": room_state}}}}},
+        "s2": {"next_batch": "s3", "rooms": {"join": {ROOM: {
+            "timeline": {"events": [ring_event]}, "state": {"events": room_state}}}}},
+    }
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def runner(request, timeout):
+        url = request.full_url
+        if "/sync" in url:
+            since = "s1" if "since=s0" in url else "s2"
+            return Response(batches[since])
+        if "/event/" in url:
+            return Response(member_event)
+        if url.endswith("/state"):
+            return Response(room_state)
+        return Response({"joined": {OWN: {}, CALLER: {}}})
+
+    reader = module.MatrixCallReader("https://matrix.example", "t", OWN, runner=runner)
+    # The first batch carries the membership only: no call yet.
+    first, cursor = reader.poll("s0")
+    assert first == []
+    assert cursor == "s2"
+    # The ring arrives in the next batch and resolves its own membership.
+    calls, cursor = reader.poll(cursor)
+    assert cursor == "s3"
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.room_id == ROOM
+    assert call.caller == CALLER
+    assert call.call_id == "mcall1"
+    assert call.membership_id == "session-1"
+    assert call.caller_device == "DEV"
+    assert call.focus["livekit_service_url"] == "https://rtc.example/sfu/get"
+    assert call.joined == tuple(sorted((OWN, CALLER)))
+    # The call is admitted inside its own lifetime.
+    assert module.admit_call(call, own_user_id=OWN, allowed_accounts=(OWN,),
+                             now=1700000001) is None
+    assert module.admit_call(call, own_user_id=OWN, allowed_accounts=(OWN,),
+                             now=1700000242) == "call_expired"
