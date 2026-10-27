@@ -183,8 +183,11 @@ async def run():
     question_seconds = len(first_pcm) / (2 * (first_rate or 48000))
     if CALLER_QUESTION_SECONDS:
         question_seconds = CALLER_QUESTION_SECONDS
-    attention_pcm = bytes(await asyncio.to_thread(
-        voice.LocalSpeechPipeline(config).synthesize, config.attention_prompt))
+    # The host engine plays the attention prompt before the greeting, so a
+    # non-empty attention would consume the outbound gate of the caller and
+    # cut the question itself. The canary caller asks and then only listens.
+    attention_pcm = b''
+    attention_text = ''
     if first_rate != 48000:
         first_pcm, _ = voice.resample_pcm16(first_pcm, first_rate, 48000, None)
 
@@ -192,7 +195,7 @@ async def run():
     prepared_call = voice.PreparedCall(
         greeting_text=FIRST_PHRASE,
         greeting_pcm=voice.SpeechPCM(first_pcm, 48000),
-        attention_text=config.attention_prompt,
+        attention_text=attention_text,
         attention_pcm=attention_pcm,
         context=FIRST_PHRASE,
         agent_context={"call_mode": "incoming_guest", "voice_transport": "matrix"},
