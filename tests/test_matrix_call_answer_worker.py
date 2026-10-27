@@ -360,3 +360,32 @@ def test_early_incoming_audio_cannot_overtake_the_call_id():
         assert uuid.UUID(bytes=payload) == uuid.UUID(call_id)
 
     asyncio.run(check())
+
+
+def test_the_callee_leg_has_no_undefined_name():
+    """The callee leg runs in the voice host: every name must resolve.
+
+    The leg answers a live call; a single missing constant would break the
+    answer before the SDK turn starts.
+    """
+    import ast
+    import builtins
+
+    path = ROOT / "src/universal_userio/voice/matrix_call_answer_worker.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    defined = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            defined.add(node.id)
+        elif isinstance(node, ast.arg):
+            defined.add(node.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                defined.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            defined.add(node.name)
+    used = {node.id for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    assert not sorted(used - defined)
