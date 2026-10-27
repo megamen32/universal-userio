@@ -116,6 +116,31 @@ class MatrixCallReader:
             raise RuntimeError("invalid Matrix joined members response")
         return tuple(sorted(str(key) for key in members))
 
+    def _call_members(self, room_id: str, room: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+        """The call memberships of the room: the delta first, the room state after.
+
+        A call membership is a state event. It is published before the ring, so
+        it is usually not part of the delta that carries the ring; the room
+        state is the persistent source of the member set.
+        """
+        members: dict[str, Mapping[str, Any]] = {}
+        events = list(((room.get("state") or {}).get("events") or []))
+        events += list((room.get("timeline") or {}).get("events") or [])
+        for event in events:
+            if isinstance(event, dict) and event.get("type") == MEMBER:
+                members[str(event.get("state_key") or "")] = event
+        if members:
+            return members
+        request = urllib.request.Request(
+            self.homeserver + "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
+            + "/state", headers={"Authorization": "Bearer " + self.token})
+        with self.runner(request, timeout=20) as response:
+            data = json.loads(response.read())
+        for event in data if isinstance(data, list) else []:
+            if isinstance(event, dict) and event.get("type") == MEMBER:
+                members[str(event.get("state_key") or "")] = event
+        return members
+
     def poll(self, cursor: str | None, *, limit: int = DEFAULT_LIMIT) -> tuple[list[InboundMatrixCall], str]:
         query = {"timeout": "0", "filter": json.dumps({"types": [MEMBER, RING]}, separators=(",", ":"))}
         if cursor:
@@ -135,28 +160,27 @@ class MatrixCallReader:
         for room_id, room in rooms.items():
             if not isinstance(room, dict):
                 continue
-            members: dict[str, Mapping[str, Any]] = {}
             rings: list[Mapping[str, Any]] = []
             for event in room.get("timeline", {}).get("events", []):
-                if not isinstance(event, dict):
+                if not isinstance(event, dict) or event.get("type") != RING:
                     continue
-                kind = event.get("type")
-                if kind == MEMBER:
-                    members[str(event.get("state_key") or "")] = event
-                elif kind == RING:
-                    mentions = (event.get("content") or {}).get("m.mentions") or {}
-                    if self.own_user_id in (mentions.get("user_ids") or []):
-                        rings.append(event)
+                mentions = (event.get("content") or {}).get("m.mentions") or {}
+                if self.own_user_id in (mentions.get("user_ids") or []):
+                    rings.append(event)
             if not rings:
                 continue
+            members = self._call_members(room_id, room)
             joined = self._joined_members(room_id, room)
             for ring in rings:
                 # The call notification names the caller; the call membership
                 # belongs to that same caller and to no one else.
                 caller = str(ring.get("sender") or "")
-                member = next((value for key, value in members.items()
-                               if key.startswith("_" + caller + "_")
-                               and str(value.get("sender") or "") == caller), None)
+                member = next((value for key, value in sorted(
+                    members.items(),
+                    key=lambda item: int(item[1].get("origin_server_ts") or 0),
+                    reverse=True)
+                    if key.startswith("_" + caller + "_")
+                    and str(value.get("sender") or "") == caller), None)
                 if member is None:
                     continue
                 content = member.get("content") or {}

@@ -301,3 +301,48 @@ def test_the_claim_is_written_before_the_external_answer(tmp_path):
     assert worker.poll_once() == 1
     assert seen and seen[0] is not None
     assert seen[0]["status"] == "accepted"
+
+
+def test_the_reader_finds_the_call_membership_in_the_room_state():
+    """In production the call membership is a state event published before the ring.
+
+    The ring arrives in the timeline of a sync delta; the call membership that
+    carries the LiveKit focus is a state event of the room and is therefore not
+    part of that delta. The reader has to take it from the room state, or the
+    call would be lost while the sync cursor moves on.
+    """
+    module = load()
+    payload = _sync_payload(ROOM, CALLER, OWN)
+    room = payload["rooms"]["join"][ROOM]
+    membership = [event for event in room["timeline"]["events"]
+                  if event["type"] == "org.matrix.msc3401.call.member"]
+    room["timeline"]["events"] = [event for event in room["timeline"]["events"]
+                                   if event["type"] != "org.matrix.msc3401.call.member"]
+    state = list(room["state"]["events"]) + membership
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def runner(request, timeout):
+        if request.full_url.endswith("/state"):
+            return Response(state)
+        return Response(payload)
+
+    reader = module.MatrixCallReader("https://matrix.example", "t", OWN, runner=runner)
+    calls, nxt = reader.poll("s1")
+    assert nxt == "s2"
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.caller == CALLER
+    assert call.focus["livekit_service_url"] == "https://rtc.example/sfu/get"
+    assert call.joined == tuple(sorted((OWN, CALLER)))
