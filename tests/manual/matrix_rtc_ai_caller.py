@@ -60,6 +60,8 @@ SCRIPT_WAVS = [item for item in os.environ.get("CALLER_SCRIPT_WAVS", "").split("
 # The scripted phrase follows the answer it answers, so the caller never
 # interrupts the callee while it is still speaking.
 SCRIPT_QUIET_SECONDS = float(os.environ.get("CALLER_SCRIPT_QUIET_SECONDS", "4") or "4")
+# The form of a real client: the call membership of the caller and no ring.
+CALLER_CLIENT_FORM = os.environ.get("CALLER_CLIENT_FORM", "") not in ("", "0", "false")
 # The fixed second question, served by the local LLM stub of the canary.
 SECOND_PHRASE = ("Проверь, что означает код пять ноль два в ответе наблюдателя "
                  "безработный точка ком, и назови первую проверку.")
@@ -273,11 +275,16 @@ async def run():
             "focus_active": {"focus_selection": "oldest_membership", "type": "livekit"},
             "m.call.intent": "audio", "membershipID": str(uuid.uuid4()), "scope": "m.room",
         })
-        await api("PUT", room_path + "/send/" + RING + "/" + str(uuid.uuid4()), {
-            "m.mentions": {"user_ids": [TARGET]}, "notification_type": "ring",
-            "m.relates_to": {"event_id": result["event_id"], "rel_type": "m.reference",
-                             "sender_ts": started, "lifetime": 60000, "m.call.intent": "audio"},
-        })
+        if not CALLER_CLIENT_FORM:
+            await api("PUT", room_path + "/send/" + RING + "/" + str(uuid.uuid4()), {
+                "m.mentions": {"user_ids": [TARGET]}, "notification_type": "ring",
+                "m.relates_to": {"event_id": result["event_id"], "rel_type": "m.reference",
+                                 "sender_ts": started, "lifetime": 60000, "m.call.intent": "audio"},
+            })
+        else:
+            # The form of a real client: the call membership and no notification.
+            print(json.dumps({"event": "originated_client_form",
+                              "membership_event_id": result["event_id"]}), flush=True)
         print(json.dumps({"event": "originated", "voice_call_id": voice_call_id}), flush=True)
 
         deadline = time.monotonic() + 60
