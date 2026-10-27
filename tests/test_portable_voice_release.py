@@ -178,3 +178,29 @@ def test_primary_keeps_its_binds_when_no_supervised_state_exists(monkeypatch,tmp
     monkeypatch.setattr(module,'SECRETARY_STATE',str(missing))
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
     assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
+
+
+def test_primary_mounts_the_fast_agent_home_of_the_incident_brain(monkeypatch,tmp_path):
+    """The incidents mode needs the deployed fast agent home of this host."""
+    module=load()
+    home=tmp_path/'fast-agent-home'
+    home.mkdir()
+    (home/'fastagent.config.yaml').write_text('model: voice\n')
+    state=tmp_path/'noticeplace-phone'
+    state.mkdir()
+    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(home))
+    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(state))
+    monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent'))
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert f'{home}:{home}:ro' in primary['HostConfig']['Binds']
+    assert f'{state}:{state}:rw' in primary['HostConfig']['Binds']
+
+
+def test_primary_keeps_its_binds_without_a_fast_agent_home(monkeypatch,tmp_path):
+    """A host without the fast agent home keeps exactly the previous binds."""
+    module=load()
+    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent'))
+    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
+    monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent-secretary'))
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']

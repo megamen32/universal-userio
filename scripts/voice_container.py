@@ -25,6 +25,9 @@ IMAGE = re.compile(r'ghcr\.io/megamen32/universal-userio-voice@sha256:[a-f0-9]{6
 LABEL = 'com.userio.portable-voice'
 STOP_TIMEOUT = 20
 SECRETARY_STATE = '/etc/agentcall-secretary'
+# The incident brain runs from the deployed fast agent home of this host.
+FAST_AGENT_HOME = '/usr/local/lib/agentcall/fast-agent-home'
+FAST_AGENT_STATE = '/var/lib/noticeplace-phone'
 DOCKER_TIMEOUT = 40
 
 
@@ -102,6 +105,13 @@ def create_spec(image, role, config, data, port):
         # added only where that protected state actually exists.
         if Path(SECRETARY_STATE).is_dir():
             spec['HostConfig']['Binds'].append(SECRETARY_STATE + ':' + SECRETARY_STATE + ':ro')
+    # The incident brain of the voice host reads its config from the deployed
+    # fast agent home and keeps its sessions in the host state. Without these
+    # the incidents mode cannot run a turn on this host.
+    if Path(FAST_AGENT_HOME).is_dir():
+        spec['HostConfig']['Binds'].append(FAST_AGENT_HOME + ':' + FAST_AGENT_HOME + ':ro')
+        if Path(FAST_AGENT_STATE).is_dir():
+            spec['HostConfig']['Binds'].append(FAST_AGENT_STATE + ':' + FAST_AGENT_STATE + ':rw')
     return spec
 
 
