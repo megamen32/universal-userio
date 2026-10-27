@@ -55,6 +55,8 @@ MAX_SECONDS = 240
 FIRST_PHRASE = ("Наблюдатель безработный точка ком отдаёт код пятьсот два. "
                 "Что это значит и что следует проверить?")
 FIRST_WAV = os.environ.get("CALLER_FIRST_WAV", "/tmp/caller_first.wav")
+# Scripted phrases of the caller: one per substantive answer of the callee.
+SCRIPT_WAVS = [item for item in os.environ.get("CALLER_SCRIPT_WAVS", "").split(",") if item]
 # The fixed second question, served by the local LLM stub of the canary.
 SECOND_PHRASE = ("Проверь, что означает код пять ноль два в ответе наблюдателя "
                  "безработный точка ком, и назови первую проверку.")
@@ -220,8 +222,14 @@ async def run():
         def get_extra_info(self, name, default=None):
             return default
 
+    remote_answers = 0
+
     class Broker:
         async def emit(self, event):
+            nonlocal remote_answers
+            if event.get("event") == "transcript_final" and event.get("speaker") == "remote" \
+                    and len(str(event.get("text") or "")) >= 40:
+                remote_answers += 1
             print(json.dumps({"event": "caller_bridge", **event}, ensure_ascii=False), flush=True)
 
     writer = Writer()
@@ -308,6 +316,28 @@ async def run():
 
         async def fixture_hangup(_call_id):
             stop.set()
+
+        async def speak(pcm: bytes) -> None:
+            frame_bytes = 960 * 2
+            for offset in range(0, len(pcm), frame_bytes):
+                chunk = pcm[offset:offset + frame_bytes]
+                await source.capture_frame(rtc.AudioFrame(chunk, 48000, 1, len(chunk) // 2))
+
+        async def scripted_phrases():
+            # The scripted phrase of the caller follows the answer it answers.
+            for index, path in enumerate(SCRIPT_WAVS):
+                while remote_answers <= index and not stop.is_set():
+                    await asyncio.sleep(0.5)
+                if stop.is_set():
+                    return
+                pcm, rate = _load_wav(path)
+                if rate != 48000:
+                    pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)
+                await speak(pcm)
+                await asyncio.sleep(1.0)
+
+        if SCRIPT_WAVS:
+            asyncio.create_task(scripted_phrases())
 
         engine = asyncio.create_task(voice.handle_call(
             audio_reader, writer, Broker(), config, {voice_call_id: prepared_call},
