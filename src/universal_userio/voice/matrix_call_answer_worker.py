@@ -22,15 +22,26 @@ import urllib.request
 import uuid
 from typing import Any, Mapping
 
-from .agentcall_realtime_bridge import (
-    BackendConfig,
-    EventBroker,
-    LocalSpeechPipeline,
-    PreparedCall,
-    handle_call,
-    load_wait_prompts,
-    pack_audiosocket_frame,
-)
+try:  # the voice host runs the bridge as a script, not as a package
+    from .agentcall_realtime_bridge import (
+        BackendConfig,
+        EventBroker,
+        LocalSpeechPipeline,
+        PreparedCall,
+        handle_call,
+        load_wait_prompts,
+        pack_audiosocket_frame,
+    )
+except ImportError:  # pragma: no cover - the flat runtime layout
+    from agentcall_realtime_bridge import (
+        BackendConfig,
+        EventBroker,
+        LocalSpeechPipeline,
+        PreparedCall,
+        handle_call,
+        load_wait_prompts,
+        pack_audiosocket_frame,
+    )
 
 MEMBER = "org.matrix.msc3401.call.member"
 CALLEE_ACTION = "matrix_answer_transport"
@@ -43,7 +54,7 @@ def server_voice_config(config):
     physical phone. Matrix calls must never depend on that device, so the
     existing Matrix transport profile is applied before anything is spoken.
     """
-    from ..matrix_call_worker import server_voice_config as existing_profile
+    from universal_userio.matrix_call_worker import server_voice_config as existing_profile
     return existing_profile(config)
 
 

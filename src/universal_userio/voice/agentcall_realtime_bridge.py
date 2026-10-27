@@ -2725,7 +2725,10 @@ class CallController:
             raise RuntimeError('a voice transport is already active')
         self._matrix_transport_busy = True
         try:
-            from .matrix_call_answer_worker import answer_incoming_call
+            try:
+                from .matrix_call_answer_worker import answer_incoming_call
+            except ImportError:  # pragma: no cover - the flat runtime layout
+                from matrix_call_answer_worker import answer_incoming_call
             receipt = await answer_incoming_call(
                 request, self.config, broker=EventBroker(Path('/run/agentcall/gatewayd.sock')),
                 writer=writer)

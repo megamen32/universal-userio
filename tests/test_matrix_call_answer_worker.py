@@ -262,3 +262,29 @@ def test_the_answer_leg_uses_the_server_speech_profile():
     assert server.tts_url == 'http://127.0.0.1:30802/synthesize'
     # A server profile stays untouched.
     assert worker.server_voice_config(server) == server
+
+
+def test_the_answer_action_imports_in_the_script_layout_of_the_voice_host():
+    """The voice host runs the bridge as a script, so the action must import.
+
+    The native service executes the bridge file as __main__ and publishes it
+    under its flat module name. The callee leg has to be importable in that
+    layout, and it has to use that very instance of the bridge.
+    """
+    import importlib.util
+    bridge_path = ROOT / "src/universal_userio/voice/agentcall_realtime_bridge.py"
+    spec = importlib.util.spec_from_file_location("agentcall_realtime_bridge", bridge_path)
+    bridge = importlib.util.module_from_spec(spec)
+    sys.modules["agentcall_realtime_bridge"] = bridge
+    voice_path = str(ROOT / "src/universal_userio/voice")
+    if voice_path not in sys.path:
+        sys.path.insert(0, voice_path)
+    try:
+        spec.loader.exec_module(bridge)
+        worker = importlib.import_module("matrix_call_answer_worker")
+        assert worker.answer_incoming_call is not None
+        # One identity: the worker speaks through the running bridge.
+        assert worker.handle_call is bridge.handle_call
+    finally:
+        sys.modules.pop("agentcall_realtime_bridge", None)
+        sys.modules.pop("matrix_call_answer_worker", None)
