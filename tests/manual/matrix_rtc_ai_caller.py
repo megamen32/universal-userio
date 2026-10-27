@@ -172,7 +172,11 @@ async def run():
 
     config = voice_config_for_request(
         server_voice_config(voice.BackendConfig.from_environment()), None)
-    config = voice.replace(config, idle_timeout_seconds=CALLER_IDLE_TIMEOUT_SECONDS)
+    # speech_speed=1.0: the canary question must reach the microphone with its
+    # own duration, so the outbound gate of the caller holds exactly the
+    # question and nothing else.
+    config = voice.replace(config, idle_timeout_seconds=CALLER_IDLE_TIMEOUT_SECONDS,
+                            speech_speed=1.0)
     # The first phrase is fixed TTS; the second turn is served by the local
     # fixed-phrase stub, so no LLM ever rewrites the caller's own question.
     first_pcm, first_rate = _load_wav(FIRST_WAV)
