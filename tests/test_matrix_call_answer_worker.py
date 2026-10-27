@@ -410,10 +410,21 @@ def test_the_transport_receipt_follows_the_broker_contract():
         broker = worker._ControlBroker(Inner(), None)
         await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
                                            text="Здравствуйте. Я голосовой секретарь."))
-        # The receipt reads exactly what the broker collected.
-        assert broker.spoken
-        assert broker.transcript == "Здравствуйте. Я голосовой секретарь."
-        assert not hasattr(broker, "assistant_text")
-        assert not hasattr(broker, "turns")
+        # The receipt is built from the broker that collected the transcript.
+        receipt = worker.transport_receipt(broker, OWNER, "c1")
+        assert receipt == {
+            "type": "receipt",
+            "state": "answered",
+            "text": "Здравствуйте. Я голосовой секретарь.",
+            "person": OWNER,
+            "callId": "c1",
+            "turns": 1,
+        }
+        # A call without spoken text is reported as unanswered.
+        empty = worker.transport_receipt(worker._ControlBroker(Inner(), None), OWNER, "c2")
+        assert empty["state"] == "unanswered"
+        assert empty["turns"] == 0
+        assert empty["text"] == ""
+        assert empty["callId"] == "c2"
 
     asyncio.run(check())

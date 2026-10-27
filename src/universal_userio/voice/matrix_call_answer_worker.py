@@ -204,6 +204,22 @@ class _RtcWriter:
         return None
 
 
+def transport_receipt(broker: "_ControlBroker", person: str, call_id: str) -> dict[str, Any]:
+    """A transport receipt of the answered call.
+
+    The state of the Secretary turn is read from the application ledger of
+    that call and turn, so the transport reports only what it spoke.
+    """
+    return {
+        "type": "receipt",
+        "state": "answered" if broker.spoken else "unanswered",
+        "text": broker.transcript,
+        "person": person,
+        "callId": call_id,
+        "turns": len(broker.spoken),
+    }
+
+
 async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig, *,
                                broker: EventBroker, writer: asyncio.StreamWriter,
                                identities: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -342,13 +358,4 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
                 pass
         await room.disconnect()
         await source.aclose()
-    # A transport receipt of the answered call. The state of the Secretary
-    # turn is read from the application ledger of that call and turn.
-    return {
-        "type": "receipt",
-        "state": "answered" if control_broker.spoken else "unanswered",
-        "text": control_broker.transcript,
-        "person": person,
-        "callId": engine_call_id,
-        "turns": len(control_broker.spoken),
-    }
+    return transport_receipt(control_broker, person, engine_call_id)
