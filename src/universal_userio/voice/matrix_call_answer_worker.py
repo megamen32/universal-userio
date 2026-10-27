@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import urllib.parse
 import urllib.request
@@ -78,10 +79,21 @@ def resolve_person(caller: str, identities: Mapping[str, str]) -> str:
     return person
 
 
-def load_identities(settings: Mapping[str, str]) -> Mapping[str, str]:
+def load_identities(settings: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    """The verified identity map of this host.
+
+    The path is the supervised secret of the voice host, resolved exactly as
+    the bridge resolves it. The identity of a caller is never taken from the
+    request.
+    """
     from agentcall_secretary_voice import private_file
     import json as _json
-    return _json.loads(private_file("EXMANAGER_VOICE_IDENTITIES_FILE", settings))
+    resolved = dict(settings or {})
+    resolved["EXMANAGER_VOICE_IDENTITIES_FILE"] = (
+        resolved.get("EXMANAGER_VOICE_IDENTITIES_FILE")
+        or os.environ.get("EXMANAGER_VOICE_IDENTITIES_FILE")
+        or "/etc/agentcall-secretary-identities.json")
+    return _json.loads(private_file("EXMANAGER_VOICE_IDENTITIES_FILE", resolved))
 
 
 class _ControlBroker:
@@ -186,12 +198,13 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     rtc_auth_url = str(request.get("rtc_auth_url") or "").rstrip("/")
     room_id = str(call.get("room_id") or "")
     caller = str(call.get("caller") or "")
-    if not room_id or not caller or not account.get("access_token") or not rtc_auth_url:
+    if not room_id or not caller or not account.get("access_token") or not rtc_auth_url \
+            or not account.get("homeserver"):
         raise ValueError("incomplete Matrix answer request")
     settings = identities if identities is not None else load_identities(dict(config.__dict__) if hasattr(config, "__dict__") else {})
     person = resolve_person(caller, settings)
 
-    server = str(account["homeserver"])
+    server = str(account.get("homeserver") or "")
     token = str(account["access_token"])
     own_user_id = str(account.get("matrix_user_id") or "")
     device = str(identity.get("device_id") or "")

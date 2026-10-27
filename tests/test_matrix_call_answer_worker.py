@@ -2,7 +2,10 @@
 import asyncio
 import importlib.util
 import json
+import os
+import stat
 import sys
+import types
 import uuid
 from pathlib import Path
 
@@ -288,3 +291,34 @@ def test_the_answer_action_imports_in_the_script_layout_of_the_voice_host():
     finally:
         sys.modules.pop("agentcall_realtime_bridge", None)
         sys.modules.pop("matrix_call_answer_worker", None)
+
+
+def test_the_identity_map_comes_from_the_supervised_secret_of_the_host(tmp_path, monkeypatch):
+    """The identity map path is the supervised secret, never the request."""
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+    # The supervised secret contract of the SDK adapter: a private, owned file.
+    adapter = types.ModuleType("agentcall_secretary_voice")
+
+    def private_file(name, settings=None):
+        path = Path((settings or os.environ)[name])
+        meta = path.stat()
+        if meta.st_uid not in {0, os.geteuid()} or stat.S_IMODE(meta.st_mode) & 0o077:
+            raise PermissionError("voice configuration must be private and service-owned")
+        return path.read_text().strip()
+
+    adapter.private_file = private_file
+    monkeypatch.setitem(sys.modules, "agentcall_secretary_voice", adapter)
+    identities = tmp_path / "identities.json"
+    identities.write_text(json.dumps({"matrix:" + CALLER: OWNER}), encoding="utf-8")
+    identities.chmod(0o600)
+    monkeypatch.setenv("EXMANAGER_VOICE_IDENTITIES_FILE", str(identities))
+    # A configuration without the identities path must still resolve the
+    # supervised secret of this host instead of failing on a missing key.
+    resolved = worker.load_identities({"fast_agent_model": "some-model"})
+    assert resolved == {"matrix:" + CALLER: OWNER}
+    # An explicit path wins over the environment.
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps({"matrix:" + QA_CALLER: QA_PERSON}), encoding="utf-8")
+    other.chmod(0o600)
+    assert worker.load_identities(
+        {"EXMANAGER_VOICE_IDENTITIES_FILE": str(other)}) == {"matrix:" + QA_CALLER: QA_PERSON}
