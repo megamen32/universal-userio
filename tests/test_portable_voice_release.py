@@ -68,10 +68,7 @@ def test_image_wires_fixed_matrix_and_fastagent_interpreters():
 
 def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch,tmp_path):
     module=load();calls=[]
-    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent-home'))
-    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
-    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tmp_path/'absent-tool'))
-    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(tmp_path/'absent-python'))
+    _isolate_host_paths(monkeypatch, tmp_path)
     image_id='sha256:'+'c'*64
     def api(method,path,*args,**kwargs):
         calls.append((method,path))
@@ -163,6 +160,17 @@ def test_incoming_health_checks_actual_host_gid_and_mode():
     assert not module.incoming_socket_ready(path,{'AGENTCALL_INCOMING_SOCKET_GID':'147 '})
 
 
+def _isolate_host_paths(monkeypatch, tmp_path):
+    """Keep the host paths of this machine out of the component specification."""
+    module = load()
+    absent = tmp_path / 'absent'
+    for name in ('SECRETARY_STATE', 'FAST_AGENT_HOME', 'FAST_AGENT_STATE',
+                 'FAST_AGENT_TOOL', 'FAST_AGENT_PYTHON_HOME', 'NOTICEPLACE_HOME',
+                 'NOTICEPLACE_MESH', 'NOTICEPLACE_MCP_ENV'):
+        monkeypatch.setattr(module, name, str(absent))
+    return absent
+
+
 def test_primary_reads_the_supervised_secretary_credential_and_standby_never(monkeypatch,tmp_path):
     """The app credential rotates; a private copy of it dies with the rotation."""
     module=load()
@@ -179,11 +187,7 @@ def test_primary_keeps_its_binds_when_no_supervised_state_exists(monkeypatch,tmp
     """A host without the supervised transport keeps exactly the previous binds."""
     module=load()
     missing=tmp_path/'absent'
-    monkeypatch.setattr(module,'SECRETARY_STATE',str(missing))
-    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(missing))
-    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(missing))
-    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(missing))
-    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(missing))
+    _isolate_host_paths(monkeypatch, tmp_path)
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
     assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
 
@@ -209,11 +213,7 @@ def test_primary_mounts_the_fast_agent_home_of_the_incident_brain(monkeypatch,tm
 def test_primary_keeps_its_binds_without_a_fast_agent_home(monkeypatch,tmp_path):
     """A host without the fast agent home keeps exactly the previous binds."""
     module=load()
-    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent'))
-    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
-    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tmp_path/'absent-tool'))
-    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(tmp_path/'absent-python'))
-    monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent-secretary'))
+    _isolate_host_paths(monkeypatch, tmp_path)
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
     assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
 
@@ -225,10 +225,7 @@ def test_primary_mounts_the_fast_agent_tool_and_its_interpreter(monkeypatch,tmp_
     tool.mkdir()
     python_home=tmp_path/'uv-python'
     python_home.mkdir()
-    monkeypatch.setattr(module,'FAST_AGENT_HOME',str(tmp_path/'absent-home'))
-    monkeypatch.setattr(module,'FAST_AGENT_STATE',str(tmp_path/'absent-state'))
-    monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tmp_path/'absent-tool'))
-    monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(tmp_path/'absent-python'))
+    _isolate_host_paths(monkeypatch, tmp_path)
     monkeypatch.setattr(module,'SECRETARY_STATE',str(tmp_path/'absent-secretary'))
     monkeypatch.setattr(module,'FAST_AGENT_TOOL',str(tool))
     monkeypatch.setattr(module,'FAST_AGENT_PYTHON_HOME',str(python_home))
@@ -237,3 +234,25 @@ def test_primary_mounts_the_fast_agent_tool_and_its_interpreter(monkeypatch,tmp_
     assert f'{python_home}:{python_home}:ro' in primary['HostConfig']['Binds']
     standby=module.create_spec(IMAGE,'standby','/etc/config','/var/lib/data',19095)
     assert f'{tool}:{tool}:ro' not in standby['HostConfig']['Binds']
+
+
+def test_primary_mounts_the_mcp_servers_of_the_incident_brain(monkeypatch,tmp_path):
+    """The incident worker starts MCP servers that live on this host."""
+    module=load()
+    absent=tmp_path/'absent'
+    for name in ('FAST_AGENT_HOME','FAST_AGENT_STATE','FAST_AGENT_TOOL',
+                 'FAST_AGENT_PYTHON_HOME','SECRETARY_STATE'):
+        monkeypatch.setattr(module,name,str(absent))
+    home=tmp_path/'noticeplace'
+    home.mkdir()
+    mesh=tmp_path/'mesh'
+    mesh.mkdir()
+    env_file=tmp_path/'noticeplace-voice-mcp.env'
+    env_file.write_text('TOKEN=<hidden>\n')
+    monkeypatch.setattr(module,'NOTICEPLACE_HOME',str(home))
+    monkeypatch.setattr(module,'NOTICEPLACE_MESH',str(mesh))
+    monkeypatch.setattr(module,'NOTICEPLACE_MCP_ENV',str(env_file))
+    primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
+    assert f'{home}:{home}:ro' in primary['HostConfig']['Binds']
+    assert f'{mesh}:{mesh}:rw' in primary['HostConfig']['Binds']
+    assert f'{env_file}:{env_file}:ro' in primary['HostConfig']['Binds']

@@ -31,6 +31,10 @@ FAST_AGENT_STATE = '/var/lib/noticeplace-phone'
 # The incident brain runs from the deployed fast agent tool of this host.
 FAST_AGENT_TOOL = '/home/roomhacker/.local/share/uv/tools/fast-agent-mcp'
 FAST_AGENT_PYTHON_HOME = '/home/roomhacker/.local/share/uv/python'
+# The MCP servers of the incident brain live on this host as well.
+NOTICEPLACE_HOME = '/opt/noticeplace'
+NOTICEPLACE_MESH = '/run/noticeplace-mesh'
+NOTICEPLACE_MCP_ENV = '/etc/noticeplace-voice-mcp.env'
 DOCKER_TIMEOUT = 40
 
 
@@ -122,6 +126,14 @@ def create_spec(image, role, config, data, port):
             if Path(FAST_AGENT_PYTHON_HOME).is_dir():
                 spec['HostConfig']['Binds'].append(
                     FAST_AGENT_PYTHON_HOME + ':' + FAST_AGENT_PYTHON_HOME + ':ro')
+        # The MCP servers of the incident brain: the NoticePlace command, its
+        # protected environment and the mesh socket of the notice store.
+        if Path(NOTICEPLACE_HOME).is_dir():
+            spec['HostConfig']['Binds'].append(NOTICEPLACE_HOME + ':' + NOTICEPLACE_HOME + ':ro')
+        if Path(NOTICEPLACE_MESH).is_dir():
+            spec['HostConfig']['Binds'].append(NOTICEPLACE_MESH + ':' + NOTICEPLACE_MESH + ':rw')
+        if Path(NOTICEPLACE_MCP_ENV).is_file():
+            spec['HostConfig']['Binds'].append(NOTICEPLACE_MCP_ENV + ':' + NOTICEPLACE_MCP_ENV + ':ro')
     return spec
 
 
