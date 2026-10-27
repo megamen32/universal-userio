@@ -578,7 +578,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                     'model':model.split('?',1)[0]+'?reasoning='+self.config.llm_reasoning_effort,
                     'base_url':base_url,'herder_url':self.config.fast_agent_herder_url,
                     'mcp_python':self.config.fast_agent_python,'mcp_script':self.config.fast_agent_mcp_script,
-                    'context':str(context)},env=environment,cwd=self.config.fast_agent_home,timeout=15)
+                    'context':str(context),'python_path':environment.get('PYTHONPATH','')},
+                    env=environment,cwd=self.config.fast_agent_home,timeout=15)
                 self._worker_route=signature
                 _log(f'fast-agent worker_ready elapsed={time.monotonic()-started:.3f}s')
                 return self._worker

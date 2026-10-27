@@ -561,3 +561,20 @@ def test_the_incident_worker_environment_carries_the_module_path():
     bridge_source = (ROOT / "src/universal_userio/voice/agentcall_realtime_bridge.py").read_text(
         encoding="utf-8")
     assert "environment=worker_environment(api_key)" in bridge_source
+
+
+def test_every_mcp_server_of_the_worker_keeps_the_module_path():
+    """The MCP servers are started with their own environment only."""
+    worker = load("agentcall_fast_agent_worker", "universal_userio.voice.agentcall_fast_agent_worker")
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+    import yaml
+    settings = yaml.safe_load(
+        "mcp:\n  servers:\n    agentcall:\n      command: /bin/true\n      env:\n        HERDER: x\n"
+        "    AgentHerder:\n      transport: http\n      url: http://127.0.0.1:18791/mcp\n")
+    servers = settings["mcp"]["servers"]
+    python_path = bridge.worker_environment("key")["PYTHONPATH"]
+    worker.server_environments(servers, python_path)
+    # The command servers carry the module path; the http server is untouched.
+    assert servers["agentcall"]["env"]["PYTHONPATH"] == python_path
+    assert servers["agentcall"]["env"]["HERDER"] == "x"
+    assert "env" not in servers["AgentHerder"]

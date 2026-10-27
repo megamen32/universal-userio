@@ -130,7 +130,23 @@ def private_path(value):
     return path
 
 
-async def serve(wire):
+async def server_environments(servers, python_path):
+    """Give every MCP server of the worker the module path of this package.
+
+    The servers are started with their own environment only; without the
+    module path the server dies before its first answer and the incidents turn
+    ends as an unknown outcome.
+    """
+    for name, server in list(servers.items()):
+        if not isinstance(server, dict) or 'command' not in server:
+            continue
+        environment = dict(server.get('env') or {})
+        environment.setdefault('PYTHONPATH', python_path)
+        server['env'] = environment
+    return servers
+
+
+def serve(wire):
     from fast_agent.core.fastagent import FastAgent
     from fast_agent.mcp.prompt_serialization import load_messages, to_json_bytes
     from fast_agent.types import RequestParams
@@ -150,6 +166,7 @@ async def serve(wire):
     servers['AgentHerder'] = herder
     servers['agentcall']={**(servers.get('agentcall') or {}),'command':boot['mcp_python'],
         'args':[boot['mcp_script'],'--context',boot['context'],'--live-context']}
+    server_environments(servers, boot.get('python_path') or '')
     config.write_text(yaml.safe_dump(settings,allow_unicode=True))
     full=json.loads(card.read_text());full['model']=boot['model']
     full['instruction']=compose_voice_instruction(full.get('instruction'))
