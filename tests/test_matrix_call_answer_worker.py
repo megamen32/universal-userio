@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import json
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,58 @@ def test_the_answer_request_cannot_carry_the_person(tmp_path):
     assert "person" not in request["call"]
     identities = {"matrix:" + CALLER: OWNER}
     assert module.resolve_person(request["call"]["caller"], identities) == OWNER
+
+
+def test_the_engine_reads_the_first_uuid_frame_of_the_callee_reader():
+    """handle_call requires the UUID frame first; the callee reader must send it."""
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+
+    call_id = str(uuid.uuid4())
+    reader = asyncio.StreamReader(limit=1024 * 1024)
+    reader.feed_data(bridge.pack_audiosocket_frame(bridge.UUID_KIND, uuid.UUID(call_id).bytes))
+
+    async def check():
+        kind, payload = await bridge.read_audiosocket_frame(reader)
+        return kind, payload
+
+    kind, payload = asyncio.run(check())
+    assert kind == bridge.UUID_KIND
+    assert len(payload) == 16
+    assert uuid.UUID(bytes=payload) == uuid.UUID(call_id)
+
+
+def test_the_callee_audio_sink_is_a_synchronous_writer_with_an_awaitable_drain():
+    """The engine writes audio synchronously and awaits the drain."""
+    import inspect
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+
+    class Source:
+        def __init__(self):
+            self.frames = []
+
+        async def capture_frame(self, frame):
+            self.frames.append(frame)
+
+    class Rtc:
+        AudioFrame = staticmethod(lambda data, rate, channels, samples: data)
+
+    source = Source()
+    writer = worker._RtcWriter(source, asyncio.Event(), Rtc)
+    # The engine writes synchronously and awaits the drain.
+    assert not inspect.iscoroutinefunction(writer.write)
+    assert inspect.iscoroutinefunction(writer.drain)
+
+    pcm = b"\x01\x02" * 160
+    writer.write(bridge.pack_audiosocket_frame(0x16, pcm))
+    assert source.frames == []
+
+    async def drain():
+        await writer.drain()
+
+    asyncio.run(drain())
+    assert source.frames == [pcm]
 
 
 def test_the_control_stream_dispatches_the_answer_action(monkeypatch):

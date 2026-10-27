@@ -59,6 +59,7 @@ class InboundMatrixCall:
     expires_ms: int
     origin_server_ts: int = 0
     joined: tuple[str, ...] = ()
+    caller_device: str = ""
 
     @property
     def key(self) -> str:
@@ -69,9 +70,14 @@ class InboundMatrixCall:
         return digest
 
     def receipt_id(self, account_ref: str) -> str:
-        """Durable receipt identity of this call for one account."""
+        """Durable receipt identity of this call for one account.
+
+        The identity is the call itself, not the notification: the same call may
+        be announced again, and a restart must still find the same receipt.
+        """
         return str(uuid.uuid5(uuid.NAMESPACE_URL, "\0".join(
-            [account_ref, self.room_id, self.caller, self.event_id])))
+            [account_ref, self.room_id, self.caller,
+             self.call_id or self.caller_device or self.event_id])))
 
 
 class MatrixCallReader:
@@ -85,6 +91,26 @@ class MatrixCallReader:
         self.runner = runner
         if not self.homeserver or not self.token or not self.own_user_id:
             raise ValueError("matrix call reader config incomplete")
+
+    def _joined_members(self, room_id: str, room: Mapping[str, Any]) -> tuple[str, ...]:
+        """The room's current members: the sync state first, the room view after."""
+        joined = {str(event.get("state_key") or "")
+                  for event in ((room.get("state") or {}).get("events") or [])
+                  if isinstance(event, dict) and event.get("type") == "m.room.member"
+                  and (event.get("content") or {}).get("membership") == "join"}
+        if joined:
+            return tuple(sorted(joined))
+        # A call usually arrives without the members in this delta, so the room
+        # view is the persistent source of the member set.
+        request = urllib.request.Request(
+            self.homeserver + "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
+            + "/joined_members", headers={"Authorization": "Bearer " + self.token})
+        with self.runner(request, timeout=20) as response:
+            data = json.loads(response.read())
+        members = data.get("joined")
+        if not isinstance(members, dict):
+            raise RuntimeError("invalid Matrix joined members response")
+        return tuple(sorted(str(key) for key in members))
 
     def poll(self, cursor: str | None, *, limit: int = DEFAULT_LIMIT) -> tuple[list[InboundMatrixCall], str]:
         query = {"timeout": "0", "filter": json.dumps({"types": [MEMBER, RING]}, separators=(",", ":"))}
@@ -101,52 +127,63 @@ class MatrixCallReader:
             raise RuntimeError("invalid Matrix sync response")
         if cursor is None:
             return [], next_batch
-        members: dict[str, Mapping[str, Any]] = {}
-        joined: dict[str, list[str]] = {}
-        rings: list[Mapping[str, Any]] = []
+        calls: list[InboundMatrixCall] = []
         for room_id, room in rooms.items():
             if not isinstance(room, dict):
                 continue
+            members: dict[str, Mapping[str, Any]] = {}
+            rings: list[Mapping[str, Any]] = []
             for event in room.get("timeline", {}).get("events", []):
                 if not isinstance(event, dict):
                     continue
                 kind = event.get("type")
-                if kind == "m.room.member":
-                    content = event.get("content") or {}
-                    if content.get("membership") == "join":
-                        joined.setdefault(room_id, []).append(str(event.get("state_key") or ""))
-                elif kind == MEMBER:
-                    state_key = str(event.get("state_key") or "")
-                    if state_key.startswith("_" + self.own_user_id + "_"):
-                        members[room_id] = event
+                if kind == MEMBER:
+                    members[str(event.get("state_key") or "")] = event
                 elif kind == RING:
                     mentions = (event.get("content") or {}).get("m.mentions") or {}
                     if self.own_user_id in (mentions.get("user_ids") or []):
                         rings.append(event)
-        calls: list[InboundMatrixCall] = []
-        for ring in rings:
-            room_id = str(ring.get("room_id") or "")
-            member = members.get(room_id)
-            if member is None:
+            if not rings:
                 continue
-            content = member.get("content") or {}
-            focus = next((item for item in content.get("foci_preferred", [])
-                          if isinstance(item, dict) and item.get("type") == "livekit"), None)
-            if focus is None:
-                continue
-            calls.append(InboundMatrixCall(
-                room_id=room_id,
-                event_id=str(ring.get("event_id") or ""),
-                caller=str(ring.get("sender") or ""),
-                call_id=str(content.get("call_id") or ""),
-                focus=focus,
-                expires_ms=int(content.get("expires") or 0),
-                origin_server_ts=int(ring.get("origin_server_ts") or 0),
-                joined=tuple(sorted(joined.get(room_id, []))),
-            ))
+            joined = self._joined_members(room_id, room)
+            for ring in rings:
+                # The call notification names the caller; the call membership
+                # belongs to that same caller and to no one else.
+                caller = str(ring.get("sender") or "")
+                member = next((value for key, value in members.items()
+                               if key.startswith("_" + caller + "_")
+                               and str(value.get("sender") or "") == caller), None)
+                if member is None:
+                    continue
+                content = member.get("content") or {}
+                focus = next((item for item in content.get("foci_preferred", [])
+                              if isinstance(item, dict) and item.get("type") == "livekit"), None)
+                if focus is None:
+                    continue
+                calls.append(InboundMatrixCall(
+                    room_id=str(room_id),
+                    event_id=str(ring.get("event_id") or ""),
+                    caller=caller,
+                    call_id=str(content.get("call_id") or ""),
+                    focus=focus,
+                    expires_ms=int(content.get("expires") or 0),
+                    origin_server_ts=int(ring.get("origin_server_ts") or 0),
+                    joined=joined,
+                    caller_device=_caller_device(str(member.get("state_key") or ""), caller),
+                ))
+                if len(calls) >= limit:
+                    break
             if len(calls) >= limit:
                 break
         return [call for call in calls if call.event_id and call.caller], next_batch
+
+
+def _caller_device(state_key: str, caller: str) -> str:
+    """The caller's device from its RTC membership key."""
+    prefix = "_" + caller + "_"
+    if not state_key.startswith(prefix) or not state_key.endswith("_m.call"):
+        return ""
+    return state_key[len(prefix):-len("_m.call")]
 
 
 def admit_call(call: InboundMatrixCall, *, own_user_id: str, allowed_accounts: Sequence[str],
@@ -258,6 +295,15 @@ def write_receipt(root: str | Path, receipt_id: str, record: Mapping[str, Any]) 
     return path
 
 
+def claim_receipt(root: str | Path, receipt_id: str, record: Mapping[str, Any]) -> Path:
+    """Claim one call durably before the external answer is attempted.
+
+    The claim is written atomically and is never removed: a restart or a
+    repeated sync must find it and answer nothing a second time.
+    """
+    return write_receipt(root, receipt_id, dict(record, status="accepted", claimed_at=time.time()))
+
+
 class MatrixInboundCallWorker:
     """Watch the managed accounts and answer an incoming call once."""
 
@@ -340,19 +386,30 @@ class MatrixInboundCallWorker:
                         account={"id": account["id"], "matrix_user_id": own_user_id},
                         secret=secret, identity={"device_id": secret.get("device_id", "")},
                         rtc_auth_url=self.rtc_auth_url)
-                    receipt = self.answers(request)
-                    write_receipt(self.call_root, receipt_id, {
+                    base = {
                         "call_id": receipt_id,
                         "user_id": account["user_id"],
                         "account_ref": account["id"],
                         "room_id": call.room_id,
                         "target": call.caller,
                         "direction": "incoming",
-                        "status": "sent" if receipt.get("type") == "receipt" else "uncertain",
-                        "answered": receipt.get("type") == "receipt",
-                        "result": receipt,
                         "created_at": time.time(),
-                    })
+                    }
+                    # The claim lands before the external answer, so a crash in
+                    # the middle of the call can never replay it.
+                    claim_receipt(self.call_root, receipt_id, base)
+                    try:
+                        receipt = self.answers(request)
+                    except Exception as error:
+                        write_receipt(self.call_root, receipt_id, dict(
+                            base, status="unknown", answered=False,
+                            error=type(error).__name__, claimed_at=time.time()))
+                        log.warning("matrix inbound call answer failed room=%s error=%s",
+                                   call.room_id, type(error).__name__)
+                        continue
+                    write_receipt(self.call_root, receipt_id, dict(
+                        base, status="sent" if receipt.get("type") == "receipt" else "unknown",
+                        answered=receipt.get("type") == "receipt", result=receipt))
                     answered += 1
                     log.info("matrix inbound call handled room=%s caller=%s receipt=%s",
                              call.room_id, call.caller, receipt.get("type"))

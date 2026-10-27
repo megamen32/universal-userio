@@ -82,23 +82,33 @@ class _ControlBroker:
 
 
 class _RtcWriter:
-    """The engine's audio sink: capture the local track for the SFU."""
+    """The engine's audio sink: capture the local track for the SFU.
 
-    def __init__(self, source, hung_up: asyncio.Event) -> None:
+    The engine writes audio synchronously and awaits the drain, exactly like the
+    AudioSocket writer it replaces; the drain is where the frames reach the
+    LiveKit source.
+    """
+
+    def __init__(self, source, hung_up: asyncio.Event, rtc: Any = None) -> None:
         self.source = source
         self.hung_up = hung_up
+        self.rtc = rtc
         self.sample_rate = 48000
         self.paces_audio = True
         self.pending = bytearray()
         self.closed = False
 
-    async def write(self, data: bytes) -> None:
-        from livekit import rtc
+    def write(self, data: bytes) -> None:
         self.pending.extend(data)
+
+    async def drain(self) -> None:
+        rtc = self.rtc
+        if rtc is None:
+            from livekit import rtc
         while len(self.pending) >= 3:
             length = int.from_bytes(self.pending[1:3], "big")
             if len(self.pending) < 3 + length:
-                break
+                return
             kind = self.pending[0]
             pcm = bytes(self.pending[3:3 + length])
             del self.pending[:3 + length]
@@ -106,9 +116,6 @@ class _RtcWriter:
                 await self.source.capture_frame(rtc.AudioFrame(pcm, 48000, 1, len(pcm) // 2))
             elif kind == 0x02:
                 self.hung_up.set()
-
-    async def drain(self) -> None:
-        return None
 
     def can_write_eof(self) -> bool:
         return True
@@ -174,9 +181,7 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
         "foci_preferred": [focus], "focus_active": {"focus_selection": "oldest_membership", "type": "livekit"},
         "m.call.intent": "audio", "membershipID": own_user_id + ":" + device, "scope": "m.room",
     }
-    _request(server, token, "PUT",
-             room_path + "/state/" + MEMBER + "/" + urllib.parse.quote(state_key, safe=""), content)
-
+    membership_path = room_path + "/state/" + MEMBER + "/" + urllib.parse.quote(state_key, safe="")
     openid = _request(server, token, "POST",
                       "/_matrix/client/v3/user/" + urllib.parse.quote(own_user_id, safe="") + "/openid/request_token", {})
     sfu = _request(rtc_auth_url, "", "POST", "/sfu/get",
@@ -186,6 +191,7 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     audio_reader = asyncio.StreamReader(limit=1024 * 1024)
     stopped = asyncio.Event()
     media_tasks: set[asyncio.Task] = set()
+    published = False
 
     async def capture(track) -> None:
         try:
@@ -208,6 +214,10 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
             task.add_done_callback(media_tasks.discard)
 
     await room.connect(sfu["url"], sfu["jwt"], rtc.RoomOptions(connect_timeout=15))
+    # The membership is published only after the media is ready, so a failed
+    # setup never leaves a stale call member behind.
+    _request(server, token, "PUT", membership_path, content)
+    published = True
     await room.local_participant.publish_track(
         rtc.LocalAudioTrack.create_audio_track("UserIO Secretary", source),
         rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
@@ -227,16 +237,29 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
         host_answered_incoming=True,
     )
     control_broker = _ControlBroker(broker, writer)
+    # The engine expects the call id as the first audio frame.
+    audio_reader.feed_data(pack_audiosocket_frame(UUID_KIND, uuid.UUID(str(call.get("call_id")).replace("-", "")).bytes))
+    max_seconds = int(call.get("max_seconds") or 120)
+    if not 30 <= max_seconds <= 600:
+        max_seconds = 120
     try:
-        await handle_call(
-            audio_reader, _RtcWriter(source, stopped), control_broker, config,
-            {str(call.get("call_id") or uuid.uuid4()): prepared},
-            answer_gate=lambda _call_id, hung_up: not hung_up.is_set(),
-        )
+        await asyncio.wait_for(
+            handle_call(
+                audio_reader, _RtcWriter(source, stopped), control_broker, config,
+                {str(call.get("call_id") or uuid.uuid4()): prepared},
+                answer_gate=lambda _call_id, hung_up: not hung_up.is_set(),
+            ),
+            timeout=max_seconds + 120)
     finally:
         stopped.set()
         for task in list(media_tasks):
             task.cancel()
+        if published:
+            # The call member of this participant never outlives the call.
+            try:
+                _request(server, token, "PUT", membership_path, {})
+            except Exception:
+                pass
         await room.disconnect()
         await source.aclose()
     return {

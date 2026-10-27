@@ -155,3 +155,147 @@ def test_the_worker_answers_an_admitted_call_once_and_keeps_a_durable_receipt(tm
     # A keepalive or a repeated sync must not answer the same call again.
     assert worker.poll_once() == 0
     assert len(sent) == 1
+
+
+def _sync_payload(room_id, caller, own):
+    """A realistic /sync answer: the room id is in the envelope, not the event."""
+    return {
+        "next_batch": "s2",
+        "rooms": {"join": {room_id: {
+            "timeline": {"events": [
+                {"type": "org.matrix.msc3401.call.member", "event_id": "$m1",
+                 "state_key": "_" + caller + "_DEV_m.call", "sender": caller,
+                 "content": {"call_id": "mcall1", "expires": 240000,
+                             "foci_preferred": [{"type": "livekit",
+                                                 "livekit_service_url": "https://rtc.example/sfu/get"}]}},
+                {"type": "org.matrix.msc4075.rtc.notification", "event_id": "$r1",
+                 "sender": caller, "origin_server_ts": 1700000000000,
+                 "content": {"m.mentions": {"user_ids": [own]}}},
+            ]},
+            "state": {"events": [
+                {"type": "m.room.member", "state_key": own, "sender": own,
+                 "content": {"membership": "join"}},
+                {"type": "m.room.member", "state_key": caller, "sender": caller,
+                 "content": {"membership": "join"}},
+            ]},
+        }}},
+    }
+
+
+def test_the_reader_uses_the_room_envelope_and_the_callers_own_membership():
+    module = load()
+    payload = _sync_payload(ROOM, CALLER, OWN)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    def runner(request, timeout):
+        return Response()
+
+    reader = module.MatrixCallReader("https://matrix.example", "t", OWN, runner=runner)
+    calls, nxt = reader.poll("s1")
+    assert nxt == "s2"
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.room_id == ROOM
+    assert call.caller == CALLER
+    assert call.joined == tuple(sorted((OWN, CALLER)))
+    assert call.focus["livekit_service_url"] == "https://rtc.example/sfu/get"
+
+
+def test_the_reader_falls_back_to_the_persistent_room_members():
+    module = load()
+    payload = _sync_payload(ROOM, CALLER, OWN)
+    payload["rooms"]["join"][ROOM].pop("state")
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    def runner(request, timeout):
+        if "joined_members" in request.full_url:
+            return _MembersResponse()
+        return Response()
+
+    class _MembersResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"joined": {OWN: {}, CALLER: {}}}).encode()
+
+    reader = module.MatrixCallReader("https://matrix.example", "t", OWN, runner=runner)
+    calls, _nxt = reader.poll("s1")
+    assert len(calls) == 1
+    assert calls[0].joined == tuple(sorted((OWN, CALLER)))
+
+
+def test_the_receipt_identity_survives_a_repeated_notification():
+    module = load()
+    first = call(module, event_id="$ring1", caller_device="DEV")
+    second = call(module, event_id="$ring2", caller_device="DEV")
+    assert first.receipt_id("matrix:1") == second.receipt_id("matrix:1")
+    other = call(module, event_id="$ring3", caller_device="DEV2")
+    assert other.receipt_id("matrix:1") != first.receipt_id("matrix:1")
+
+
+def test_the_claim_is_written_before_the_external_answer(tmp_path):
+    module = load()
+    root = tmp_path / "calls"
+    seen = []
+
+    class Store:
+        class _Connection:
+            def execute(self, query):
+                class Rows(list):
+                    def __iter__(self):
+                        return iter([{"user_id": "u", "id": "matrix:1", "provider": "matrix",
+                                      "credential_ref": "connector:abc"}])
+                return Rows()
+        _lock = __import__("threading").RLock()
+        _connection = _Connection()
+
+    class Service:
+        _store = Store()
+
+    class Vault:
+        def load(self, credential_ref, *, user_id, provider):
+            return {"homeserver": "https://matrix.example", "access_token": "t",
+                    "matrix_user_id": OWN, "device_id": "D"}
+
+    class Reader:
+        def __init__(self, account, secret):
+            pass
+
+        def poll(self, cursor, limit=50):
+            return [call(module)], "next"
+
+    def answers(request):
+        # The claim must already be on disk while the answer is running.
+        receipt_id = call(module).receipt_id("matrix:1")
+        seen.append(module.load_receipt(root, receipt_id))
+        return {"type": "receipt", "state": "completed", "text": "Здравствуйте."}
+
+    worker = module.MatrixInboundCallWorker(
+        Service(), allowed_accounts=(OWN,), rtc_auth_url="https://rtc.example/sfu/get",
+        call_root=root, reader_factory=lambda account, secret: Reader(account, secret),
+        answers=answers, vault=Vault())
+    assert worker.poll_once() == 1
+    assert seen and seen[0] is not None
+    assert seen[0]["status"] == "accepted"
