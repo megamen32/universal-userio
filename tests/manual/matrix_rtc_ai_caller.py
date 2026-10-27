@@ -65,6 +65,8 @@ CALLER_CLIENT_FORM = os.environ.get("CALLER_CLIENT_FORM", "") not in ("", "0", "
 # The canary caller is a listener: it must not end the call because its own
 # recognition of the callee was late. The Secretary may need a minute to think.
 CALLER_IDLE_TIMEOUT_SECONDS = float(os.environ.get("CALLER_IDLE_TIMEOUT_SECONDS", "150") or "150")
+# How long the caller is allowed to speak: the question and nothing else.
+CALLER_QUESTION_SECONDS = float(os.environ.get("CALLER_QUESTION_SECONDS", "0") or "0")
 # The fixed second question, served by the local LLM stub of the canary.
 SECOND_PHRASE = ("Проверь, что означает код пять ноль два в ответе наблюдателя "
                  "безработный точка ком, и назови первую проверку.")
@@ -174,6 +176,9 @@ async def run():
     # The first phrase is fixed TTS; the second turn is served by the local
     # fixed-phrase stub, so no LLM ever rewrites the caller's own question.
     first_pcm, first_rate = _load_wav(FIRST_WAV)
+    question_seconds = len(first_pcm) / (2 * (first_rate or 48000))
+    if CALLER_QUESTION_SECONDS:
+        question_seconds = CALLER_QUESTION_SECONDS
     attention_pcm = bytes(await asyncio.to_thread(
         voice.LocalSpeechPipeline(config).synthesize, config.attention_prompt))
     if first_rate != 48000:
@@ -210,6 +215,10 @@ async def run():
         def __init__(self):
             self.pending = bytearray()
             self.closed = False
+            # The canary caller speaks the question once and then only listens.
+            # Its own phrases must never barge in on the answer of the callee.
+            self.spoken_seconds = 0.0
+            self.question_seconds = 0.0
 
         def write(self, data):
             self.pending.extend(data)
@@ -224,7 +233,10 @@ async def run():
                 pcm = bytes(self.pending[3:3 + length])
                 del self.pending[:3 + length]
                 if kind == 0x16:
+                    if self.spoken_seconds >= self.question_seconds:
+                        continue
                     await source.capture_frame(rtc.AudioFrame(pcm, 48000, 1, len(pcm) // 2))
+                    self.spoken_seconds += len(pcm) / (2 * self.sample_rate)
                 elif kind == voice.HANGUP_KIND:
                     stop.set()
 
@@ -257,6 +269,7 @@ async def run():
             print(json.dumps({"event": "caller_bridge", **event}, ensure_ascii=False), flush=True)
 
     writer = Writer()
+    writer.question_seconds = question_seconds
 
     async def receive(track):
         stream = rtc.AudioStream(track, sample_rate=48000, num_channels=1,
