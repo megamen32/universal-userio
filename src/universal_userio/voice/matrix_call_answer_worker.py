@@ -305,7 +305,8 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
         asyncio.to_thread(pipeline.synthesize, config.attention_prompt),
     )
     prepared = PreparedCall(
-        "Здравствуйте. Я голосовой секретарь. Слушаю вас.", greeting_pcm, "", b"\x00\x00" * 160,
+        "Здравствуйте. Я голосовой секретарь. Слушаю вас.", greeting_pcm,
+        config.attention_prompt, attention_pcm,
         "Владелец звонит личному помощнику через Matrix. Выясни его задачу, не предполагай цель звонка.",
         {"call_mode": "incoming", "voice_transport": "matrix", "voice_target": caller},
         time.time(), load_wait_prompts(),
@@ -327,7 +328,6 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
             handle_call(
                 audio_reader, _RtcWriter(source, stopped), control_broker, config,
                 {engine_call_id: prepared},
-                answer_gate=lambda _call_id, hung_up: not hung_up.is_set(),
             ),
             timeout=max_seconds + 120)
     finally:
@@ -342,11 +342,13 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
                 pass
         await room.disconnect()
         await source.aclose()
+    # A transport receipt of the answered call. The state of the Secretary
+    # turn is read from the application ledger of that call and turn.
     return {
         "type": "receipt",
-        "state": "completed" if control_broker.assistant_text else "unanswered",
-        "text": control_broker.assistant_text.strip(),
+        "state": "answered" if control_broker.spoken else "unanswered",
+        "text": control_broker.transcript,
         "person": person,
         "callId": engine_call_id,
-        "turns": control_broker.turns,
+        "turns": len(control_broker.spoken),
     }

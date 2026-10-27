@@ -389,3 +389,31 @@ def test_the_callee_leg_has_no_undefined_name():
     used = {node.id for node in ast.walk(tree)
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
     assert not sorted(used - defined)
+
+
+def test_the_transport_receipt_follows_the_broker_contract():
+    """The receipt is built from the broker that collected the transcript."""
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+
+    class Inner:
+        def __init__(self):
+            self.events = []
+
+        async def accept(self, reader, writer):
+            return None
+
+        async def emit(self, event):
+            self.events.append(event)
+
+    async def check():
+        broker = worker._ControlBroker(Inner(), None)
+        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
+                                           text="Здравствуйте. Я голосовой секретарь."))
+        # The receipt reads exactly what the broker collected.
+        assert broker.spoken
+        assert broker.transcript == "Здравствуйте. Я голосовой секретарь."
+        assert not hasattr(broker, "assistant_text")
+        assert not hasattr(broker, "turns")
+
+    asyncio.run(check())
