@@ -60,6 +60,7 @@ class InboundMatrixCall:
     origin_server_ts: int = 0
     joined: tuple[str, ...] = ()
     caller_device: str = ""
+    membership_id: str = ""
 
     @property
     def key(self) -> str:
@@ -75,9 +76,12 @@ class InboundMatrixCall:
         The identity is the call itself, not the notification: the same call may
         be announced again, and a restart must still find the same receipt.
         """
+        # The membership id is the session identity of this very call: it is
+        # stable for its keepalives and notifications, and a new call on the
+        # same device publishes a new one.
         return str(uuid.uuid5(uuid.NAMESPACE_URL, "\0".join(
             [account_ref, self.room_id, self.caller,
-             self.call_id or self.caller_device or self.event_id])))
+             self.membership_id or self.call_id or self.event_id])))
 
 
 class MatrixCallReader:
@@ -170,6 +174,7 @@ class MatrixCallReader:
                     origin_server_ts=int(ring.get("origin_server_ts") or 0),
                     joined=joined,
                     caller_device=_caller_device(str(member.get("state_key") or ""), caller),
+                    membership_id=str(content.get("membershipID") or ""),
                 ))
                 if len(calls) >= limit:
                     break
@@ -235,7 +240,10 @@ def build_answer_request(call: InboundMatrixCall, *, account: Mapping[str, str],
     return {
         "action": CALLEE_ACTION,
         "call": {
-            "call_id": call.key,
+            # The wire call id stays room-scoped like the working caller, and
+            # the internal engine uuid is a separate field.
+            "call_id": "",
+            "engine_call_id": str(uuid.uuid5(uuid.NAMESPACE_URL, call.key)),
             "room_id": call.room_id,
             "caller": call.caller,
             "purpose": purpose or f"Входящий Matrix-звонок от {call.caller}",

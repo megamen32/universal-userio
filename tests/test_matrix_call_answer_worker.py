@@ -152,3 +152,49 @@ def test_the_control_stream_dispatches_the_answer_action(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["call"]["caller"] == CALLER
     assert written and json.loads(written[0])["type"] == "receipt"
+
+
+def test_the_local_contract_from_the_request_to_the_engine_prepared_call():
+    """build_answer_request -> the engine uuid frame -> the prepared call lookup.
+
+    No RTC and no model: the wire call id stays room-scoped, the internal
+    engine uuid is a real uuid, and the engine finds the prepared call by it.
+    """
+    import uuid as uuid_module
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+    intake = load("matrix_inbound_calls", "universal_userio.matrix_inbound_calls")
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+
+    call = intake.InboundMatrixCall(
+        room_id="!r:chat.bezrabotnyi.com", event_id="$r1", caller=CALLER, call_id="",
+        focus={"type": "livekit", "livekit_service_url": "https://rtc.example/sfu/get"},
+        expires_ms=240000, origin_server_ts=1, joined=("@aiadmin:chat.bezrabotnyi.com", CALLER),
+        membership_id="M1")
+    request = intake.build_answer_request(
+        call,
+        account={"id": "matrix:1", "matrix_user_id": "@aiadmin:chat.bezrabotnyi.com"},
+        secret={"homeserver": "https://matrix.example", "access_token": "t",
+                "matrix_user_id": "@aiadmin:chat.bezrabotnyi.com"},
+        identity={"device_id": "D"},
+        rtc_auth_url="https://rtc.example/sfu/get")
+
+    # The wire call id is room-scoped, exactly like the working caller.
+    assert request["call"]["call_id"] == ""
+    # The internal engine uuid is a real uuid the engine can frame and look up.
+    engine_call_id = request["call"]["engine_call_id"]
+    assert uuid_module.UUID(engine_call_id)
+
+    prepared = {engine_call_id: object()}
+
+    async def read_first():
+        # The reader belongs to the running loop of the engine.
+        reader = asyncio.StreamReader(limit=1024 * 1024)
+        reader.feed_data(bridge.pack_audiosocket_frame(bridge.UUID_KIND, uuid_module.UUID(engine_call_id).bytes))
+        return await bridge.read_audiosocket_frame(reader)
+
+    kind, payload = asyncio.run(read_first())
+    assert kind == bridge.UUID_KIND and len(payload) == 16
+    # The engine finds the prepared call by exactly that uuid.
+    assert str(uuid_module.UUID(bytes=payload)) in prepared
+    # And the request never carries a person: the voice host resolves it.
+    assert "person" not in request["call"]

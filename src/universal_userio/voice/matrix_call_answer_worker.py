@@ -176,10 +176,12 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
 
     state_key = "_" + own_user_id + "_" + device + "_m.call"
     content = {
-        "application": "m.call", "call_id": str(call.get("call_id") or ""), "device_id": device,
+        # The published membership keeps the room-scoped call id of the working
+        # caller; the internal engine uuid never reaches the wire.
+        "application": "m.call", "call_id": "", "device_id": device,
         "expires": int(call.get("expires_ms") or 240000),
         "foci_preferred": [focus], "focus_active": {"focus_selection": "oldest_membership", "type": "livekit"},
-        "m.call.intent": "audio", "membershipID": own_user_id + ":" + device, "scope": "m.room",
+        "m.call.intent": "audio", "membershipID": str(uuid.uuid4()), "scope": "m.room",
     }
     membership_path = room_path + "/state/" + MEMBER + "/" + urllib.parse.quote(state_key, safe="")
     openid = _request(server, token, "POST",
@@ -238,7 +240,8 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     )
     control_broker = _ControlBroker(broker, writer)
     # The engine expects the call id as the first audio frame.
-    audio_reader.feed_data(pack_audiosocket_frame(UUID_KIND, uuid.UUID(str(call.get("call_id")).replace("-", "")).bytes))
+    engine_call_id = str(call.get("engine_call_id") or uuid.uuid4())
+    audio_reader.feed_data(pack_audiosocket_frame(UUID_KIND, uuid.UUID(engine_call_id).bytes))
     max_seconds = int(call.get("max_seconds") or 120)
     if not 30 <= max_seconds <= 600:
         max_seconds = 120
@@ -246,7 +249,7 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
         await asyncio.wait_for(
             handle_call(
                 audio_reader, _RtcWriter(source, stopped), control_broker, config,
-                {str(call.get("call_id") or uuid.uuid4()): prepared},
+                {engine_call_id: prepared},
                 answer_gate=lambda _call_id, hung_up: not hung_up.is_set(),
             ),
             timeout=max_seconds + 120)
@@ -267,6 +270,6 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
         "state": "completed" if control_broker.assistant_text else "unanswered",
         "text": control_broker.assistant_text.strip(),
         "person": person,
-        "callId": str(call.get("call_id") or ""),
+        "callId": engine_call_id,
         "turns": control_broker.turns,
     }

@@ -246,12 +246,14 @@ def test_the_reader_falls_back_to_the_persistent_room_members():
     assert calls[0].joined == tuple(sorted((OWN, CALLER)))
 
 
-def test_the_receipt_identity_survives_a_repeated_notification():
+def test_the_receipt_identity_follows_the_call_not_the_device():
     module = load()
-    first = call(module, event_id="$ring1", caller_device="DEV")
-    second = call(module, event_id="$ring2", caller_device="DEV")
+    # The same call keeps its membership id across its notifications.
+    first = call(module, event_id="$ring1", membership_id="M1", caller_device="DEV")
+    second = call(module, event_id="$ring2", membership_id="M1", caller_device="DEV")
     assert first.receipt_id("matrix:1") == second.receipt_id("matrix:1")
-    other = call(module, event_id="$ring3", caller_device="DEV2")
+    # A new call on the same device publishes a new membership id.
+    other = call(module, event_id="$ring3", membership_id="M2", caller_device="DEV")
     assert other.receipt_id("matrix:1") != first.receipt_id("matrix:1")
 
 
