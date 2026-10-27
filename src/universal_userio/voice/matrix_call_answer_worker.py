@@ -63,12 +63,12 @@ def load_identities(settings: Mapping[str, str]) -> Mapping[str, str]:
 
 
 class _ControlBroker:
-    """Forward engine events to the control stream and keep the answered text.
+    """Forward engine events to the control stream and keep the spoken text.
 
-    The engine emits safe_event dictionaries: the event name is in "event", the
-    spoken text in "text" and the speaker in "speaker". The greeting is a
-    transcript_final of the same speaker, so only the text after the greeting
-    counts as the answer of the Secretary.
+    The engine emits safe_event dictionaries: the event name is the string in
+    "event", the spoken text in "text" and the speaker in "speaker". The full
+    agent transcript is the transport text of the call; whether the Secretary
+    answer was completed is read from the application ledger, not from here.
     """
 
     def __init__(self, inner: EventBroker, writer: asyncio.StreamWriter) -> None:
@@ -81,22 +81,16 @@ class _ControlBroker:
 
     async def emit(self, event: Mapping[str, Any]) -> None:
         payload = dict(event)
-        if (payload.get("event") == "transcript_final"
-                and payload.get("speaker") == "agent"
-                and payload.get("phase") != "progress"):
+        if payload.get("event") == "transcript_final" and payload.get("speaker") == "agent":
             text = str(payload.get("text") or "").strip()
             if text:
                 self.spoken.append(text)
         await self.inner.emit(payload)
 
     @property
-    def answer(self) -> str:
-        """The answered text; the greeting alone is never an answer."""
-        return self.spoken[-1] if len(self.spoken) > 1 else ""
-
-    @property
-    def answered(self) -> bool:
-        return len(self.spoken) > 1
+    def transcript(self) -> str:
+        """The whole spoken text of this call, in order."""
+        return " ".join(self.spoken).strip()
 
 
 class _RtcWriter:

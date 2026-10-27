@@ -220,22 +220,20 @@ def test_the_control_broker_reads_the_real_safe_event_contract():
         inner = Inner()
         broker = worker._ControlBroker(inner, None)
         # The greeting arrives first, then the answer of the Secretary.
+        # The whole agent transcript is the transport text of the call.
         await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
                                            text="Здравствуйте. Я голосовой секретарь."))
-        assert broker.answer == ""
-        assert broker.answered is False
-        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
-                                           text="Здравствуйте! Я веду ваши личные дела."))
-        assert broker.answered is True
-        assert broker.answer == "Здравствуйте! Я веду ваши личные дела."
-        # A progress phrase is never the answer.
         await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
                                            text="Секунду, пожалуйста.", phase="progress"))
-        assert broker.answer == "Здравствуйте! Я веду ваши личные дела."
-        # The remote side is never the answer either.
+        await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="agent",
+                                           text="Здравствуйте! Я веду ваши личные дела."))
+        assert broker.transcript == (
+            "Здравствуйте. Я голосовой секретарь. Секунду, пожалуйста. "
+            "Здравствуйте! Я веду ваши личные дела.")
+        # The remote side is never the spoken text of the call.
         await broker.emit(bridge.safe_event("transcript_final", "c1", speaker="remote",
                                            text="Алло?"))
-        assert broker.answer == "Здравствуйте! Я веду ваши личные дела."
+        assert "Алло?" not in broker.transcript
         assert len(inner.events) == 4
 
     asyncio.run(check())
