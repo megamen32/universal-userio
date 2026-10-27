@@ -57,6 +57,9 @@ FIRST_PHRASE = ("Наблюдатель безработный точка ком
 FIRST_WAV = os.environ.get("CALLER_FIRST_WAV", "/tmp/caller_first.wav")
 # Scripted phrases of the caller: one per substantive answer of the callee.
 SCRIPT_WAVS = [item for item in os.environ.get("CALLER_SCRIPT_WAVS", "").split(",") if item]
+# The scripted phrase follows the answer it answers, so the caller never
+# interrupts the callee while it is still speaking.
+SCRIPT_QUIET_SECONDS = float(os.environ.get("CALLER_SCRIPT_QUIET_SECONDS", "4") or "4")
 # The fixed second question, served by the local LLM stub of the canary.
 SECOND_PHRASE = ("Проверь, что означает код пять ноль два в ответе наблюдателя "
                  "безработный точка ком, и назови первую проверку.")
@@ -223,13 +226,15 @@ async def run():
             return default
 
     remote_answers = 0
+    last_remote_at = 0.0
 
     class Broker:
         async def emit(self, event):
-            nonlocal remote_answers
-            if event.get("event") == "transcript_final" and event.get("speaker") == "remote" \
-                    and len(str(event.get("text") or "")) >= 40:
-                remote_answers += 1
+            nonlocal remote_answers, last_remote_at
+            if event.get("event") == "transcript_final" and event.get("speaker") == "remote":
+                last_remote_at = time.monotonic()
+                if len(str(event.get("text") or "")) >= 40:
+                    remote_answers += 1
             print(json.dumps({"event": "caller_bridge", **event}, ensure_ascii=False), flush=True)
 
     writer = Writer()
@@ -326,8 +331,10 @@ async def run():
         async def scripted_phrases():
             # The scripted phrase of the caller follows the answer it answers.
             for index, path in enumerate(SCRIPT_WAVS):
-                while remote_answers <= index and not stop.is_set():
-                    await asyncio.sleep(0.5)
+                while (remote_answers <= index or not last_remote_at
+                       or time.monotonic() - last_remote_at < SCRIPT_QUIET_SECONDS) \
+                        and not stop.is_set():
+                    await asyncio.sleep(0.25)
                 if stop.is_set():
                     return
                 pcm, rate = _load_wav(path)
