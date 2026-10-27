@@ -416,7 +416,9 @@ async def run():
                 if (summaries["caller_turns"] >= args.reply_turns + 1
                         and summaries["assistant_turns"] >= args.reply_turns + 1
                         and not stop.is_set()):
-                    stop.set()
+                    # The answer text arrives before its playback: let the
+                    # engine speak it before the session is closed.
+                    asyncio.get_event_loop().call_later(22, stop.set)
                     audio_reader.feed_data(pack_audiosocket_frame(voice.HANGUP_KIND, b""))
                     await asyncio.sleep(0)
             elif kind == "error":
