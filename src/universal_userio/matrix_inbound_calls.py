@@ -126,6 +126,17 @@ class MatrixCallReader:
             data = json.loads(response.read())
         return data if isinstance(data, dict) else {}
 
+    @staticmethod
+    def _delta_members(room: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+        """The call memberships that this sync delta carries."""
+        members: dict[str, Mapping[str, Any]] = {}
+        events = list(((room.get("state") or {}).get("events") or []))
+        events += list((room.get("timeline") or {}).get("events") or [])
+        for event in events:
+            if isinstance(event, dict) and event.get("type") == MEMBER:
+                members[str(event.get("state_key") or "")] = event
+        return members
+
     def _call_members(self, room_id: str, room: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
         """The call memberships of the room: the delta plus the room state.
 
@@ -133,12 +144,7 @@ class MatrixCallReader:
         it is usually not part of the delta that carries the ring; the room
         state is the persistent source of the member set.
         """
-        members: dict[str, Mapping[str, Any]] = {}
-        events = list(((room.get("state") or {}).get("events") or []))
-        events += list((room.get("timeline") or {}).get("events") or [])
-        for event in events:
-            if isinstance(event, dict) and event.get("type") == MEMBER:
-                members[str(event.get("state_key") or "")] = event
+        members = self._delta_members(room)
         request = urllib.request.Request(
             self.homeserver + "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
             + "/state", headers={"Authorization": "Bearer " + self.token})
@@ -197,9 +203,12 @@ class MatrixCallReader:
                 mentions = (event.get("content") or {}).get("m.mentions") or {}
                 if self.own_user_id in (mentions.get("user_ids") or []):
                     rings.append(event)
-            if not rings:
-                continue
-            joined = self._joined_members(room_id, room)
+            # The call signals of this room: a ring that mentions us, and the
+            # call membership of the other participant. A real client publishes
+            # the membership and no notification at all, so the membership is
+            # a call signal of its own.
+            signals: list[tuple[str, Mapping[str, Any], Mapping[str, Any]]] = []
+            signalled: set[str] = set()
             for ring in rings:
                 # The call notification names the caller; the call membership
                 # belongs to that same caller and to no one else.
@@ -207,6 +216,29 @@ class MatrixCallReader:
                 member = self._call_member(room_id, room, ring, caller)
                 if member is None:
                     continue
+                key = str(member.get("state_key") or "")
+                if key in signalled:
+                    continue
+                signalled.add(key)
+                signals.append((caller, ring, member))
+            delta_members = self._delta_members(room)
+            for member in delta_members.values():
+                caller = str(member.get("sender") or "")
+                if not caller or caller == self.own_user_id:
+                    continue
+                content = member.get("content") or {}
+                if not content.get("foci_preferred"):
+                    # A cleared membership is the end of a call, not a call.
+                    continue
+                key = str(member.get("state_key") or "")
+                if key in signalled:
+                    continue
+                signalled.add(key)
+                signals.append((caller, member, member))
+            if not signals:
+                continue
+            joined = self._joined_members(room_id, room)
+            for caller, event, member in signals:
                 content = member.get("content") or {}
                 focus = next((item for item in content.get("foci_preferred", [])
                               if isinstance(item, dict) and item.get("type") == "livekit"), None)
@@ -214,12 +246,12 @@ class MatrixCallReader:
                     continue
                 calls.append(InboundMatrixCall(
                     room_id=str(room_id),
-                    event_id=str(ring.get("event_id") or ""),
+                    event_id=str(event.get("event_id") or ""),
                     caller=caller,
                     call_id=str(content.get("call_id") or ""),
                     focus=focus,
                     expires_ms=int(content.get("expires") or 0),
-                    origin_server_ts=int(ring.get("origin_server_ts") or 0),
+                    origin_server_ts=int(event.get("origin_server_ts") or 0),
                     joined=joined,
                     caller_device=_caller_device(str(member.get("state_key") or ""), caller),
                     membership_id=str(content.get("membershipID") or ""),

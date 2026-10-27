@@ -380,8 +380,10 @@ def test_the_reader_answers_a_ring_that_arrives_after_its_call_membership():
          "content": {"membership": "join"}},
     ]
     batches = {
+        # The membership was published in an earlier batch and is only in the
+        # room state now; the ring arrives in the next one.
         "s1": {"next_batch": "s2", "rooms": {"join": {ROOM: {
-            "timeline": {"events": [member_event]}, "state": {"events": room_state}}}}},
+            "timeline": {"events": []}, "state": {"events": room_state}}}}},
         "s2": {"next_batch": "s3", "rooms": {"join": {ROOM: {
             "timeline": {"events": [ring_event]}, "state": {"events": room_state}}}}},
     }
@@ -432,3 +434,63 @@ def test_the_reader_answers_a_ring_that_arrives_after_its_call_membership():
                              now=1700000001) is None
     assert module.admit_call(call, own_user_id=OWN, allowed_accounts=(OWN,),
                              now=1700000242) == "call_expired"
+
+
+def test_the_reader_answers_the_call_form_of_a_real_client():
+    """A real client publishes the call membership and no notification.
+
+    The owner client sends only the call membership of the caller; the ring
+    notification is absent. The intake has to recognise the call from the
+    membership, or the call stays unanswered.
+    """
+    module = load()
+    membership = {
+        "type": "org.matrix.msc3401.call.member", "event_id": "$m1",
+        "state_key": "_" + CALLER + "_9KrATrt4uw_m.call", "sender": CALLER,
+        "origin_server_ts": 1793138322433,
+        "content": {"application": "m.call", "call_id": "", "device_id": "9KrATrt4uw",
+                    "expires": 14400000, "membershipID": "session-1",
+                    "foci_preferred": [{"type": "livekit",
+                                        "livekit_service_url": "https://rtc.chat.bezrabotnyi.com/sfu/get"}]},
+    }
+    payload = {
+        "next_batch": "s2",
+        "rooms": {"join": {ROOM: {
+            # The membership arrives as a state event; there is no ring.
+            "state": {"events": [membership]},
+            "timeline": {"events": []},
+        }}},
+    }
+
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def runner(request, timeout):
+        if request.full_url.endswith("/state"):
+            return Response([membership])
+        if request.full_url.endswith("/joined_members"):
+            return Response({"joined": {OWN: {}, CALLER: {}}})
+        return Response(payload)
+
+    reader = module.MatrixCallReader("https://matrix.example", "t", OWN, runner=runner)
+    calls, cursor = reader.poll("s1")
+    assert cursor == "s2"
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.caller == CALLER
+    assert call.membership_id == "session-1"
+    assert call.caller_device == "9KrATrt4uw"
+    assert call.focus["livekit_service_url"].startswith("https://rtc.chat.bezrabotnyi.com")
+    # The call of a real client is admitted in a one-to-one room.
+    assert module.admit_call(call, own_user_id=OWN, allowed_accounts=(OWN,),
+                             now=1793138323) is None
