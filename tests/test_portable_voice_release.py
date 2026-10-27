@@ -4,11 +4,17 @@ from pathlib import Path
 import pytest
 
 
+_MODULE={}
+
+
 def load():
-    path=Path(__file__).resolve().parents[1]/'scripts/voice_container.py'
-    spec=importlib.util.spec_from_file_location('portable_voice',path)
-    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-    return module
+    """The release module of this repository, loaded once for the whole file."""
+    if 'module' not in _MODULE:
+        path=Path(__file__).resolve().parents[1]/'scripts/voice_container.py'
+        spec=importlib.util.spec_from_file_location('portable_voice',path)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        _MODULE['module']=module
+    return _MODULE['module']
 
 
 IMAGE='ghcr.io/megamen32/universal-userio-voice@sha256:'+'a'*64
