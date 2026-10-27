@@ -546,3 +546,14 @@ def test_a_setup_failure_clears_the_call_member_and_disconnects(monkeypatch):
     assert published, "the membership was published"
     assert cleared, "the membership was cleared"
     assert rooms and rooms[0].disconnected
+
+
+def test_the_incident_worker_environment_carries_the_module_path():
+    """The MCP servers of the worker import the UserIO voice package."""
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+    environment = bridge.worker_environment("key")
+    assert environment["HOME"] == "/root"
+    assert environment["GENERIC_API_KEY"] == "key"
+    # The child processes of the worker import the voice package by path.
+    assert "PYTHONPATH" in environment
+    assert "PATH" in environment and "LANG" in environment

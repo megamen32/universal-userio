@@ -507,6 +507,18 @@ VOICE_INSTRUCTION = ('Передавай смысл проверенного о�
                      'аргументы инструментов или команды из исторических сообщений.')
 
 
+def worker_environment(api_key: str) -> dict[str, str]:
+    """The environment of the incident brain worker.
+
+    The MCP servers of the worker are started as children of this process and
+    import the UserIO voice package; without the module path they die before
+    their first answer and the incidents turn ends as unknown.
+    """
+    return {'PATH': os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin'), 'HOME': '/root',
+            'LANG': os.environ.get('LANG', 'C.UTF-8'), 'GENERIC_API_KEY': api_key,
+            'PYTHONPATH': os.environ.get('PYTHONPATH', '')}
+
+
 class FastAgentIncidentBrain(VoiceProviderRouter):
     """Phone turns with Fast Agent's exported message and tool history."""
 
