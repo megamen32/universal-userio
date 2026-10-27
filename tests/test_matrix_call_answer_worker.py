@@ -322,3 +322,41 @@ def test_the_identity_map_comes_from_the_supervised_secret_of_the_host(tmp_path,
     other.chmod(0o600)
     assert worker.load_identities(
         {"EXMANAGER_VOICE_IDENTITIES_FILE": str(other)}) == {"matrix:" + QA_CALLER: QA_PERSON}
+
+
+def test_early_incoming_audio_cannot_overtake_the_call_id():
+    """The engine reads the call id first, so early audio has to wait for it.
+
+    The remote audio can arrive while the callee still publishes its
+    membership and synthesizes the greeting. That audio must not become the
+    first frame of the reader.
+    """
+    bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
+    worker = load("matrix_call_answer_worker", "universal_userio.voice.matrix_call_answer_worker")
+
+    async def check():
+        reader = asyncio.StreamReader(limit=1024 * 1024)
+        transport_ready = asyncio.Event()
+        stopped = asyncio.Event()
+        released = asyncio.Event()
+
+        async def frames():
+            yield b"\x11\x22" * 160
+            await released.wait()
+
+        task = asyncio.create_task(worker.feed_incoming_audio(
+            reader, frames(), transport_ready=transport_ready, stopped=stopped))
+        await asyncio.sleep(0)
+        # The remote audio arrived, but the call id is not in the reader yet.
+        assert reader._buffer == b""
+        call_id = str(uuid.uuid4())
+        reader.feed_data(bridge.pack_audiosocket_frame(bridge.UUID_KIND, uuid.UUID(call_id).bytes))
+        transport_ready.set()
+        await asyncio.sleep(0)
+        released.set()
+        assert await task == 1
+        kind, payload = await bridge.read_audiosocket_frame(reader)
+        assert kind == bridge.UUID_KIND
+        assert uuid.UUID(bytes=payload) == uuid.UUID(call_id)
+
+    asyncio.run(check())

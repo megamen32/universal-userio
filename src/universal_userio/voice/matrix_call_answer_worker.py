@@ -127,6 +127,26 @@ class _ControlBroker:
         return " ".join(self.spoken).strip()
 
 
+async def feed_incoming_audio(reader, frames, *, transport_ready, stopped,
+                              limit: int = 1024 * 1024) -> int:
+    """Feed the caller's audio after the call id frame.
+
+    The engine reads the call id as the first frame of the reader, so the
+    incoming audio waits for it. LiveKit keeps the frames meanwhile; no frame
+    can overtake the call id.
+    """
+    await transport_ready.wait()
+    fed = 0
+    async for frame in frames:
+        if stopped.is_set():
+            break
+        if len(reader._buffer) + len(frame) + 3 > limit:
+            raise BufferError("Matrix incoming audio exceeds bounded buffer")
+        reader.feed_data(pack_audiosocket_frame(0x16, frame))
+        fed += 1
+    return fed
+
+
 class _RtcWriter:
     """The engine's audio sink: capture the local track for the SFU.
 
@@ -243,19 +263,20 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     source = rtc.AudioSource(48000, 1, queue_size_ms=200)
     audio_reader = asyncio.StreamReader(limit=1024 * 1024)
     stopped = asyncio.Event()
+    transport_ready = asyncio.Event()
     media_tasks: set[asyncio.Task] = set()
     published = False
 
     async def capture(track) -> None:
         try:
             stream = rtc.AudioStream(track, sample_rate=48000, num_channels=1, frame_size_ms=20, capacity=100)
-            async for event in stream:
-                if stopped.is_set():
-                    break
-                frame = bytes(event.frame.data)
-                if len(audio_reader._buffer) + len(frame) + 3 > 1024 * 1024:
-                    raise BufferError("Matrix incoming audio exceeds bounded buffer")
-                audio_reader.feed_data(pack_audiosocket_frame(0x16, frame))
+
+            async def frames():
+                async for event in stream:
+                    yield bytes(event.frame.data)
+
+            await feed_incoming_audio(audio_reader, frames(),
+                                       transport_ready=transport_ready, stopped=stopped)
         except Exception:
             pass
 
@@ -293,6 +314,9 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     # The engine expects the call id as the first audio frame.
     engine_call_id = str(call.get("engine_call_id") or uuid.uuid4())
     audio_reader.feed_data(pack_audiosocket_frame(UUID_KIND, uuid.UUID(engine_call_id).bytes))
+    # The call id is the first frame of the reader; only now may the incoming
+    # audio follow it.
+    transport_ready.set()
     max_seconds = int(call.get("max_seconds") or 120)
     if not 30 <= max_seconds <= 600:
         max_seconds = 120
