@@ -294,6 +294,9 @@ async def run():
 
     remote_answers = 0
     last_remote_at = 0.0
+    received_pcm = bytearray()
+    last_voice_at = 0.0
+    first_heard = False
 
     class Broker:
         async def emit(self, event):
@@ -308,6 +311,7 @@ async def run():
     writer.question_seconds = question_seconds
 
     async def receive(track, publication=None, participant=None):
+        nonlocal last_voice_at, first_heard
         if crypto and (publication.encryption_type != rtc.EncryptionType.GCM or
                        not await crypto.authorize(room, participant.identity)):
             stop.set()
@@ -321,6 +325,17 @@ async def run():
                 if stop.is_set():
                     break
                 frame = bytes(event.frame.data)
+                if os.environ.get('CALLER_PASSIVE_LISTENER') == '1':
+                    from array import array
+                    received_pcm.extend(frame)
+                    if max((abs(value) for value in array('h', frame)), default=0) > 500:
+                        last_voice_at = time.monotonic()
+                        if not first_heard:
+                            first_heard = True
+                            print(json.dumps({'event': 'received_remote_audio',
+                                'participant': participant.identity,
+                                'encrypted': bool(crypto)}), flush=True)
+                    continue
                 if len(audio_reader._buffer) + len(frame) + 3 > 1024 * 1024:
                     raise BufferError("caller incoming audio exceeds bounded buffer")
                 audio_reader.feed_data(voice.pack_audiosocket_frame(0x16, frame))
@@ -395,6 +410,18 @@ async def run():
         if crypto:
             await crypto.wait_ready()
         transport_ready.set()
+        if os.environ.get('CALLER_AUDIO_GATE') == 'private-jsonl':
+            if not crypto:
+                raise PermissionError('private audio gate requires encrypted fixture control')
+            # The same private stream carries media RPC. Hold its lock while
+            # the operator binds the actual B engine UUID in the native SDK.
+            async with crypto._lock:
+                crypto.writer.write((json.dumps({'event': 'fixture_audio_gate'})+'\n').encode())
+                await crypto.writer.drain()
+                result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 45))
+                if result.get('type') != 'fixture_audio_gate_result' or result.get('allowed') is not True:
+                    raise PermissionError('native fixture audio scope was not granted')
+            print(json.dumps({'event': 'fixture_audio_released', 'call_id': result['call_id']}), flush=True)
         audio_reader.feed_data(voice.pack_audiosocket_frame(voice.UUID_KIND,
                                                            uuid.UUID(voice_call_id).bytes))
 
@@ -425,6 +452,41 @@ async def run():
                 await speak(pcm)
                 await asyncio.sleep(1.0)
 
+        if os.environ.get('CALLER_PASSIVE_LISTENER') == '1':
+            async def wait_reply(after, timeout=35):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline and not stop.is_set():
+                    if last_voice_at > after and time.monotonic()-last_voice_at > 1.6:
+                        return
+                    await asyncio.sleep(.05)
+                raise TimeoutError('fixture remote answer deadline')
+            # Let the permanent handler's cached greeting finish, then speak
+            # fixed WAVs. This fixture never generates an assistant answer.
+            await wait_reply(time.monotonic()-30, 12)
+            for index, path in enumerate([FIRST_WAV, *SCRIPT_WAVS]):
+                pcm, rate = _load_wav(path)
+                if rate != 48000:
+                    pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)
+                started_phrase = time.monotonic()
+                await speak(pcm)
+                await source.wait_for_playout()
+                print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
+                barge = os.environ.get('CALLER_BARGE_WAV') if index == 0 else None
+                if barge:
+                    deadline = time.monotonic()+35
+                    while last_voice_at <= started_phrase and time.monotonic() < deadline:
+                        await asyncio.sleep(.05)
+                    await asyncio.sleep(.8)
+                    pcm, rate = _load_wav(barge)
+                    if rate != 48000:
+                        pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)
+                    await speak(pcm)
+                    await source.wait_for_playout()
+                    started_phrase = time.monotonic()
+                    print(json.dumps({'event': 'fixture_barge_sent'}), flush=True)
+                await wait_reply(started_phrase)
+            return 0
+
         if SCRIPT_WAVS:
             asyncio.create_task(scripted_phrases())
 
@@ -441,6 +503,11 @@ async def run():
         return 0
     finally:
         stop.set()
+        if received_pcm:
+            with wave.open(os.environ.get('CALLER_RECEIVED_WAV', '/tmp/caller_received.wav'), 'wb') as output:
+                output.setnchannels(1); output.setsampwidth(2); output.setframerate(48000)
+                output.writeframes(received_pcm)
+            print(json.dumps({'event': 'received_audio_saved', 'pcm_bytes': len(received_pcm)}), flush=True)
         if crypto:
             await crypto.close()
         try:
