@@ -9,7 +9,7 @@ import unittest
 
 
 class FixtureBargeTests(unittest.TestCase):
-    def run_loop(self, heard=True):
+    def run_loop(self, heard=True, fresh=True):
         tree = ast.parse((Path(__file__).parent/'manual/matrix_rtc_ai_caller.py').read_text())
         loop = next(n for n in ast.walk(tree) if isinstance(n, ast.For)
                     and ast.unparse(n.iter) == 'enumerate([FIRST_WAV, *SCRIPT_WAVS])')
@@ -20,7 +20,7 @@ class FixtureBargeTests(unittest.TestCase):
         events = []
         clock = [10.0]
         def now():
-            clock[0] += 10
+            clock[0] += 0
             return clock[0]
         async def speak(pcm): events.append(('pcm', pcm))
         async def gate(stage): events.append(('gate', stage))
@@ -33,7 +33,7 @@ class FixtureBargeTests(unittest.TestCase):
             _load_wav=lambda path: (path, 48000), source=SimpleNamespace(wait_for_playout=noop),
             speak=speak, completed_answer=gate, wait_reply=noop, wait_substantive_answer=substantive, received_pcm=bytearray(),
             time=SimpleNamespace(monotonic=now, time=now),
-            asyncio=SimpleNamespace(sleep=noop), last_voice_at=100000 if heard else 0,
+            asyncio=SimpleNamespace(sleep=noop), last_voice_at=10 if fresh else 0,
             stop=SimpleNamespace(is_set=lambda: False), json=__import__('json'))
         exec(compile(module, '<real fixture phrase loop>', 'exec'), namespace)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -50,3 +50,9 @@ class FixtureBargeTests(unittest.TestCase):
         events, timed_out = self.run_loop(heard=False)
         self.assertTrue(timed_out)
         self.assertEqual(events, [('pcm','first'), ('substantive_pcm_gate',False)])
+
+    def test_finished_answer_does_not_release_late_barge_after_asr(self):
+        events, timed_out = self.run_loop(fresh=False)
+        self.assertFalse(timed_out)
+        self.assertNotIn(('pcm', 'barge'), events)
+        self.assertIn(('gate', 'phrase'), events)

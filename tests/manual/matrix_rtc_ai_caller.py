@@ -519,7 +519,16 @@ async def run():
                     pcm, rate = _load_wav(barge)
                     if rate != 48000:
                         pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)
+                    voice_age = time.monotonic()-last_voice_at
+                    trigger = {'received_pcm_offset':len(received_pcm),
+                               'triggered_at':time.time(), 'last_voice_age_seconds':voice_age}
+                    if not 0 <= voice_age <= .35:
+                        print(json.dumps({'event':'fixture_not_barged', **trigger}), flush=True)
+                        await completed_answer('phrase')
+                        await wait_reply(started_phrase)
+                        continue
                     started_utc = time.time()
+                    print(json.dumps({'event':'fixture_barge_trigger', **trigger}), flush=True)
                     await speak(pcm)
                     await source.wait_for_playout()
                     started_phrase = time.monotonic()
