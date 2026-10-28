@@ -228,6 +228,10 @@ class Messenger:
         provider_id = ''
         if conv['source'] in {'telegram','vk','max'} and mid.startswith(account_ref+'|'+peer+':'):
             provider_id = mid[len(account_ref+'|'+peer+':'):]
+        elif conv['source'] == 'telegram' and mid.startswith(peer+':'):
+            # Ingestion preserves legacy keys when hydrating this exact scoped
+            # conversation. Keep that stored identity while recovering its ID.
+            provider_id = mid[len(peer+':'):]
         elif conv['source'] == 'max' and mid.startswith('max-'+peer+'-'):
             provider_id = mid[len('max-'+peer+'-'):]
         if conv['source'] not in {'telegram','max','vk'}: provider_id=mid
