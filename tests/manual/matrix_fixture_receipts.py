@@ -46,7 +46,7 @@ def received_answer_started(sdk, received_asr):
     return any(tuple(heard[i:i+4]) in phrases for i in range(len(heard)-3))
 
 
-def received_domain_then_computer_started(sdk, received_asr, domain):
+def received_domain_then_computer_started(sdk, received_asr, domain, spoken_domain=""):
     """The A fixture must hear the complete domain and 502 before barging.
 
     This only validates a private QA gate; it never rewrites a transcript.
@@ -57,7 +57,8 @@ def received_domain_then_computer_started(sdk, received_asr, domain):
     tails = []
     for text in (sdk.get('text', ''), received_asr):
         text = text.lower().replace('ё', 'е')
-        address = re.search(re.escape(domain.lower()), text)
+        variants = [domain.lower()] + ([spoken_domain.lower()] if spoken_domain else [])
+        address = re.search('|'.join(re.escape(value) for value in variants), text)
         if not address:
             return False
         error = re.search(r'502|пятьсот\s+два|пять\s+ноль\s+два', text[address.end():])

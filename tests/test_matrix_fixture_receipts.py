@@ -47,6 +47,8 @@ class ReceivedAnswerGateTests(unittest.TestCase):
                       'На компьютере voice qa sandbox я умею читать ваши файлы.']:
             self.assertFalse(m.received_domain_then_computer_started(sdk, heard, 'notify.bezrabotnyi.com'))
         self.assertTrue(m.received_domain_then_computer_started(sdk, text, 'notify.bezrabotnyi.com'))
+        spoken = text.replace('notify.bezrabotnyi.com', 'нотифай точка безработный точка ком')
+        self.assertTrue(m.received_domain_then_computer_started(sdk, spoken, 'notify.bezrabotnyi.com', 'нотифай точка безработный точка ком'))
 
     def test_failed_ack_is_not_an_unknown_turn_or_a_reason_to_replay_it(self):
         self.assertEqual(m.phase_result({'state':'delegated','mode':'incidents'}, native_mode='incidents',
