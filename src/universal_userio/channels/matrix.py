@@ -1,6 +1,6 @@
 """Matrix provider reader with no UserIO store/UI/MCP dependency."""
 from __future__ import annotations
-import json, os, signal, threading, time, urllib.parse, urllib.request
+import hashlib, json, os, signal, threading, time, urllib.parse, urllib.request, urllib.error
 from dataclasses import dataclass
 from typing import Any
 
@@ -11,6 +11,42 @@ class _RejectRedirect(urllib.request.HTTPRedirectHandler):
 
 def _matrix_open(request, timeout):
     return urllib.request.build_opener(_RejectRedirect).open(request, timeout=timeout)
+
+
+class MatrixSender:
+    """One canonical UserIO draft, one stable Matrix transaction and receipt."""
+    def __init__(self, homeserver: str, token: str):
+        self.homeserver, self.token = homeserver.rstrip('/'), token
+        if not self.homeserver or not self.token:
+            raise ValueError('Matrix connected account credentials unavailable')
+
+    def send(self, *, room_id: str, body: str, request_id: str) -> str:
+        from ..contracts import DeliveryNotSubmittedError
+        room = urllib.parse.quote(room_id, safe='')
+        headers = {'Authorization':'Bearer '+self.token, 'Content-Type':'application/json'}
+        # This plain-text outbox must never expose a message in an encrypted
+        # room. Existing account crypto remains its separate lifecycle owner.
+        check = urllib.request.Request(self.homeserver+'/_matrix/client/v3/rooms/'+room+'/state/m.room.encryption',headers=headers)
+        try:
+            with _matrix_open(check, timeout=15):
+                raise DeliveryNotSubmittedError('Encrypted Matrix message delivery is not supported by this text outbox')
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise DeliveryNotSubmittedError('Matrix room encryption check rejected') from None
+        transaction = 'userio-'+hashlib.sha256(request_id.encode()).hexdigest()[:32]
+        request = urllib.request.Request(self.homeserver+'/_matrix/client/v3/rooms/'+room+'/send/m.room.message/'+transaction,
+            data=json.dumps({'msgtype':'m.text','body':body},ensure_ascii=False).encode(),headers=headers,method='PUT')
+        try:
+            with _matrix_open(request, timeout=15) as response:
+                result=json.loads(response.read(65537))
+        except urllib.error.HTTPError as error:
+            if error.code in {401,403,404}:
+                raise DeliveryNotSubmittedError('Matrix provider rejected message HTTP'+str(error.code)) from None
+            raise
+        event_id=result.get('event_id') if isinstance(result,dict) else None
+        if not isinstance(event_id,str) or not event_id.startswith('$'):
+            raise RuntimeError('Matrix accepted outcome has no provider event id; do not replay')
+        return 'matrix:'+event_id
 
 
 @dataclass(frozen=True, slots=True)

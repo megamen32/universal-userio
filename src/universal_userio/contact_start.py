@@ -140,6 +140,16 @@ class ContactStarter:
             raise ContactStartError(f"contact_resolution_unsupported:{provider or 'unknown'}")
         return resolver(account, identifier, user_id=user_id)
 
+    def _resolve_matrix(self, account: dict[str, Any], identifier: str, *,
+                        user_id: str) -> ResolvedContact:
+        # A literal room ID is already canonical; never join rooms or guess
+        # a contact from a display name on an operator notification path.
+        if not re.fullmatch(r"![^\s:]+:[^\s/]+", identifier):
+            raise ContactStartError("contact_matrix_room_id_required")
+        return ResolvedContact(provider="matrix", account_ref=str(account["id"]),
+            source="matrix", peer_id=identifier, display_name=identifier,
+            route_id="matrix-read-only", peer_kind="group", identifier=identifier)
+
     def _resolve_gmail(self, account: dict[str, Any], identifier: str, *,
                        user_id: str) -> ResolvedContact:
         address = mail_address(identifier) or identifier.strip().casefold()

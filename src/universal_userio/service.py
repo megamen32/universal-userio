@@ -1899,6 +1899,20 @@ class UserIOService:
         source = str(conversation["source"])
         if source == 'diagnostic':
             raise DeliveryUnavailableError('Diagnostic chats never select an external outbox/provider.')
+        if source == 'matrix':
+            from .account_connections import ConnectorSecrets
+            from .channels.matrix import MatrixSender
+            account_ref = str(conversation.get('account_ref') or '')
+            account = self.contact_starter.account(user_id=user_id, account_ref=account_ref)
+            reference = str(account.get('credential_ref') or '')
+            if account.get('provider') != 'matrix' or not reference.startswith('connector:'):
+                raise DeliveryUnavailableError('Matrix connected account is unavailable')
+            secret = ConnectorSecrets().load(reference, user_id=user_id, provider='matrix')
+            if secret.get('account_id') != account_ref or secret.get('user_id') != user_id:
+                raise DeliveryUnavailableError('Matrix credential identity does not match account')
+            sender = MatrixSender(str(secret.get('homeserver') or ''), str(secret.get('access_token') or ''))
+            return partial(sender.send, room_id=str(conversation.get('peer_id') or ''),
+                           body=draft.body, request_id=draft.id)
         if source=='yandex':
             from .yandex.web import YandexWeb
             return YandexWeb(self,user_id).prepare(conversation,draft)
