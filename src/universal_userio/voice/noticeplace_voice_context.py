@@ -29,6 +29,34 @@ QA_BINDING = {'qa_caller':'caller', 'qa_room':'room', 'qa_account_ref':'account_
               'correlation_id':'correlation_id'}
 
 
+def explicit_incident_acknowledgement(text):
+    """Recognize a current, unqualified receipt statement; never quoted intent."""
+    value = str(text or '').casefold().replace('ё', 'е')
+    if re.search(r'[?"«»“”]|\b(?:не|нет|если|когда|допустим)\b', value):
+        return False
+    value = ' '.join(re.sub(r'[.,!;:]', ' ', value).split())
+    value = re.sub(r'^(?:да |пожалуйста )+', '', value)
+    value = re.sub(r'(?: пожалуйста| спасибо)+$', '', value)
+    return bool(re.fullmatch(
+        r'(?:я )?(?:(?:получил|получила|получили|принял|приняла) '
+        r'(?:(?:это|тестовое|ваше|данное) )*(?:уведомление|сообщение)|'
+        r'(?:(?:это|тестовое|ваше|данное) )*(?:уведомление|сообщение) '
+        r'(?:получил|получила|получено|принято)|'
+        r'подтверждаю(?: (?:(?:этот|данный|тестовый) )?инцидент| получение(?: уведомления)?)?|'
+        r'подтверди(?: (?:(?:этот|данный|тестовый) )?инцидент| получение(?: уведомления)?)?|'
+        r'принято|останови эскалацию)', value))
+
+
+def incident_ack_instruction(text):
+    if not explicit_incident_acknowledgement(text):
+        return ''
+    return ('Текущая реплика явно подтверждает получение уведомления (ACK), '
+            'в том числе «получил уведомление»; повторного подтверждения не спрашивай. '
+            'Отметь только точный текущий инцидент существующим разрешённым ACK-инструментом. '
+            'Это не ремонт и не resolve. Сообщай об отметке только по квитанции; '
+            'если разрешённого инструмента нет, честно скажи, что отметка не выполнена. ')
+
+
 def qa_scope_document():
     """Read only the server-owned scope; a file reference allows live revocation."""
     try:
@@ -274,3 +302,87 @@ class ScopedNoticePlaceVoiceStore(NoticePlaceVoiceStore):
             return {'ok':False,'incident_id':incident_id,'state':'unknown','replay_allowed':False}
         return {'ok':card['state'] in ('acknowledged','resolved'), 'incident_id':incident_id,
                 'state':card['state'],'delivery_cancellation_verified':False}
+
+
+class RecipientNoticePlaceVoiceStore(NoticePlaceVoiceStore):
+    """The same narrow tools for a real delivered recipient, without QA grants.
+
+    The opaque proof stays in the private server context and HTTP body. Only
+    NoticePlace can resolve an incident; tools cannot supply identity or scope.
+    """
+    def __init__(self, binding, *, receipt_directory='/var/lib/agentcall/qa-actions', **kwargs):
+        self.binding = dict(binding)
+        if not self.binding.get('voice_recipient_proof') or not self.binding.get('secretary_voice_call_id'):
+            raise PermissionError('No server recipient receipt')
+        self.receipt_directory = Path(receipt_directory)
+        kwargs.setdefault('runner', _scoped_open)
+        super().__init__(token='', **kwargs)
+        self._bound = None
+
+    def _action(self, action, utterance=''):
+        if not self.base_url:
+            raise NoticePlaceContextError('NoticePlace recipient API is not configured')
+        body = {'proof':self.binding['voice_recipient_proof'], 'action':action}
+        if self._bound:
+            body['binding_id'] = self._bound['binding_id']
+        if action == 'ack':body['utterance'] = utterance
+        request = urllib.request.Request(self.base_url+'/v1/voice/recipient-context', method='POST',
+            data=json.dumps(body).encode(), headers={'Content-Type':'application/json'})
+        try:
+            with self.runner(request, timeout=self.timeout) as response:
+                result = json.loads(response.read())
+        except urllib.error.HTTPError:
+            raise PermissionError('No unique current delivered recipient notice') from None
+        if (not isinstance(result,dict) or result.get('ok') is not True
+                or result.get('call_id') != self.binding['secretary_voice_call_id']
+                or type(result.get('expires_at')) not in (int,float)
+                or not time.time() < result['expires_at'] <= time.time()+600
+                or not isinstance(result.get('incident'),dict) or not result['incident'].get('id')
+                or not isinstance(result.get('binding_id'),str) or not result['binding_id']):
+            raise PermissionError('Recipient response does not match this call')
+        if self._bound and (result['binding_id'] != self._bound['binding_id'] or
+                any(result['incident'].get(key) != self._bound['incident'].get(key)
+                    for key in ('id','project','correlation_id'))):
+            raise PermissionError('Recipient incident changed during call')
+        self._bound = result
+        return result['incident']
+
+    def incident(self, incident_id=None):
+        card = self._action('read' if self._bound else 'resolve')
+        if incident_id is not None and incident_id != card['id']:
+            raise PermissionError('Incident is outside this recipient call')
+        return self._summary(card) | {'body':safe_text(card.get('body'),2000),'has_session':False}
+
+    def list_incidents(self, query='', include_resolved=False):
+        card = self.incident()
+        return {'total_in_scope':1, 'returned':1, 'truncated':False,
+                'audiences':['current recipient'], 'incidents':[card]}
+
+    def acknowledge(self, incident_id=None, utterance=''):
+        if not explicit_incident_acknowledgement(utterance):
+            raise PermissionError('No explicit current receipt statement')
+        card = self.incident(incident_id)
+        if card['state'] in ('acknowledged','resolved'):
+            return {'ok':True,'incident_id':card['id'],'state':card['state']}
+        root = self.receipt_directory
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        metadata = root.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise PermissionError('Action receipts must be private and service-owned')
+        key = hashlib.sha256((self.binding['secretary_voice_call_id']+'\0'+self._bound['binding_id']).encode()).hexdigest()
+        try:
+            fd = os.open(root/(key+'.ack.json'),os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        except FileExistsError:
+            return {'ok':False,'state':'unknown','replay_allowed':False}
+        with os.fdopen(fd,'w') as stream:
+            json.dump({'state':'attempted','incident_id':card['id'],'replay_allowed':False},stream)
+            stream.flush();os.fsync(stream.fileno())
+        directory = os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(directory)
+        finally:os.close(directory)
+        try:
+            self._action('ack',utterance)
+            card = self.incident(card['id'])
+        except Exception:
+            return {'ok':False,'state':'unknown','replay_allowed':False}
+        return {'ok':card['state'] in ('acknowledged','resolved'),'incident_id':card['id'],'state':card['state']}

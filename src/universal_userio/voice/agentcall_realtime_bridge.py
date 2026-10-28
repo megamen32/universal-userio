@@ -59,6 +59,8 @@ GATEWAY_RECONNECT_COMMAND = "am startservice -a com.callagent.gateway.RECONNECT 
 AGENT_CONTEXT_LIMITS = {
     "voice_transport": 16,
     "voice_target": 256,
+    "voice_receipt_id": 256,
+    "voice_recipient_proof": 4096,
     "secretary_voice_call_id": 36,
     "call_mode": 16,
     "qa_caller": 256,
@@ -576,6 +578,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             entry=Path(self.config.fast_agent_bin).read_text().splitlines()
             python=entry[0][2:].strip() if entry and entry[0].startswith('#!/') else self.config.fast_agent_python
             environment=worker_environment(api_key)
+            if self.agent_context.get('voice_recipient_proof'):
+                environment.update({k:os.environ[k] for k in ('NOTICEPLACE_API_URL',) if k in os.environ})
             if self.agent_context.get('call_mode') == 'qa_scoped':
                 from noticeplace_voice_context import qa_scope_environment, qa_incident_scope
                 qa_incident_scope(self.agent_context)
@@ -660,11 +664,13 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
 
     @property
     def available(self) -> bool:
-        scoped = self.agent_context.get('call_mode') == 'qa_scoped'
-        if scoped:
+        scoped = self.agent_context.get('call_mode') in ('qa_scoped','recipient_bound')
+        if self.agent_context.get('call_mode') == 'qa_scoped':
             from noticeplace_voice_context import qa_incident_scope
             try:qa_incident_scope(self.agent_context)
             except PermissionError:return False
+        if self.agent_context.get('call_mode') == 'recipient_bound' and not self.agent_context.get('voice_recipient_proof'):
+            return False
         return bool(
             self.config.fast_agent_enabled
             and self.agent_context.get('call_mode') != 'incoming_guest'
@@ -676,6 +682,9 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
         )
 
     def _incoming_snapshot(self, text: str) -> dict[str, Any] | None:
+        if self.agent_context.get('call_mode') == 'recipient_bound':
+            from noticeplace_voice_context import RecipientNoticePlaceVoiceStore
+            return RecipientNoticePlaceVoiceStore(self.agent_context).list_incidents()
         if self.agent_context.get('call_mode') == 'qa_scoped':
             from noticeplace_voice_context import ScopedNoticePlaceVoiceStore
             return ScopedNoticePlaceVoiceStore(self.agent_context).list_incidents()
@@ -696,11 +705,13 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             return None
 
     def _prompt(self, text: str, turn_id: str = "", *, incoming_snapshot=None) -> str:
+        from noticeplace_voice_context import incident_ack_instruction
+        acknowledgement = incident_ack_instruction(text)
         history = "\n".join(
             f"{role}: {content}" for role, content in self.history[-6:]
         )
-        if self.agent_context.get('call_mode') == 'qa_scoped':
-            return ('Ты консультант по единственному синтетическому инциденту в изолированном QA-звонке. '
+        if self.agent_context.get('call_mode') in ('qa_scoped','recipient_bound'):
+            return (acknowledgement + 'Ты консультант по единственному инциденту, доставленному собеседнику и привязанному сервером к этому разговору. '
                     'Доступны только incidents_list, incident_read, acknowledge_incident и switch_to_secretary; '
                     'используй только факты этой карточки, не заявляй ремонт или подтверждение без квитанции. '
                     'На просьбу вернуться к секретарю вызови switch_to_secretary; следующая реплика '
@@ -730,7 +741,7 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                 if incoming_snapshot is not None else ''
             )
             return (
-                "Ты Fast Agent отвечаешь на входящий телефонный звонок владельца. "
+                acknowledgement + "Ты Fast Agent отвечаешь на входящий телефонный звонок владельца. "
                 + ("В этом же звонке есть личный секретарь. На вопрос о личных задачах, "
                    "напоминаниях или просьбу вернуться к секретарю вызови switch_to_secretary; "
                    "не выдавай инциденты за список личных дел. Следующая реплика пойдёт секретарю. "
@@ -793,7 +804,7 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                 + snapshot_data + f"Текущий вопрос: {text}"
             )
         return (
-            "Ты Fast Agent внутри телефонного звонка об инциденте. Отвечай естественно "
+            acknowledgement + "Ты Fast Agent внутри телефонного звонка об инциденте. Отвечай естественно "
             "по-русски, максимум двумя короткими предложениями, без Markdown. MCP-"
             "инструменты привязаны к точной сессии: контекст, чтение расследования, "
             "статус и продолжение работы. На вопросы о причине, выполненных проверках "
@@ -937,6 +948,32 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
     def reply(self, text: str, *, on_phrase=None) -> str:
         if not self.available:
             raise RuntimeError("Fast Agent exact-session runtime is unavailable")
+        from noticeplace_voice_context import explicit_incident_acknowledgement, ScopedNoticePlaceVoiceStore, RecipientNoticePlaceVoiceStore
+        if ((self.agent_context.get('call_mode') == 'qa_scoped' or self.agent_context.get('voice_recipient_proof'))
+                and explicit_incident_acknowledgement(text)):
+            # The scoped adapter already fences id/project/correlation/TTL and
+            # persists an attempted-action receipt before POST. Never ask a
+            # model to reinterpret an unambiguous current receipt statement.
+            try:
+                if self.agent_context.get('voice_recipient_proof'):
+                    receipt = RecipientNoticePlaceVoiceStore(self.agent_context).acknowledge(utterance=text)
+                else:
+                    receipt = ScopedNoticePlaceVoiceStore(self.agent_context).acknowledge(self.agent_context['incident_id'])
+            except PermissionError:
+                receipt = {'state':'unbound'}
+            answer = ('Отметил уведомление как полученное.'
+                      if receipt.get('ok') is True and receipt.get('state') in ('acknowledged','resolved')
+                      else 'Не удалось однозначно определить доставленное вам уведомление. Уточните, какое уведомление вы подтверждаете.'
+                      if receipt.get('state') == 'unbound'
+                      else 'Результат отметки пока неизвестен. Повторять действие не буду.')
+            self.history.extend((('пользователь',text[:512]),('ассистент',answer)))
+            if self.messages:
+                self.messages.extend({'role':role,'content':[{'type':'text','text':content}]}
+                                     for role,content in (('user',text[:512]),('assistant',answer)))
+            self.turn_interrupted = False
+            if on_phrase is not None:
+                on_phrase(answer)
+            return answer
         routing_started = time.monotonic()
         model, base_url, api_key = self._provider_route()
         _log(f"fast-agent provider_admission elapsed={time.monotonic()-routing_started:.3f}s")
@@ -1007,7 +1044,7 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             "--timeout",
             str(self.config.fast_agent_timeout),
         ]
-        scoped = self.agent_context.get('call_mode') == 'qa_scoped'
+        scoped = self.agent_context.get('call_mode') in ('qa_scoped','recipient_bound')
         if scoped:
             # The QA profile has no direct or configured global MCP connections.
             position = command.index('--url')
@@ -1039,9 +1076,11 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             "LANG": os.environ.get("LANG", "C.UTF-8"),
             "GENERIC_API_KEY": api_key,
         }
-        if scoped:
+        if self.agent_context.get('call_mode') == 'qa_scoped':
             from noticeplace_voice_context import qa_scope_environment
             environment.update(qa_scope_environment())
+        if self.agent_context.get('voice_recipient_proof'):
+            environment.update({k:os.environ[k] for k in ('NOTICEPLACE_API_URL',) if k in os.environ})
         if on_phrase is not None:
             hooks = Path(__file__).with_name('agentcall_fast_agent_voice_hooks.py')
             from agentcall_fast_agent_worker import compose_voice_instruction

@@ -146,7 +146,7 @@ def server_environments(servers, python_path):
 
 
 def voice_servers(context, servers):
-    if context.get('call_mode') == 'qa_scoped':return ['agentcall']
+    if context.get('call_mode') in ('qa_scoped','recipient_bound'):return ['agentcall']
     return ['AgentHerder','agentcall']+(['NoticePlace'] if 'NoticePlace' in servers else [])
 
 
@@ -177,6 +177,10 @@ async def serve(wire):
         from noticeplace_voice_context import qa_incident_scope, qa_scope_environment
         qa_incident_scope(context)
         servers['agentcall']['env'].update(qa_scope_environment())
+        settings['mcp']['servers'] = {'agentcall':servers['agentcall']}
+    if context.get('voice_recipient_proof'):
+        servers['agentcall']['env'].update({k:os.environ[k] for k in ('NOTICEPLACE_API_URL',) if k in os.environ})
+    if context.get('call_mode') == 'recipient_bound':
         settings['mcp']['servers'] = {'agentcall':servers['agentcall']}
     config.write_text(yaml.safe_dump(settings,allow_unicode=True))
     full=json.loads(card.read_text());full['model']=boot['model']

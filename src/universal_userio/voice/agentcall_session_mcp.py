@@ -62,6 +62,8 @@ def load_context(path: Path, *, enforce_runtime_path: bool = True) -> dict[str, 
         raise ValueError("context must be a JSON object")
     context = {
         "call_mode": _bounded_text(raw.get("call_mode"), 16),
+        "voice_recipient_proof": _bounded_text(raw.get("voice_recipient_proof"), 4096),
+        "voice_receipt_id": _bounded_text(raw.get("voice_receipt_id"), 256),
         "incident_id": _bounded_text(raw.get("incident_id"), 128),
         "event_type": _bounded_text(raw.get("event_type"), 128),
         "severity": _bounded_text(raw.get("severity"), 32),
@@ -84,6 +86,10 @@ def load_context(path: Path, *, enforce_runtime_path: bool = True) -> dict[str, 
         from noticeplace_voice_context import qa_incident_scope
         qa_incident_scope(context)
         context['session_id'] = context['session_harness'] = ''
+    elif context['call_mode'] == 'recipient_bound':
+        if not context['voice_recipient_proof'] or not context['voice_receipt_id']:
+            raise PermissionError('a server recipient receipt is required')
+        context['session_id'] = context['session_harness'] = ''
     elif context['call_mode'] != 'incoming' and (not context["session_id"] or context["session_harness"] not in ALLOWED_HARNESSES):
         raise ValueError("a supported exact Agent Herder session is required")
     return context
@@ -92,7 +98,8 @@ def load_context(path: Path, *, enforce_runtime_path: bool = True) -> dict[str, 
 class LiveContext(dict):
     """Per-call stdio connection, per-turn authorization and audit context."""
     BINDING=('call_mode','session_id','session_harness','incident_id','secretary_voice_call_id',
-             'voice_transport','qa_caller','qa_room','qa_account_ref','qa_sdk_user_id','correlation_id')
+             'voice_transport','qa_caller','qa_room','qa_account_ref','qa_sdk_user_id','correlation_id',
+             'voice_recipient_proof','voice_receipt_id')
     def __init__(self,path):
         self.path=path
         super().__init__(load_context(path))
@@ -336,7 +343,7 @@ def register_secretary_switch(server, context):
 
 
 def build_server(context: dict[str, str]) -> MCPServer:
-    if context.get('call_mode') == 'qa_scoped':
+    if context.get('call_mode') in ('qa_scoped','recipient_bound'):
         return build_scoped_server(context)
     if context.get('call_mode') == 'incoming':
         return build_incoming_server(context)
@@ -375,6 +382,8 @@ def build_server(context: dict[str, str]) -> MCPServer:
         refresh_context(context)
         hidden = {
             "current_utterance",
+            "voice_recipient_proof",
+            "voice_receipt_id",
             "previous_assistant",
             "session_id",
             "session_harness",
@@ -412,35 +421,35 @@ def build_server(context: dict[str, str]) -> MCPServer:
 
 
 def build_scoped_server(context, store=None):
-    from noticeplace_voice_context import ScopedNoticePlaceVoiceStore
+    from noticeplace_voice_context import ScopedNoticePlaceVoiceStore, RecipientNoticePlaceVoiceStore
     refresh_context(context)
-    store = store or ScopedNoticePlaceVoiceStore(context)
+    recipient = context.get('call_mode') == 'recipient_bound'
+    store = store or (RecipientNoticePlaceVoiceStore(context) if recipient else ScopedNoticePlaceVoiceStore(context))
     server = MCPServer('agentcall-qa-incident', instructions=(
-        'Only the one server-bound synthetic incident is accessible. No owner data, sessions or repair tools.'))
+        'Only the one server-bound delivered incident is accessible. No owner data, sessions or repair tools.'))
     register_secretary_switch(server, context)
 
-    @server.tool(description='List the single synthetic incident bound to this QA call.')
+    @server.tool(description='List the single incident delivered to the authenticated caller and bound by the server.')
     def incidents_list(query: str = '', include_resolved: bool = False):
         refresh_context(context)
         return store.list_incidents(query, include_resolved)
 
-    @server.tool(description='Read only the synthetic incident already bound to this QA call.')
+    @server.tool(description='Read only the current server-bound incident.')
     def incident_read(incident_id: str):
         refresh_context(context)
-        if incident_id != context['incident_id']:
+        if not recipient and incident_id != context['incident_id']:
             raise PermissionError('Incident is outside this QA call')
         return store.incident(incident_id)
 
-    @server.tool(description='Acknowledge only this synthetic incident when the caller explicitly asks. This does not repair or resolve the service. Unknown operations must never be replayed.')
+    @server.tool(description='Acknowledge only this bound incident on explicit receipt, including «получил уведомление», without a second confirmation. This does not repair or resolve the service. Unknown operations must never be replayed.')
     def acknowledge_incident(incident_id: str):
         refresh_context(context)
-        utterance = context.get('current_utterance','').casefold()
-        if (re.search(r'\bне\s+(?:подтвержд|приним|останавлив)',utterance)
-                or not re.search(r'\b(?:подтверждаю|подтверди|принято|останови\s+эскалацию)\b',utterance)):
+        from noticeplace_voice_context import explicit_incident_acknowledgement
+        if not explicit_incident_acknowledgement(context.get('current_utterance','')):
             raise PermissionError('Current caller utterance does not explicitly acknowledge the incident')
-        if incident_id != context['incident_id']:
+        if not recipient and incident_id != context['incident_id']:
             raise PermissionError('Incident is outside this QA call')
-        return store.acknowledge(incident_id)
+        return store.acknowledge(incident_id,context.get('current_utterance','')) if recipient else store.acknowledge(incident_id)
 
     return server
 
@@ -453,8 +462,14 @@ def build_incoming_server(context: dict[str, str], store=None, userio_chats=None
     server = MCPServer('agentcall-incidents', instructions=(
         'Read owner audiences me and health only, including recent resolved incidents when discussing past repairs, '
         'and their actually linked Agent Herder sessions. '
-        'Read-only tools: no continuation or arbitrary session access.'))
+        'No continuation or arbitrary session access. Any optional receipt ACK is limited to the current delivered recipient binding.'))
     register_secretary_switch(server, context)
+    if context.get('voice_recipient_proof'):
+        @server.tool(description='Acknowledge the unique notice delivered to this authenticated caller, on explicit receipt only; never an arbitrary incident.')
+        def acknowledge_current_notice():
+            refresh_context(context)
+            from noticeplace_voice_context import RecipientNoticePlaceVoiceStore
+            return RecipientNoticePlaceVoiceStore(context).acknowledge(utterance=context.get('current_utterance',''))
     turn_id = context.get('turn_id', '')
     if not re.fullmatch(r'[0-9a-f]{32}', turn_id):
         raise ValueError('invalid turn identifier')
