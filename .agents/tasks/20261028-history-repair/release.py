@@ -266,15 +266,33 @@ def activate():
     assert inspect('userio-voice')['Id'] == before['voice_id']
     assert m.unknown_draft_hash(NAME) == before['unknown_draft_hash']
     # SQLite's online backup includes WAL. Keep it outside the live data mount.
-    backup_dir = Path('/var/backups/universal-userio') / ('history-repair-' + str(int(time.time())))
-    backup_dir.mkdir(mode=0o700)
-    backup = backup_dir / 'userio.sqlite3'
-    with sqlite3.connect('file:/var/lib/universal-userio/userio.sqlite3?mode=ro', uri=True) as source:
-        with sqlite3.connect(backup) as target:
-            backup.chmod(0o600)
-            source.backup(target)
-            assert target.execute('pragma quick_check').fetchone()[0] == 'ok'
-            assert target.execute('pragma integrity_check').fetchone()[0] == 'ok'
+    if (AREA / 'backup.json').exists():
+        backup = Path(load('backup')['path'])
+    elif (AREA / 'candidate.json').exists():
+        # Reconcile the successful backup from the pre-mutation metadata check.
+        stamp = (AREA / 'candidate.json').stat().st_mtime
+        matches = [p for p in Path('/var/backups/universal-userio').glob('history-repair-*/userio.sqlite3')
+                   if 0 <= stamp - p.stat().st_mtime <= 300]
+        assert len(matches) == 1, 'prior backup identity requires reconciliation'
+        backup = matches[0]
+    else:
+        backup_dir = Path('/var/backups/universal-userio') / ('history-repair-' + str(int(time.time())))
+        backup_dir.mkdir(mode=0o700)
+        backup = backup_dir / 'userio.sqlite3'
+        with sqlite3.connect('file:/var/lib/universal-userio/userio.sqlite3?mode=ro', uri=True) as source:
+            with sqlite3.connect(backup) as target:
+                backup.chmod(0o600)
+                source.backup(target)
+    with sqlite3.connect('file:' + str(backup) + '?mode=ro', uri=True) as target:
+        assert target.execute('pragma quick_check').fetchone()[0] == 'ok'
+        assert target.execute('pragma integrity_check').fetchone()[0] == 'ok'
+        rows = target.execute('SELECT message_id,body,direction,received_at FROM messages '
+                              'WHERE conversation_id=? ORDER BY received_at,message_id',
+                              ('conv_05b6c8996307c403fdb31851',)).fetchall()
+        assert {r[0]: digest(r) for r in rows} == before['retained']['rows'], 'backup source rows differ'
+    if not (AREA / 'backup.json').exists():
+        save('backup', {'path': str(backup), 'quick_check': 'ok', 'integrity_check': 'ok',
+                        'retained_rows': len(rows)})
     unchanged(before)
     client = DockerConnection('localhost', timeout=60)
     client.request('GET', '/version')
