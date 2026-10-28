@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from email import message_from_bytes
 from email.message import EmailMessage
-from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import formatdate, getaddresses, make_msgid, parseaddr, parsedate_to_datetime
 from typing import Any
 
 from userio_adapter_sdk import (
@@ -141,6 +141,8 @@ def _parse_email_message(uid: int, raw: bytes) -> dict[str, Any]:
     return {
         "uid": uid,
         "sender": sender,
+        "recipients": [address for _name, address in getaddresses(mail.get_all("To", []))],
+        "message_id": str(mail.get("Message-ID", "")),
         "subject": subject,
         "date": date,
         "body": body,
@@ -202,6 +204,8 @@ class SmtpImapTransport:
         message["From"] = self.config.sender
         message["To"] = recipient
         message["Subject"] = subject
+        message["Message-ID"] = make_msgid()
+        message["Date"] = formatdate(localtime=False)
         if in_reply_to:
             message["In-Reply-To"] = in_reply_to
             message["References"] = in_reply_to
@@ -272,6 +276,16 @@ def _peer(chat: ChatRef) -> str:
 def _subject_for(text: str) -> str:
     first_line = text.strip().splitlines()[0] if text.strip() else ""
     return (first_line[:57] + "...") if len(first_line) > 60 else (first_line or "userio")
+
+
+@dataclass(frozen=True, slots=True)
+class EmailOperatorReceipt:
+    """SMTP-accepted RFC822 identity, separate from an incoming integer IMAP UID."""
+
+    id: str
+    chat_id: str
+    text: str
+    out: bool = True
 
 
 class EmailChannel:
@@ -430,6 +444,39 @@ class EmailChannel:
         )
         # Outgoing emails get no IMAP UID here; 0 marks a locally originated copy.
         return ChatMessage(chat_id=recipient, id=0, text=text, sender_id=None, out=True)
+
+    async def send_operator_message(
+        self, chat: ChatRef, text: str, *, idempotency_key: str,
+    ) -> EmailOperatorReceipt:
+        """Return the accepted SMTP identity; SMTP does not promise idempotent replay."""
+        recipient = _peer(chat)
+        receipt = await asyncio.to_thread(
+            self._transport.send, recipient=recipient, body=text,
+            subject=_subject_for(text), in_reply_to=None,
+        )
+        if not isinstance(receipt, str) or not receipt.startswith("<") or not receipt.endswith(">"):
+            raise ValueError("SMTP accepted outcome has no valid Message-ID; reconcile without replay")
+        return EmailOperatorReceipt(id=receipt, chat_id=recipient, text=text)
+
+    async def confirm_operator_receipt(
+        self, chat: ChatRef, text: str, receipt_id: str,
+    ) -> EmailOperatorReceipt:
+        """Read one already delivered message and require the full sender/recipient/body binding."""
+        if (not receipt_id.startswith("<") or not receipt_id.endswith(">")
+                or any(char in receipt_id for char in '\r\n"')):
+            raise ValueError("Invalid email Message-ID")
+        recipient = _peer(chat)
+        uid = await asyncio.to_thread(self._transport.search_uid_by_message_id, receipt_id)
+        row = await asyncio.to_thread(self._transport.fetch_raw, uid=uid) if uid is not None else None
+        expected_body = text.replace("\r\n", "\n").replace("\r", "\n")
+        if not expected_body.endswith("\n"):
+            expected_body += "\n"
+        if (not row or row.get("message_id") != receipt_id
+                or row.get("sender", "").casefold() != parseaddr(self._transport.config.sender)[1].casefold()
+                or [value.casefold() for value in row.get("recipients", [])] != [recipient.casefold()]
+                or row.get("body", "").replace("\r\n", "\n").replace("\r", "\n") != expected_body):
+            raise ValueError("Delivered email does not match sender, recipient, text and Message-ID")
+        return EmailOperatorReceipt(id=receipt_id, chat_id=recipient, text=text)
 
     async def acknowledge_chat(self, chat: ChatRef) -> None:
         raise AdapterNotSupported("email channel does not support acknowledge_chat")
