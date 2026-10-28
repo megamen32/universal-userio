@@ -282,19 +282,27 @@ def activate():
     assert response.status == 200
     api = '/v' + json.loads(response.read())['ApiVersion']
     candidate = 'userio-history-candidate-' + built['manifest'][:12]
-    config = {**live['Config'], 'Image': built['image'], 'HostConfig': live['HostConfig']}
-    client.request('POST', api + '/containers/create?name=' + candidate,
-                   body=json.dumps(config), headers={'Content-Type': 'application/json'})
-    response = client.getresponse()
-    body = response.read()
-    assert response.status == 201, 'candidate create outcome requires exact-name reconciliation'
-    created = json.loads(body)['Id']
-    save('candidate', {'id': created, 'name': candidate})
+    wanted_config = {**live['Config'], 'Image': built['image'],
+                     'Labels': {**(live['Config'].get('Labels') or {}),
+                                'io.userio.history-repair.manifest': built['manifest']}}
+    config = {**wanted_config, 'HostConfig': live['HostConfig']}
+    if (AREA / 'candidate.json').exists():
+        prior = load('candidate')
+        assert prior['name'] == candidate, 'candidate receipt name mismatch'
+        created = prior['id']
+    else:
+        client.request('POST', api + '/containers/create?name=' + candidate,
+                       body=json.dumps(config), headers={'Content-Type': 'application/json'})
+        response = client.getresponse()
+        body = response.read()
+        assert response.status == 201, 'candidate create outcome requires exact-name reconciliation'
+        created = json.loads(body)['Id']
+        save('candidate', {'id': created, 'name': candidate})
     spec = inspect(candidate)
     assert spec['Id'] == created and spec['State']['Status'] == 'created'
+    assert spec['Image'] == built['image_id'], 'candidate image mismatch'
     assert host_config(spec) == host_config(live), 'candidate host config mismatch'
-    assert {k:v for k,v in spec['Config'].items() if k != 'Image'} == {
-        k:v for k,v in live['Config'].items() if k != 'Image'}, 'candidate config mismatch'
+    assert spec['Config'] == wanted_config, 'candidate config mismatch'
     original = CONFIG.read_bytes()
     original_processes = PROCESSES.read_bytes()
     modified_processes = process_config(original_processes, before['process_changes'])
