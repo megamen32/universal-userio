@@ -31,6 +31,8 @@ def test_matrix_exact_account_draft_approve_has_provider_receipt_and_no_replay(t
     # The real connector reader stores account-qualified Matrix source names.
     conversation=store.ensure_contact_conversation('matrix:qa-a','Strict',user_id=user,
         account_ref='matrix:qa-a',peer_id='!strict:test',conversation_kind='group',route_id='matrix-read-only')
+    resolved=service.contact_starter.resolve(user_id=user,account_ref='matrix:qa-a',identifier='!strict:test')
+    assert service.contact_starter.conversation(resolved,user_id=user)['id']==conversation['id']
     prepared = service.contact_starter.prepare(user_id=user,account_ref='matrix:qa-a',
         conversation_id=conversation['id'],text='Synthetic notice',request_id='matrix-message-qa-001')
     import universal_userio.channels.matrix as matrix
