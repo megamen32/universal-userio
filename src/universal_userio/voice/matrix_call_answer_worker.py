@@ -254,6 +254,11 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
 
     room_path = "/_matrix/client/v3/rooms/" + urllib.parse.quote(room_id, safe="")
     state = _request(server, token, "GET", room_path + "/state")
+    # Match the outgoing transport: joining without authenticated MatrixRTC
+    # media keys would publish clear media into an encrypted room. Keep this
+    # closed until the account's Matrix crypto session can supply those keys.
+    if any(event.get("type") == "m.room.encryption" for event in state):
+        raise ValueError("encrypted MatrixRTC key exchange unavailable; room was not downgraded")
     joined = {str(event.get("state_key")) for event in state
               if event.get("type") == "m.room.member"
               and (event.get("content") or {}).get("membership") == "join"}
