@@ -394,3 +394,23 @@ def test_normal_recipient_mcp_denies_foreign_card_and_negative_intent(monkeypatc
     ctx['current_utterance']='Не получил уведомление'
     with pytest.raises(PermissionError):server.tools['acknowledge_incident']('delivered')
     assert len(attempts)==1
+
+
+def test_owner_with_proof_keeps_readers_when_no_pending_recipient_notice(monkeypatch,tmp_path):
+    monkeypatch.syspath_prepend(str(Path(context_api.__file__).parent))
+    import agentcall_realtime_bridge as bridge
+    import noticeplace_voice_context as bare_context
+    owner_store=types.SimpleNamespace(list_incidents=lambda *args:{'incidents':[],
+        'returned':0,'total_in_scope':0,'truncated':False})
+    monkeypatch.setattr(bare_context,'NoticePlaceVoiceStore',lambda **kw:owner_store)
+    monkeypatch.setattr(bare_context,'RecipientNoticePlaceVoiceStore',
+        lambda *a,**kw:pytest.fail('ordinary owner listing must not resolve a recipient notice'))
+    brain=object.__new__(bridge.FastAgentIncidentBrain)
+    brain.agent_context={'call_mode':'incoming','voice_recipient_proof':'private-proof'}
+    assert brain._incoming_snapshot('Что с делами?')['incidents']==[]
+    assert worker.voice_servers(brain.agent_context,{'NoticePlace':{}})==['AgentHerder','agentcall','NoticePlace']
+    session=load_session_mcp(monkeypatch)
+    ctx=dict(brain.agent_context,turn_id='f'*32)
+    server=session.build_incoming_server(ctx,owner_store,types.SimpleNamespace())
+    assert {'incidents_list','incident_read','incident_session_read','agent_session_read',
+            'acknowledge_current_notice'} <= set(server.tools)
