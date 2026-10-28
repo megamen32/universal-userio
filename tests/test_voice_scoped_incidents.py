@@ -414,3 +414,46 @@ def test_owner_with_proof_keeps_readers_when_no_pending_recipient_notice(monkeyp
     server=session.build_incoming_server(ctx,owner_store,types.SimpleNamespace())
     assert {'incidents_list','incident_read','incident_session_read','agent_session_read',
             'acknowledge_current_notice'} <= set(server.tools)
+
+
+def test_recipient_without_notice_can_complete_reply_and_switch_back(monkeypatch,tmp_path):
+    monkeypatch.syspath_prepend(str(Path(context_api.__file__).parent))
+    import agentcall_realtime_bridge as bridge
+    import noticeplace_voice_context as bare_context
+    session=load_session_mcp(monkeypatch)
+    def unavailable(*args,**kwargs):
+        raise PermissionError('No unique current delivered recipient notice')
+    no_notice=types.SimpleNamespace(list_incidents=unavailable,
+        acknowledge=lambda *a,**kw:pytest.fail('no-notice switch must never ACK'))
+    monkeypatch.setattr(bare_context,'RecipientNoticePlaceVoiceStore',lambda _:no_notice)
+    monkeypatch.setattr(bare_context,'NoticePlaceVoiceStore',lambda **kw:pytest.fail('no owner data fallback'))
+    runtime=tmp_path/'runtime';runtime.mkdir()
+    monkeypatch.setattr(bridge,'Path',lambda p:runtime if p=='/run/agentcall/fast-agent' else Path(p))
+    monkeypatch.setattr(session,'Path',lambda p:runtime if p=='/run/agentcall/fast-agent' else Path(p))
+    executable=tmp_path/'bin';executable.touch()
+    home=tmp_path/'home';home.mkdir()
+    config=replace(bridge.BackendConfig.from_environment(),fast_agent_enabled=True,
+        fast_agent_bin=str(executable),fast_agent_python=str(executable),
+        fast_agent_mcp_script=str(executable),fast_agent_home=str(home),llm_api_key='synthetic')
+    context={'call_mode':'recipient_bound','voice_recipient_proof':'private-proof',
+             'voice_receipt_id':'receipt','secretary_voice_call_id':'7a0440b3-2637-4966-8865-e97820d9bd96'}
+    observed=[];spoken=[]
+    def runner(command,**kwargs):
+        # A fake model chooses the real existing MCP switch. It must remain
+        # callable without a notice, and receives only an empty scoped list.
+        prompt=json.loads(Path(command[command.index('--prompt-file')+1]).read_text())
+        text=prompt['messages'][-1]['content'][0]['text']
+        assert '"incidents": []' in text and 'кедр' in text
+        assert 'private-proof' not in text
+        ctx=json.loads((runtime/('turn-'+brain._voice_turn_id+'.json')).read_text())
+        server=session.build_scoped_server(ctx,no_notice)
+        observed.append(server.tools['switch_to_secretary']())
+        return subprocess.CompletedProcess(command,0,stdout='Возвращаюсь к секретарю. Помню слово кедр.',stderr='')
+    brain=bridge.FastAgentIncidentBrain(config,context,'',runner=runner)
+    brain.history=[('пользователь','Запомни слово кедр'),('ассистент','Запомнил.')]
+    monkeypatch.setattr(brain,'_provider_route',lambda:('test-model','http://test','synthetic'))
+    answer=brain.reply_stream('Вернись к секретарю и напомни слово',spoken.append)
+    assert observed[0]['mode']=='secretary' and spoken==[answer]
+    proposal=json.loads((runtime/('turn-'+brain._voice_turn_id+'.voice-mode.json')).read_text())
+    assert proposal['call_id']==context['secretary_voice_call_id']
+    assert brain.history[-2:]==[('пользователь','Вернись к секретарю и напомни слово'),('ассистент',answer)]
