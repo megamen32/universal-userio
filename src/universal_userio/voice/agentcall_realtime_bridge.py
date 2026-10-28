@@ -2259,6 +2259,7 @@ class CallController:
         generate_opening=None,
         originate=None,
         audio_port: int = 9092,
+        event_broker: EventBroker | None = None,
     ) -> None:
         self.config = config
         self.prepared_calls = prepared_calls
@@ -2267,6 +2268,7 @@ class CallController:
         self.generate_opening = generate_opening or LocalSpeechPipeline(config).opening
         self.originate = originate or self._originate
         self.audio_port = audio_port
+        self.event_broker = event_broker or EventBroker(Path('/run/agentcall/gatewayd.sock'))
 
     def _prune(self) -> None:
         # 2026-09-27: 300s -- a prepared entry must survive the 120s S21
@@ -2788,7 +2790,7 @@ class CallController:
             except ImportError:  # pragma: no cover - the flat runtime layout
                 from matrix_call_answer_worker import answer_incoming_call
             receipt = await answer_incoming_call(
-                request, self.config, broker=EventBroker(Path('/run/agentcall/gatewayd.sock')),
+                request, self.config, broker=self.event_broker,
                 writer=writer, control_reader=reader)
             writer.write((json.dumps(receipt, ensure_ascii=False) + '\n').encode())
             await writer.drain()
@@ -4325,7 +4327,7 @@ async def run(host: str, port: int, socket_path: Path, control_socket_path: Path
     os.chmod(socket_path, 0o660)
     os.chown(socket_path, -1, grp.getgrnam(config.control_group).gr_gid)
     prepared_calls: dict[str, PreparedCall] = {}
-    controller = CallController(config, prepared_calls, audio_port=port)
+    controller = CallController(config, prepared_calls, audio_port=port, event_broker=broker)
     control_socket_path.unlink(missing_ok=True)
     control_server = await asyncio.start_unix_server(
         controller.accept, path=str(control_socket_path)

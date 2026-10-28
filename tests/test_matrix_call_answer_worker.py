@@ -121,6 +121,7 @@ def test_the_control_stream_dispatches_the_answer_action(monkeypatch):
     monkeypatch.setitem(sys.modules, "universal_userio.voice.matrix_call_answer_worker", worker)
 
     controller = bridge.CallController.__new__(bridge.CallController)
+    controller.event_broker = bridge.EventBroker(Path('/unused-test-events.sock'))
     controller.config = object()
     controller.prepared_calls = {}
     controller._matrix_transport_busy = False
@@ -578,3 +579,33 @@ def test_every_mcp_server_of_the_worker_keeps_the_module_path():
     assert servers["agentcall"]["env"]["PYTHONPATH"] == python_path
     assert servers["agentcall"]["env"]["HERDER"] == "x"
     assert "env" not in servers["AgentHerder"]
+
+
+def test_incoming_matrix_active_reaches_existing_gateway_subscriber(tmp_path, monkeypatch):
+    bridge = load('bridge', 'universal_userio.voice.agentcall_realtime_bridge')
+    worker = load('worker', 'universal_userio.voice.matrix_call_answer_worker')
+    async def check():
+        broker = bridge.EventBroker(tmp_path / 'gateway.sock')
+        server = await asyncio.start_unix_server(broker.accept, path=str(broker.path))
+        reader, subscriber = await asyncio.open_unix_connection(str(broker.path))
+        subscriber.write(b'{"id":"scope","method":"events"}\n')
+        await subscriber.drain(); await reader.readline()
+        async def answer(request, config, *, broker, **kwargs):
+            await broker.emit(bridge.safe_event('active', 'actual-engine-id', direction='incoming'))
+            return {'type': 'receipt'}
+        monkeypatch.setattr(worker, 'answer_incoming_call', answer)
+        class Writer:
+            def write(self, data):pass
+            async def drain(self):pass
+            def close(self):pass
+            async def wait_closed(self):pass
+        controller = bridge.CallController(bridge.BackendConfig.from_environment(), {}, event_broker=broker)
+        try:
+            await controller.stream_matrix_answer_transport({}, None, Writer())
+            event = json.loads(await asyncio.wait_for(reader.readline(), .5))['event']
+            assert event['event'] == 'active' and event['callId'] == 'actual-engine-id'
+        finally:
+            subscriber.close(); await subscriber.wait_closed()
+            server.close(); await server.wait_closed()
+    asyncio.run(check())
+
