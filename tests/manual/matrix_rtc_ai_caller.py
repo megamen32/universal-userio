@@ -485,14 +485,13 @@ async def run():
                 await source.wait_for_playout()
                 print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
                 utterance += 1
-                await completed_answer('phrase')
-                if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
-                    started_phrase = time.monotonic()-1
                 barge = os.environ.get('CALLER_BARGE_WAV') if index == 0 else None
                 if barge:
-                    deadline = time.monotonic()+35
-                    while last_voice_at <= started_phrase and time.monotonic() < deadline:
+                    deadline = time.monotonic()+150
+                    while last_voice_at <= started_phrase and time.monotonic() < deadline and not stop.is_set():
                         await asyncio.sleep(.05)
+                    if last_voice_at <= started_phrase or stop.is_set():
+                        raise TimeoutError('fixture received speech required before interruption')
                     await asyncio.sleep(.8)
                     pcm, rate = _load_wav(barge)
                     if rate != 48000:
@@ -504,6 +503,10 @@ async def run():
                     print(json.dumps({'event': 'fixture_barge_sent'}), flush=True)
                     utterance += 1
                     await completed_answer('barge')
+                    if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
+                        started_phrase = time.monotonic()-1
+                else:
+                    await completed_answer('phrase')
                     if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
                         started_phrase = time.monotonic()-1
                 await wait_reply(started_phrase)
