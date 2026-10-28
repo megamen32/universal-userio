@@ -46,3 +46,18 @@ unchanged checks. Only the overlay's expected metadata manifest label changed.
 
 Independent installed stored/fresh/channel consumer proof remains Lead-owned;
 this worker performed no sends, calls or read acknowledgements.
+
+## Independent consumer acceptance reported by Lead
+
+After the second-layer install, Lead independently called the actual MCP:
+
+- `messenger.history(refresh=true)` returned `ok=true`, 30 messages,
+  `fresh=true`, `mode=provider`, `provider_read_acknowledged=false`.
+- `messenger.history(refresh=false)` returned `ok=true`, 30 messages,
+  `mode=stored`.
+- `channels.read` returned all 30 original messages. Lead compared them to
+  the pre-repair snapshot: every original message ID and body matched exactly.
+
+These are Lead-provided independent installed consumer receipts, distinct from
+the worker's source tests and deployment checks. This final archive update
+made no runtime changes and replayed no external operation.
