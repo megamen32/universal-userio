@@ -222,7 +222,8 @@ def transport_receipt(broker: "_ControlBroker", person: str, call_id: str) -> di
 
 async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig, *,
                                broker: EventBroker, writer: asyncio.StreamWriter,
-                               identities: Mapping[str, str] | None = None) -> dict[str, Any]:
+                               identities: Mapping[str, str] | None = None,
+                               control_reader=None) -> dict[str, Any]:
     """Answer the admitted call, run the Secretary and return the terminal receipt."""
     from livekit import rtc
 
@@ -257,8 +258,11 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     # Match the outgoing transport: joining without authenticated MatrixRTC
     # media keys would publish clear media into an encrypted room. Keep this
     # closed until the account's Matrix crypto session can supply those keys.
+    crypto = None
     if any(event.get("type") == "m.room.encryption" for event in state):
-        raise ValueError("encrypted MatrixRTC key exchange unavailable; room was not downgraded")
+        from universal_userio.matrix_rtc_crypto import MediaEncryption
+        crypto = MediaEncryption(request, control_reader, writer)
+        device = await crypto.prepare()
     joined = {str(event.get("state_key")) for event in state
               if event.get("type") == "m.room.member"
               and (event.get("content") or {}).get("membership") == "join"}
@@ -290,8 +294,13 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
     media_tasks: set[asyncio.Task] = set()
     published = False
 
-    async def capture(track) -> None:
+    async def capture(track, publication=None, participant=None) -> None:
         try:
+            if crypto and (publication.encryption_type != rtc.EncryptionType.GCM or
+                           not await crypto.authorize(room, participant.identity)):
+                stopped.set()
+                audio_reader.feed_eof()
+                return
             stream = rtc.AudioStream(track, sample_rate=48000, num_channels=1, frame_size_ms=20, capacity=100)
 
             async def frames():
@@ -300,13 +309,16 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
 
             await feed_incoming_audio(audio_reader, frames(),
                                        transport_ready=transport_ready, stopped=stopped)
-        except Exception:
-            pass
+        except Exception as error:
+            if crypto:
+                crypto.failure = type(error).__name__
+                stopped.set()
+                audio_reader.feed_eof()
 
     @room.on("track_subscribed")
     def subscribed(track, publication, participant) -> None:
         if participant.identity.startswith(caller + ":"):
-            task = asyncio.create_task(capture(track))
+            task = asyncio.create_task(capture(track, publication, participant))
             media_tasks.add(task)
             task.add_done_callback(media_tasks.discard)
 
@@ -320,16 +332,20 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
         # The whole setup belongs to the cleanup: a failure after the
         # membership is published must not leave a stale call member, a
         # connected room or a running capture behind.
-        await room.connect(sfu["url"], sfu["jwt"], rtc.RoomOptions(connect_timeout=15))
+        await room.connect(sfu["url"], sfu["jwt"], crypto.options(rtc) if crypto else rtc.RoomOptions(connect_timeout=15))
         # The membership is published only after the media is ready, so a failed
         # setup never leaves a stale call member behind.
         _request(server, token, "PUT", membership_path, content)
         published = True
+        if crypto:
+            await crypto.start(room, lambda: (stopped.set(), audio_reader.feed_eof()))
         await room.local_participant.publish_track(
             rtc.LocalAudioTrack.create_audio_track("UserIO Secretary", source),
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
 
+        if crypto:
+            await crypto.wait_ready()
         pipeline = LocalSpeechPipeline(config)
         greeting_pcm, attention_pcm = await asyncio.gather(
             asyncio.to_thread(pipeline.synthesize, "Здравствуйте. Я голосовой секретарь. Слушаю вас."),
@@ -356,8 +372,11 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
             timeout=max_seconds + 120)
     finally:
         stopped.set()
+        if crypto:
+            await crypto.close()
         for task in list(media_tasks):
             task.cancel()
+        await asyncio.gather(*media_tasks, return_exceptions=True)
         if published:
             # The call member of this participant never outlives the call.
             try:
@@ -372,4 +391,6 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
             await source.aclose()
         except Exception:
             pass
+    if crypto and crypto.failure:
+        raise RuntimeError("Matrix media key lifecycle failed")
     return transport_receipt(control_broker, person, engine_call_id)

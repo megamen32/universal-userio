@@ -88,11 +88,12 @@ class MatrixCallReader:
     """Read MatrixRTC call events of one account; messages are never requested."""
 
     def __init__(self, homeserver: str, token: str, own_user_id: str,
-                 runner: Any = _matrix_open) -> None:
+                 runner: Any = _matrix_open, sync=None) -> None:
         self.homeserver = homeserver.rstrip("/")
         self.token = token
         self.own_user_id = own_user_id
         self.runner = runner
+        self.sync = sync
         if not self.homeserver or not self.token or not self.own_user_id:
             raise ValueError("matrix call reader config incomplete")
 
@@ -184,8 +185,11 @@ class MatrixCallReader:
         request = urllib.request.Request(
             self.homeserver + "/_matrix/client/v3/sync?" + urllib.parse.urlencode(query),
             headers={"Authorization": "Bearer " + self.token})
-        with self.runner(request, timeout=30) as response:
-            data = json.loads(response.read())
+        if self.sync is not None:
+            data = self.sync(cursor)
+        else:
+            with self.runner(request, timeout=30) as response:
+                data = json.loads(response.read())
         next_batch = data.get("next_batch")
         rooms = data.get("rooms", {}).get("join", {})
         if not isinstance(next_batch, str) or not isinstance(rooms, dict):
@@ -326,12 +330,14 @@ def build_answer_request(call: InboundMatrixCall, *, account: Mapping[str, str],
             "engine_call_id": str(uuid.uuid5(uuid.NAMESPACE_URL, call.key)),
             "room_id": call.room_id,
             "caller": call.caller,
+            "caller_device": call.caller_device,
+            "membership_id": call.membership_id,
             "purpose": purpose or f"Входящий Matrix-звонок от {call.caller}",
             "max_seconds": 120,
             "focus": dict(call.focus),
             "expires_ms": call.expires_ms,
         },
-        "account": dict(secret),
+        "account": dict(secret, id=account["id"]),
         "identity": dict(identity),
         "rtc_auth_url": rtc_auth_url,
     }
@@ -350,6 +356,15 @@ def answer_call(request: Mapping[str, Any], socket_path: str, *, timeout: float 
             if not line:
                 break
             event = json.loads(line)
+            if event.get("event") == "matrix_crypto":
+                from .matrix_rtc_crypto import CryptoControl
+                try:
+                    response = CryptoControl(request).handle(event)
+                except Exception as error:
+                    response = {"type": "matrix_crypto_result", "request_id": event.get("request_id"),
+                                "error": type(error).__name__}
+                client.sendall((json.dumps(response) + "\n").encode())
+                continue
             if event.get("type") in {"receipt", "error"}:
                 return event
     return {"type": "error", "error": "no_receipt"}
@@ -418,7 +433,9 @@ class MatrixInboundCallWorker:
         self.thread.start()
 
     def _reader(self, account: Mapping[str, str], secret: Mapping[str, str]) -> MatrixCallReader:
-        return MatrixCallReader(secret["homeserver"], secret["access_token"], secret["matrix_user_id"])
+        from .matrix_crypto import for_account, enabled_for
+        return MatrixCallReader(secret["homeserver"], secret["access_token"], secret["matrix_user_id"],
+                                sync=for_account(secret).poll if enabled_for(secret) else None)
 
     def _accounts(self) -> list[Mapping[str, str]]:
         with self.service._store._lock:

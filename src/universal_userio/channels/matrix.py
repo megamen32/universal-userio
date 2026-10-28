@@ -50,11 +50,12 @@ class MatrixReader:
             # at the provider's end, preserving the exact previous sync bound.
             start=end
         return list(reversed(events))
-    def poll(self,cursor:str|None,*,limit:int=100)->tuple[list[MatrixMessage],str]:
+    def poll(self,cursor:str|None,*,limit:int=100,data=None)->tuple[list[MatrixMessage],str]:
         q={'timeout':'0'}
         if cursor: q['since']=cursor
         req=urllib.request.Request(self.homeserver+'/_matrix/client/v3/sync?'+urllib.parse.urlencode(q),headers={'Authorization':'Bearer '+self.token})
-        with self.runner(req,timeout=30) as r: data=json.loads(r.read())
+        if data is None:
+            with self.runner(req,timeout=30) as r: data=json.loads(r.read())
         nxt=data.get('next_batch'); rooms=data.get('rooms',{}).get('join',{})
         if not isinstance(nxt,str) or not isinstance(rooms,dict): raise RuntimeError('invalid Matrix sync response')
         if cursor is None: return [],nxt

@@ -95,8 +95,17 @@ async def run(request):
     async def api(method,path,payload=None):
         return await asyncio.to_thread(request_json,server+path,token,payload,method)
     events = await api('GET',room_path+'/state')
+    crypto = None
     if any(e.get('type')=='m.room.encryption' for e in events):
-        raise ValueError('encrypted MatrixRTC key exchange unavailable; room was not downgraded')
+        from .matrix_rtc_crypto import MediaEncryption
+        control_reader = asyncio.StreamReader(limit=65536)
+        await asyncio.get_running_loop().connect_read_pipe(
+            lambda: asyncio.StreamReaderProtocol(control_reader), sys.stdin)
+        class ControlWriter:
+            def write(self, data): sys.stdout.write(data.decode())
+            async def drain(self): sys.stdout.flush()
+        crypto = MediaEncryption(request, control_reader, ControlWriter())
+        identity = dict(identity, device_id=await crypto.prepare())
     members = {e.get('state_key'):e.get('content',{}).get('membership') for e in events if e.get('type')=='m.room.member'}
     if set(k for k,v in members.items() if v=='join') != {account['matrix_user_id'],target}:
         raise ValueError('caller and recipient need an existing two-person room')
@@ -115,7 +124,11 @@ async def run(request):
         ended.set()
         if not reader.at_eof(): reader.feed_eof()
     loop.add_signal_handler(signal.SIGTERM,terminate)
-    async def receive(track):
+    async def receive(track, publication=None, participant=None):
+        if crypto and (publication.encryption_type != rtc.EncryptionType.GCM or
+                       not await crypto.authorize(media, participant.identity)):
+            terminate()
+            return
         stream = rtc.AudioStream(track,sample_rate=48000,num_channels=1,frame_size_ms=20,capacity=100)
         try:
             await transport_ready.wait()
@@ -128,7 +141,7 @@ async def run(request):
     @media.on('track_subscribed')
     def subscribed(track,publication,participant):
         if track.kind==rtc.TrackKind.KIND_AUDIO and participant.identity.startswith(target+':'):
-            task=asyncio.create_task(receive(track));media_tasks.add(task)
+            task=asyncio.create_task(receive(track, publication, participant));media_tasks.add(task)
             task.add_done_callback(lambda t: terminate() if not t.cancelled() and t.exception() else None)
     @media.on('participant_disconnected')
     def disconnected(participant):
@@ -172,9 +185,10 @@ async def run(request):
         current_id=call_id
         print(json.dumps({'event':'prepared','callId':call_id}),flush=True)
         prepared[call_id]=bind_prepared(prepared[call_id],record)
-        await media.connect(sfu['url'],sfu['jwt'],rtc.RoomOptions(connect_timeout=15))
-        await media.local_participant.publish_track(rtc.LocalAudioTrack.create_audio_track('ИИ',source),
-            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+        await media.connect(sfu['url'],sfu['jwt'],crypto.options(rtc) if crypto else rtc.RoomOptions(connect_timeout=15))
+        if not crypto:
+            await media.local_participant.publish_track(rtc.LocalAudioTrack.create_audio_track('ИИ',source),
+                rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
         started=int(time.time()*1000)
         result=await api('PUT',state_path,{'application':'m.call','call_id':'','device_id':device,
             'expires':(record['max_seconds']+90)*1000,'foci_preferred':[{'type':'livekit',
@@ -182,6 +196,10 @@ async def run(request):
             'focus_active':{'focus_selection':'oldest_membership','type':'livekit'},
             'm.call.intent':'audio','membershipID':str(uuid.uuid4()),'scope':'m.room'})
         joined=True
+        if crypto:
+            await crypto.start(media, terminate)
+            await media.local_participant.publish_track(rtc.LocalAudioTrack.create_audio_track('ИИ',source),
+                rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
         await api('PUT',room_path+'/send/'+RING+'/'+record['call_id'],{
             'm.mentions':{'user_ids':[target]},'notification_type':'ring',
             'm.relates_to':{'event_id':result['event_id'],'rel_type':'m.reference'},
@@ -194,6 +212,8 @@ async def run(request):
         else:
             await broker.emit({'event':'ended','callId':call_id,'reason':'unanswered'})
             raise TimeoutError('recipient did not answer')
+        if crypto:
+            await crypto.wait_ready()
         reader.feed_data(voice.pack_audiosocket_frame(voice.UUID_KIND,uuid.UUID(call_id).bytes))
         transport_ready.set()
         engine_task=asyncio.create_task(voice.handle_call(reader,writer,broker,config,prepared,
@@ -211,6 +231,8 @@ async def run(request):
         await source.wait_for_playout()
     finally:
         terminate()
+        if crypto:
+            await crypto.close()
         if engine_task and not engine_task.done():
             engine_task.cancel();await asyncio.gather(engine_task,return_exceptions=True)
         for task in media_tasks:task.cancel()
@@ -220,6 +242,8 @@ async def run(request):
             finally: await source.aclose()
         finally:
             if joined:await api('PUT',state_path,{})
+    if crypto and crypto.failure:
+        raise RuntimeError('Matrix media key lifecycle failed')
 
 
 def main():

@@ -87,6 +87,18 @@ def _request(server: str, token: str, method: str, path: str, payload=None):
 
 def _caller_credentials():
     """Load only the fixture caller account and its stored model alias."""
+    if os.environ.get("CALLER_TRANSPORT_INPUT") == "private-jsonl":
+        # The API-host fixture owner supplies the already bound request. The
+        # voice host must not assume it shares the API database or vault.
+        request = json.loads(sys.stdin.readline(65537))
+        secret = dict(request.get("account") or {})
+        if (secret.get("account_id") != "matrix:ab023a689e926bf99d924e933ebd"
+                or secret.get("matrix_user_id") != "@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com"
+                or request.get("call", {}).get("room_id") != ROOM
+                or request.get("call", {}).get("target") != TARGET
+                or not secret.get("user_id")):
+            raise PermissionError("fixture_private_transport_binding_mismatch")
+        return secret["user_id"], secret["account_id"], secret
     from universal_userio.account_connections import ConnectorSecrets
 
     db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
@@ -162,8 +174,25 @@ async def run():
     joined = {member for member, membership in members.items() if membership == "join"}
     if joined != {"@lhc_voice_tester_a_20261021:chat.bezrabotnyi.com", TARGET}:
         raise PermissionError("fixture_room_membership_changed")
+    crypto = None
+    if any(event.get("type") == "m.room.encryption" for event in state):
+        # The API-host fixture owner handles these frames with CryptoControl
+        # on the existing private runner stream; never tee raw JSONL into logs.
+        if os.environ.get("CALLER_CRYPTO_CONTROL") != "private-jsonl":
+            raise PermissionError("encrypted fixture requires private account-bound crypto control")
+        from universal_userio.matrix_rtc_crypto import MediaEncryption
+        control_reader = asyncio.StreamReader(limit=65536)
+        await asyncio.get_running_loop().connect_read_pipe(
+            lambda: asyncio.StreamReaderProtocol(control_reader), sys.stdin)
+        class ControlWriter:
+            def write(self, data): sys.stdout.write(data.decode())
+            async def drain(self): sys.stdout.flush()
+        crypto = MediaEncryption({"account": account,
+                                  "call": {"room_id": ROOM, "target": TARGET}},
+                                 control_reader, ControlWriter())
+        identity["device_id"] = await crypto.prepare()
     devices = _request(homeserver, access, "GET", "/_matrix/client/v3/devices").get("devices", [])
-    device = next((str(item.get("device_id") or "") for item in devices if item.get("device_id")), "")
+    device = str(identity.get("device_id") or "") or next((str(item.get("device_id") or "") for item in devices if item.get("device_id")), "")
     if not device:
         raise PermissionError("fixture_caller_device_missing")
 
@@ -278,7 +307,12 @@ async def run():
     writer = Writer()
     writer.question_seconds = question_seconds
 
-    async def receive(track):
+    async def receive(track, publication=None, participant=None):
+        if crypto and (publication.encryption_type != rtc.EncryptionType.GCM or
+                       not await crypto.authorize(room, participant.identity)):
+            stop.set()
+            audio_reader.feed_eof()
+            return
         stream = rtc.AudioStream(track, sample_rate=48000, num_channels=1,
                                  frame_size_ms=20, capacity=100)
         try:
@@ -296,7 +330,7 @@ async def run():
     @room.on("track_subscribed")
     def subscribed(track, publication, participant):
         if track.kind == rtc.TrackKind.KIND_AUDIO and participant.identity.startswith(TARGET + ":"):
-            task = asyncio.create_task(receive(track))
+            task = asyncio.create_task(receive(track, publication, participant))
             media_tasks.add(task)
             task.add_done_callback(media_tasks.discard)
 
@@ -351,11 +385,15 @@ async def run():
         sfu = await asyncio.to_thread(
             _request, RTC_URL, "", "POST", "/sfu/get",
             {"room": ROOM, "openid_token": openid, "device_id": device})
-        await room.connect(sfu["url"], sfu["jwt"], rtc.RoomOptions(connect_timeout=15))
+        await room.connect(sfu["url"], sfu["jwt"], crypto.options(rtc) if crypto else rtc.RoomOptions(connect_timeout=15))
         joined_rtc = True
+        if crypto:
+            await crypto.start(room, lambda: (stop.set(), audio_reader.feed_eof()))
         await room.local_participant.publish_track(
             rtc.LocalAudioTrack.create_audio_track("UserIO caller fixture", source),
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+        if crypto:
+            await crypto.wait_ready()
         transport_ready.set()
         audio_reader.feed_data(voice.pack_audiosocket_frame(voice.UUID_KIND,
                                                            uuid.UUID(voice_call_id).bytes))
@@ -403,6 +441,12 @@ async def run():
         return 0
     finally:
         stop.set()
+        if crypto:
+            await crypto.close()
+        try:
+            await api("PUT", state_full, {})
+        except Exception:
+            pass
         for task in list(media_tasks):
             task.cancel()
         if media_tasks:

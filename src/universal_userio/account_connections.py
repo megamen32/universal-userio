@@ -202,6 +202,7 @@ def connect_matrix(service: UserIOService, user_id: str, payload: Mapping[str, A
     reference = storage.save({
         "provider": "matrix", "user_id": user_id, "account_id": account_id,
         "homeserver": server, "matrix_user_id": actual, "access_token": token,
+        "device_id": str(identity.get("device_id") or ""),
     })
     service._store.register_account(
         account_id=account_id, provider="matrix", display_name=actual,
@@ -538,7 +539,11 @@ class UserAccountPoller:
         )
         # Initial snapshot imports recent messages as history, without triggering
         # live workspace events. Subsequent polls only deliver new events.
-        messages, nxt = reader.poll(cursor or "", limit=1000)
+        from .matrix_crypto import for_account, enabled_for
+        if enabled_for(account):
+            messages, nxt = reader.poll(cursor or "", limit=1000, data=for_account(account).poll(cursor))
+        else:
+            messages, nxt = reader.poll(cursor or "", limit=1000)
         for message in messages:
             self.service.receive(
                 InboxMessage(

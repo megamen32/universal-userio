@@ -112,7 +112,7 @@ def test_the_control_stream_dispatches_the_answer_action(monkeypatch):
     bridge = load("agentcall_realtime_bridge", "universal_userio.voice.agentcall_realtime_bridge")
     calls = []
 
-    async def fake_answer(request, config, *, broker, writer):
+    async def fake_answer(request, config, *, broker, writer, control_reader):
         calls.append(request)
         return {"type": "receipt", "state": "completed", "text": "Здравствуйте."}
 

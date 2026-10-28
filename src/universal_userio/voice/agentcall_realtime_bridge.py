@@ -2736,7 +2736,16 @@ class CallController:
                 '/opt/universal-userio/.venv/bin/python', '-m', 'universal_userio.matrix_call_worker',
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, env=env)
             process.stdin.write((json.dumps(request, ensure_ascii=False)+'\n').encode())
-            await process.stdin.drain(); process.stdin.close()
+            await process.stdin.drain()
+            async def control():
+                while True:
+                    line = await reader.readline()
+                    if not line: break
+                    if len(line)>65536: raise ValueError('Matrix control exceeds limit')
+                    if json.loads(line).get('type') != 'matrix_crypto_result':
+                        raise ValueError('unsupported Matrix control frame')
+                    process.stdin.write(line); await process.stdin.drain()
+                process.stdin.close()
             async def relay():
                 while True:
                     line = await process.stdout.readline()
@@ -2746,7 +2755,7 @@ class CallController:
                     writer.write(line); await writer.drain()
                 await process.wait()
             forward = asyncio.create_task(relay())
-            closed = asyncio.create_task(reader.read(1))
+            closed = asyncio.create_task(control())
             await asyncio.wait((forward, closed), timeout=duration+240,
                                return_when=asyncio.FIRST_COMPLETED)
         finally:
@@ -2780,7 +2789,7 @@ class CallController:
                 from matrix_call_answer_worker import answer_incoming_call
             receipt = await answer_incoming_call(
                 request, self.config, broker=EventBroker(Path('/run/agentcall/gatewayd.sock')),
-                writer=writer)
+                writer=writer, control_reader=reader)
             writer.write((json.dumps(receipt, ensure_ascii=False) + '\n').encode())
             await writer.drain()
         except Exception as error:

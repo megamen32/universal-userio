@@ -235,6 +235,15 @@ class MatrixCalls:
                     if event.get('ok') is False: raise RuntimeError('voice service refused Matrix transport')
                     if event.get('callId'): record['voice_call_id'] = str(uuid.UUID(event['callId']))
                     kind = event.get('event')
+                    if kind == 'matrix_crypto':
+                        from .matrix_rtc_crypto import CryptoControl
+                        try:
+                            result = await asyncio.to_thread(CryptoControl(request).handle, event)
+                        except Exception as error:
+                            result = {'type':'matrix_crypto_result', 'request_id':event.get('request_id'),
+                                      'error':type(error).__name__}
+                        writer.write((json.dumps(result)+'\n').encode()); await writer.drain()
+                        continue  # Media keys never enter call receipts or history.
                     if kind in {'ringing','active'}:
                         record['status'] = kind
                         record['answered'] = kind == 'active' or record['answered']
