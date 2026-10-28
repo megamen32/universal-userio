@@ -46,6 +46,32 @@ def received_answer_started(sdk, received_asr):
     return any(tuple(heard[i:i+4]) in phrases for i in range(len(heard)-3))
 
 
+def received_domain_then_computer_started(sdk, received_asr, domain):
+    """The A fixture must hear the complete domain and 502 before barging.
+
+    This only validates a private QA gate; it never rewrites a transcript.
+    Both SDK text and received speech must preserve the requested order.
+    """
+    if sdk.get('state') != 'completed':
+        return False
+    tails = []
+    for text in (sdk.get('text', ''), received_asr):
+        text = text.lower().replace('ё', 'е')
+        address = re.search(re.escape(domain.lower()), text)
+        if not address:
+            return False
+        error = re.search(r'502|пятьсот\s+два|пять\s+ноль\s+два', text[address.end():])
+        if not error:
+            return False
+        remaining = text[address.end()+error.end():]
+        explanation = re.search(r'означ|шлюз|неверн|сервер|ответ', remaining)
+        computer = re.search(r'компьютер|возможност|voice[- ]qa|я работаю', remaining)
+        if not explanation or not computer or explanation.start() >= computer.start():
+            return False
+        tails.append(remaining[computer.start():])
+    return received_answer_started({'state':'completed','text':tails[0]}, tails[1])
+
+
 def phase_result(sdk, *, native_mode, expected_mode=None, ack_state=None):
     """A known failed ACK is recorded; it never replays the terminal turn."""
     done = sdk.get('state') in {'completed', 'delegated'}

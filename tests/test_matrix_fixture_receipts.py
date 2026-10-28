@@ -39,6 +39,15 @@ class ReceivedAnswerGateTests(unittest.TestCase):
         self.assertTrue(m.received_answer_started(sdk, 'Открываю контекст. Я работаю на изолированной тестовой среде'))
         self.assertFalse(m.received_answer_started(dict(sdk, state='processing'), sdk['text']))
 
+    def test_domain_explanation_precedes_computer_barge(self):
+        text = 'Адрес notify.bezrabotnyi.com. Ошибка 502 означает, что шлюз получил неверный ответ сервера. На компьютере voice qa sandbox я умею читать ваши файлы.'
+        sdk = {'state':'completed','text':text}
+        for heard in ['Адрес notify.bezrabotnyi.com.',
+                      'Адрес notify.bezrabotnyi.com. Ошибка 502 означает, что шлюз получил неверный ответ сервера.',
+                      'На компьютере voice qa sandbox я умею читать ваши файлы.']:
+            self.assertFalse(m.received_domain_then_computer_started(sdk, heard, 'notify.bezrabotnyi.com'))
+        self.assertTrue(m.received_domain_then_computer_started(sdk, text, 'notify.bezrabotnyi.com'))
+
     def test_failed_ack_is_not_an_unknown_turn_or_a_reason_to_replay_it(self):
         self.assertEqual(m.phase_result({'state':'delegated','mode':'incidents'}, native_mode='incidents',
             expected_mode='incidents', ack_state='open'), {'completed':True, 'failed_ACK':True})
