@@ -463,6 +463,17 @@ async def run():
             # Let the permanent handler's cached greeting finish, then speak
             # fixed WAVs. This fixture never generates an assistant answer.
             await wait_reply(time.monotonic()-30, 12)
+            utterance = 0
+            async def completed_answer(stage):
+                if os.environ.get('CALLER_WAIT_FULL_ANSWER') != 'private-jsonl':
+                    return
+                async with crypto._lock:
+                    crypto.writer.write((json.dumps({'event': 'fixture_answer_gate',
+                        'turn_id': utterance, 'stage': stage})+'\n').encode())
+                    await crypto.writer.drain()
+                    result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 180))
+                    if result.get('type') != 'fixture_answer_gate_result' or result.get('completed') is not True:
+                        raise RuntimeError('Native answer is not durably completed')
             for index, path in enumerate([FIRST_WAV, *SCRIPT_WAVS]):
                 pcm, rate = _load_wav(path)
                 if rate != 48000:
@@ -471,14 +482,9 @@ async def run():
                 await speak(pcm)
                 await source.wait_for_playout()
                 print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
+                utterance += 1
+                await completed_answer('phrase')
                 if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
-                    async with crypto._lock:
-                        crypto.writer.write((json.dumps({'event': 'fixture_answer_gate',
-                            'turn_id': index+1})+'\n').encode())
-                        await crypto.writer.drain()
-                        result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 180))
-                        if result.get('type') != 'fixture_answer_gate_result' or result.get('completed') is not True:
-                            raise RuntimeError('Native SDK answer is not durably completed')
                     started_phrase = time.monotonic()-1
                 barge = os.environ.get('CALLER_BARGE_WAV') if index == 0 else None
                 if barge:
@@ -493,6 +499,10 @@ async def run():
                     await source.wait_for_playout()
                     started_phrase = time.monotonic()
                     print(json.dumps({'event': 'fixture_barge_sent'}), flush=True)
+                    utterance += 1
+                    await completed_answer('barge')
+                    if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
+                        started_phrase = time.monotonic()-1
                 await wait_reply(started_phrase)
             return 0
 
