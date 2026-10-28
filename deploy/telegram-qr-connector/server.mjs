@@ -27,6 +27,8 @@ import { sendTelegramReply, TelegramReplyRefused } from './message-reply.mjs';
 import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
+import { ConnectionTCPObfuscated } from 'telegram/network/connection/TCPObfuscated.js';
+import { telegramTransportOptions } from './transport-options.mjs';
 import { logoutTelegramClient } from './account-disconnect.mjs';
 import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs";
 import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
@@ -398,7 +400,7 @@ function telegramProxy() {
 }
 
 function telegramClientOptions(connectionRetries, retryDelay) {
-  const options = { connectionRetries };
+  const options = { connectionRetries, ...telegramTransportOptions(process.env.TELEGRAM_TRANSPORT, ConnectionTCPObfuscated) };
   if (retryDelay) options.retryDelay = retryDelay;
   const httpProxy = String(process.env.TELEGRAM_HTTP_PROXY_URL || '').trim();
   if (httpProxy) return { ...options, ...httpConnectOptions(httpProxy, PromisedNetSockets) };
