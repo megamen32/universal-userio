@@ -29,5 +29,22 @@ class FixtureReceiptTests(unittest.TestCase):
         self.assertIsNone(m.completed_native_turn(lines, 'qa', 0))
 
 
+class ReceivedAnswerGateTests(unittest.TestCase):
+    def test_ack_progress_and_greeting_do_not_release_barge(self):
+        sdk = {'state':'completed','text':'Я работаю на изолированной тестовой среде голосового секретаря, узел voice-qa-sandbox.'}
+        for audio in ['Здравствуйте, я голосовой секретарь. Слушаю вас.',
+                      'Так, сейчас подумаю. Открываю контекст вашего разговора.',
+                      'Одну минутку, я отвечу. Проверяю данные для вашего ответа.']:
+            self.assertFalse(m.received_answer_started(sdk, audio))
+        self.assertTrue(m.received_answer_started(sdk, 'Открываю контекст. Я работаю на изолированной тестовой среде'))
+        self.assertFalse(m.received_answer_started(dict(sdk, state='processing'), sdk['text']))
+
+    def test_failed_ack_is_not_an_unknown_turn_or_a_reason_to_replay_it(self):
+        self.assertEqual(m.phase_result({'state':'delegated','mode':'incidents'}, native_mode='incidents',
+            expected_mode='incidents', ack_state='open'), {'completed':True, 'failed_ACK':True})
+        self.assertEqual(m.phase_result({'state':'processing','mode':'incidents'}, native_mode='incidents',
+            expected_mode='incidents', ack_state='open'), {'completed':False, 'failed_ACK':False})
+
+
 if __name__ == '__main__':
     unittest.main()

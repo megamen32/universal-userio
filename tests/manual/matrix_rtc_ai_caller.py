@@ -475,6 +475,33 @@ async def run():
                     result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 180))
                     if result.get('type') != 'fixture_answer_gate_result' or result.get('completed') is not True:
                         raise RuntimeError('Native answer is not durably completed')
+            async def wait_substantive_answer():
+                if os.environ.get('CALLER_WAIT_FULL_ANSWER') != 'private-jsonl':
+                    raise PermissionError('substantive received-audio gate required for barge fixture')
+                import hashlib
+                prefix = os.environ['CALLER_RECEIVED_WAV'] + '.prefix.wav'
+                deadline = time.monotonic()+150
+                while time.monotonic() < deadline and not stop.is_set():
+                    pcm = bytes(received_pcm[response_audio_start:])[-48000*2*30:]
+                    if pcm and last_voice_at > started_phrase:
+                        # The operator ASRs this exact immutable snapshot. Only
+                        # received B speech matching an SDK answer releases A2.
+                        with wave.open(prefix, 'wb') as output:
+                            output.setnchannels(1); output.setsampwidth(2); output.setframerate(48000)
+                            output.writeframes(pcm)
+                        os.chmod(prefix, 0o600)
+                        digest = hashlib.sha256(Path(prefix).read_bytes()).hexdigest()
+                        async with crypto._lock:
+                            crypto.writer.write((json.dumps({'event':'fixture_barge_gate',
+                                'audio_sha256':digest, 'utterance_started_at':started_utc})+'\n').encode())
+                            await crypto.writer.drain()
+                            result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 45))
+                        if result.get('type') != 'fixture_barge_gate_result':
+                            raise PermissionError('invalid received-audio gate response')
+                        if result.get('allowed') is True:
+                            return
+                    await asyncio.sleep(.5)
+                raise TimeoutError('substantive received SDK speech required before interruption')
             for index, path in enumerate([FIRST_WAV, *SCRIPT_WAVS]):
                 pcm, rate = _load_wav(path)
                 if rate != 48000:
@@ -485,14 +512,10 @@ async def run():
                 await source.wait_for_playout()
                 print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
                 utterance += 1
+                response_audio_start = len(received_pcm)
                 barge = os.environ.get('CALLER_BARGE_WAV') if index == 0 else None
                 if barge:
-                    deadline = time.monotonic()+150
-                    while last_voice_at <= started_phrase and time.monotonic() < deadline and not stop.is_set():
-                        await asyncio.sleep(.05)
-                    if last_voice_at <= started_phrase or stop.is_set():
-                        raise TimeoutError('fixture received speech required before interruption')
-                    await asyncio.sleep(.8)
+                    await wait_substantive_answer()
                     pcm, rate = _load_wav(barge)
                     if rate != 48000:
                         pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)

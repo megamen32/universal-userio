@@ -29,3 +29,25 @@ def completed_native_turn(lines, call_id, remote_at):
             result = {'turn_id': int(match[1]), 'mode': match[2],
                       'heard_at': pending, 'completed_at': at}
     return result
+
+
+def received_answer_started(sdk, received_asr):
+    """Match actual received speech against the exact substantive SDK answer.
+
+    The fixture supplies audio captured after its question, excluding greeting.
+    Mere audio energy, acknowledgements and progress have no authority here.
+    """
+    if sdk.get('state') != 'completed' or not sdk.get('text'):
+        return False
+    words = lambda text: re.findall(r'[\w]+', text.lower().replace('ё', 'е'))
+    expected = words(sdk['text']); heard = words(received_asr)
+    # Four consecutive words distinguish speech content from generic wait text.
+    phrases = {tuple(expected[i:i+4]) for i in range(len(expected)-3)}
+    return any(tuple(heard[i:i+4]) in phrases for i in range(len(heard)-3))
+
+
+def phase_result(sdk, *, native_mode, expected_mode=None, ack_state=None):
+    """A known failed ACK is recorded; it never replays the terminal turn."""
+    done = sdk.get('state') in {'completed', 'delegated'}
+    done = done and (not expected_mode or sdk.get('mode') == native_mode == expected_mode)
+    return {'completed':done, 'failed_ACK':bool(done and ack_state is not None and ack_state != 'acknowledged')}

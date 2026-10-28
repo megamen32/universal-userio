@@ -24,11 +24,14 @@ class FixtureBargeTests(unittest.TestCase):
             return clock[0]
         async def speak(pcm): events.append(('pcm', pcm))
         async def gate(stage): events.append(('gate', stage))
+        async def substantive():
+            events.append(('substantive_pcm_gate', heard))
+            if not heard: raise TimeoutError('no substantive received audio')
         async def noop(*args): pass
         namespace = dict(FIRST_WAV='first', SCRIPT_WAVS=[],
             os=SimpleNamespace(environ={'CALLER_WAIT_FULL_ANSWER':'private-jsonl', 'CALLER_BARGE_WAV':'barge'}),
             _load_wav=lambda path: (path, 48000), source=SimpleNamespace(wait_for_playout=noop),
-            speak=speak, completed_answer=gate, wait_reply=noop,
+            speak=speak, completed_answer=gate, wait_reply=noop, wait_substantive_answer=substantive, received_pcm=bytearray(),
             time=SimpleNamespace(monotonic=now, time=now),
             asyncio=SimpleNamespace(sleep=noop), last_voice_at=100000 if heard else 0,
             stop=SimpleNamespace(is_set=lambda: False), json=__import__('json'))
@@ -41,9 +44,9 @@ class FixtureBargeTests(unittest.TestCase):
     def test_barge_follows_received_speech_before_waiting_for_completed_turn(self):
         events, timed_out = self.run_loop()
         self.assertFalse(timed_out)
-        self.assertEqual(events, [('pcm','first'), ('pcm','barge'), ('gate','barge')])
+        self.assertEqual(events, [('pcm','first'), ('substantive_pcm_gate',True), ('pcm','barge'), ('gate','barge')])
 
     def test_no_received_speech_never_releases_interruption(self):
         events, timed_out = self.run_loop(heard=False)
         self.assertTrue(timed_out)
-        self.assertEqual(events, [('pcm','first')])
+        self.assertEqual(events, [('pcm','first'), ('substantive_pcm_gate',False)])
