@@ -81,7 +81,12 @@ public port is created. Other hosts reject this setting.
 The runtime owner must first confirm the actual88 primary control socket and
 an idle resource join. On100 provision only `/run/agentcall/primary88` for the
 existing SSH service user, mode0700, inside the backend's existing `/run/agentcall`
-mount. Keep the forwarded socket private and validate its owner/mode after bind.
+mount. Persist that cold-boot prerequisite with the supplied
+`userio-primary88.tmpfiles.conf` installed as
+`/etc/tmpfiles.d/userio-primary88.conf`; apply only that file with
+`systemd-tmpfiles --create /etc/tmpfiles.d/userio-primary88.conf`. The rule creates
+the private parent and preserves an existing socket. Keep the forwarded socket
+private and validate its owner/mode after bind.
 The tunnel process on88 also needs the existing `notification-center` group to
 connect to its local `root:notification-center` mode0660 AgentCall socket. Add
 that group only as a supplementary group on this unit; do not widen the socket
