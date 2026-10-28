@@ -475,6 +475,39 @@ async def run():
                     result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 180))
                     if result.get('type') != 'fixture_answer_gate_result' or result.get('completed') is not True:
                         raise RuntimeError('Native answer is not durably completed')
+            async def wait_received_tail():
+                # SDK completion and a gap between TTS chunks cannot close the
+                # receiver. The operator must ASR the exact received tail PCM.
+                if os.environ.get('CALLER_WAIT_FULL_ANSWER') != 'private-jsonl':
+                    raise PermissionError('received-tail private gate required')
+                import hashlib
+                prefix = os.environ['CALLER_RECEIVED_WAV'] + '.prefix.wav'
+                deadline = time.monotonic()+60
+                previous_size = -1
+                while time.monotonic() < deadline and not stop.is_set():
+                    pcm = bytes(received_pcm[response_audio_start:])[-48000*2*30:]
+                    if pcm and len(received_pcm) != previous_size:
+                        previous_size = len(received_pcm)
+                        with wave.open(prefix, 'wb') as output:
+                            output.setnchannels(1); output.setsampwidth(2); output.setframerate(48000)
+                            output.writeframes(pcm)
+                        os.chmod(prefix, 0o600)
+                        digest = hashlib.sha256(Path(prefix).read_bytes()).hexdigest()
+                        async with crypto._lock:
+                            crypto.writer.write((json.dumps({'event':'fixture_tail_gate',
+                                'audio_sha256':digest, 'phrase_index':index,
+                                'received_pcm_offset':previous_size})+'\n').encode())
+                            await crypto.writer.drain()
+                            result = json.loads(await asyncio.wait_for(crypto.reader.readline(),45))
+                        if result.get('type') != 'fixture_tail_gate_result':
+                            raise PermissionError('invalid received-tail response')
+                        if result.get('allowed') is True:
+                            print(json.dumps({'event':'fixture_tail_received',
+                                'audio_sha256':digest,'received_pcm_offset':previous_size,
+                                'at':time.time()}),flush=True)
+                            return
+                    await asyncio.sleep(.1)
+                raise TimeoutError('final answer tail has not been received')
             async def wait_substantive_answer():
                 if os.environ.get('CALLER_WAIT_FULL_ANSWER') != 'private-jsonl':
                     raise PermissionError('substantive received-audio gate required for barge fixture')
@@ -541,6 +574,8 @@ async def run():
                     await completed_answer('phrase')
                     if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
                         started_phrase = time.monotonic()-1
+                if index == len(SCRIPT_WAVS) and os.environ.get('CALLER_REQUIRED_FINAL_TAIL'):
+                    await wait_received_tail()
                 await wait_reply(started_phrase)
             return 0
 

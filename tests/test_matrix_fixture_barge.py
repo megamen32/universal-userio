@@ -9,7 +9,7 @@ import unittest
 
 
 class FixtureBargeTests(unittest.TestCase):
-    def run_loop(self, heard=True, fresh=True):
+    def run_loop(self, heard=True, fresh=True, tail_required=False):
         tree = ast.parse((Path(__file__).parent/'manual/matrix_rtc_ai_caller.py').read_text())
         loop = next(n for n in ast.walk(tree) if isinstance(n, ast.For)
                     and ast.unparse(n.iter) == 'enumerate([FIRST_WAV, *SCRIPT_WAVS])')
@@ -27,11 +27,14 @@ class FixtureBargeTests(unittest.TestCase):
         async def substantive():
             events.append(('substantive_pcm_gate', heard))
             if not heard: raise TimeoutError('no substantive received audio')
+        async def tail():
+            events.append(('received_tail_gate', False))
+            raise TimeoutError('expected final word not yet received')
         async def noop(*args): pass
         namespace = dict(FIRST_WAV='first', SCRIPT_WAVS=[],
-            os=SimpleNamespace(environ={'CALLER_WAIT_FULL_ANSWER':'private-jsonl', 'CALLER_BARGE_WAV':'barge'}),
+            os=SimpleNamespace(environ=({'CALLER_WAIT_FULL_ANSWER':'private-jsonl', 'CALLER_REQUIRED_FINAL_TAIL':'кедр'} if tail_required else {'CALLER_WAIT_FULL_ANSWER':'private-jsonl', 'CALLER_BARGE_WAV':'barge'})),
             _load_wav=lambda path: (path, 48000), source=SimpleNamespace(wait_for_playout=noop),
-            speak=speak, completed_answer=gate, wait_reply=noop, wait_substantive_answer=substantive, received_pcm=bytearray(),
+            speak=speak, completed_answer=gate, wait_reply=noop, wait_substantive_answer=substantive, wait_received_tail=tail, received_pcm=bytearray(),
             time=SimpleNamespace(monotonic=now, time=now),
             asyncio=SimpleNamespace(sleep=noop), last_voice_at=10 if fresh else 0,
             stop=SimpleNamespace(is_set=lambda: False), json=__import__('json'))
@@ -56,3 +59,8 @@ class FixtureBargeTests(unittest.TestCase):
         self.assertFalse(timed_out)
         self.assertNotIn(('pcm', 'barge'), events)
         self.assertIn(('gate', 'phrase'), events)
+
+    def test_sdk_terminal_and_silence_do_not_replace_received_final_tail(self):
+        events, timed_out = self.run_loop(tail_required=True)
+        self.assertTrue(timed_out)
+        self.assertEqual(events, [('pcm','first'), ('gate','phrase'), ('received_tail_gate',False)])
