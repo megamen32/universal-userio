@@ -321,7 +321,7 @@ def build_answer_request(call: InboundMatrixCall, *, account: Mapping[str, str],
     """
     if not call.caller or call.caller == account.get("matrix_user_id"):
         raise ValueError("matrix call is not addressed to the polled account")
-    return {
+    request = {
         "action": CALLEE_ACTION,
         "call": {
             # The wire call id stays room-scoped like the working caller, and
@@ -341,6 +341,10 @@ def build_answer_request(call: InboundMatrixCall, *, account: Mapping[str, str],
         "identity": dict(identity),
         "rtc_auth_url": rtc_auth_url,
     }
+    from .matrix_voice_recipient import bind_recipient
+    bind_recipient(request['call'], receipt_id=call.receipt_id(account['id']),
+                   account_ref=account['id'], token=os.environ.get('USERIO_MATRIX_NOTICE_TOKEN',''))
+    return request
 
 
 def answer_call(request: Mapping[str, Any], socket_path: str, *, timeout: float = 240.0) -> dict[str, Any]:
@@ -498,6 +502,7 @@ class MatrixInboundCallWorker:
                         "room_id": call.room_id,
                         "target": call.caller,
                         "direction": "incoming",
+                        "engine_call_id": request['call']['engine_call_id'],
                         "created_at": time.time(),
                     }
                     # The claim lands before the external answer, so a crash in

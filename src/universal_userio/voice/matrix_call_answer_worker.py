@@ -22,6 +22,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Mapping
+from universal_userio.matrix_voice_recipient import recipient_context
 
 try:  # the voice host runs the bridge as a script, not as a package
     from .agentcall_realtime_bridge import (
@@ -355,7 +356,8 @@ async def answer_incoming_call(request: Mapping[str, Any], config: BackendConfig
             "Здравствуйте. Я голосовой секретарь. Слушаю вас.", greeting_pcm,
             config.attention_prompt, attention_pcm,
             "Владелец звонит личному помощнику через Matrix. Выясни его задачу, не предполагай цель звонка.",
-            {"call_mode": "incoming", "voice_transport": "matrix", "voice_target": caller},
+            {"call_mode": "incoming", "voice_transport": "matrix", "voice_target": caller,
+             **recipient_context(call, caller=caller, account_ref=str(account.get("id") or ""), room_id=room_id)},
             time.time(), load_wait_prompts(),
             account_ref=str(account.get("id") or ""), peer_ref=room_id, peer_label=caller,
             host_answered_incoming=True,
