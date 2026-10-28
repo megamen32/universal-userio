@@ -28,8 +28,11 @@ def fixture(tmp_path, monkeypatch, can_reply=True):
 
 def test_matrix_exact_account_draft_approve_has_provider_receipt_and_no_replay(tmp_path,monkeypatch):
     store, service, user = fixture(tmp_path,monkeypatch)
+    # The real connector reader stores account-qualified Matrix source names.
+    conversation=store.ensure_contact_conversation('matrix:qa-a','Strict',user_id=user,
+        account_ref='matrix:qa-a',peer_id='!strict:test',conversation_kind='group',route_id='matrix-read-only')
     prepared = service.contact_starter.prepare(user_id=user,account_ref='matrix:qa-a',
-        identifier='!strict:test',text='Synthetic notice',request_id='matrix-message-qa-001')
+        conversation_id=conversation['id'],text='Synthetic notice',request_id='matrix-message-qa-001')
     import universal_userio.channels.matrix as matrix
     calls=[]
     class Response:

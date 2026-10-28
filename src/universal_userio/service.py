@@ -1899,10 +1899,12 @@ class UserIOService:
         source = str(conversation["source"])
         if source == 'diagnostic':
             raise DeliveryUnavailableError('Diagnostic chats never select an external outbox/provider.')
-        if source == 'matrix':
+        if source == 'matrix' or source.startswith('matrix:'):
             from .account_connections import ConnectorSecrets
             from .channels.matrix import MatrixSender
             account_ref = str(conversation.get('account_ref') or '')
+            if source != 'matrix' and source != account_ref:
+                raise DeliveryUnavailableError('Matrix conversation source does not match account')
             account = self.contact_starter.account(user_id=user_id, account_ref=account_ref)
             reference = str(account.get('credential_ref') or '')
             if account.get('provider') != 'matrix' or not reference.startswith('connector:'):
