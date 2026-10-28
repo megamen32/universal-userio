@@ -4224,8 +4224,17 @@ async def handle_call(
                     fixed_answer=fixed, acknowledgement=None if fixed else acknowledgements.next(),caller_timing=caller_timing)
             except Exception as error:
                 if isinstance(error, NativeTurnUnsettled):
+                    _log(f'call={call_id} native turn unsettled; no replay: {call_error_detail(error)}')
+                    failure_answer = ('Нет подтверждения результата вашего поручения. '
+                                      'Автоматически его не повторяю. Пожалуйста, проверьте результат позже.')
+                    await broker.emit(safe_event('error', call_id, reason=failure_answer,
+                                                  recoverable=False, **peer_fields))
+                    stop_playback.clear()
+                    await stream_voice_turn(writer, broker, call_id, '', fast_agent or pipeline, speech,
+                        hung_up, stop_playback, peer_fields=peer_fields, fixed_answer=failure_answer)
+                    termination_reason = 'native_turn_unknown'
                     hung_up.set()
-                    raise
+                    break
                 if fast_agent is None and not isinstance(error,VoiceModelRefused):
                     raise
                 _log(f'call={call_id} native turn failed; no replay: {type(error).__name__}: {str(error)[:160]}')
