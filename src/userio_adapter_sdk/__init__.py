@@ -161,6 +161,8 @@ class ChatMessage:
     buttons: tuple[tuple[str, ...], ...]
     out: bool
     reply_to_msg_id: int | None
+    provider_message_id: str | None
+    provider_reply_to_message_id: str | None
 
     def __init__(
         self,
@@ -179,6 +181,8 @@ class ChatMessage:
         chat: ChatId | None = None,
         message_id: int | None = None,
         message: str | None = None,
+        provider_message_id: str | None = None,
+        provider_reply_to_message_id: str | None = None,
     ) -> None:
         if chat_id is None:
             chat_id = chat
@@ -205,6 +209,11 @@ class ChatMessage:
         )
         object.__setattr__(self, "out", bool(out))
         object.__setattr__(self, "reply_to_msg_id", reply_to_msg_id)
+        for name, value in (("provider_message_id", provider_message_id),
+                            ("provider_reply_to_message_id", provider_reply_to_message_id)):
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"{name} must be a string or None")
+            object.__setattr__(self, name, value)
 
     @property
     def message_id(self) -> int:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import subprocess
 
@@ -110,6 +111,14 @@ def email_env_config(env: Mapping[str, str] | None = None) -> EmailEnvConfig:
     )
 
 
+def _single_message_id(values: list[str]) -> str | None:
+    """Keep one exact RFC822 ID; missing/multi-parent/ambiguous headers have no inferred link."""
+    if len(values) != 1 or len(values[0]) > 998:
+        return None
+    match = re.fullmatch(r'\s*(<[^<>\s]+>)\s*', values[0])
+    return match.group(1) if match else None
+
+
 def _parse_email_message(uid: int, raw: bytes) -> dict[str, Any]:
     """Parse one RFC822 message into a plain row for the channel."""
 
@@ -143,6 +152,7 @@ def _parse_email_message(uid: int, raw: bytes) -> dict[str, Any]:
         "sender": sender,
         "recipients": [address for _name, address in getaddresses(mail.get_all("To", []))],
         "message_id": str(mail.get("Message-ID", "")),
+        "in_reply_to": _single_message_id([str(value) for value in mail.get_all('In-Reply-To', [])]),
         "subject": subject,
         "date": date,
         "body": body,
@@ -375,6 +385,8 @@ class EmailChannel:
             text=str(row.get("body") or ""),
             sender_id=str(row["sender"]),
             date=row.get("date"),
+            provider_message_id=_single_message_id([str(row.get('message_id') or '')]),
+            provider_reply_to_message_id=row.get('in_reply_to'),
             media_type=first[1] if first else None,
             filename=first[0] if first else None,
             out=False,
