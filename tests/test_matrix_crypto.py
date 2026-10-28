@@ -85,6 +85,44 @@ def test_crypto_activation_is_explicit_and_does_not_touch_other_accounts(monkeyp
     assert not enabled_for(dict(account(), account_id="matrix:personal"))
 
 
+def test_parallel_accounts_keep_sdk_identity_and_store_isolated(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    import time
+    from peewee import SqliteDatabase
+
+    bind = SqliteDatabase.bind_ctx
+    @contextmanager
+    def scheduled_binding(database, *args, **kwargs):
+        with bind(database, *args, **kwargs):
+            # Force the scheduler gap between nio's global model binding and
+            # its query, as happens when two account pollers run concurrently.
+            time.sleep(.002)
+            yield
+    monkeypatch.setattr(SqliteDatabase, 'bind_ctx', scheduled_binding)
+
+    identities = {}
+    def run(number):
+        name = str(number % 2)
+        a = dict(account(), account_id="matrix:" + name, matrix_user_id="@" + name + ":example.org",
+                 device_id=name)
+        def api(method, path, payload=None):
+            if path.endswith('/whoami'):
+                return {'user_id': a['matrix_user_id'], 'device_id': name}
+            return {'device_keys': {}}
+        async def save(client, db):
+            await asyncio.sleep(.005)
+            client.olm.save_account()
+            await asyncio.sleep(.005)
+            return client.olm.account.identity_keys
+        return name, AccountCrypto(a, root=tmp_path, api=api).transaction(save)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for name, identity in pool.map(run, range(24)):
+            assert identities.setdefault(name, identity) == identity
+    assert identities['0'] != identities['1']
+
+
 def test_two_consumers_share_the_sdk_sync_cursor_without_losing_events(tmp_path, monkeypatch):
     from nio import AsyncClient
     from urllib.parse import parse_qs, urlsplit

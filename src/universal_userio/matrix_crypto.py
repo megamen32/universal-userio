@@ -16,11 +16,16 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import threading
 import time
 from urllib.parse import quote, urlencode
 
 KEY_EVENT = "io.element.call.encryption_keys"
 MEMBER = "org.matrix.msc3401.call.member"
+# nio DefaultStore temporarily binds shared Peewee model classes to each
+# account's database. Keep that SDK lifecycle serial across poller threads;
+# the per-account flock below also excludes other processes on this device.
+_SDK_LOCK = threading.RLock()
 
 
 class CryptoIdentityMissing(ValueError):
@@ -51,6 +56,10 @@ class AccountCrypto:
 
     def transaction(self, action):
         """Hold the exclusive account lifecycle through SDK state and sync commit."""
+        with _SDK_LOCK:
+            return self._locked_transaction(action)
+
+    def _locked_transaction(self, action):
         _private_directory(self.root)
         fd = os.open(self.root / "owner.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
