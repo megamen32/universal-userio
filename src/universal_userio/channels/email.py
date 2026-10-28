@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import subprocess
 
 try:
@@ -321,7 +322,15 @@ class EmailChannel:
             command = (account.get(kind) or {}).get("sasl", {}).get("plain", {}).get("password", {}).get("command")
             if not command:
                 raise ValueError(f"himalaya account {name!r} has no {kind} password.command")
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+            argv = shlex.split(command) if isinstance(command, str) else command
+            if not isinstance(argv, (list, tuple)) or not argv or not all(
+                isinstance(argument, str) and argument for argument in argv
+            ):
+                raise ValueError(f"himalaya account {name!r} has an invalid {kind} password.command")
+            result = subprocess.run(
+                list(argv), stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                timeout=30, check=False,
+            )
             if result.returncode != 0:
                 raise ValueError(f"{kind} password command failed: {result.stderr.strip()[:200]}")
             return result.stdout.strip()

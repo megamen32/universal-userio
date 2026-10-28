@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 from email.message import EmailMessage
@@ -134,3 +136,46 @@ def test_from_env_builds_channel() -> None:
     channel = EmailChannel.from_env(FULL_ENV)
     assert channel.platform == "email"
     assert channel.capabilities == frozenset({"read", "send", "media", "download"})
+
+
+def test_from_himalaya_runs_password_command_argv_without_shell(tmp_path, monkeypatch) -> None:
+    config = tmp_path / "himalaya.toml"
+    config.write_text(
+        '''
+[accounts.airlock.smtp]
+server = "smtp://mail.example.com:587"
+
+[accounts.airlock.smtp.sasl.plain]
+username = "airlock@example.com"
+
+[accounts.airlock.smtp.sasl.plain.password]
+command = ["/secret-helper", "airlock"]
+
+[accounts.airlock.imap]
+server = "imaps://mail.example.com:993"
+
+[accounts.airlock.imap.sasl.plain]
+username = "airlock@example.com"
+
+[accounts.airlock.imap.sasl.plain.password]
+command = ["/secret-helper", "airlock"]
+''',
+        encoding="utf-8",
+    )
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="test-password\n", stderr="")
+
+    monkeypatch.setattr("universal_userio.channels.email.subprocess.run", run)
+    channel = EmailChannel.from_himalaya("airlock", config_path=str(config))
+
+    assert channel._transport.config.sender == "airlock@example.com"
+    assert channel._transport.config.smtp_password == "test-password"
+    assert channel._transport.config.imap_password == "test-password"
+    assert len(calls) == 2
+    assert all(command == ["/secret-helper", "airlock"] for command, _ in calls)
+    assert all(kwargs["stdin"] == subprocess.DEVNULL for _, kwargs in calls)
+    assert all(not kwargs.get("shell", False) for _, kwargs in calls)
+    assert all(kwargs.get("check") is False for _, kwargs in calls)
