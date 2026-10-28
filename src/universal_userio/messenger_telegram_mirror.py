@@ -196,9 +196,7 @@ class TelegramMirrorProvider:
         conv=api._conversation(self.account_ref,conversation_id)
         projected=[]
         for native_id in ids[:limit]:
-            mid=self.account_ref+'|'+peer_id+':'+str(native_id)
-            message=self.service._store.message(mid,source='telegram',user_id=self.authorized_user)
-            if not message or message['conversation_id']!=conv['id']:raise ValueError('fresh Telegram projection missing')
+            message=self._stored_message(conv,peer_id,str(native_id))
             value=api._project(conv,message)
             if value['source'].get('direction') not in {'incoming','outgoing'}:
                 projection_complete=False
@@ -255,14 +253,23 @@ class TelegramMirrorProvider:
         fetched=page.get('fetched');oldest=page.get('oldest_id')
         if not (native_id in ids or (type(fetched) is int and fetched>0 and oldest==native_id)):
             raise ValueError('provider_source_not_live')
-        mid=self.account_ref+'|'+peer_id+':'+provider_message_id
-        message=self.service._store.message(mid,source='telegram',user_id=self.authorized_user)
-        if not message:raise ValueError('fresh Telegram projection missing')
         api=Messenger(self.service._store,self.service,
             UserPrincipal(self.authorized_user,'mirror-reader','user',read_only=True))
         conv=api._conversation(self.account_ref,conversation_id)
         if str(conv.get('peer_id'))!=peer_id:raise ValueError('Telegram projection scope conflict')
+        message=self._stored_message(conv,peer_id,provider_message_id)
         return self._validated_projection(api._project(conv,message),peer_id,conversation_id)
+
+    def _stored_message(self, conv, peer_id, provider_message_id):
+        if conv.get('account_ref')!=self.account_ref or str(conv.get('peer_id'))!=peer_id:
+            raise ValueError('Telegram projection scope conflict')
+        legacy=peer_id+':'+provider_message_id
+        for mid in (self.account_ref+'|'+legacy,legacy):
+            message=self.service._store.message(mid,source='telegram',user_id=self.authorized_user)
+            if message:
+                if message['conversation_id']!=conv['id']:break
+                return message
+        raise ValueError('fresh Telegram projection missing')
 
     def _validated_projection(self, projected, peer_id, conversation_id):
         """The same shape the relay provider publishes, with the same refusal codes."""
@@ -272,7 +279,7 @@ class TelegramMirrorProvider:
             raise ValueError('provider projection scope conflict')
         raw_id=s.get('provider_message_id')
         if (not isinstance(raw_id,str) or not raw_id.isdigit()
-                or s.get('message_id')!=self.account_ref+'|'+peer_id+':'+raw_id
+                or s.get('message_id') not in {self.account_ref+'|'+peer_id+':'+raw_id,peer_id+':'+raw_id}
                 or s.get('direction') not in {'incoming','outgoing'}
                 or not isinstance(projected.get('text'),str)
                 or type(projected.get('at')) not in (int,float) or projected['at']<=0):
