@@ -453,7 +453,7 @@ async def run():
                 await asyncio.sleep(1.0)
 
         if os.environ.get('CALLER_PASSIVE_LISTENER') == '1':
-            async def wait_reply(after, timeout=35):
+            async def wait_reply(after, timeout=150):
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline and not stop.is_set():
                     if last_voice_at > after and time.monotonic()-last_voice_at > 1.6:
@@ -471,6 +471,15 @@ async def run():
                 await speak(pcm)
                 await source.wait_for_playout()
                 print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
+                if os.environ.get('CALLER_WAIT_FULL_ANSWER') == 'private-jsonl':
+                    async with crypto._lock:
+                        crypto.writer.write((json.dumps({'event': 'fixture_answer_gate',
+                            'turn_id': index+1})+'\n').encode())
+                        await crypto.writer.drain()
+                        result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 180))
+                        if result.get('type') != 'fixture_answer_gate_result' or result.get('completed') is not True:
+                            raise RuntimeError('Native SDK answer is not durably completed')
+                    started_phrase = time.monotonic()-1
                 barge = os.environ.get('CALLER_BARGE_WAV') if index == 0 else None
                 if barge:
                     deadline = time.monotonic()+35
