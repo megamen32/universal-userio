@@ -77,15 +77,22 @@ def load_context(path: Path, *, enforce_runtime_path: bool = True) -> dict[str, 
         "previous_assistant": _bounded_text(raw.get("previous_assistant"), 512),
         "turn_id": _bounded_text(raw.get("turn_id"), 64),
         "secretary_voice_call_id": _bounded_text(raw.get("secretary_voice_call_id"), 36),
+        **{key:_bounded_text(raw.get(key), 256) for key in
+           ('voice_transport','qa_caller','qa_room','qa_account_ref','qa_sdk_user_id')},
     }
-    if context['call_mode'] != 'incoming' and (not context["session_id"] or context["session_harness"] not in ALLOWED_HARNESSES):
+    if context['call_mode'] == 'qa_scoped':
+        from noticeplace_voice_context import qa_incident_scope
+        qa_incident_scope(context)
+        context['session_id'] = context['session_harness'] = ''
+    elif context['call_mode'] != 'incoming' and (not context["session_id"] or context["session_harness"] not in ALLOWED_HARNESSES):
         raise ValueError("a supported exact Agent Herder session is required")
     return context
 
 
 class LiveContext(dict):
     """Per-call stdio connection, per-turn authorization and audit context."""
-    BINDING=('call_mode','session_id','session_harness','incident_id','secretary_voice_call_id')
+    BINDING=('call_mode','session_id','session_harness','incident_id','secretary_voice_call_id',
+             'voice_transport','qa_caller','qa_room','qa_account_ref','qa_sdk_user_id','correlation_id')
     def __init__(self,path):
         self.path=path
         super().__init__(load_context(path))
@@ -102,6 +109,9 @@ class LiveContext(dict):
 def refresh_context(context):
     refresh=getattr(context,'refresh',None)
     if refresh:refresh()
+    if context.get('call_mode') == 'qa_scoped':
+        from noticeplace_voice_context import qa_incident_scope
+        qa_incident_scope(context)
 
 
 def turn_audit_path(context):
@@ -326,6 +336,8 @@ def register_secretary_switch(server, context):
 
 
 def build_server(context: dict[str, str]) -> MCPServer:
+    if context.get('call_mode') == 'qa_scoped':
+        return build_scoped_server(context)
     if context.get('call_mode') == 'incoming':
         return build_incoming_server(context)
     server = MCPServer(
@@ -395,6 +407,40 @@ def build_server(context: dict[str, str]) -> MCPServer:
         if result.get("queued"):
             continued = context.get('turn_id')
         return result
+
+    return server
+
+
+def build_scoped_server(context, store=None):
+    from noticeplace_voice_context import ScopedNoticePlaceVoiceStore
+    refresh_context(context)
+    store = store or ScopedNoticePlaceVoiceStore(context)
+    server = MCPServer('agentcall-qa-incident', instructions=(
+        'Only the one server-bound synthetic incident is accessible. No owner data, sessions or repair tools.'))
+    register_secretary_switch(server, context)
+
+    @server.tool(description='List the single synthetic incident bound to this QA call.')
+    def incidents_list(query: str = '', include_resolved: bool = False):
+        refresh_context(context)
+        return store.list_incidents(query, include_resolved)
+
+    @server.tool(description='Read only the synthetic incident already bound to this QA call.')
+    def incident_read(incident_id: str):
+        refresh_context(context)
+        if incident_id != context['incident_id']:
+            raise PermissionError('Incident is outside this QA call')
+        return store.incident(incident_id)
+
+    @server.tool(description='Acknowledge only this synthetic incident when the caller explicitly asks. This does not repair or resolve the service. Unknown operations must never be replayed.')
+    def acknowledge_incident(incident_id: str):
+        refresh_context(context)
+        utterance = context.get('current_utterance','').casefold()
+        if (re.search(r'\bне\s+(?:подтвержд|приним|останавлив)',utterance)
+                or not re.search(r'\b(?:подтверждаю|подтверди|принято|останови\s+эскалацию)\b',utterance)):
+            raise PermissionError('Current caller utterance does not explicitly acknowledge the incident')
+        if incident_id != context['incident_id']:
+            raise PermissionError('Incident is outside this QA call')
+        return store.acknowledge(incident_id)
 
     return server
 

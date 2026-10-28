@@ -7,7 +7,11 @@ voice answer must not depend on the storage of another service.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import math
+from pathlib import Path
+import stat
 import re
 import time
 import urllib.error
@@ -20,6 +24,60 @@ from zoneinfo import ZoneInfo
 AUTOSELL_ALIASES = ('autosell', 'autofindclient', 'автопродаж', 'автоселлер')
 API_TIMEOUT_SECONDS = 6.0
 OWNER_AUDIENCES = ('me', 'health')
+QA_BINDING = {'qa_caller':'caller', 'qa_room':'room', 'qa_account_ref':'account_ref',
+              'qa_sdk_user_id':'sdk_user_id', 'voice_transport':'transport', 'incident_id':'incident_id',
+              'correlation_id':'correlation_id'}
+
+
+def qa_scope_document():
+    """Read only the server-owned scope; a file reference allows live revocation."""
+    try:
+        scope = json.loads(os.environ.get('AGENTCALL_QA_SCOPE') or '{}')
+        if isinstance(scope, dict) and scope.get('scope_file'):
+            path = Path(scope['scope_file'])
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(descriptor) as stream:
+                metadata = os.fstat(stream.fileno())
+                import pwd
+                owners = {0, os.geteuid(), pwd.getpwnam('roomhacker').pw_uid}
+                if (metadata.st_uid not in owners or metadata.st_mode & 0o077
+                        or not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 65536):
+                    raise PermissionError('QA scope must be a private server-owned file')
+                scope = json.load(stream)
+        if not isinstance(scope, dict):raise ValueError('invalid scope')
+        return scope
+    except (OSError, ValueError, TypeError):
+        raise PermissionError('QA incident scope is unavailable') from None
+
+
+def qa_incident_scope(binding, *, now=None):
+    """Authorize this exact synthetic incident, never an owner or arbitrary session."""
+    moment = time.time() if now is None else now
+    entries = qa_scope_document().get('entries', [])
+    if not isinstance(entries, list):raise PermissionError('Invalid QA scope entries')
+    for entry in entries:
+        if not isinstance(entry, dict):continue
+        if any(not binding.get(key) or binding[key] != entry.get(field)
+               for key, field in QA_BINDING.items()):continue
+        expires = entry.get('expires_at')
+        pair = entry.get('participants')
+        if (entry.get('synthetic') is not True or entry.get('transport') != 'matrix'
+                or not isinstance(pair, list) or len(pair) != 2
+                or any(not isinstance(member,str) or not member for member in pair)
+                or len(set(pair)) != 2
+                or entry['caller'] not in pair
+                or type(expires) not in (int, float) or not math.isfinite(expires) or expires <= moment
+                or not isinstance(entry.get('project'), str) or not entry['project'].strip()
+                or entry['project'] == '*'
+                or entry.get('token_env') != 'NOTICEPLACE_VOICE_QA_TOKEN'):
+            raise PermissionError('QA incident scope is invalid or expired')
+        return entry
+    raise PermissionError('No exact QA incident scope for this caller')
+
+
+def qa_scope_environment():
+    return {key:os.environ[key] for key in ('AGENTCALL_QA_SCOPE','NOTICEPLACE_VOICE_QA_TOKEN',
+            'NOTICEPLACE_API_URL') if key in os.environ}
 
 
 def service_search(query):
@@ -48,6 +106,12 @@ class NoticePlaceContextError(RuntimeError):
 def _direct_open(request, timeout=None):
     """Open one request without a proxy: the API address is explicit."""
     return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
+
+
+def _scoped_open(request, timeout=None):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):return None
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(request, timeout=timeout)
 
 
 class NoticePlaceVoiceStore:
@@ -135,3 +199,78 @@ class NoticePlaceVoiceStore:
         result['session_harness'] = str(payload.get('session_harness') or '')
         result['session_id'] = str(payload.get('session_id') or '')
         return result
+
+
+class ScopedNoticePlaceVoiceStore(NoticePlaceVoiceStore):
+    """QA reads one server-bound card; no global list, sessions or owner token."""
+    def __init__(self, binding, *, receipt_directory='/var/lib/agentcall/qa-actions', **kwargs):
+        self.binding = dict(binding)
+        self.receipt_directory = Path(receipt_directory)
+        scope = qa_incident_scope(self.binding)
+        kwargs.setdefault('runner', _scoped_open)
+        super().__init__(token=os.environ.get(scope['token_env'], ''),
+                         project=scope['project'], **kwargs)
+
+    def incident(self, incident_id):
+        scope = qa_incident_scope(self.binding)
+        if incident_id != scope['incident_id']:
+            raise PermissionError('Incident is outside this QA call')
+        self.token = os.environ.get(scope['token_env'], '')
+        self.project = scope['project']
+        payload = self._request('/v1/incidents/' + urllib.parse.quote(incident_id, safe=''))
+        if (payload.get('id') != incident_id or payload.get('project') != self.project
+                or payload.get('correlation_id') != scope['correlation_id']):
+            raise PermissionError('QA incident response does not match its binding')
+        result = self._summary(payload)
+        result['body'] = safe_text(payload.get('body'), 2000)
+        result['has_session'] = False
+        return result
+
+    def list_incidents(self, query='', include_resolved=False):
+        card = self.incident(self.binding['incident_id'])
+        cards = [card] if include_resolved or card['state'] != 'resolved' else []
+        return {'total_in_scope':len(cards), 'returned':len(cards), 'truncated':False,
+                'audiences':['synthetic'], 'includes_recent_resolved':bool(include_resolved),
+                'incidents':cards, 'observed_at':datetime.now(ZoneInfo('Europe/Moscow')).isoformat()}
+
+    def _post_ack(self, incident_id):
+        request = urllib.request.Request(self.base_url+'/v1/incidents/'+
+            urllib.parse.quote(incident_id,safe='')+'/ack', method='POST',
+            data=json.dumps({'actor':'voice-qa:'+self.binding['qa_sdk_user_id']}).encode(),
+            headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json',
+                     'Idempotency-Key':'voice-qa-ack-'+hashlib.sha256((incident_id+'\0'+
+                         self.binding['correlation_id']).encode()).hexdigest()})
+        with self.runner(request, timeout=self.timeout) as response:
+            response.read()
+
+    def acknowledge(self, incident_id):
+        card = self.incident(incident_id)  # Checks exact id, project, correlation and live TTL.
+        if card['state'] in ('acknowledged','resolved'):
+            return {'ok':True,'incident_id':incident_id,'state':card['state'],
+                    'delivery_cancellation_verified':False}
+        root = self.receipt_directory
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        metadata = root.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+            raise PermissionError('QA action receipts must be private and service-owned')
+        key = hashlib.sha256((incident_id+'\0'+self.binding['correlation_id']).encode()).hexdigest()
+        path = root / (key+'.ack.json')
+        try:
+            descriptor = os.open(path, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            return {'ok':False,'incident_id':incident_id,'state':'unknown','replay_allowed':False}
+        with os.fdopen(descriptor,'w') as stream:
+            json.dump({'incident_id':incident_id,'correlation_id':self.binding['correlation_id'],
+                       'state':'attempted','replay_allowed':False},stream)
+            stream.flush();os.fsync(stream.fileno())
+        descriptor = os.open(root, os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(descriptor)
+        finally:os.close(descriptor)
+        try:
+            qa_incident_scope(self.binding)
+            self._post_ack(incident_id)
+            card = self.incident(incident_id)
+        except Exception:
+            return {'ok':False,'incident_id':incident_id,'state':'unknown','replay_allowed':False}
+        return {'ok':card['state'] in ('acknowledged','resolved'), 'incident_id':incident_id,
+                'state':card['state'],'delivery_cancellation_verified':False}

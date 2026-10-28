@@ -145,6 +145,11 @@ def server_environments(servers, python_path):
     return servers
 
 
+def voice_servers(context, servers):
+    if context.get('call_mode') == 'qa_scoped':return ['agentcall']
+    return ['AgentHerder','agentcall']+(['NoticePlace'] if 'NoticePlace' in servers else [])
+
+
 async def serve(wire):
     from fast_agent.core.fastagent import FastAgent
     from fast_agent.mcp.prompt_serialization import load_messages, to_json_bytes
@@ -166,10 +171,17 @@ async def serve(wire):
     servers['agentcall']={**(servers.get('agentcall') or {}),'command':boot['mcp_python'],
         'args':[boot['mcp_script'],'--context',boot['context'],'--live-context']}
     server_environments(servers, boot.get('python_path') or '')
+    context = json.loads(private_path(boot['context']).read_text())
+    selected = voice_servers(context, servers)
+    if context.get('call_mode') == 'qa_scoped':
+        from noticeplace_voice_context import qa_incident_scope, qa_scope_environment
+        qa_incident_scope(context)
+        servers['agentcall']['env'].update(qa_scope_environment())
+        settings['mcp']['servers'] = {'agentcall':servers['agentcall']}
     config.write_text(yaml.safe_dump(settings,allow_unicode=True))
     full=json.loads(card.read_text());full['model']=boot['model']
     full['instruction']=compose_voice_instruction(full.get('instruction'))
-    full['servers']=['AgentHerder','agentcall']+(['NoticePlace'] if 'NoticePlace' in servers else [])
+    full['servers']=selected
     card.write_text(json.dumps(full,ensure_ascii=False))
     status=card.with_name(card.stem+'-status.yaml')
     status.write_text(json.dumps(dict(full,name='voice_status',default=False,servers=[],
