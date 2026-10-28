@@ -28,3 +28,21 @@ duplicated. Existing pytest unknown-option warning remains unchanged.
 Lead owns independent installed consumer proof. This receipt records source
 evidence; the second one-file overlay is prepared separately on the accepted
 first image, preserving all earlier fixes and configuration.
+
+Source published as `6718f8688b8dece758819c2885bacf694170adab`;
+one-file release wrapper published as `99cdb7c`. It uses the checksum-verified
+immutable release engine from `8bd382c` with a new private receipt directory,
+base image and exact source pin. No previous activation intent was reused.
+
+The second layer is installed in backend
+`2c53129ef5122f3124819e4fd2fdc6e2a31829844d4f62ef7d57989ca8855e73`,
+image `sha256:7a2834d39f6138a3d9f807d197780824dc2ee59df459bd27e0a9fc99515423e9`,
+manifest `ead29ffbdfda550c0bcfbb16b159ce30e59d511812b3d6b54b70f74b3d7731c0`.
+Health passed. Only `messenger_telegram_mirror.py` changed from the first accepted
+image; all other Python files and all 45 connector modules retained their
+hashes. Docker operational config, environment, all process environment values,
+frontend/voice IDs, UNKNOWN receipts and all 30 retained source rows passed
+unchanged checks. Only the overlay's expected metadata manifest label changed.
+
+Independent installed stored/fresh/channel consumer proof remains Lead-owned;
+this worker performed no sends, calls or read acknowledgements.
