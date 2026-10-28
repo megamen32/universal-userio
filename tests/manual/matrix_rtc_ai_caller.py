@@ -469,7 +469,8 @@ async def run():
                     return
                 async with crypto._lock:
                     crypto.writer.write((json.dumps({'event': 'fixture_answer_gate',
-                        'turn_id': utterance, 'stage': stage})+'\n').encode())
+                        'turn_id': utterance, 'stage': stage, 'phrase_index': index,
+                        'utterance_started_at': started_utc, 'utterance_completed_at': time.time()})+'\n').encode())
                     await crypto.writer.drain()
                     result = json.loads(await asyncio.wait_for(crypto.reader.readline(), 180))
                     if result.get('type') != 'fixture_answer_gate_result' or result.get('completed') is not True:
@@ -479,6 +480,7 @@ async def run():
                 if rate != 48000:
                     pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)
                 started_phrase = time.monotonic()
+                started_utc = time.time()
                 await speak(pcm)
                 await source.wait_for_playout()
                 print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
@@ -495,6 +497,7 @@ async def run():
                     pcm, rate = _load_wav(barge)
                     if rate != 48000:
                         pcm, _ = voice.resample_pcm16(pcm, rate, 48000, None)
+                    started_utc = time.time()
                     await speak(pcm)
                     await source.wait_for_playout()
                     started_phrase = time.monotonic()
