@@ -318,7 +318,12 @@ def assert_idle():
                 if status not in call_statuses:
                     continue
                 started_at = float(record.get('started_at', record.get('created_at')))
-                max_seconds = int(record['max_seconds'])
+                # Incoming Matrix admission stores a claim without the bound;
+                # its answer request uses the fixed 120s transport contract.
+                if name == 'matrix-calls' and record.get('direction') == 'incoming' and 'max_seconds' not in record:
+                    max_seconds = 120
+                else:
+                    max_seconds = int(record['max_seconds'])
                 if not 30 <= max_seconds <= 600 or now < started_at:
                     raise ValueError('call deadline is invalid')
                 if now - started_at <= max_seconds + 310:

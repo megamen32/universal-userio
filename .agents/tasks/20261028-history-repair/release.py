@@ -134,7 +134,7 @@ class RuntimeHelpers:
     @staticmethod
     def idle():
         path = ROOT / 'scripts/container_release.py'
-        expected = '912f969b8d9a2774abac2a53258e2a93fc3273d59864470fae05ff70044cd734'
+        expected = 'd6c110daa57eb1e667ddcbb2af12ce6c706fc791917737cca10378f8b767cdb0'
         assert digest(path.read_bytes()) == expected, 'idle-check helper changed'
         assert digest(command(['git', '-C', ROOT, 'show', 'origin/main:scripts/container_release.py'])) == expected
         spec = importlib.util.spec_from_file_location('history_idle_helper', path)
