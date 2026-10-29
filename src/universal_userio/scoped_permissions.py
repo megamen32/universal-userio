@@ -138,6 +138,8 @@ def enforce(store, principal, name, args):
         grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
         if grant is None:
             raise PermissionError('chat_or_account_outside_token_scope')
+        if grant['chats'] is not None:
+            raise PermissionError('account_scope_required_for_contact_resolution')
         return
     if not name.startswith('userio.messenger.'):
         raise PermissionError('scoped_messenger_only')

@@ -40,6 +40,25 @@ def test_chat_read_write_and_account_denial(tmp_path):
         enforce(s,p,'userio.workspace.poll',{})
 
 
+def test_contact_resolution_requires_account_wide_grant(tmp_path):
+    from universal_userio.service import UserIOService
+    from universal_userio.mcp_surface import UserIOMcpSurface
+    s, t, created, p = fixture(tmp_path)
+    surface = UserIOMcpSurface(s, UserIOService(s, object(), object()))
+    result = surface.dispatch('userio.contacts.resolve', {
+        'account_ref': 'telegram:1', 'identifier': 'unlisted-contact',
+    }, principal=p)
+    assert result == {'ok': False, 'error': 'account_scope_required_for_contact_resolution'}
+    enforce(s, p, 'userio.messenger.resolve', {'account_ref': 'telegram:1', 'peer_id': '101'})
+    with pytest.raises(PermissionError):
+        enforce(s, p, 'userio.messenger.resolve', {'account_ref': 'telegram:1', 'peer_id': '999'})
+    t.update_permissions(p.user_id, created['id'], [
+        {'account_ref': 'telegram:1', 'access': 'read_only', 'chats': None},
+    ])
+    enforce(s, s.authenticate_token(created['token']), 'userio.contacts.resolve',
+            {'account_ref': 'telegram:1', 'identifier': 'unlisted-contact'})
+
+
 def test_existing_token_changes_without_rotation(tmp_path):
     s,t,created,p = fixture(tmp_path)
     t.update_permissions(p.user_id,created['id'],[{'account_ref':'telegram:1','access':'read_only','chats':[
