@@ -129,3 +129,11 @@ def test_notify_domain_keeps_the_audible_initial_diphthong():
     # Existing received Matrix audio made the old "нотифай" ambiguous.
     assert spoken('notify.bezrabotnyi.com') == 'ноутифай точка безработный точка ком'
     assert spoken('Notify') == 'ноутифай'
+
+
+def test_common_it_words_keep_each_part_of_a_hyphenated_hostname():
+    assert spoken('voice') == 'войс'
+    assert spoken('QA') == 'кью-эй'
+    assert spoken('sandbox') == 'сэндбокс'
+    assert spoken('voice-qa-sandbox') == 'войс-кью-эй-сэндбокс'
+    assert spoken('notify.bezrabotnyi.com') == 'ноутифай точка безработный точка ком'

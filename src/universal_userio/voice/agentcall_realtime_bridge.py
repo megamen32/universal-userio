@@ -1301,6 +1301,7 @@ _LATIN_TO_CYRILLIC = {
 # Names people already say in Russian. The owner hears "Эйпл" and
 # "безработный точка ком", not a spelled-out domain.
 _SPOKEN_NAMES = {
+    'voice': 'войс', 'qa': 'кью-эй', 'sandbox': 'сэндбокс',
     'apple': 'Эйпл', 'icloud': 'айклод', 'ipad': 'айпад', 'iphone': 'айфон',
     'macbook': 'макбук', 'airpods': 'эйрподс', 'applemusic': 'эйпл мьюзик',
     'google': 'Гугл', 'gmail': 'гмейл', 'youtube': 'ютуб',
