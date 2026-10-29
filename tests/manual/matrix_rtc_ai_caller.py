@@ -310,8 +310,9 @@ async def run():
     writer = Writer()
     writer.question_seconds = question_seconds
 
+    received_voiced_samples = 0
     async def receive(track, publication=None, participant=None):
-        nonlocal last_voice_at, first_heard
+        nonlocal last_voice_at, first_heard, received_voiced_samples
         if crypto and (publication.encryption_type != rtc.EncryptionType.GCM or
                        not await crypto.authorize(room, participant.identity)):
             stop.set()
@@ -330,6 +331,7 @@ async def run():
                     received_pcm.extend(frame)
                     if max((abs(value) for value in array('h', frame)), default=0) > 500:
                         last_voice_at = time.monotonic()
+                        received_voiced_samples += len(frame)//2
                         if not first_heard:
                             first_heard = True
                             print(json.dumps({'event': 'received_remote_audio',
@@ -532,6 +534,14 @@ async def run():
                         if result.get('type') != 'fixture_barge_gate_result':
                             raise PermissionError('invalid received-audio gate response')
                         if result.get('allowed') is True:
+                            if result.get('physical_pcm_seconds'):
+                                baseline = received_voiced_samples
+                                required = float(result['physical_pcm_seconds'])*48000
+                                while received_voiced_samples-baseline < required and time.monotonic()<deadline and not stop.is_set():
+                                    await asyncio.sleep(.02)
+                                if received_voiced_samples-baseline < required:
+                                    raise TimeoutError('bounded physical speech trigger not reached')
+                                print(json.dumps({'event':'fixture_physical_speech_gate', 'voiced_samples':received_voiced_samples-baseline,'at':time.time()}),flush=True)
                             return
                     await asyncio.sleep(.5)
                 raise TimeoutError('substantive received SDK speech required before interruption')
@@ -546,7 +556,7 @@ async def run():
                 print(json.dumps({'event': 'fixture_phrase_sent', 'index': index}), flush=True)
                 utterance += 1
                 response_audio_start = len(received_pcm)
-                barge = os.environ.get('CALLER_BARGE_WAV') if index == 0 else None
+                barge = os.environ.get('CALLER_BARGE_WAV') if index == int(os.environ.get('CALLER_BARGE_PHRASE_INDEX','0')) else None
                 if barge:
                     await wait_substantive_answer()
                     pcm, rate = _load_wav(barge)
