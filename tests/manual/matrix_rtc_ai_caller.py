@@ -537,14 +537,13 @@ async def run():
                             if result.get('physical_pcm_seconds'):
                                 baseline = received_voiced_samples
                                 first_pcm_at = None
-                                required = float(result['physical_pcm_seconds'])*48000
-                                while received_voiced_samples-baseline < required and time.monotonic()<deadline and not stop.is_set():
+                                while (first_pcm_at is None or time.time()-first_pcm_at < float(result['physical_pcm_seconds'])) and time.monotonic()<deadline and not stop.is_set():
                                     if received_voiced_samples>baseline and first_pcm_at is None:
                                         first_pcm_at = time.time()
                                     if received_voiced_samples>baseline and time.monotonic()-last_voice_at>1:
                                         raise TimeoutError('substantive speech ended before interruption; do not accumulate an idle prompt')
                                     await asyncio.sleep(.02)
-                                if received_voiced_samples-baseline < required:
+                                if first_pcm_at is None or time.time()-first_pcm_at < float(result['physical_pcm_seconds']):
                                     raise TimeoutError('bounded physical speech trigger not reached')
                                 print(json.dumps({'event':'fixture_physical_speech_gate', 'voiced_samples':received_voiced_samples-baseline,'first_received_voice_at':first_pcm_at,'at':time.time()}),flush=True)
                             return
