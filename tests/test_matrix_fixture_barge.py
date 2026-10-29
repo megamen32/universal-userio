@@ -69,3 +69,14 @@ class FixtureBargeTests(unittest.TestCase):
         events, timed_out = self.run_loop(barge_index=1)
         self.assertFalse(timed_out)
         self.assertEqual(events, [('pcm','first'), ('gate','phrase'), ('pcm','second'), ('substantive_pcm_gate',True), ('pcm','barge'), ('gate','barge')])
+
+    def test_physical_window_cannot_accumulate_later_idle_prompt(self):
+        tree=ast.parse((Path(__file__).parent/'manual/matrix_rtc_ai_caller.py').read_text())
+        loop=next(n for n in ast.walk(tree) if isinstance(n,ast.While) and 'received_voiced_samples - baseline < required' in ast.unparse(n.test))
+        fn=ast.AsyncFunctionDef(name='run',args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),body=[loop],decorator_list=[])
+        clock=[0.]
+        async def tick(*args):clock[0]+=.2
+        namespace=dict(received_voiced_samples=100,baseline=0,required=48000,deadline=10,last_voice_at=0,stop=SimpleNamespace(is_set=lambda:False),time=SimpleNamespace(monotonic=lambda:clock[0]),asyncio=SimpleNamespace(sleep=tick))
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[fn],type_ignores=[])),'<physical gate>','exec'),namespace)
+        with self.assertRaises(TimeoutError):asyncio.run(namespace['run']())
+        self.assertLess(clock[0],2)

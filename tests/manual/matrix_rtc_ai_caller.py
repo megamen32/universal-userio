@@ -538,6 +538,8 @@ async def run():
                                 baseline = received_voiced_samples
                                 required = float(result['physical_pcm_seconds'])*48000
                                 while received_voiced_samples-baseline < required and time.monotonic()<deadline and not stop.is_set():
+                                    if received_voiced_samples>baseline and time.monotonic()-last_voice_at>1:
+                                        raise TimeoutError('substantive speech ended before interruption; do not accumulate an idle prompt')
                                     await asyncio.sleep(.02)
                                 if received_voiced_samples-baseline < required:
                                     raise TimeoutError('bounded physical speech trigger not reached')
