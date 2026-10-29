@@ -104,7 +104,7 @@ class VoiceWorker:
 class TurnProcess:
     """The existing stream observer can wait for an SDK turn like a CLI result."""
     def __init__(self, worker, request):
-        self.worker=worker;self.request=request;self.returncode=None;self.sent=False
+        self.worker=worker;self.request=request;self.returncode=None;self.sent=False;self.model_route=[]
     def communicate(self, timeout=None):
         if self.sent:raise RuntimeError('SDK turn already admitted; no replay')
         self.sent=True
@@ -112,6 +112,7 @@ class TurnProcess:
         response=self.worker.receive(timeout)
         if response.get('event') != 'result' or response.get('turn') != self.request['turn']:
             raise RuntimeError('SDK turn completion unknown; no replay')
+        self.model_route=response.get('model_route',[])
         self.returncode=1 if response.get('error') else 0
         return response.get('answer',''),response.get('error') or ''
     def poll(self):return self.returncode
@@ -201,6 +202,11 @@ async def serve(wire):
     task = asyncio.current_task()
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, task.cancel)
     async with fast.run() as app:
+        if boot.get('provider_chain'):
+            from agentcall_fast_agent_fallback import native_factory
+            factory=native_factory(fault_context=lambda:json.loads(private_path(boot['context']).read_text()))
+            for name in ('voice','voice_status'):
+                await app[name].attach_llm(factory)
         emit({'event':'ready'})
         count = 0
         while count < 128:
@@ -213,6 +219,7 @@ async def serve(wire):
             result = private_path(request['result'])
             os.environ['AGENTCALL_STREAM_PATH'] = str(stream)
             agent = app[request['agent']]
+            if boot.get('provider_chain'):agent.llm.begin_turn()
             messages = load_messages(str(prompt))
             # Match the old fresh-CLI prompt-file semantics. Native call history
             # comes from the parent export, never another SDK/global session.
@@ -241,7 +248,8 @@ async def serve(wire):
                     history=messages+[fact]+history[1:]
                 elif lean:history=messages[:-1]+history
                 result.write_bytes(to_json_bytes(history))
-            emit({'event':'result','turn':request['turn'],'answer':answer,'error':error})
+            emit({'event':'result','turn':request['turn'],'answer':answer,'error':error,
+                  'model_route':agent.llm.model_route if boot.get('provider_chain') else []})
             count += 1
 
 

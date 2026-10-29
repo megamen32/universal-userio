@@ -60,6 +60,9 @@ AGENT_CONTEXT_LIMITS = {
     "voice_transport": 16,
     "voice_target": 256,
     "voice_receipt_id": 256,
+    "voice_account_ref": 256,
+    "voice_room": 256,
+    "voice_sdk_user_id": 36,
     "voice_recipient_proof": 4096,
     "secretary_voice_call_id": 36,
     "call_mode": 16,
@@ -239,6 +242,7 @@ class BackendConfig:
     fast_agent_home: str = "/usr/local/lib/agentcall/fast-agent-home"
     incoming_greeting_wav: str = "/usr/local/lib/agentcall/incoming-greeting.wav"
     fast_agent_herder_url: str = "http://127.0.0.1:18787/mcp"
+    fast_agent_provider_chain_enabled: bool = False
     fast_agent_fallback_enabled: bool = False
     fast_agent_fallback_base_url: str = ""
     fast_agent_fallback_model: str = "voice-zai"
@@ -276,6 +280,7 @@ class BackendConfig:
         return cls(
             speech_speed=speech_speed,
             peer_account_ref=os.getenv("AGENTCALL_PEER_ACCOUNT_REF", ""),
+            fast_agent_provider_chain_enabled=os.getenv("AGENTCALL_FAST_AGENT_PROVIDER_CHAIN_ENABLED", "0") == "1",
             fast_agent_fallback_enabled=os.getenv("AGENTCALL_FAST_AGENT_FALLBACK_ENABLED", "0") == "1",
             fast_agent_fallback_base_url=os.getenv("AGENTCALL_FAST_AGENT_FALLBACK_BASE_URL", ""),
             fast_agent_fallback_model=os.getenv("AGENTCALL_FAST_AGENT_FALLBACK_MODEL", "voice-zai"),
@@ -553,6 +558,13 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
         self._worker_lock = threading.RLock()
         self._worker_closed = False
 
+    def _provider_route(self):
+        if not self.config.fast_agent_provider_chain_enabled:
+            return super()._provider_route()
+        key = os.environ.get("ZAI_API_KEY", "")
+        if not key:raise PermissionError("Native incident provider binding unavailable: ZAI_API_KEY")
+        return ("generic.glm-5.3-flash", "https://api.z.ai/api/coding/paas/v4", key)
+
     def _ensure_worker(self, route):
         from agentcall_fast_agent_worker import VoiceWorker
         model, base_url, api_key = route
@@ -578,6 +590,9 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             entry=Path(self.config.fast_agent_bin).read_text().splitlines()
             python=entry[0][2:].strip() if entry and entry[0].startswith('#!/') else self.config.fast_agent_python
             environment=worker_environment(api_key)
+            if self.config.fast_agent_provider_chain_enabled:
+                environment.update({k:os.environ[k] for k in ("ZAI_API_KEY","CODEX_API_KEY","AGENTCALL_QA_SCOPE") if k in os.environ})
+                environment["MINIMAX_API_KEY"]=self.config.llm_api_key
             if self.agent_context.get('voice_recipient_proof'):
                 environment.update({k:os.environ[k] for k in ('NOTICEPLACE_API_URL',) if k in os.environ})
             if self.agent_context.get('call_mode') == 'qa_scoped':
@@ -590,7 +605,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                     'model':model.split('?',1)[0]+'?reasoning='+self.config.llm_reasoning_effort,
                     'base_url':base_url,'herder_url':self.config.fast_agent_herder_url,
                     'mcp_python':self.config.fast_agent_python,'mcp_script':self.config.fast_agent_mcp_script,
-                    'context':str(context),'python_path':environment.get('PYTHONPATH','')},
+                    'context':str(context),'python_path':environment.get('PYTHONPATH',''),
+                    'provider_chain':self.config.fast_agent_provider_chain_enabled},
                     env=environment,cwd=self.config.fast_agent_home,timeout=15)
                 self._worker_route=signature
                 _log(f'fast-agent worker_ready elapsed={time.monotonic()-started:.3f}s')
@@ -955,6 +971,8 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
             waiter.join(timeout=timeout + 1)
 
     def reply(self, text: str, *, on_phrase=None) -> str:
+        if self.config.fast_agent_provider_chain_enabled and on_phrase is None:
+            on_phrase=lambda _phrase:None
         if not self.available:
             raise RuntimeError("Fast Agent exact-session runtime is unavailable")
         from noticeplace_voice_context import explicit_incident_acknowledgement, ScopedNoticePlaceVoiceStore, RecipientNoticePlaceVoiceStore
@@ -1129,6 +1147,9 @@ class FastAgentIncidentBrain(VoiceProviderRouter):
                 result, emitted = self._run_stream_cli(command, env=environment,
                     cwd=self.config.fast_agent_home, timeout=self.config.fast_agent_timeout + 5,
                     stream_path=stream_path, on_phrase=lambda p: on_phrase(redact(p)),process=turn)
+                self.model_route=turn.model_route
+                _log('incident_model_route call='+self.agent_context.get('secretary_voice_call_id','')+
+                     ' turn='+turn.request['turn']+' route='+json.dumps(turn.model_route,separators=(',',':')))
             else:
                 result = self.runner(command, capture_output=True, text=True,
                     timeout=self.config.fast_agent_timeout + 5, env=environment,
