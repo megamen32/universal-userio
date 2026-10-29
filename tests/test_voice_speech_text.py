@@ -123,3 +123,9 @@ def test_markdown_destination_domain_survives_when_label_is_generic():
     out = spoken('На [сайте](https://notify.bezrabotnyi.com) ошибка HTTP 502.')
     assert spoken('notify.bezrabotnyi.com') in out, out
     assert 'пять ноль два' in out
+
+
+def test_notify_domain_keeps_the_audible_initial_diphthong():
+    # Existing received Matrix audio made the old "нотифай" ambiguous.
+    assert spoken('notify.bezrabotnyi.com') == 'ноутифай точка безработный точка ком'
+    assert spoken('Notify') == 'ноутифай'

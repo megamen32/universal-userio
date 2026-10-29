@@ -1297,7 +1297,7 @@ _SPOKEN_NAMES = {
     'nginx': 'Энджинкс', 'asterisk': 'Астериск', 'redis': 'Редис',
     'postgres': 'Постгрес', 'mysql': 'Майскул', 'sqlite': 'Склайт',
     'sber': 'Сбер', 'tinkoff': 'Тинькофф', 'sberbank': 'Сбербанк',
-    'bezrabotnyi': 'безработный', 'msg': 'месенджер', 'notify': 'нотифай',
+    'bezrabotnyi': 'безработный', 'msg': 'месенджер', 'notify': 'ноутифай',
 }
 
 # Words of the owner's own vocabulary, including the domain labels of the
@@ -1305,7 +1305,7 @@ _SPOKEN_NAMES = {
 _SPOKEN_LABELS = {
     'bezrabotnyi': 'безработный',
     'msg': 'месенджер',
-    'notify': 'нотифай',
+    'notify': 'ноутифай',
     'noticeplace': 'нотис плэйс',
     'exmanager': 'экс менеджер',
     'herder': 'хердер',
