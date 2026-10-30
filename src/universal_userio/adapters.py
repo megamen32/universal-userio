@@ -664,18 +664,20 @@ class TelegramQrHttpOutbox:
         }
 
     def reply_message(self, *, chat_id: str, account_ref: str, message_id: str,
-                      thread_id: str, expected_text: str, text: str, request_id: str) -> dict[str, object]:
+                      thread_id: str, expected_text: str, text: str, request_id: str,
+                      format: str | None = None) -> dict[str, object]:
         if (not re.fullmatch(r"telegram:[1-9][0-9]*", account_ref)
                 or not re.fullmatch(r"-?[1-9][0-9]*", chat_id)
                 or not message_id.isdigit() or not 0 < int(message_id) <= 0x7FFFFFFF
                 or thread_id and (not thread_id.isdigit() or not 0 < int(thread_id) <= 0x7FFFFFFF)
                 or not isinstance(expected_text, str) or not isinstance(text, str)
-                or not text.strip() or len(text) > 4096 or not request_id):
+                or not text.strip() or len(text) > 4096 or not request_id
+                or format not in (None, 'telegram_markdown')):
             raise ValueError("Telegram reply requires exact account, chat, source, and bounded text")
         payload = json.dumps({"account_id": account_ref, "chat_id": chat_id,
                               "reply_to_id": message_id, "thread_id": thread_id,
                               "expected_text": expected_text, "body": text,
-                              "request_id": request_id}).encode()
+                              "request_id": request_id, **({'format': format} if format else {})}).encode()
         request = urllib.request.Request(
             f"{self._base_url}/send", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
@@ -705,7 +707,9 @@ class TelegramQrHttpOutbox:
                 or int(result["message_id"]) > 0x7FFFFFFF
                 or str(result.get("reply_to_id")) != message_id
                 or str(result.get("thread_id") or "") != thread_id
-                or (not duplicate and (result.get("text") != text or result.get("out") is not True))
+                or (not duplicate and (result.get("out") is not True or
+                    (result.get('input_text') != text or result.get('formatting_verified') is not True
+                     if format else result.get('text') != text)))
                 or type(result.get("date")) not in (int, float) or result["date"] <= 0):
             raise RuntimeError("Telegram reply receipt could not be verified")
         return result
@@ -809,8 +813,8 @@ class TelegramQrHttpOutbox:
             return json.loads(response.read())
 
     def edit_message(self, *, chat_id: str, account_ref: str, message_id: str,
-                     expected_text: str, text: str) -> dict[str, object]:
-        if not account_ref or not chat_id or not message_id or not expected_text or not text.strip():
+                     expected_text: str, text: str, format: str | None = None) -> dict[str, object]:
+        if not account_ref or not chat_id or not message_id or not expected_text or not text.strip() or format not in (None, 'telegram_markdown'):
             raise ValueError("Telegram edit requires account, chat, source and text")
         try:
             scope, native = message_id.split("|", 1)
@@ -821,7 +825,7 @@ class TelegramQrHttpOutbox:
             raise ValueError("Telegram edit message reference does not match the account and chat")
         payload = json.dumps({"account_id": account_ref, "chat_id": chat_id,
                               "message_id": message_id, "expected_text": expected_text,
-                              "text": text}).encode()
+                              "text": text, **({'format': format} if format else {})}).encode()
         request = urllib.request.Request(
             f"{self._base_url}/edit", data=payload, method="POST",
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self._token}"},
@@ -842,7 +846,8 @@ class TelegramQrHttpOutbox:
             raise RuntimeError("telegram-qr edit outcome is unknown: connector is unreachable") from error
         if (result.get("ok") is not True or result.get("account_id") != account_ref
                 or str(result.get("peer_id")) != chat_id or str(result.get("message_id")) != native_id
-                or result.get("text") != text or result.get("out") is not True
+                or (result.get('input_text') != text or result.get('formatting_verified') is not True
+                    if format else result.get('text') != text) or result.get("out") is not True
                 or type(result.get("edit_date")) not in (int, float) or result["edit_date"] <= 0):
             raise RuntimeError("Telegram edit receipt could not be verified")
         return result

@@ -17,6 +17,7 @@ function fixture(message) {
     async invoke(request) {
       calls.push(request);
       current.message = request.message;
+      current.entities = request.entities || [];
       current.editDate = 123;
     },
   };
@@ -32,6 +33,32 @@ test("edits one own text message only after a fresh exact-text read and verifies
   assert.ok(f.calls[0] instanceof EditMessage);
   assert.deepEqual({ ...f.calls[0] }, { peer: "peer", id: 77, message: "after", noWebpage: false });
   assert.deepEqual(result, { messageId: "77", text: "after", editDate: 123, out: true });
+});
+
+test('edits a markdown response with provider-verified bold formatting', async () => {
+  const f = fixture({});
+  const result = await editOwnedTelegramText({
+    ...f, peer: 'peer', messageId: 77, expectedText: 'before',
+    text: '**Готово**', format: 'telegram_markdown',
+  });
+  assert.equal(f.calls[0].message, 'Готово');
+  assert.equal(f.calls[0].entities[0].className, 'MessageEntityBold');
+  assert.equal(result.text, 'Готово');
+});
+
+test('does not claim a formatted edit when Telegram readback omits its entities', async () => {
+  const f = fixture({});
+  const read = f.client.getMessages;
+  f.client.getMessages = async (...args) => {
+    const result = await read(...args);
+    if (f.calls.length) result[0].entities = [];
+    return result;
+  };
+  await assert.rejects(editOwnedTelegramText({
+    ...f, peer: 'peer', messageId: 77, expectedText: 'before',
+    text: '**Готово**', format: 'telegram_markdown',
+  }), /outcome is unknown/);
+  assert.equal(f.calls.length, 1);
 });
 
 test("refuses an incoming or stale message before invoking Telegram", async (t) => {

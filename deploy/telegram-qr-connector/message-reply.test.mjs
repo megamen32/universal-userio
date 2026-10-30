@@ -28,6 +28,25 @@ test("sends to the exact Telegram peer and replies to the selected source and to
   });
 });
 
+test('sends and reads back a formatted reply without changing its source binding', async () => {
+  let sent, options;
+  const source = {id: 77, message: 'source'};
+  const client = {
+    async sendMessage(_peer, value) {
+      options = value;
+      sent = {id: 78, message: value.message, entities: value.formattingEntities,
+        date: 123, out: true, replyTo: {replyToMsgId: value.replyTo}};
+      return sent;
+    },
+    async getMessages(_peer, {ids}) { return [ids[0] === 77 ? source : sent]; },
+  };
+  const result = await sendTelegramReply({client, peer: 'peer', messageId: '77',
+    expectedText: 'source', text: '**Готово**', format: 'telegram_markdown'});
+  assert.equal(options.message, 'Готово');
+  assert.equal(options.formattingEntities[0].className, 'MessageEntityBold');
+  assert.equal(result.text, 'Готово');
+});
+
 test("refuses invalid reply ids before invoking Telegram", async () => {
   let called = false;
   await assert.rejects(sendTelegramReply({

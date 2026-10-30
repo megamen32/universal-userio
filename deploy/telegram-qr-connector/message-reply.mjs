@@ -1,3 +1,5 @@
+import { formatTelegramMessage, sameTelegramEntities } from './message-format.mjs';
+
 export class TelegramReplyRefused extends Error {
   constructor(code, message) {
     super(message);
@@ -9,7 +11,7 @@ export class TelegramReplyRefused extends Error {
 const nativeId = value => typeof value === "string" && /^[1-9][0-9]*$/.test(value)
   && Number.isSafeInteger(Number(value)) && Number(value) <= 0x7fffffff;
 
-export async function sendTelegramReply({ client, peer, messageId, threadId = "", expectedText, text }) {
+export async function sendTelegramReply({ client, peer, messageId, threadId = "", expectedText, text, format }) {
   if (!peer || !nativeId(messageId)) {
     throw new TelegramReplyRefused("invalid_reply_target", "A valid Telegram chat and source message id are required");
   }
@@ -38,7 +40,12 @@ export async function sendTelegramReply({ client, peer, messageId, threadId = ""
     throw new TelegramReplyRefused("thread_changed", "The selected Telegram message moved to another topic");
   }
 
-  const options = { message: text, replyTo: Number(messageId) };
+  const formatted = formatTelegramMessage(text, format);
+  if (!formatted.text.trim() || [...formatted.text].length > 4096) {
+    throw new TelegramReplyRefused('invalid_reply_text', 'Rendered Telegram text is invalid');
+  }
+  const options = { message: formatted.text, replyTo: Number(messageId),
+    ...(format ? {formattingEntities: formatted.entities} : {}) };
   const effectiveThreadId = threadId || sourceThreadId;
   if (effectiveThreadId) options.topMsgId = Number(effectiveThreadId);
   const sent = await client.sendMessage(peer, options);
@@ -50,7 +57,8 @@ export async function sendTelegramReply({ client, peer, messageId, threadId = ""
   const replyToId = String(after?.replyTo?.replyToMsgId || "");
   const returnedThreadId = String(after?.replyTo?.replyToTopId || "");
   if (!after || String(after.id) !== String(sent.id) || after.out !== true
-      || String(after.message || "") !== text || replyToId !== messageId
+      || String(after.message || "") !== formatted.text || replyToId !== messageId
+      || format && !sameTelegramEntities(formatted.entities, after.entities)
       || effectiveThreadId && returnedThreadId !== effectiveThreadId) {
     throw new Error("Telegram reply outcome is unknown; provider readback did not confirm the exact reply");
   }

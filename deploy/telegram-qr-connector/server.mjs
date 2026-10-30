@@ -1661,6 +1661,11 @@ http.createServer(async (req, res) => {
         const replyToId = String(payload.reply_to_id || "").trim();
         const threadId = String(payload.thread_id || "").trim();
         const expectedText = payload.expected_text;
+        const format = payload.format;
+        if (format !== undefined && (format !== 'telegram_markdown' || !replyToId)) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "unsupported reply format", submitted: false }));
+        }
         const text = replyToId ? rawText : rawText.trim();
         if ((replyToId || threadId || expectedText !== undefined) && (!replyToId || !wantAccount || !chatId || !/^[1-9][0-9]*$/.test(replyToId)
             || Number(replyToId) > 0x7fffffff || threadId && (!/^[1-9][0-9]*$/.test(threadId)
@@ -1698,7 +1703,7 @@ http.createServer(async (req, res) => {
           const peerId = chatId || String(await item.client.getPeerId(peer, true));
           if (replyToId) {
             const sent = await sendTelegramReply({ client: item.client, peer, messageId: replyToId,
-              threadId, expectedText, text });
+              threadId, expectedText, text, format });
             console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
             sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
               peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply",
@@ -1706,7 +1711,8 @@ http.createServer(async (req, res) => {
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, peer_id: chatId,
               message_id: sent.messageId, reply_to_id: sent.replyToId, thread_id: sent.threadId,
-              text: sent.text, date: sent.date, out: sent.out }));
+              text: sent.text, date: sent.date, out: sent.out,
+              ...(format ? {input_text: text, formatting_verified: true} : {}) }));
             return true;
           }
           // Record the attempt before the provider call, so an outcome that
@@ -1975,7 +1981,8 @@ http.createServer(async (req, res) => {
       const messageRef = String(payload.message_id || "").trim();
       const chatId = String(payload.chat_id || "").trim();
       if (!accountId || !chatId || !messageRef || typeof payload.expected_text !== "string"
-          || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 4096) {
+          || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 4096
+          || payload.format !== undefined && payload.format !== 'telegram_markdown') {
         throw new TelegramEditRefused("invalid_edit", "Account, chat, message and text are required");
       }
       const separator = messageRef.indexOf("|");
@@ -2002,11 +2009,12 @@ http.createServer(async (req, res) => {
       }
       const edited = await editOwnedTelegramText({
         client: item.client, api: Api, peer, messageId,
-        expectedText: payload.expected_text, text: payload.text,
+        expectedText: payload.expected_text, text: payload.text, format: payload.format,
       });
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify({ ok: true, slot, account_id: accountId, peer_id: chatId,
-        message_id: edited.messageId, text: edited.text, edit_date: edited.editDate, out: edited.out }));
+        message_id: edited.messageId, text: edited.text, edit_date: edited.editDate, out: edited.out,
+        ...(payload.format ? {input_text: payload.text, formatting_verified: true} : {}) }));
     } catch (error) {
       if (error?.submitted === false) {
         res.writeHead(409, { "content-type": "application/json" });

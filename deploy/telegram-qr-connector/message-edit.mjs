@@ -1,3 +1,5 @@
+import { formatTelegramMessage, sameTelegramEntities } from './message-format.mjs';
+
 export class TelegramEditRefused extends Error {
   constructor(code, message) {
     super(message);
@@ -6,14 +8,14 @@ export class TelegramEditRefused extends Error {
   }
 }
 
-export async function editOwnedTelegramText({ client, api, peer, messageId, expectedText, text }) {
+export async function editOwnedTelegramText({ client, api, peer, messageId, expectedText, text, format }) {
   if (!Number.isSafeInteger(messageId) || messageId <= 0) {
     throw new TelegramEditRefused("invalid_message_id", "A valid Telegram message id is required");
   }
   if (typeof expectedText !== "string" || typeof text !== "string" || !text.trim()) {
     throw new TelegramEditRefused("invalid_text", "Expected and replacement text are required");
   }
-  if (expectedText === text) {
+  if (format === undefined && expectedText === text) {
     throw new TelegramEditRefused("unchanged_text", "The replacement text is unchanged");
   }
 
@@ -30,11 +32,17 @@ export async function editOwnedTelegramText({ client, api, peer, messageId, expe
 
   // The official MTProto request is messages.editMessage. Read the message
   // back after submission so the mirror only changes on provider confirmation.
+  const formatted = formatTelegramMessage(text, format);
+  if (!formatted.text.trim() || [...formatted.text].length > 4096) {
+    throw new TelegramEditRefused('invalid_text', 'Rendered Telegram text is invalid');
+  }
   await client.invoke(new api.messages.EditMessage({
-    peer, id: messageId, message: text, noWebpage: false,
+    peer, id: messageId, message: formatted.text, noWebpage: false,
+    ...(format ? {entities: formatted.entities} : {}),
   }));
   const after = (await client.getMessages(peer, { ids: [messageId] }))?.[0];
-  if (!after || after.out !== true || String(after.message || "") !== text) {
+  if (!after || after.out !== true || String(after.message || "") !== formatted.text
+      || format && !sameTelegramEntities(formatted.entities, after.entities)) {
     throw new Error("Telegram edit outcome is unknown; readback did not confirm the replacement");
   }
   return {

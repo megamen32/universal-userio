@@ -26,7 +26,12 @@ The HTTP and stdio surfaces share `mcp_catalog.MESSENGER_SPECS`.
 | `userio.messenger.approve` | `action_id`, `expected_hash`, `confirm:true` | Execute exactly the human-approved action. Durable accepted receipt or explicit failure/unknown |
 | `userio.messenger.get` | `action_id` | Read the durable outcome; never generate a second intent to resolve `sending` |
 
-Payloads: reply`{text}`, edit`{text,expected_text}`; edit source is the exact
+Payloads: reply`{text}`, edit`{text,expected_text}`; Telegram reply/edit may also
+set `format: "telegram_markdown"` explicitly. The approved action binds that
+format and source text; the connector renders Telegram entities and checks both
+the visible text and entities in provider readback. Omitting `format` retains
+the existing plain-text contract. The normalized mirror stores visible text.
+For other channels this format is rejected. An edit source is the exact
 outgoing target. Reaction`{emoji}`; sticker`{media_message_id,attachment_index}`;
 file additionally allows `caption`; typing`{active}`. Media references must be
 actual messages in this owned conversation. Each provider advertises only

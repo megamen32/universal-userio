@@ -418,12 +418,15 @@ class TelegramMirrorProvider:
                 raise DeliveryNotSubmittedError('Telegram edit route unavailable')
             result=edit(chat_id=str(envelope['peer_id']),account_ref=self.account_ref,
                 message_id=str(envelope['source_message_id']),expected_text=str(envelope['payload']['expected_text']),
-                text=str(envelope['payload']['text']))
+                text=str(envelope['payload']['text']),
+                **({'format': envelope['payload']['format']} if 'format' in envelope['payload'] else {}))
             if (not isinstance(result,dict) or result.get('ok') is not True
                     or result.get('account_id')!=self.account_ref
                     or str(result.get('peer_id'))!=str(envelope['peer_id'])
                     or str(result.get('message_id'))!=str(envelope['source_provider_message_id'])
-                    or result.get('text')!=envelope['payload']['text'] or result.get('out') is not True):
+                    or (result.get('input_text') != envelope['payload']['text'] or result.get('formatting_verified') is not True
+                        if 'format' in envelope['payload'] else result.get('text') != envelope['payload']['text'])
+                    or not isinstance(result.get('text'), str) or result.get('out') is not True):
                 raise RuntimeError('Telegram edit readback identity conflict')
 
             current=self.service._store.message(envelope['source_message_id'],source='telegram',
@@ -450,7 +453,8 @@ class TelegramMirrorProvider:
         result=reply(chat_id=str(envelope['peer_id']),account_ref=self.account_ref,
             message_id=str(envelope['source_provider_message_id']),
             thread_id=str(envelope.get('thread_id') or ''),expected_text=projected['text'],
-            text=str(envelope['payload']['text']),request_id=str(envelope['action_id']))
+            text=str(envelope['payload']['text']),request_id=str(envelope['action_id']),
+            **({'format': envelope['payload']['format']} if 'format' in envelope['payload'] else {}))
         if (not isinstance(result,dict) or result.get('ok') is not True
                 or result.get('account_id')!=self.account_ref
                 or str(result.get('peer_id'))!=str(envelope['peer_id'])
@@ -458,7 +462,9 @@ class TelegramMirrorProvider:
                 or not 0<int(result.get('message_id') or '0')<=0x7FFFFFFF
                 or str(result.get('reply_to_id'))!=str(envelope['source_provider_message_id'])
                 or str(result.get('thread_id') or '')!=str(envelope.get('thread_id') or '')
-                or result.get('text')!=envelope['payload']['text'] or result.get('out') is not True
+                or (result.get('input_text') != envelope['payload']['text'] or result.get('formatting_verified') is not True
+                    if 'format' in envelope['payload'] else result.get('text') != envelope['payload']['text'])
+                or not isinstance(result.get('text'), str) or result.get('out') is not True
                 or type(result.get('date')) not in (int,float) or result['date']<=0):
             raise RuntimeError('Telegram reply receipt identity conflict')
         return {'account_ref':self.account_ref,'peer_id':str(envelope['peer_id']),

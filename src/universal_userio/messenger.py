@@ -408,7 +408,7 @@ class Messenger:
     @staticmethod
     def _payload(action, payload):
         if not isinstance(payload,dict): raise ValueError('payload_must_be_object')
-        keys = {'reply':{'text'},'edit':{'text','expected_text'},'react':{'emoji'},
+        keys = {'reply':{'text','format'},'edit':{'text','expected_text','format'},'react':{'emoji'},
                 'sticker':{'media_message_id','attachment_index'},'file':{'media_message_id','attachment_index','caption'},
                 'typing':{'active'},'button_click':{'row','column','button_text','callback_data_base64'}}
         if action=='file' and 'upload_id' in payload:
@@ -423,6 +423,8 @@ class Messenger:
         if action in {'reply','edit'}:
             if not isinstance(payload.get('text'),str) or not payload['text'].strip() or len(payload['text'])>65536:
                 raise ValueError('text_required')
+            if 'format' in payload and payload['format'] != 'telegram_markdown':
+                raise ValueError('invalid_text_format')
         if action=='edit' and not isinstance(payload.get('expected_text'),str): raise ValueError('expected_text_required')
         if action=='react' and (not isinstance(payload.get('emoji'),str) or len(payload['emoji'])>16
                                or payload['emoji'] and not payload['emoji'].strip()):
@@ -593,6 +595,8 @@ class Messenger:
         if action == 'react' and payload['emoji'] == '' and not self._reaction_removal_supported(account_ref, self._provider(account_ref)):
             raise PermissionError('reaction_removal_not_supported')
         conv = self._conversation(account_ref,conversation_id)
+        if 'format' in payload and conv['source'] != 'telegram':
+            raise ValueError('text_format_not_supported_for_channel')
         supports_action=getattr(self._provider(account_ref),'supports_action',None)
         if callable(supports_action) and supports_action(action,conv) is False:
             raise PermissionError('provider_not_supported_for_conversation')
