@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatTelegramMessage } from './message-format.mjs';
+import { formatTelegramMessage, sameTelegramEntities } from './message-format.mjs';
 
 const entity = name => class { constructor(value) { Object.assign(this, value); this.className = name; } };
 const api = {
@@ -22,4 +22,11 @@ test('renders bold, italic, code and a link using Telegram UTF-16 offsets', () =
 test('plain text and incomplete markup remain literal', () => {
   assert.deepEqual(formatTelegramMessage('**текст**', undefined, api), {text: '**текст**', entities: []});
   assert.deepEqual(formatTelegramMessage('**незакрыто', 'telegram_markdown', api), {text: '**незакрыто', entities: []});
+});
+
+test('provider-added automatic URLs do not hide missing requested formatting', () => {
+  const expected = [{className: 'MessageEntityBold', offset: 0, length: 6}];
+  const auto = {className: 'MessageEntityUrl', offset: 7, length: 12};
+  assert.equal(sameTelegramEntities(expected, [auto, ...expected]), true);
+  assert.equal(sameTelegramEntities(expected, [auto]), false);
 });

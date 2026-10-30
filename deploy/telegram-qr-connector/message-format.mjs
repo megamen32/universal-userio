@@ -40,5 +40,9 @@ export function formatTelegramMessage(source, format) {
 export function sameTelegramEntities(expected, actual) {
   const view = entity => ({type: entity.className, offset: entity.offset, length: entity.length,
     ...(entity.url ? {url: entity.url} : {}), ...(entity.language ? {language: entity.language} : {})});
-  return JSON.stringify(expected.map(view)) === JSON.stringify((actual || []).map(view));
+  const automatic = new Set(['MessageEntityUrl', 'MessageEntityEmail', 'MessageEntityMention',
+    'MessageEntityHashtag', 'MessageEntityBotCommand', 'MessageEntityCashtag', 'MessageEntityPhone']);
+  const normalize = items => items.map(view).filter(item => !automatic.has(item.type))
+    .map(item => JSON.stringify(item)).sort();
+  return JSON.stringify(normalize(expected)) === JSON.stringify(normalize(actual || []));
 }
