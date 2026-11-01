@@ -57,8 +57,11 @@ FROM backend AS voice
 # the path's effective MSS (~1400 B), which modern OpenSSL clienthellos hit.
 # The autoupdate procedure passes PIP_PROXY (the host LAN proxy) to route pip
 # traffic; empty default keeps CI and other hosts unchanged.
+#
+# This stays an ARG and is never promoted to ENV: a build arg that becomes an
+# image ENV changes the container's Env list, and the voice swap procedure
+# refuses a replacement whose environment differs from the running one.
 ARG PIP_PROXY=""
-ENV PIP_PROXY=${PIP_PROXY}
 RUN apt-get update && apt-get install -y --no-install-recommends espeak ffmpeg sudo \
     && apt-get clean \
     && groupadd -g 163 asterisk \
