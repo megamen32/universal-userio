@@ -1,4 +1,13 @@
+import {DOT_POLICY} from './dot-policy.mjs';
+import {DotMediaIngress,hasSupportedImage,MAX_IMAGE_BYTES} from './dot-media.mjs';
+import { createBoardDotNodeMount } from "./board-dot-mount.mjs";
+import { ROOM as DOT_BOARD_ROOM } from "./dot-relay.mjs";
+import { DotMirror, mirrorSendOptions, safeReplyContext } from "./dot-mirror.mjs";
+import { dotBrowserCall } from "./dot-browser-mcp.mjs";
+import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
+import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
 import http from "node:http";
+import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken } from "./bot-enrollment.mjs";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -65,6 +74,7 @@ const unreadRefreshLast = new Map();
 // route approved replies through the one process that owns each Telegram
 // session (auth keys are never shared).
 const liveSlots = new Map();
+const botEnrollments = new Set();
 const disconnectedSlots = new Set();
 let nextSlot = 1;
 let promptSeq = 0;
@@ -650,7 +660,7 @@ async function envelope(chatKey, label, message, client, self, options) {
     ...(message.editDate ? { edited_at: Number(message.editDate) } : {}),
     ...(options && options.reconciliation ? { reconciliation: true } : {}),
     ...(entityName(chatEntity) ? { sender_name: entityName(chatEntity) } : {}),
-    body: bodyWithOrigin(normalized.body, forwardOrigin(message)),
+    body: bodyWithOrigin(redactBotFatherToken(normalized.body), forwardOrigin(message)),
     ...(attachments.length ? { attachments: attachments.map((attachment, idx) => ({ ...attachment, idx })) } : {}),
   };
 }
@@ -841,6 +851,110 @@ async function backfillDialogs(slot, client, accountId, dialogLabels, labelPeers
   return chats;
 }
 
+const dotRelays = new Map();
+const dotMediaIngresses = new Map();
+const dotMirrors = new Map();
+function getDotRelay(accountId,binding) {
+  if (!dotRelays.has(accountId)) {
+    const boundLive = () => {
+      const current = readDotBinding();
+      if (!current || current.mirrorEnabled !== true ||
+          current.botAccountId !== accountId || current.pageId !== binding.pageId)
+        throw new Error("dot_mirror_disabled");
+      const live = [...liveSlots.values()].find(item => item.accountId === accountId);
+      if (!live || live.self?.bot !== true) throw new Error("dot_bot_disconnected");
+      return live;
+    };
+    const relay = new DotRelay({
+      statePath: `${stateDir}/dot-relay-${accountId.split(":")[1]}.json`,
+      botAccountId:accountId,agentId:"existing-mac-mini-mcp",tabId:binding.pageId,
+      browserCall:dotBrowserCall,
+      send:async(owner,text)=>{
+        if(owner!==DOT_OWNER)throw new Error("wrong_dot_owner");
+        const live=boundLive();
+        const sent=await live.client.sendMessage(BigInt(owner),mirrorSendOptions(text));
+        if(!sent?.id)throw new Error("dot_bot_send_unknown");
+        return sent.id;
+      },
+      edit:async(owner,receipt,text,expectedHash)=>{
+        if(owner!==DOT_OWNER||!expectedHash)throw new Error("wrong_dot_edit");
+        const live=boundLive(),peer=await live.client.getInputEntity(BigInt(owner));
+        const messageId=Number(receipt);
+        const before=(await live.client.getMessages(peer,{ids:[messageId]}))?.[0];
+        if(!before||before.out!==true||textHash(String(before.message||""))!==expectedHash)
+          throw new Error("dot_edit_source_changed");
+        return editOwnedTelegramText({client:live.client,api:Api,peer,messageId,
+          expectedText:String(before.message||""),text});
+      },
+    });
+    dotRelays.set(accountId,relay);
+    dotMirrors.set(accountId,new DotMirror(relay));
+  }
+  const relay=dotRelays.get(accountId);
+  if(relay.tabId!==binding.pageId)throw new Error("dot_page_binding_changed");
+  return relay;
+}
+function relayDotMessage(client,accountId,self,message,chatKey,isEdit) {
+  const binding=readDotBinding(undefined,true);
+  if(!isDedicatedDotBot(accountId,binding))return false;
+  if(binding.enabled!==true||!self.bot)return true;
+  const senderId=canonicalPrivateSender(message,chatKey);
+  const privatePeer=String(message.peerId?.userId||"")===DOT_OWNER;
+  const relay=getDotRelay(accountId,binding);
+  const event={accountId,peerId:chatKey,senderId,
+    private:privatePeer,out:!!message.out,isEdit,messageId:String(message.id),
+    text:String(message.message||""),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+  const deliver=prepared=>relay.prepareReceive(prepared,async(replyTo)=>{
+    let context='[Контекст недоступен]';
+    if(/^[1-9][0-9]*$/.test(replyTo)){
+      try{
+        const referenced=(await client.getMessages(BigInt(DOT_OWNER),{ids:[Number(replyTo)]}))?.[0];
+        context=safeReplyContext(referenced,replyTo);
+      }catch{}
+    }
+    const current=readDotBinding();
+    if(!current||!current.enabled||current.botAccountId!==accountId)throw Error('dot_disabled');
+    return context;
+  });
+  if(hasSupportedImage(message)){
+    if(!dotMediaIngresses.has(accountId))dotMediaIngresses.set(accountId,new DotMediaIngress({
+      stateDir,botAccountId:accountId,
+      download:async(source)=>{
+        const current=readDotBinding();
+        if(!current?.enabled||current.botAccountId!==accountId)throw Error('dot_disabled');
+        return client.downloadMedia(source,{progressCallback:(received,total)=>{
+          if(Number(received)>MAX_IMAGE_BYTES||Number(total)>MAX_IMAGE_BYTES)throw Error('image_size_refused');
+        }});
+      },
+      deliver:async(prepared)=>{
+        const current=readDotBinding();
+        if(!current?.enabled||current.botAccountId!==accountId)throw Error('dot_disabled');
+        return deliver(prepared);
+      },
+    }));
+    if(!relay.state.incoming[accountId+':'+DOT_OWNER+':'+event.messageId])
+      dotMediaIngresses.get(accountId).receive(event,message);
+  }else Promise.resolve(dotMediaIngresses.get(accountId)?.waitForPending()).then(()=>deliver(event)).then(result=>console.log("dot relay",result.status))
+    .catch(()=>console.error("dot relay requires review"));
+  return true;
+}
+let dotMirrorRunning=false,dotMirrorNext=0;
+async function tickDotMirror(){
+  if(dotMirrorRunning||Date.now()<dotMirrorNext)return;
+  dotMirrorRunning=true;
+  try{
+    const binding=readDotBinding();
+    if(!binding||binding.mirrorEnabled!==true)return;
+    const live=[...liveSlots.values()].find(item=>item.accountId===binding.botAccountId);
+    if(!live||live.self?.bot!==true)return;
+    getDotRelay(binding.botAccountId,binding);
+    const result=await dotMirrors.get(binding.botAccountId).tick();
+    dotMirrorNext=Date.now()+(['idle','cursor_not_visible','snapshot_unavailable'].includes(result.status)?30000:15000);
+    if(!['idle','incoming_busy','stabilizing'].includes(result.status))console.log("dot mirror",result.status);
+  }catch(_){dotMirrorNext=Date.now()+30000;console.error("dot mirror requires review");}
+  finally{dotMirrorRunning=false;}
+}
+
 async function ingestLive(slot, client, accountId, dialogLabels, self, event, isEdit = false) {
   const message = event.message;
   if (!message) return;
@@ -862,13 +976,14 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   const inboxMessage = await envelope(chatKey, label, message, client, self, { accountId, chatEntity });
   if (!inboxMessage.body) return;
   const posted = await postInbox(accountId, inboxMessage);
-  if (!isEdit && !message.out) {
+  if (!isEdit && !message.out && !self.bot) {
     const peer = chatEntity || (live && live.labelPeers.idPeers.get(chatKey));
     scheduleUnreadCountRefresh(slot, client, accountId, chatKey, peer);
   }
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
-  if (!isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
+  const isDotBot = relayDotMessage(client, accountId, self, message, chatKey, isEdit);
+  if (!isDotBot && !isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
 }
@@ -906,7 +1021,7 @@ async function syncAccount(slot) {
       rememberProfile(slot, accountId, displayName);
       const dialogLabels = new Map();
       const labelPeers = { labelPeers: new Map(), idPeers: new Map() };
-      liveSlots.set(slot, { client, labelPeers, accountId, dialogLabels });
+      liveSlots.set(slot, { client, labelPeers, accountId, dialogLabels, self: me });
       slots.set(slot, { ...(slots.get(slot) || {}), status: "connected", name: displayName, accountId });
       // Attach push ingestion before reconciliation. A slow historical media
       // item must not postpone delivery of genuinely new messages.
@@ -924,10 +1039,13 @@ async function syncAccount(slot) {
         ingestProviderState(slot, client, accountId, update).catch(error =>
           console.error(`sync ${slot} state error:`, error.message || error));
       }, new Raw({}));
-      await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
-          const chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
-          await refreshUnreadSnapshot(client, accountId).catch(error =>
-            console.error(`unread snapshot startup: ${error.message || error}`));
+      let chats = 0;
+      // Bots receive push updates but cannot enumerate user dialogs/contacts.
+      if (!me.bot) {
+        await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error("contact index failed"));
+        chats = await backfillDialogs(slot, client, accountId, dialogLabels, labelPeers, me);
+        await refreshUnreadSnapshot(client, accountId).catch(error => console.error("unread snapshot failed"));
+      }
       if (disconnectedSlots.has(slot)) break;
       setSync(slot, { status: "live", chats, lastError: "", lastSyncAt: Date.now() });
       console.log(`sync ${slot}: live as ${accountId}, ${chats} chats backfilled`);
@@ -940,8 +1058,8 @@ async function syncAccount(slot) {
         await new Promise((resolve) => setTimeout(resolve, 60000));
         if (disconnectedSlots.has(slot)) break;
         await client.getMe();
-        if (beat % 60 === 0) await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
-            if (beat % 5 === 0) {
+        if (!me.bot && beat % 60 === 0) await syncContactProfiles(client, accountId, postUserIO).catch(error => console.error(`contact index: ${error.message || error}`));
+            if (!me.bot && beat % 5 === 0) {
               await refreshUnreadSnapshot(client, accountId).catch(error =>
                 console.error(`unread snapshot periodic: ${error.message || error}`));
               await backfillDialogs(slot, client, accountId, dialogLabels, (liveSlots.get(slot) || {}).labelPeers || null, me, 20);
@@ -1212,11 +1330,23 @@ document.addEventListener('click',async function(event){
 poll();
 </script>`;
 
+const boardDotHandler = createBoardDotNodeMount({
+  stateDir,
+  binding: {owner: DOT_OWNER, room: DOT_BOARD_ROOM},
+  resolveRelay: () => {
+    const binding = readDotBinding();
+    if (!binding || binding.enabled !== true || binding.mirrorEnabled !== true)
+      throw new Error("dot_board_binding_disabled");
+    return getDotRelay(binding.botAccountId, binding);
+  },
+});
+
 http.createServer(async (req, res) => {
+  if (await boardDotHandler(req, res)) return;
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/dot/replay'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1227,6 +1357,80 @@ http.createServer(async (req, res) => {
       if(slot&&!enrollmentOwners.allowed(slot,browserOwner.principal.user_id))throw Error('Not your enrollment');
       if(!['/','/state'].includes(url.pathname)&&!browserOwner.principal.can_manage)throw Error('Personal login required');
     }catch(error){res.writeHead(403,{'content-type':'application/json'});return res.end(JSON.stringify({error:'Войдите в свой UserIO для подключения аккаунта'}));}
+  }
+
+  if (url.pathname === "/dot/replay" && req.method === "POST") {
+    try {
+      const payload = await readJsonBody(req, 1024);
+      const binding = readDotBinding();
+      const messageId = Number(payload.message_id);
+      if (!binding || payload.account_id !== binding.botAccountId ||
+          !Number.isSafeInteger(messageId) || messageId < 1) throw Error("invalid_replay");
+      const source = [...liveSlots].find(([id,item]) => item.accountId === binding.botAccountId &&
+        enrollmentOwners.allowed(id, browserOwner.principal.user_id));
+      if (!source) throw Error("owned_bot_required");
+      const me = await source[1].client.getMe();
+      if (!me.bot || "telegram:" + String(me.id) !== binding.botAccountId) throw Error("wrong_bot");
+      const messages = await source[1].client.getMessages(BigInt(DOT_OWNER), {ids:[messageId]});
+      const message = messages?.[0];
+      if (!message || Number(message.id) !== messageId ||
+          canonicalPrivateSender(message,DOT_OWNER) !== DOT_OWNER) throw Error("wrong_message");
+      relayDotMessage(source[1].client,binding.botAccountId,me,message,DOT_OWNER,false);
+      res.writeHead(202, {"content-type":"application/json"});
+      return res.end(JSON.stringify({accepted:true,account_id:binding.botAccountId,message_id:messageId,status:"replay_requested"}));
+    } catch (_) {
+      res.writeHead(400, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"dot_replay_refused"}));
+    }
+  }
+
+  if (url.pathname === "/bot/enroll-from-botfather" && req.method === "POST") {
+    let botClient = null;
+    try {
+      const payload = await readJsonBody(req, 4096);
+      if (!DOT_POLICY || payload.source_account_id !== DOT_POLICY.sourceAccountId || payload.source_username !== DOT_POLICY.sourceUsername) throw Error("authorized_botfather_source_required");
+      const source = [...liveSlots].find(([id, item]) =>
+        item.accountId === payload.source_account_id && enrollmentOwners.allowed(id, browserOwner.principal.user_id));
+      if (!source) throw Error("owned_source_account_required");
+      const sourceMe = await source[1].client.getMe();
+      if (String(sourceMe.username || "").toLowerCase() !== String(payload.source_username || "").replace(/^@/, "").toLowerCase()
+          || !payload.source_username) throw Error("source_username_mismatch");
+      const messageId = Number(payload.message_id);
+      if (!Number.isSafeInteger(messageId) || messageId < 1) throw Error("exact_botfather_message_required");
+      const father = await source[1].client.getEntity("BotFather");
+      const messages = await source[1].client.getMessages(father, { ids: [messageId] });
+      const expected = botTokenFromMessage(messages[0], father, payload.bot_username);
+      const botAccountId = "telegram:" + expected.botId;
+      const owner = browserOwner.principal.user_id;
+      const existing = [...slots].find(([id, item]) => item.accountId === botAccountId);
+      if (existing) {
+        if (!enrollmentOwners.allowed(existing[0], owner)) throw Error("bot_account_owned_elsewhere");
+        res.writeHead(200, {"content-type":"application/json"});
+        return res.end(JSON.stringify({ok:existing[1].status === "connected", account_id:botAccountId, status:existing[1].status === "connected" ? "already_registered" : "registration_incomplete", token_returned:false}));
+      }
+      if (botEnrollments.has(botAccountId)) throw Error("bot_enrollment_in_progress");
+      botEnrollments.add(botAccountId);
+      try {
+        botClient = newClient();
+        await botClient.connect();
+        const user = await botClient.signInBot(credentials(), { botAuthToken: expected.token });
+        assertBotIdentity(user, expected);
+        saveEncryptedBotToken(stateDir + "/credentials/bots", keyPath, owner, expected);
+        reserveDotBotBinding(botAccountId);
+        const newSlot = "account-" + nextSlot++;
+        enrollmentOwners.bind(newSlot, browserOwner.principal, browserOwner.headers);
+        slots.set(newSlot, {status:"connecting", mode:"bot"});
+        await finishLogin(newSlot, botClient, user);
+        const state = slots.get(newSlot);
+        res.writeHead(state?.status === "connected" ? 201 : 202, {"content-type":"application/json"});
+        return res.end(JSON.stringify({ok:state?.status === "connected", account_id:botAccountId,
+          username:expected.username, status:state?.status || "unknown", token_stored:true, token_returned:false}));
+      } finally { botEnrollments.delete(botAccountId); }
+    } catch (error) {
+      // Provider/auth errors may embed the credential. Never return or log them.
+      res.writeHead(400, {"content-type":"application/json"});
+      return res.end(JSON.stringify({error:"bot_enrollment_failed", token_returned:false}));
+    } finally { if (botClient) await botClient.disconnect().catch(() => {}); }
   }
 
   if (url.pathname === "/agent-deliver-callback" && req.method === "POST") {
@@ -2297,3 +2501,6 @@ http.createServer(async (req, res) => {
   res.setHeader("content-type", "text/html; charset=utf-8");
   return res.end(pageShell.split("__PREFIX__").join(publicPrefix));
 }).listen(port, "127.0.0.1");
+
+// One bounded observer for the single explicitly bound dot room.
+setInterval(()=>{void tickDotMirror();},15000).unref();

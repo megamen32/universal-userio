@@ -1,0 +1,14 @@
+import './dot-test-policy.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import {createBoardDotHandler} from './board-dot-endpoint.mjs';
+const binding={owner:'fixture-owner',room:'a'.repeat(32)};
+const grant={...binding,audience:'userio-dot-board',active:true,credentialId:'fixture-credential',operations:['enqueue','read_receipt']};
+const id='board:'+'b'.repeat(64);
+function setup(change={}){const calls=[];const handler=createBoardDotHandler({enabled:true,binding,authorizeToken:async token=>token==='fixture'?grant:null,relay:{enqueueOwned:async(...args)=>{calls.push(args);return {status:'accepted',text:'must not leak'};}},readReceipt:async(credential,requestId)=>credential===grant.credentialId&&requestId===id?{status:'accepted',text:'private'}:null,...change});return {handler,calls};}
+const req=(body={requestId:id,text:'synthetic'},auth='Bearer fixture')=>new Request('https://userio.invalid/telegram-qr/dot-board/requests',{method:'POST',headers:{authorization:auth},body:JSON.stringify(body)});
+test('disabled by default, no credential lookup',async()=>{let called=false;const h=createBoardDotHandler({binding,authorizeToken:async()=>{called=true;}});assert.equal((await h(req())).status,503);assert.equal(called,false);});
+test('missing and invalid auth cannot enqueue',async()=>{const f=setup();assert.equal((await f.handler(req(undefined,''))).status,401);assert.equal((await f.handler(req(undefined,'Bearer bad'))).status,403);assert.equal(f.calls.length,0);});
+for(const [field,value] of [['owner','other'],['room','other'],['audience','herder']])test('reject wrong '+field,async()=>{const f=setup({authorizeToken:async()=>({...grant,[field]:value})});assert.equal((await f.handler(req())).status,403);assert.equal(f.calls.length,0);});
+test('body cannot select arbitrary room, namespace or oversize task',async()=>{const f=setup();for(const body of [{requestId:id,text:'x',room:'other'},{requestId:'telegram:1',text:'x'},{requestId:id,text:'x'.repeat(16001)}])assert.equal((await f.handler(req(body))).status,400);assert.equal(f.calls.length,0);});
+test('accepted reply contains metadata only',async()=>{const f=setup();const r=await f.handler(req());assert.equal(r.status,202);assert.deepEqual(await r.json(),{requestId:id,status:'accepted'});assert.equal(f.calls[0][0],grant.credentialId);});
+test('read is exact credential owned source and metadata only',async()=>{const f=setup();const r=await f.handler(new Request('https://userio.invalid/telegram-qr/dot-board/requests/'+encodeURIComponent(id),{headers:{authorization:'Bearer fixture'}}));assert.deepEqual(await r.json(),{requestId:id,status:'accepted'});});
+test('provider exception is unknown without secret disclosure',async()=>{const f=setup({relay:{enqueueOwned:async()=>{throw Error('secret upstream detail');}}});const r=await f.handler(req());assert.deepEqual(await r.json(),{requestId:id,status:'unknown',retryable:false});});
