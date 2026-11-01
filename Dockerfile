@@ -52,6 +52,13 @@ STOPSIGNAL SIGTERM
 CMD ["python", "-m", "universal_userio.container_runtime"]
 
 FROM backend AS voice
+# Build-time package fetches (pip → download.pytorch.org / download-r2.pytorch.org)
+# break on some hosts: server-100 2026-11-01 — TLS dies when ClientHello exceeds
+# the path's effective MSS (~1400 B), which modern OpenSSL clienthellos hit.
+# The autoupdate procedure passes PIP_PROXY (the host LAN proxy) to route pip
+# traffic; empty default keeps CI and other hosts unchanged.
+ARG PIP_PROXY=""
+ENV PIP_PROXY=${PIP_PROXY}
 RUN apt-get update && apt-get install -y --no-install-recommends espeak ffmpeg sudo \
     && apt-get clean \
     && groupadd -g 163 asterisk \
@@ -60,7 +67,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends espeak ffmpeg s
     && python -m venv --system-site-packages /opt/tts \
     && python -m venv --system-site-packages /opt/universal-userio/telegram-call-runtime
 COPY deploy/containers/requirements-voice.txt /tmp/userio-voice-requirements.txt
-RUN /opt/voice-legacy-sdk/bin/pip install --no-cache-dir -r /tmp/userio-voice-requirements.txt \
+RUN if [ -n "$PIP_PROXY" ]; then export https_proxy="$PIP_PROXY" http_proxy="$PIP_PROXY"; fi; \
+    /opt/voice-legacy-sdk/bin/pip install --no-cache-dir -r /tmp/userio-voice-requirements.txt \
     && /opt/tts/bin/pip install --no-cache-dir numpy==2.2.6 omegaconf==2.3.1 \
     && /opt/tts/bin/pip install --no-cache-dir torch==2.14.0+cpu --index-url https://download.pytorch.org/whl/cpu \
     && /opt/universal-userio/telegram-call-runtime/bin/pip install --no-cache-dir ntgcalls==3.0.3 \
