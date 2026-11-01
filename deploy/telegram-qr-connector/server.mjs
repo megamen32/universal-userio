@@ -14,6 +14,7 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 import { bodyWithOrigin, forwardOrigin } from "./forward-origin.mjs";
 import { duplicateReceipt, replyAttemptFields } from "./send-receipt.mjs";
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
+import { withTelegramAuthorClassification } from "./author-classification.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
 import { syncContactProfiles } from "./contact-index.mjs";
@@ -635,6 +636,19 @@ async function envelope(chatKey, label, message, client, self, options) {
   }
   const conversationKind = telegramConversationKind(chatEntity, chatKey);
   const senderIsBot = conversationKind === "telegram_bot" || !!(senderEntity && senderEntity.bot === true);
+  // Only a real provider User entity proves a negative bot classification.
+  // The legacy sender_is_bot=false default is not evidence.
+  const authorEntity = senderEntity instanceof Api.User ? senderEntity
+    : (!message.out && ["direct", "telegram_bot"].includes(conversationKind)
+        && chatEntity instanceof Api.User ? chatEntity : null);
+  if (!message.out && authorEntity) {
+    const classified = withTelegramAuthorClassification(routing, {
+      id: String(authorEntity.id), is_bot: authorEntity.bot === true,
+    });
+    if (routing) attachments[attachments.indexOf(routing)] = classified;
+    else attachments.push(classified);
+  }
+
   return {
     schema: "universal.inbox.message.v1",
     source: "telegram",
