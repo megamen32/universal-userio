@@ -244,7 +244,10 @@ def test_invocation_is_authenticated_routing_metadata_never_body_guess(case):
 @pytest.mark.parametrize('is_bot', [False, True])
 def test_incoming_author_bot_metadata_from_stored_provider(case, is_bot):
     store, service, provider, cid, source = case
-    changed = replace(source, sender_is_bot=is_bot)
+    routing = json.loads(source.attachments[0]['provider_ref'])
+    routing['author_is_bot'] = is_bot
+    changed = replace(source, sender_is_bot=is_bot, attachments=(
+        dict(source.attachments[0], provider_ref=json.dumps(routing)),))
     service.receive(changed, route_id='telegram', account_ref=provider.account_ref)
     result = dispatch(case, 'history', {'account_ref':provider.account_ref,
         'conversation_id':cid, 'limit':1})
@@ -260,3 +263,9 @@ def test_missing_author_bot_metadata_is_not_assumed_human(case):
     msg = store.message(provider.account_ref+'|'+source.message_id, source='telegram', user_id=store.owner().user_id)
     msg.pop('sender_is_bot', None)
     assert 'is_bot' not in api._project(conv, msg)['author']
+
+def test_legacy_default_false_is_unknown_even_in_group(case):
+    store, service, provider, cid, source = case
+    result = dispatch(case, 'history', {'account_ref':provider.account_ref,
+        'conversation_id':cid, 'limit':1})
+    assert 'is_bot' not in result['messages'][0]['author']
