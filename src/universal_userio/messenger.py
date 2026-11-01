@@ -269,6 +269,11 @@ class Messenger:
             direction=str(msg['direction']), routing=routing,
             thread_id=str(msg.get('provider_thread_id') or ''),
             reply_to=str(msg.get('provider_reply_to') or ''))
+        # Provider-ingested sender classification, never inferred from names,
+        # usernames, forwarded-message authors or other group participants.
+        # Omit unknown metadata rather than claiming an unclassified bot is human.
+        if not outgoing and msg.get('sender_is_bot') in (0, 1, False, True):
+            author['is_bot'] = bool(msg['sender_is_bot'])
         return {'source':source, 'author':author, 'text':str(msg['body']),
                 'at':msg['received_at'], 'edited_at':msg.get('edited_at', 0), 'media':media}
 

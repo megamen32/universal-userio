@@ -240,3 +240,23 @@ def test_invocation_is_authenticated_routing_metadata_never_body_guess(case):
     result=dispatch(case,'history',{'account_ref':p.account_ref,'conversation_id':cid})['messages'][-1]
     assert result['source']['invocation']=={'mention':False,'reply':False}
     assert p.calls==[]
+
+@pytest.mark.parametrize('is_bot', [False, True])
+def test_incoming_author_bot_metadata_from_stored_provider(case, is_bot):
+    store, service, provider, cid, source = case
+    changed = replace(source, sender_is_bot=is_bot)
+    service.receive(changed, route_id='telegram', account_ref=provider.account_ref)
+    result = dispatch(case, 'history', {'account_ref':provider.account_ref,
+        'conversation_id':cid, 'limit':1})
+    assert result['messages'][0]['author']['is_bot'] is is_bot
+    assert result['messages'][0]['author']['id'] == '42'
+    assert provider.calls == []
+
+def test_missing_author_bot_metadata_is_not_assumed_human(case):
+    from universal_userio.messenger import Messenger
+    store, service, provider, cid, source = case
+    api = Messenger(store, service, store.owner())
+    conv = store.conversation(cid, user_id=store.owner().user_id)
+    msg = store.message(provider.account_ref+'|'+source.message_id, source='telegram', user_id=store.owner().user_id)
+    msg.pop('sender_is_bot', None)
+    assert 'is_bot' not in api._project(conv, msg)['author']
