@@ -75,6 +75,9 @@ def test_production_shape_manager_claim_and_canonical_source_binding(tmp_path):
         assert event["conversation_id"] == conversation_id
         assert event["source"] == "telegram"
         assert event["account_ref"] == account
+        # Workspace preview has no edited_at; consumers must read current
+        # persisted source revision instead of inventing one from the preview.
+        assert "edited_at" not in event
         seq = int(event["seq"])
         principal = UserPrincipal(
             store.default_user_id, "owner", "owner",
