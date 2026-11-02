@@ -112,6 +112,11 @@ class UserIOService:
             from .messenger_max import MaxMessengerProvider
             self.messenger_providers['max'] = MaxMessengerProvider(self)
 
+        # A single dispatcher hook per service; independent of AI triage.
+        from .auto_replies import AutoReplyRules
+        self.auto_reply_rules = AutoReplyRules(self)
+        self.add_inbound_listener(self.auto_reply_rules.on_inbound)
+
     def qualify_task_contact(
         self, *, issuer, task_id: str, actor_id: str,
         contact_ref: str, account_ref: str,
@@ -1162,6 +1167,10 @@ class UserIOService:
         conversation_id, accepted = self.receive(message, route_id=route_id, user_id=user_id)
         if not accepted:
             return conversation_id, False, None
+        # A matched opt-in rule already has a durable exclusive claim.
+        # Do not also generate/auto-send an AI draft for that event.
+        if self.auto_reply_rules.claimed_for(user_id, conversation_id, message.message_id):
+            return conversation_id, True, None
         draft = self.propose(conversation_id, message, user_id=user_id)
         conversation = self._store.conversation(conversation_id, user_id=user_id)
         if (

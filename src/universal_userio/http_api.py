@@ -640,6 +640,38 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path in {"/v1/auto-replies", "/v1/auto-replies/preview"}:
+                    if principal.service_account:
+                        self._reply(403, {"error": "personal_login_required"})
+                        return
+                    payload = self._json()
+                    manager = service.auto_reply_rules
+                    try:
+                        if path.endswith("/preview"):
+                            result = manager.preview(user_id, payload)
+                        else:
+                            action = payload.get("action")
+                            if action == "create":
+                                result = {"rule": manager.create(user_id, payload)}
+                            elif action == "update":
+                                result = {"rule": manager.update(user_id, str(payload.get("id") or ""), payload)}
+                            elif action == "toggle":
+                                result = {"rule": manager.toggle(user_id, str(payload.get("id") or ""), payload.get("enabled"))}
+                            elif action == "delete":
+                                manager.delete(user_id, str(payload.get("id") or ""))
+                                result = {"deleted": True}
+                            elif action == "move":
+                                result = {"rules": manager.move(user_id, str(payload.get("id") or ""), payload.get("direction"))}
+                            else:
+                                raise ValueError("invalid_action")
+                    except KeyError as exc:
+                        self._reply(404, {"error": str(exc.args[0])})
+                        return
+                    except (ValueError, TypeError) as exc:
+                        self._reply(400, {"error": str(exc)})
+                        return
+                    self._reply(200, result, headers={"Cache-Control": "no-store"})
+                    return
                 if path == "/v1/webhooks/incoming":
                     if principal.service_account or principal.read_only or not service._store.capability_enabled("read", user_id=user_id):
                         self._reply(403, {"error": "Войдите в личный кабинет с правом чтения"}); return
@@ -1786,6 +1818,13 @@ def handler(
                 self._reply(403, {"error": "read_only_token"})
                 return
             user_id = principal.user_id
+            if path == "/v1/auto-replies":
+                if principal.service_account:
+                    self._reply(403, {"error": "personal_login_required"})
+                    return
+                self._reply(200, {"rules": service.auto_reply_rules.list(user_id)},
+                            headers={"Cache-Control": "no-store"})
+                return
             if path.startswith('/v1/exports/'):
                 name = path.removeprefix('/v1/exports/')
                 if not re.fullmatch(r'[A-Za-z0-9._-]{1,120}\.md', name):
