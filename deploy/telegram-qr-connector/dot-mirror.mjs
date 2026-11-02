@@ -1,5 +1,7 @@
 import {DOT_POLICY} from './dot-policy.mjs';
 import {OWNER,ROOM,textHash} from './dot-relay.mjs';
+import {MAX_IMAGES} from './dot-media.mjs';
+import {verifyDotTelegramMedia} from './dot-egress.mjs';
 export function sensitiveText(text){
  const s=String(text);
  return /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/.test(s)||/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/.test(s)||/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/.test(s)||/\bBearer\s+[A-Za-z0-9._~+\/-]{12,}/i.test(s)||/(?:password|passwd|passphrase|парол[ьяь]|токен|token|api[_ -]?key|секрет|secret|session[_ -]?(?:id|key)|cookie)\s*(?::|=|\bis\b|это)/i.test(s)||/(?:парол[ьяь]|password|passphrase|api[_ -]?key|токен)/i.test(s);
@@ -43,6 +45,16 @@ export function mirrorParts(message){
  while(offset<text.length){let end=Math.min(offset+3000,text.length);if(end<text.length&&/[\uD800-\uDBFF]/.test(text[end-1]))end--;pieces.push(text.slice(offset,end));offset=end;if(pieces.length>12)throw Error('message_too_large');}
  return pieces.map((body,i)=>label+(pieces.length>1?` (${i+1}/${pieces.length})`:'')+':\n'+body);
 }
+// Text-only hashes remain byte-for-byte compatible with the existing journal.
+// Media must be included in the source identity before any provider send.
+export function mirrorSourceHash(m){
+ const count=m.attachment_count??m.attachment_names?.length??0;
+ if(!Number.isSafeInteger(count)||count<0||count>MAX_IMAGES)return null;
+ if(!count)return textHash(m.text);
+ const f=m.attachment_fingerprints;
+ if(!Array.isArray(f)||f.length!==count||f.some(x=>typeof x!=='string'||! /^[a-f0-9]{64}$/.test(x)))return null;
+ return textHash(JSON.stringify({text:String(m.text||''),media:f}));
+}
 export class DotMirror{
  constructor(relay,{now=()=>Date.now(),stableMs=8000}={}){this.relay=relay;this.now=now;this.stableMs=stableMs;this.running=false;}
  async tick(){
@@ -69,10 +81,12 @@ export class DotMirror{
    const index=rows.findIndex(m=>m.id===state.cursor);
    if(index<0){state.status='cursor_not_visible';this.relay.save();return {status:state.status};}
    const newRows=rows.slice(index+1);
-   const edits=rows.filter(m=>state.published[m.id]&&state.published[m.id].hash!==textHash(m.text));
+   const edits=rows.filter(m=>state.published[m.id]&&state.published[m.id].hash!==mirrorSourceHash(m));
    for(const m of [...newRows,...edits]){
     if(!['user','assistant'].includes(m.role))continue;
-    const hash=textHash(m.text);const old=state.candidates[m.id];
+    const hash=mirrorSourceHash(m);
+    if(hash===null){state.status='media_identity_requires_review';state.blocked=state.status;this.relay.save();return {status:state.status};}
+    const old=state.candidates[m.id];
     if(!old||old.hash!==hash)state.candidates[m.id]={hash,since:this.now()};
    }
    this.relay.save();let changed=false;
@@ -82,15 +96,50 @@ export class DotMirror{
     if(origin==='uncertain'){state.status='incoming_origin_uncertain';this.relay.save();return {status:state.status};}
     if(origin==='telegram'){state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     const c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)break;
-    if(sensitiveText(m.text)||!m.text.trim()){
+    const imageCount=m.attachment_count??m.attachment_names?.length??0;
+    if(sensitiveText(m.text)||(!m.text.trim()&&!imageCount)){
      state.held[m.id]={reason:sensitiveText(m.text)?'sensitive_content':'no_visible_text',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
     const reply=resolveMirrorReply(this.relay,m.reply_to);
     if(reply.status==='unresolved'){
      state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
-    let parts;try{parts=mirrorParts(m);}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
-    const pub={hash:c.hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,receipts:[],partHashes:parts.map(textHash),status:'sending'};state.published[m.id]=pub;this.relay.save();
+    let parts;try{parts=m.text.trim()?mirrorParts(m):[];}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
+    let media=null,caption=null;
+    if(imageCount){
+     if(typeof this.relay.sendMedia!=='function'){state.status='media_transport_requires_review';this.relay.save();return {status:state.status};}
+     // Download, validate and stage ALL images before any irreversible send.
+     try{
+      media=await this.relay.browserCall('dot_media_read',{tab_id:this.relay.tabId,source_id:m.id,expected_fingerprints:m.attachment_fingerprints});
+      if(verifyDotTelegramMedia(media)!==imageCount)throw Error('media_count_changed');
+     }catch{
+      state.status='media_source_requires_review';state.blocked=state.status;
+      state.held[m.id]={reason:state.status,hash:c.hash};
+      this.relay.save();return {status:state.status};
+     }
+     const inline=parts.length===1&&parts[0].length<=900;
+     caption=inline?parts[0]:mirrorParts({...m,text:'[изображение]'})[0];
+     if(inline)parts=[];
+    }
+    const pub={hash:c.hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,
+     receipts:[],media_receipts:[],media_count:imageCount,
+     media_sha256:media?.map(f=>f.sha256)||[],partHashes:parts.map(textHash),status:'sending'};
+    state.published[m.id]=pub;this.relay.save();
+    if(imageCount){
+     const key='mirror:'+m.id+':media:0';
+     if(this.relay.state.outgoing[key]){state.blocked='delivery_requires_review';this.relay.save();return {status:state.blocked};}
+     this.relay.state.outgoing[key]={status:'send_uncertain',source_id:m.id,kind:'media',
+      media_sha256:pub.media_sha256,part:0};this.relay.save();
+     try{
+      // No competing claim: propagate the immutable original source identity.
+      // Native claim fence integration belongs to the existing UserIO owner.
+      const receipts=await this.relay.sendMedia(OWNER,media,caption,reply.receipt,{source_message_id:m.id});
+      if(!Array.isArray(receipts)||!receipts.length||receipts.some(id=>!/^[1-9][0-9]*$/.test(String(id))))throw Error('media_provider_receipt_unknown');
+      pub.media_receipts=receipts.map(String);pub.receipts.push(...pub.media_receipts);
+      this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,kind:'media',part:0,receipts:pub.media_receipts};
+      this.relay.save();
+     }catch{state.blocked='delivery_unknown';this.relay.save();return {status:state.blocked};}
+    }
     for(let n=0;n<parts.length;n++){
      const key='mirror:'+m.id+':'+n;
      if(this.relay.state.outgoing[key]){state.blocked='delivery_requires_review';this.relay.save();return {status:state.blocked};}
@@ -102,6 +151,7 @@ export class DotMirror{
    }
    for(const m of edits){
     const pub=state.published[m.id],c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)continue;
+    if(pub.media_count||(m.attachment_count??m.attachment_names?.length??0)>0){state.held[m.id]={reason:'media_edit_requires_review',hash:c.hash};this.relay.save();continue;}
     if((m.reply_to||null)!==(pub.reply_to||null)){state.held[m.id]={reason:'reply_target_edited_requires_review',hash:c.hash};continue;}
     if(sensitiveText(m.text)||!m.text.trim()){state.held[m.id]={reason:'sensitive_or_empty_update',hash:c.hash};continue;}
     let parts;try{parts=mirrorParts(m);}catch{state.held[m.id]={reason:'oversize_update',hash:c.hash};continue;}

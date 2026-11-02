@@ -12,6 +12,8 @@ import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
+import { CustomFile } from 'telegram/client/uploads.js';
+import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
 // GramJS 2.26 events/index.js exports only Raw/NewMessage(NewEvent); the
@@ -889,6 +891,18 @@ function getDotRelay(accountId,binding) {
         const sent=await live.client.sendMessage(BigInt(owner),mirrorSendOptions(text,replyReceipt));
         if(!sent?.id)throw new Error("dot_bot_send_unknown");
         return sent.id;
+      },
+      sendMedia:async(owner,media,caption,replyReceipt=null,origin=null)=>{
+        if(owner!==DOT_OWNER||typeof origin?.source_message_id!=='string'
+          ||!origin.source_message_id.startsWith(DOT_BOARD_ROOM+'~'+DOT_BOARD_ROOM+'~CalpicoMessage~'))
+          throw Error('wrong_dot_media_owner_or_source');
+        const live=boundLive();
+        const params=dotTelegramMediaParams(media,caption,replyReceipt,CustomFile);
+        // The one existing account-scoped GramJS client performs the operation.
+        // The durable mirror journal already claimed this exact source before
+        // invocation. Shared backend claim/fence integration is a separate owner.
+        const sent=await live.client.sendFile(BigInt(owner),params);
+        return dotTelegramMediaReceipts(sent,media.length);
       },
       edit:async(owner,receipt,text,expectedHash)=>{
         if(owner!==DOT_OWNER||!expectedHash)throw new Error("wrong_dot_edit");

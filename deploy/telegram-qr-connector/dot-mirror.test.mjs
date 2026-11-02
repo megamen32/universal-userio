@@ -1,7 +1,51 @@
 import './dot-test-policy.mjs';
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {DotRelay,ROOM,OWNER,textHash} from './dot-relay.mjs';import {DotMirror,sensitiveText,mirrorParts,mirrorSendOptions} from './dot-mirror.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {DotRelay,ROOM,OWNER,textHash} from './dot-relay.mjs';
+import {createHash} from 'node:crypto';
+import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';import {DotMirror,sensitiveText,mirrorParts,mirrorSendOptions,mirrorSourceHash} from './dot-mirror.mjs';
 const msg=(id,role,text)=>({id,role,text});
-function fixture(options={}){let rows=[msg('baseline','user','old history')],time=0,sends=[],edits=[],reads=0;const config={statePath:join(mkdtempSync(join(tmpdir(),'dot-mirror-')),'state.json'),botAccountId:'telegram:999999',agentId:'browser',tabId:18,browserCall:async()=>{reads++;return {ok:true,room:ROOM,cursor:rows.at(-1)?.id,messages:rows}},send:async(owner,text,replyTo=null)=>{sends.push(replyTo==null?{owner,text}:{owner,text,replyTo});if(options.sendError)throw Error('unknown');return options.numericReceipts?String(sends.length):'tg'+sends.length},edit:async(owner,receipt,text)=>{edits.push({owner,receipt,text});if(options.editError)throw Error('unknown')},wait:async()=>{}};let relay=new DotRelay(config),mirror=new DotMirror(relay,{now:()=>time,stableMs:10});return {get relay(){return relay},get mirror(){return mirror},rows:v=>{rows=v},advance:()=>{time+=11},sends,edits,reads:()=>reads,restart:()=>{relay=new DotRelay(config);mirror=new DotMirror(relay,{now:()=>time,stableMs:10})}};}
+function fixture(options={}){
+ let rows=[msg('baseline','user','old history')],time=0,sends=[],edits=[],mediaSends=[],reads=0;
+ class FakeCustomFile{constructor(name,size,path,buffer){Object.assign(this,{name,size,path,buffer});}}
+ const config={
+  statePath:join(mkdtempSync(join(tmpdir(),'dot-mirror-')),'state.json'),
+  botAccountId:'telegram:999999',agentId:'browser',tabId:18,
+  browserCall:async(action,args)=>{
+   reads++;
+   if(action==='dot_media_read'){
+    if(options.mediaReadError)throw Error('browser_image_unavailable');
+    return options.media||[];
+   }
+   return {ok:true,room:ROOM,cursor:rows.at(-1)?.id,messages:rows};
+  },
+  send:async(owner,text,replyTo=null)=>{
+   sends.push(replyTo==null?{owner,text}:{owner,text,replyTo});
+   if(options.sendError)throw Error('unknown');
+   return options.numericReceipts?String(sends.length):'tg'+sends.length;
+  },
+  sendMedia:async(owner,media,caption,replyTo,source)=>{
+   const optionsParams=dotTelegramMediaParams(media,caption,replyTo,FakeCustomFile);
+   mediaSends.push({owner,caption,replyTo,source,count:media.length,files:optionsParams.file,journalStatusAtCall:relay.state.outgoing['mirror:'+source.source_message_id+':media:0']?.status});
+   if(options.mediaSendError)throw Error('provider_unknown');
+   return dotTelegramMediaReceipts(media.map((_,i)=>({id:100+mediaSends.length*10+i})),media.length);
+  },
+  edit:async(owner,receipt,text)=>{
+   edits.push({owner,receipt,text});if(options.editError)throw Error('unknown');
+  },wait:async()=>{}
+ };
+ let relay=new DotRelay(config),mirror=new DotMirror(relay,{now:()=>time,stableMs:10});
+ return {get relay(){return relay},get mirror(){return mirror},rows:v=>{rows=v},
+  advance:()=>{time+=11},sends,mediaSends,edits,reads:()=>reads,
+  restart:()=>{relay=new DotRelay(config);mirror=new DotMirror(relay,{now:()=>time,stableMs:10})}};
+}
+const imageEntry=(index,seed=index)=>{
+ const bytes=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.alloc(512,seed)]);
+ const sha256=createHash('sha256').update(bytes).digest('hex');
+ return {filename:'dot-'+index+'-'+sha256.slice(0,16)+'.png',bytes,sha256,mime:'image/png'};
+};
+const withImages=(id,role,text,count=1)=>({...msg(id,role,text),
+ attachment_count:count,attachment_names:Array.from({length:count},(_,i)=>'photo'+i+'.png'),
+ attachment_fingerprints:Array.from({length:count},(_,i)=>createHash('sha256').update('source_'+i+'_'+id).digest('hex'))});
+
 async function settle(x){await x.mirror.tick();x.advance();return x.mirror.tick();}
 test('activation baseline skips all history, repeat does not send',async()=>{const x=fixture();assert.equal((await x.mirror.tick()).status,'baseline_initialized');await settle(x);assert.equal(x.sends.length,0)});
 test('both new authors labelled, restart and stable IDs prevent duplicates',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('u','user','hello'),msg('a','assistant','background result')]);await settle(x);assert.deepEqual(x.sends,[{owner:OWNER,text:'Test owner:\nhello'},{owner:OWNER,text:'dots:\nbackground result'}]);x.restart();await settle(x);assert.equal(x.sends.length,2)});
@@ -113,4 +157,129 @@ test('ambiguous native origin mapping is held rather than guessed',async()=>{
  await settle(x);
  assert.equal(x.sends.length,0);
  assert.equal(x.relay.state.mirror.held.reply.reason,'reply_target_unresolved');
+});
+
+test('photo-only dot message reaches one synthetic Telegram media operation, no replay after restart',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~photo1';
+ const x=fixture({media:[imageEntry(1)]});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant','')]);
+ assert.equal((await settle(x)).status,'updated');
+ assert.equal(x.sends.length,0);
+ assert.equal(x.mediaSends.length,1);
+ assert.equal(x.mediaSends[0].owner,OWNER);
+ assert.equal(x.mediaSends[0].source.source_message_id,id);
+ assert.equal(x.mediaSends[0].journalStatusAtCall,'send_uncertain');
+ assert.equal(x.mediaSends[0].count,1);
+ assert.match(x.mediaSends[0].caption,/изображение/);
+ assert.equal(x.relay.state.mirror.published[id].media_count,1);
+ assert.deepEqual(x.relay.state.mirror.published[id].media_sha256,[imageEntry(1).sha256]);
+ assert.deepEqual(x.relay.state.mirror.published[id].media_receipts,['110']);
+ assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'].status,'accepted');
+ x.restart();await settle(x);assert.equal(x.mediaSends.length,1);
+});
+test('dot image album and caption preserve original Telegram reply correlation',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~replyWithImages';
+ const x=fixture({media:[imageEntry(1),imageEntry(2)],numericReceipts:true});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),msg('first','assistant','initial')]);await settle(x);
+ x.rows([msg('baseline','user','old'),msg('first','assistant','initial'),{...withImages(id,'assistant','two images',2),reply_to:'first'}]);
+ await settle(x);
+ assert.equal(x.sends.length,1);
+ assert.equal(x.mediaSends.length,1);
+ assert.equal(x.mediaSends[0].replyTo,'1');
+ assert.equal(x.mediaSends[0].source.source_message_id,id);
+ assert.equal(x.mediaSends[0].count,2);
+ assert.equal(x.mediaSends[0].caption,'dots:\ntwo images');
+ assert.deepEqual(x.relay.state.mirror.published[id].media_receipts,['110','111']);
+ x.restart();await settle(x);assert.equal(x.mediaSends.length,1);
+});
+test('long caption is preserved in subsequent scoped text chunks, no silent truncation',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~largeCaption';
+ const txt='x'.repeat(5000);
+ const x=fixture({media:[imageEntry(1)],numericReceipts:true});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant',txt)]);
+ await settle(x);
+ assert.equal(x.mediaSends.length,1);
+ assert.equal(x.sends.length,2);
+ assert.match(x.mediaSends[0].caption,/изображение/);
+ assert.equal(x.sends.map(x=>x.text.slice(x.text.indexOf('\n')+1)).join(''),txt);
+ assert.equal(x.relay.state.mirror.published[id].receipts.length,3);
+});
+test('failed browser media read blocks BEFORE any durable send attempt, preserves cursor',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~noBrowserData';
+ const x=fixture({mediaReadError:true});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant','caption')]);
+ assert.equal((await settle(x)).status,'media_source_requires_review');
+ assert.equal(x.mediaSends.length,0);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.relay.state.mirror.cursor,'baseline');
+ assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'],undefined);
+});
+test('unknown provider photo send is journaled before call and never replayed',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~unknownPhoto';
+ const x=fixture({media:[imageEntry(1)],mediaSendError:true});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant','caption')]);
+ assert.equal((await settle(x)).status,'delivery_unknown');
+ assert.equal(x.mediaSends.length,1);
+ assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'].status,'send_uncertain');
+ x.restart();await x.mirror.tick();
+ assert.equal(x.mediaSends.length,1);
+});
+test('image fingerprint changes require restabilization before any send',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~changed';
+ const x=fixture({media:[imageEntry(1)]});
+ const first=withImages(id,'assistant','caption');
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),first]);
+ await x.mirror.tick();
+ x.advance();
+ const changed={...first,attachment_fingerprints:['a'.repeat(64)]};
+ x.rows([msg('baseline','user','old'),changed]);
+ await x.mirror.tick();
+ assert.equal(x.mediaSends.length,0);
+ x.advance();await x.mirror.tick();
+ assert.equal(x.mediaSends.length,1);
+});
+test('published photo edits require review, never edit an image or resend old data',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~editedPhoto';
+ const x=fixture({media:[imageEntry(1)]});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant','original')]);await settle(x);
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant','edited')]);await settle(x);
+ assert.equal(x.mediaSends.length,1);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.edits.length,0);
+ assert.equal(x.relay.state.mirror.held[id].reason,'media_edit_requires_review');
+});
+test('unverified media snapshot cannot pass as text-only output',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~noFingerprint';
+ const x=fixture({media:[imageEntry(1)]});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),{...msg(id,'assistant','caption'),attachment_count:1}]);
+ assert.equal((await x.mirror.tick()).status,'media_identity_requires_review');
+ assert.equal(x.sends.length,0);assert.equal(x.mediaSends.length,0);
+ assert.equal(x.relay.state.mirror.cursor,'baseline');
+});
+test('old text-only journals retain exact previous digest semantics',()=>{
+ assert.equal(mirrorSourceHash(msg('a','assistant','hello')),textHash('hello'));
+ assert.equal(mirrorSourceHash({...msg('a','assistant','hello'),attachment_count:0}),textHash('hello'));
+ assert.equal(mirrorSourceHash({...msg('a','assistant','hello'),attachment_count:1}),null);
+});
+
+test('corrupted image hash cannot create an uncertain provider send record',async()=>{
+ const id=ROOM+'~'+ROOM+'~CalpicoMessage~corrupt';
+ const damaged={...imageEntry(1),sha256:'f'.repeat(64)};
+ const x=fixture({media:[damaged]});
+ await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),withImages(id,'assistant','photo')]);
+ assert.equal((await settle(x)).status,'media_source_requires_review');
+ assert.equal(x.relay.state.mirror.blocked,'media_source_requires_review');
+ assert.equal(x.mediaSends.length,0);
+ assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'],undefined);
+ x.restart();assert.equal((await x.mirror.tick()).status,'media_source_requires_review');
+ assert.equal(x.mediaSends.length,0);
 });

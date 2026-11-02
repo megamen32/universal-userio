@@ -1,5 +1,6 @@
 import {DOT_POLICY,ROOM,requireDotPolicy} from './dot-policy.mjs';
 import {sendMediaThroughBrowser} from './dot-browser-media.mjs';
+import {readDotMediaThroughBrowser} from './dot-browser-egress.mjs';
 import {spawn} from 'node:child_process';
 import {pageAction} from './dot-browser-page.mjs';
 const URL=DOT_POLICY?.browserUrl||'';
@@ -45,6 +46,12 @@ export function discoverDotPage(output){
 export function createDotBrowserCaller(call=gatewayCall,now=()=>Date.now()){
  const pages=new Map();let lastDiscovery=-Infinity;
  return async(action,args)=>{
+  // Read-only media extraction is bound to a previously observed native
+  // source message; it never discovers a different page or starts a send.
+  if(action==='dot_media_read'){
+   const page=pages.get(args?.tab_id)||args?.tab_id;
+   return readDotMediaThroughBrowser(call,page,args,parseEvaluation,URL,ROOM);
+  }
   // Validate operation before any discovery. A send is NEVER retried.
   fixedEvaluation(action,args);
   const evaluate=async(page)=>parseEvaluation(await call('evaluate_script',fixedEvaluation(action,{...args,tab_id:page})));
