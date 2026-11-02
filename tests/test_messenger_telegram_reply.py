@@ -107,7 +107,7 @@ def test_telegram_reply_capability_approves_and_projects_exact_reply(tmp_path):
     store.close()
 
 
-def test_telegram_admin_proposals_are_exact_account_bound_and_deduplicated(tmp_path):
+def test_telegram_admin_create_is_exact_account_bound_and_deduplicated(tmp_path):
     store = SQLiteUserIOStore(tmp_path / "store.sqlite3")
     outbox = ReplyOutbox()
     service = UserIOService(store, object(), object(), telegram_outbox=outbox)
@@ -120,17 +120,23 @@ def test_telegram_admin_proposals_are_exact_account_bound_and_deduplicated(tmp_p
     args = {"account_ref": account, "operation": "channel_create",
             "payload": {"title": "Test private channel", "about": ""},
             "request_id": "telegram-admin-request-001"}
-    proposal = api.dispatch("userio.messenger.telegram_admin.propose", args, principal=principal)
-    assert proposal["ok"] is True, proposal
-    action = proposal["action"]
-    assert action["status"] == "proposed" and action["envelope"]["channel"] == "telegram"
-    assert action["envelope"]["payload"]["private"] is True
+    # Creation is immediate only through the dedicated create tool. Generic
+    # propose must not create channels or skip account validation.
+    wrong_route = api.dispatch("userio.messenger.telegram_admin.propose", args, principal=principal)
+    assert wrong_route == {"ok": False, "error": "use_telegram_admin_create"}
     assert outbox.admin_calls == []
-    approved = api.dispatch("userio.messenger.approve", {
+    created = api.dispatch("userio.messenger.telegram_admin.create", args, principal=principal)
+    assert created["ok"] is True, created
+    action = created["action"]
+    assert action["status"] == "accepted" and action["envelope"]["channel"] == "telegram"
+    assert action["envelope"]["payload"]["private"] is True
+    # Provider mutation is keyed by the durable action ID, not UI request text.
+    assert outbox.admin_calls == [action["id"]]
+    approved_again = api.dispatch("userio.messenger.approve", {
         "action_id": action["id"], "expected_hash": action["hash"], "confirm": True,
     }, principal=principal)
-    assert approved["ok"] and approved["action"]["status"] == "accepted"
-    again = api.dispatch("userio.messenger.telegram_admin.propose", args, principal=principal)
+    assert approved_again["ok"] and approved_again["action"]["status"] == "accepted"
+    again = api.dispatch("userio.messenger.telegram_admin.create", args, principal=principal)
     assert again["action"]["id"] == action["id"]
     assert len(outbox.admin_prepares)==1 and len(outbox.admin_calls)==1
     assert not api.dispatch("userio.messenger.telegram_admin.propose", {
@@ -154,6 +160,7 @@ def test_telegram_admin_proposals_are_exact_account_bound_and_deduplicated(tmp_p
     assert admin_caps["telegram_admin"]["allowed"]
     manifest={tool["name"] for tool in UserIOMcpSurface(store,service).tool_manifest(principal=admin_principal)["tools"]}
     assert "userio.messenger.telegram_admin.propose" in manifest
+    assert "userio.messenger.telegram_admin.create" in manifest
     assert "userio.messenger.propose" not in manifest
     assert "userio.messenger.approve" in manifest
     denied_reply=api.dispatch("userio.messenger.propose",{
@@ -164,7 +171,7 @@ def test_telegram_admin_proposals_are_exact_account_bound_and_deduplicated(tmp_p
     other_account="telegram:900000102"
     store.register_account(account_id=other_account,provider="telegram",display_name="Other",
         can_read=True,can_reply=True,credential_ref="telegram-qr:other")
-    assert api.dispatch("userio.messenger.telegram_admin.propose",{
+    assert api.dispatch("userio.messenger.telegram_admin.create",{
         **args,"account_ref":other_account,"request_id":"telegram-admin-other-001",
     },principal=admin_principal)["error"]=="chat_or_account_outside_token_scope"
     sender=tokens.create(store.default_user_id,"normal sender",scope="messenger_actions",account_refs=[account])
@@ -273,7 +280,12 @@ def test_scoped_token_reads_and_downloads_only_its_exact_telegram_chat(tmp_path,
     denied_write=api.dispatch("userio.channels.send_draft",{
         "chat_id":conversation_id,"text":"not permitted",
     },principal=principal)
-    assert denied_write["error"]=="chat_read_only_token"
+    # The scoped credential cannot invoke this legacy unscoped route at all.
+    # Generic fail-closed scope denial is correct before the chat is inspected.
+    assert denied_write["error"]=="scoped_messenger_only"
+    assert store._connection.execute(
+        "SELECT COUNT(*) FROM drafts WHERE user_id=?", (principal.user_id,)
+    ).fetchone()[0] == 0
     store.close()
 
 
@@ -286,15 +298,29 @@ def test_telegram_admin_recovers_a_lost_http_response_without_new_action(tmp_pat
         can_read=True,can_reply=True,credential_ref="telegram-qr:nikita")
     from universal_userio.mcp_surface import UserIOMcpSurface
     api=UserIOMcpSurface(store,service);principal=store.owner()
-    proposal=api.dispatch("userio.messenger.telegram_admin.propose",{
-        "account_ref":account,"operation":"channel_create",
+    create_args={"account_ref":account,"operation":"channel_create",
         "payload":{"title":"Recovery channel","about":""},
-        "request_id":"telegram-admin-recovery-001"},principal=principal)
-    action=proposal["action"]
-    approval={"action_id":action["id"],"expected_hash":action["hash"],"confirm":True}
-    assert not api.dispatch("userio.messenger.approve",approval,principal=principal)["ok"]
-    assert api.dispatch("userio.messenger.get",{"action_id":action["id"]},principal=principal)["action"]["status"]=="sending"
-    recovered=api.dispatch("userio.messenger.approve",approval,principal=principal)
+        "request_id":"telegram-admin-recovery-001"}
+    first=api.dispatch("userio.messenger.telegram_admin.create",create_args,principal=principal)
+    assert not first["ok"]
+    # The first provider mutation may have succeeded. Reuse the SAME durable
+    # request ID and action; never submit with a fresh ID after lost response.
+    row=store._connection.execute(
+        "SELECT id,status FROM messenger_actions WHERE user_id=? AND request_id=?",
+        (principal.user_id,create_args["request_id"]),
+    ).fetchone()
+    assert row is not None and row["status"]=="sending"
+    existing=api.dispatch("userio.messenger.get",{"action_id":row["id"]},principal=principal)
+    assert existing["action"]["status"]=="sending"
+    recovered=api.dispatch("userio.messenger.telegram_admin.create",create_args,principal=principal)
     assert recovered["ok"] and recovered["action"]["status"]=="accepted"
+    assert recovered["action"]["id"]==row["id"]
     assert len(outbox.admin_calls)==2 and len(set(outbox.admin_calls))==1
+    repeated=api.dispatch("userio.messenger.telegram_admin.create",create_args,principal=principal)
+    assert repeated["action"]["id"]==row["id"]
+    assert len(outbox.admin_calls)==2
+    assert store._connection.execute(
+        "SELECT COUNT(*) FROM messenger_actions WHERE user_id=? AND request_id=?",
+        (principal.user_id,create_args["request_id"]),
+    ).fetchone()[0]==1
     store.close()
