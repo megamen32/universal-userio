@@ -282,8 +282,14 @@ class QuestionCoordination:
             now = self.clock()
             if row and row["state"] in {"completed", "paused", "handoff", "transferring"}:
                 raise Busy("question_unavailable")
-            if row and row["delivery_state"] != "none":
+            if row and row["delivery_state"] in {"in_flight", "unknown"}:
                 raise Busy("delivery_receipt_must_be_reconciled")
+            if row and row["delivery_state"] in {"sent", "failed"} and (
+                not row["receipt_ref"] or not row["result_ref"]
+            ):
+                raise Busy("terminal_delivery_receipt_incomplete")
+            # A settled original operation can be adopted for completion only;
+            # reserve_delivery still rejects every second send on this question.
             if row and row["state"] == "active" and row["lease_expires_at"] > now:
                 raise Busy("already_claimed")
             epoch = (row["epoch"] + 1) if row else 1
@@ -537,6 +543,74 @@ class QuestionCoordination:
             self._record(src, request_id, digest, result)
             return result
 
+    def begin_original_send(self, context, event_seq, revision, token, epoch,
+                            dispatch_id, delivery_request_id):
+        """Atomically fence and start one *existing* approved Messenger action.
+
+        No new queue or outgoing operation is created. Unknown is committed
+        before the caller may enter the existing provider transport.
+        """
+        with self._tx():
+            actor, src = self._scope(context, event_seq, revision)
+            digest, duplicate = self._seen(src, dispatch_id,
+                ["begin_original_send", epoch, revision, delivery_request_id])
+            if duplicate is not None:
+                return duplicate
+            row = self._existing(src)
+            self._assert_owner(row, actor, token, epoch)
+            if not row["result_ref"]:
+                raise Rejected("result_must_be_saved")
+            if row["delivery_state"] != "none":
+                raise Busy("original_delivery_must_be_reconciled")
+            if not self.delivery_authorized(actor, src, delivery_request_id):
+                raise AccessDenied("current_delivery_authorization_required")
+            self.journal_reserve(self.db, src, delivery_request_id)
+            self.db.execute("""
+                UPDATE question_coordination SET delivery_request_id=?,
+                  delivery_state='unknown',updated_at=? WHERE question_id=?
+            """, (delivery_request_id, self.clock(), src["question_id"]))
+            self._audit(src, actor, "delivery_unknown", actor.holder, actor.holder,
+                        epoch, dispatch_id, reason="original_provider_send_started",
+                        result_ref=row["result_ref"])
+            result = dict(question_id=src["question_id"], state="unknown",
+                          delivery_request_id=delivery_request_id,
+                          holder=actor.holder, epoch=epoch)
+            self._record(src, dispatch_id, digest, result)
+            return result
+
+    def mark_send_started(self, context, event_seq, revision, token, epoch, request_id):
+        """Server-only effect-start fence before Messenger's provider call.
+
+        This irrevocable UNKNOWN marker precedes provider IO and is never
+        presented as a retry permit. Same request_id cannot start twice.
+        """
+        with self._tx():
+            actor, src = self._scope(context, event_seq, revision)
+            digest, duplicate = self._seen(src, request_id,
+                                           ["provider_start", epoch, revision])
+            if duplicate is not None:
+                return duplicate
+            row = self._existing(src)
+            self._assert_owner(row, actor, token, epoch)
+            if (row["delivery_state"] != "in_flight" or
+                    not row["delivery_request_id"]):
+                raise Rejected("original_outgoing_not_reserved")
+            if not self.delivery_authorized(actor, src, row["delivery_request_id"]):
+                raise AccessDenied("current_delivery_authorization_required")
+            self.db.execute("""
+                UPDATE question_coordination SET delivery_state='unknown',updated_at=?
+                WHERE question_id=?
+            """, (self.clock(), src["question_id"]))
+            self._audit(src, actor, "delivery_unknown", actor.holder,
+                        actor.holder, epoch, request_id,
+                        reason="original_provider_send_started",
+                        result_ref=row["result_ref"])
+            result = dict(question_id=src["question_id"],
+                          state="unknown", holder=actor.holder, epoch=epoch,
+                          delivery_request_id=row["delivery_request_id"])
+            self._record(src, request_id, digest, result)
+            return result
+
     def send_fenced(self, context, event_seq, revision, token, epoch, dispatch_id, transport):
         """Only the trusted server's EXISTING UserIO transport may invoke this.
 
@@ -637,7 +711,8 @@ def _with_rejection_audit(method):
 
 for _method in (
     "acquire", "renew", "pause", "handoff", "resume", "result_saved",
-    "reserve_delivery", "send_fenced", "reconcile_delivery", "complete",
+    "reserve_delivery", "begin_original_send", "mark_send_started", "send_fenced",
+    "reconcile_delivery", "complete",
 ):
     setattr(QuestionCoordination, _method,
             _with_rejection_audit(getattr(QuestionCoordination, _method)))

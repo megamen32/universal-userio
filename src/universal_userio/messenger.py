@@ -769,13 +769,13 @@ class Messenger:
         return {'id':row['id'],'hash':row['hash'],'status':row['status'], 'created_at':row['created_at'],
                 'envelope':e,'receipt':json.loads(row['receipt']) if row['receipt'] else None}
 
-    def approve(self, action_id, expected_hash, confirm):
+    def approve(self, action_id, expected_hash, confirm, question=None):
         if confirm is not True: raise ValueError('exact_confirmation_required')
         action = self.get(action_id)
         if expected_hash != action['hash']: raise ValueError('action_snapshot_conflict')
-        return self._execute_action(action)
+        return self._execute_action(action, question_proof=question)
 
-    def _execute_action(self, action):
+    def _execute_action(self, action, question_proof=None):
         action_id = action['id']; e = action['envelope']
         if e.get('action')=='telegram_admin':
             if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:
@@ -823,6 +823,15 @@ class Messenger:
         provider = self._provider(e['account_ref'])
         if provider is None or getattr(provider,'account_ref',None)!=e['account_ref']:
             raise ValueError('provider_account_conflict')
+        question_runtime = getattr(self.service, 'question_runtime', None)
+        question_receipt_context = None
+        if e['action'] == 'reply' and question_runtime is not None:
+            # The exact immutable Messenger approval has already passed.
+            # Begin the existing provider send only after durable lease fence.
+            question_receipt_context = question_runtime.before_existing_messenger_send(
+                self.principal, e, question_proof)
+        elif question_proof is not None:
+            raise ValueError('question_proof_not_supported_for_action')
         with self.store._lock, self.store._connection:
             # Lock the writer before reading source/claiming: a concurrent
             # source update cannot slip between the snapshot and the claim.
@@ -864,7 +873,18 @@ class Messenger:
                 pass
         # Other failures keep the durable sending state. Never infer rejection
         # from a timeout or retry a mutation that could have reached a provider.
-        return self.get(action_id)
+        outcome = self.get(action_id)
+        if question_receipt_context is not None:
+            try:
+                q = question_runtime.after_existing_messenger_receipt(
+                    self.principal, question_receipt_context)
+                outcome['question_reconciliation'] = {
+                    'state': q['delivery_state'], 'receipt_ref': q.get('receipt_ref')}
+            except (PermissionError, ValueError, KeyError):
+                # Provider acceptance is already durable. The existing exact
+                # receipt can be reconciled later, never replayed.
+                outcome['question_reconciliation'] = {'state': 'requires_review'}
+        return outcome
 
 
 def dispatch(store, service, principal, name, arguments):

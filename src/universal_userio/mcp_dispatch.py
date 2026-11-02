@@ -54,6 +54,22 @@ class UserIOToolDispatcher:
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
+        if name.startswith("userio.messenger.question."):
+            if (principal.read_only or principal.meeting_recorder
+                    or (principal.messenger_grants is not None
+                        and not any(g.get("access") == "read_write"
+                                    for g in principal.messenger_grants))):
+                return {"ok": False, "error": "question_scope_denied"}
+            if not self._store.capability_enabled("send", user_id=principal.user_id):
+                return {"ok": False, "error": "send_capability_disabled"}
+            runtime = getattr(self._service, "question_runtime", None)
+            if runtime is None:
+                return {"ok": False, "error": "question_runtime_unavailable"}
+            try:
+                return {"ok": True, "question": runtime.dispatch(
+                    principal, name.removeprefix("userio.messenger.question."), arguments)}
+            except (PermissionError, ValueError, KeyError) as error:
+                return {"ok": False, "error": str(error).strip("'")}
         if principal.messenger_grants is not None:
             from .scoped_permissions import enforce, dispatch_scoped
             try:

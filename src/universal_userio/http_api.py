@@ -136,6 +136,13 @@ def handler(
     trusted_proxy_token: str = "", runtime_identity: Mapping[str, object] | None = None,
     login_service: LoginCodeService | None = None,
 ) -> Type[BaseHTTPRequestHandler]:
+    from .question_runtime import QuestionRuntime
+    service.question_runtime = (
+        QuestionRuntime(
+            service._store,
+            key=hashlib.sha256(("userio-question-lease:" + token).encode()).digest(),
+        ) if token else None
+    )
     surface = UserIOMcpSurface(service._store, service)
     oauth = OAuthProvider(service._store)
     personal_tokens = PersonalTokens(service._store)
@@ -380,6 +387,29 @@ def handler(
                 self._reply(403, {"error": "origin_not_allowed"})
                 return
             restricted = self._principal()
+            if path == "/v1/questions/operation":
+                # The existing service token plus saved dot account binding
+                # identifies the dot holder. No send API or new credentials.
+                if restricted is None or not restricted.service_account:
+                    self._reply(403, {"error": "bound_service_principal_required"})
+                    return
+                payload = self._json()
+                if not isinstance(payload, dict) or set(payload) != {"operation", "arguments"}:
+                    self._reply(400, {"error": "exact_question_operation_required"})
+                    return
+                runtime = getattr(service, "question_runtime", None)
+                if runtime is None:
+                    self._reply(503, {"error": "question_runtime_unavailable"})
+                    return
+                try:
+                    outcome = runtime.dispatch(
+                        restricted, payload["operation"], payload["arguments"])
+                except (PermissionError, ValueError, KeyError) as error:
+                    self._reply(409, {"error": str(error).strip("'")})
+                    return
+                self._reply(200, {"ok": True, "question": outcome},
+                            {"Cache-Control": "no-store"})
+                return
             if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
                 self._reply(403, {'error': 'meeting_recording_scope_only'})
                 return

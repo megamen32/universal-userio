@@ -3158,6 +3158,20 @@ class SQLiteUserIOStore:
                 return draft
             if draft.status != "proposed":
                 raise ValueError("draft is not approvable")
+            # An exact question-level claim owns this original incoming
+            # message. The legacy draft route must not bypass the server send
+            # fence, but neighboring messages in the same chat stay usable.
+            if self._table_exists("question_coordination"):
+                coordinated = self._connection.execute("""
+                    SELECT 1 FROM draft_reply_origins o
+                    JOIN question_coordination q
+                      ON q.user_id=o.user_id AND q.account_ref=o.account_ref
+                     AND q.conversation_id=o.conversation_id
+                     AND q.message_id=o.message_key AND q.tenant='userio'
+                    WHERE o.user_id=? AND o.draft_id=? LIMIT 1
+                """, (user_id, draft_id)).fetchone()
+                if coordinated is not None:
+                    raise PermissionError("question_requires_original_fenced_messenger_action")
             self._connection.execute(
                 "UPDATE drafts SET status='sending',sending_at=?,delivery_state='claimed',"
                 "delivery_attempt_generation=delivery_attempt_generation+1,delivery_attempts=0,"
