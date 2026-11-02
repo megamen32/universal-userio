@@ -464,7 +464,14 @@ MESSENGER_SPECS = (
         schema({'action_id':{'type':'string'}}, ['action_id'])),
     ToolSpec('userio.messenger.approve',
         'Execute only this explicitly approved immutable operation. Bind approval to its exact hash; no automatic model approval.',
-        schema({'action_id':{'type':'string'}, 'expected_hash':{'type':'string'}, 'confirm':{'type':'boolean'}},
+        schema({'action_id':{'type':'string'}, 'expected_hash':{'type':'string'}, 'confirm':{'type':'boolean'},
+                'question':{'type':'object','properties':{
+                    'event_seq':{'type':'integer','minimum':1},
+                    'revision':{'type':'string','maxLength':128},
+                    'epoch':{'type':'integer','minimum':1},
+                    'lease_token':{'type':'string','minLength':1,'maxLength':256}},
+                    'required':['event_seq','revision','epoch','lease_token'],
+                    'additionalProperties':False}},
                ['action_id','expected_hash','confirm'])),
 )
 TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS)
@@ -625,3 +632,45 @@ TOOL_CAPABILITIES = {
     "userio.accounts.list": "read",
     "userio.ai.propose": "send",
 }
+
+
+# Addressed question coordination reuses native UserIO account and send grants.
+_QUESTION_FIELDS = {
+    "event_seq": {"type": "integer", "minimum": 1},
+    "revision": {"type": "string", "maxLength": 128},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "lease_token": {"type": "string", "minLength": 1, "maxLength": 256},
+    "epoch": {"type": "integer", "minimum": 1},
+    "ttl": {"type": "integer", "minimum": 30, "maximum": 900},
+    "pending_question": {"type": "string", "maxLength": 256},
+    "card_id": {"type": "string", "maxLength": 256},
+    "target_holder": {"type": "string", "enum": ["dot", "manager"]},
+    "result_ref": {"type": "string", "maxLength": 256},
+}
+QUESTION_REQUIRED = {
+    "acquire": ("event_seq", "revision", "request_id"),
+    "renew": ("event_seq", "revision", "lease_token", "epoch", "request_id"),
+    "pause": ("event_seq", "revision", "request_id"),
+    "handoff": ("event_seq", "revision", "request_id", "target_holder"),
+    "resume": ("event_seq", "revision", "request_id"),
+    "result_saved": ("event_seq", "revision", "lease_token", "epoch",
+                     "request_id", "result_ref"),
+    "reconcile": ("event_seq", "revision", "request_id"),
+    "complete": ("event_seq", "revision", "lease_token", "epoch", "request_id"),
+    "audit": ("event_seq",),
+}
+QUESTION_OPTIONAL = {
+    "acquire": ("ttl", "pending_question", "card_id"),
+    "renew": ("ttl",), "resume": ("ttl",),
+}
+QUESTION_TOOL_SPECS = tuple(
+    ToolSpec("userio.messenger.question." + operation,
+             "Authenticated question lease and original UserIO outgoing "
+             "receipt operation; does not grant send authority.",
+             schema({k: _QUESTION_FIELDS[k]
+                     for k in required + QUESTION_OPTIONAL.get(operation, ())},
+                    list(required)))
+    for operation, required in QUESTION_REQUIRED.items()
+)
+TOOL_SPECS = (*TOOL_SPECS, *QUESTION_TOOL_SPECS)
+TOOL_CAPABILITIES.update({spec.name: "send" for spec in QUESTION_TOOL_SPECS})
