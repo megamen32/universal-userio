@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping
 
 from . import chatgpt_sessions
+from .chatgpt_request_trace import CHATGPT_REQUEST_TRACE, classify_endpoint, retry_after_seconds
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 from .contracts import ChannelFile, ContactResolutionUnavailable, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
@@ -1658,19 +1659,29 @@ class ChatGPTCDPMcpClient:
         self._lock = threading.Lock()
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            self._start()
-            result = self._request("tools/call", {"name": name, "arguments": dict(arguments)})
-        content = result.get("content")
-        if not isinstance(content, list) or not content or not isinstance(content[0], Mapping):
-            raise RuntimeError("chatgpt-cdp-mcp returned an invalid tool result")
-        text = content[0].get("text")
-        if not isinstance(text, str):
-            raise RuntimeError("chatgpt-cdp-mcp returned a non-text tool result")
-        value = json.loads(text)
-        if not isinstance(value, dict):
-            raise RuntimeError("chatgpt-cdp-mcp returned a non-object tool result")
-        return value
+        started = time.perf_counter()
+        try:
+            with self._lock:
+                self._start()
+                result = self._request("tools/call", {"name": name, "arguments": dict(arguments)})
+            content = result.get("content")
+            if not isinstance(content, list) or not content or not isinstance(content[0], Mapping):
+                raise RuntimeError("chatgpt-cdp-mcp returned an invalid tool result")
+            text = content[0].get("text")
+            if not isinstance(text, str):
+                raise RuntimeError("chatgpt-cdp-mcp returned a non-text tool result")
+            value = json.loads(text)
+            if not isinstance(value, dict):
+                raise RuntimeError("chatgpt-cdp-mcp returned a non-object tool result")
+            return value
+        finally:
+            try:
+                CHATGPT_REQUEST_TRACE.record(
+                    initiator="userio_cdp", executor="cdp_sidecar", kind="delegated",
+                    operation=name if name in {"list_chats", "export_chat", "send_message"} else "other",
+                    endpoint="cdp_sidecar", latency_ms=(time.perf_counter()-started)*1000)
+            except Exception:
+                pass  # A failed observer must not change the MCP delivery receipt.
 
     def _start(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -2057,15 +2068,34 @@ def _chatgpt_raw(
         headers["Accept"] = "text/event-stream"
     response = None
     last_error: Exception | None = None
-    for _ in range(3):  # chatgpt.com occasionally closes connections mid-transfer
+    operation, endpoint = classify_endpoint(url, method="POST" if json_body is not None else "GET")
+    for attempt in range(3):  # Each physical attempt gets one upstream record.
         client = _chatgpt_client(user, slug)
+        started = time.perf_counter()
         try:
             response = client.post(url, headers=headers, json=json_body) if json_body is not None \
                 else client.get(url, headers=headers)
-            break
         except Exception as error:  # curl_cffi raises its own hierarchy
             last_error = error
+            try:
+                CHATGPT_REQUEST_TRACE.record(
+                    initiator="userio_web", executor="curl_cffi", kind="upstream_http",
+                    operation=operation, endpoint=endpoint, latency_ms=(time.perf_counter()-started)*1000,
+                    retry_attempt=attempt, backoff_ms=1000 if attempt < 2 else 0)
+            except Exception:
+                pass  # Telemetry must never change delivery outcomes.
             time.sleep(1)
+            continue
+        try:
+            retry_header = getattr(getattr(response, "headers", None), "get", lambda _key: None)("Retry-After")
+            CHATGPT_REQUEST_TRACE.record(
+                initiator="userio_web", executor="curl_cffi", kind="upstream_http",
+                operation=operation, endpoint=endpoint, status=int(response.status_code),
+                latency_ms=(time.perf_counter()-started)*1000,
+                retry_attempt=attempt, retry_after_s=retry_after_seconds(retry_header))
+        except Exception:
+            pass  # Only local metadata; no body/headers/URLs ever logged.
+        break
     if response is None:
         raise RuntimeError(f"ChatGPT transport failed: {last_error}")
     if response.status_code in (401, 403):
