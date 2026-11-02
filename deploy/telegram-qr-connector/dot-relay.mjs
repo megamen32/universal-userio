@@ -12,9 +12,9 @@ export function canonicalPrivateSender(message,peerId){
  return explicit==null ? OWNER : String(explicit);
 }
 export class DotRelay {
- constructor({statePath,botAccountId,agentId,tabId,browserCall,send,sendMedia,edit,wait=ms=>new Promise(r=>setTimeout(r,ms))}){
+ constructor({statePath,botAccountId,agentId,tabId,browserCall,send,sendMedia,questionApproval,edit,wait=ms=>new Promise(r=>setTimeout(r,ms))}){
   if(!DOT_POLICY||!/^telegram:\d+$/.test(botAccountId)||RESERVED_ACCOUNTS.includes(botAccountId)||!agentId||!Number.isInteger(tabId))throw Error('invalid_dot_binding');
-  Object.assign(this,{statePath,botAccountId,agentId,tabId,browserCall,send,sendMedia,edit,wait});
+  Object.assign(this,{statePath,botAccountId,agentId,tabId,browserCall,send,sendMedia,questionApproval,edit,wait});
   const binding={botAccountId,agentId,tabId,room:ROOM,owner:OWNER};
   this.state=existsSync(statePath)?JSON.parse(readFileSync(statePath,'utf8')):{binding,incoming:{},outgoing:{}};
   if(JSON.stringify(this.state.binding)!==JSON.stringify(binding))throw Error('binding_changed_requires_review');

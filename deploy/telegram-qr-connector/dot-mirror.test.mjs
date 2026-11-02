@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';import {DotMirror,sensitiveText,mirrorParts,mirrorSendOptions,mirrorSourceHash} from './dot-mirror.mjs';
 const msg=(id,role,text)=>({id,role,text});
 function fixture(options={}){
- let rows=[msg('baseline','user','old history')],time=0,sends=[],edits=[],mediaSends=[],reads=0;
+ let rows=[msg('baseline','user','old history')],time=0,sends=[],edits=[],mediaSends=[],questionApprovals=[],reads=0;
  class FakeCustomFile{constructor(name,size,path,buffer){Object.assign(this,{name,size,path,buffer});}}
  const config={
   statePath:join(mkdtempSync(join(tmpdir(),'dot-mirror-')),'state.json'),
@@ -28,13 +28,30 @@ function fixture(options={}){
    if(options.mediaSendError)throw Error('provider_unknown');
    return dotTelegramMediaReceipts(media.map((_,i)=>({id:100+mediaSends.length*10+i})),media.length);
   },
+  ...(options.withQuestionApproval?{questionApproval:async({source,dot_source_id,body,original_reply_receipt})=>{
+   questionApprovals.push({source,dot_source_id,body,original_reply_receipt,
+    journalStatusAtCall:relay.state.outgoing['mirror:'+dot_source_id+':0']?.status});
+   if(options.questionApprovalError)throw Error('backend_original_provider_unknown');
+   const action_id='action_'+'a'.repeat(64);
+   return options.questionResponse||{
+    status:'accepted',question_delivery_state:'sent',
+    account_ref:source.account_ref,peer_id:source.peer_id,
+    source_provider_message_id:source.source_provider_message_id,
+    source_message_id:source.account_ref+'|'+source.peer_id+':'+source.source_provider_message_id,
+    conversation_id:'conv_verified',
+    event_seq:42,revision:'0',epoch:1,
+    action_id,request_id:'original_request_0001',
+    receipt_ref:'messenger:'+action_id,
+    provider_message_id:'201',message_sha256:textHash(body),
+   };
+  }}:{}),
   edit:async(owner,receipt,text)=>{
    edits.push({owner,receipt,text});if(options.editError)throw Error('unknown');
   },wait:async()=>{}
  };
  let relay=new DotRelay(config),mirror=new DotMirror(relay,{now:()=>time,stableMs:10});
  return {get relay(){return relay},get mirror(){return mirror},rows:v=>{rows=v},
-  advance:()=>{time+=11},sends,mediaSends,edits,reads:()=>reads,
+  advance:()=>{time+=11},sends,mediaSends,questionApprovals,edits,reads:()=>reads,
   restart:()=>{relay=new DotRelay(config);mirror=new DotMirror(relay,{now:()=>time,stableMs:10})}};
 }
 const imageEntry=(index,seed=index)=>{
@@ -49,7 +66,13 @@ const withImages=(id,role,text,count=1)=>({...msg(id,role,text),
 async function settle(x){await x.mirror.tick();x.advance();return x.mirror.tick();}
 test('activation baseline skips all history, repeat does not send',async()=>{const x=fixture();assert.equal((await x.mirror.tick()).status,'baseline_initialized');await settle(x);assert.equal(x.sends.length,0)});
 test('both new authors labelled, restart and stable IDs prevent duplicates',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('u','user','hello'),msg('a','assistant','background result')]);await settle(x);assert.deepEqual(x.sends,[{owner:OWNER,text:'Test owner:\nhello'},{owner:OWNER,text:'dots:\nbackground result'}]);x.restart();await settle(x);assert.equal(x.sends.length,2)});
-test('Telegram-origin echo suppressed but assistant still mirrored',async()=>{const x=fixture();await x.mirror.tick();x.relay.state.incoming['telegram:999999:111111111:1']={source:'telegram',status:'accepted',echo:'echo'};x.rows([msg('baseline','user','old'),msg('echo','user','from TG'),msg('a','assistant','answer')]);await settle(x);assert.deepEqual(x.sends.map(s=>s.text),['dots:\nanswer'])});
+test('unverified incoming Telegram echo holds assistant instead of bypassing backend claim',async()=>{
+ const x=fixture();await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':1']={source:'telegram',status:'accepted',echo:'echo'};
+ x.rows([msg('baseline','user','old'),msg('echo','user','from TG'),msg('a','assistant','answer')]);
+ assert.equal((await settle(x)).status,'question_origin_requires_review');
+ assert.deepEqual(x.sends,[]);assert.equal(x.relay.state.mirror.cursor,'echo');
+});
 test('uncertain incoming origin pauses instead of echo duplication',async()=>{const x=fixture();await x.mirror.tick();x.relay.state.incoming['telegram:999999:111111111:1']={source:'telegram',status:'send_uncertain',text_hash:textHash('from TG')};x.rows([msg('baseline','user','old'),msg('echo','user','from TG')]);assert.equal((await settle(x)).status,'incoming_origin_uncertain');assert.equal(x.sends.length,0)});
 test('secret patterns and explicit credential labels held with no raw excerpts',async()=>{for(const text of ['123456789:'+ 'A'.repeat(35),'sk-'+ 'A'.repeat(30),'Authorization: Bearer abcdefghijklmnop','-----BEGIN RSA PRIVATE KEY-----','password: hunter2','токен: hidden','Пароль передан через SSS'])assert.equal(sensitiveText(text),true);const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('secret','assistant','password: hunter2'),msg('safe','assistant','ready')]);await settle(x);assert.deepEqual(x.sends.map(s=>s.text),['dots:\nready']);assert.equal(x.relay.state.mirror.held.secret.reason,'sensitive_content');assert.equal(JSON.stringify(x.relay.state).includes('hunter2'),false)});
 test('long text chunks without truncation and bounded oversize held',async()=>{const text='a'.repeat(7000);const parts=mirrorParts(msg('a','assistant',text));assert.equal(parts.length,3);assert.equal(parts.map(p=>p.slice(p.indexOf('\n')+1)).join(''),text);assert.throws(()=>mirrorParts(msg('x','user','a'.repeat(40000))));const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('large','assistant','a'.repeat(40000))]);await settle(x);assert.equal(x.sends.length,0);assert.equal(x.relay.state.mirror.held.large.reason,'oversize_requires_review')});
@@ -98,13 +121,15 @@ test('dot reply uses original Telegram receipt for a previously mirrored message
  assert.equal(x.relay.state.mirror.published.reply.reply_receipt,'1');
  x.restart();await settle(x);assert.equal(x.sends.length,2);
 });
-test('dot assistant replying to an accepted Telegram echo uses original owner message ID',async()=>{
+test('dot reply to Telegram echo waits for original Messenger approval, never direct send',async()=>{
  const x=fixture({numericReceipts:true});await x.mirror.tick();
  x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
   source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
  x.rows([msg('baseline','user','old'),msg('echo','user','tg inbound'),{...msg('assistant-reply','assistant','response'),reply_to:'echo'}]);
- await settle(x);
- assert.deepEqual(x.sends,[{owner:OWNER,text:'dots:\nresponse',replyTo:'42'}]);
+ assert.equal((await settle(x)).status,'question_original_approval_not_wired');
+ assert.deepEqual(x.sends,[]);assert.deepEqual(x.mediaSends,[]);
+ assert.equal(x.relay.state.mirror.cursor,'echo');
+ assert.equal(x.relay.state.outgoing['mirror:assistant-reply:0'],undefined);
 });
 test('unverified dot reply target is held and cannot fall back to a silent plain message',async()=>{
  const x=fixture();await x.mirror.tick();
@@ -282,4 +307,113 @@ test('corrupted image hash cannot create an uncertain provider send record',asyn
  assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'],undefined);
  x.restart();assert.equal((await x.mirror.tick()).status,'media_source_requires_review');
  assert.equal(x.mediaSends.length,0);
+});
+
+test('approved question reply delegates to original Messenger action without any direct Telegram send',async()=>{
+ const x=fixture({withQuestionApproval:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  msg('answer','assistant','response')]);
+ assert.equal((await settle(x)).status,'updated');
+ assert.equal(x.questionApprovals.length,1);
+ const call=x.questionApprovals[0];
+ assert.equal(call.source.account_ref,'telegram:999999');
+ assert.equal(call.source.peer_id,OWNER);
+ assert.equal(call.source.source_provider_message_id,'42');
+ assert.equal(Object.hasOwn(call.source,'source_message_id'),false);
+ assert.equal(call.body,'dots:\nresponse');
+ assert.equal(call.journalStatusAtCall,'send_uncertain');
+ assert.equal(x.sends.length,0);
+ assert.equal(x.mediaSends.length,0);
+ assert.equal(x.edits.length,0);
+ const accepted=x.relay.state.outgoing['mirror:answer:0'];
+ assert.equal(accepted.kind,'original_question');
+ assert.equal(accepted.status,'accepted');
+ assert.equal(accepted.source_provider_message_id,'42');
+ assert.equal(accepted.source_message_id,'telegram:999999|'+OWNER+':42');
+ assert.equal(accepted.receipt_ref,'messenger:action_'+'a'.repeat(64));
+ assert.equal(accepted.receipt,'201');
+ assert.equal(x.relay.state.mirror.cursor,'answer');
+ assert.equal(x.relay.state.mirror.published.answer.question_receipt_ref,accepted.receipt_ref);
+ x.restart();await settle(x);
+ assert.equal(x.questionApprovals.length,1);
+});
+test('backend original Messenger approval uncertainty remains blocked after restart',async()=>{
+ const x=fixture({withQuestionApproval:true,questionApprovalError:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),msg('answer','assistant','answer')]);
+ assert.equal((await settle(x)).status,'question_original_delivery_unknown');
+ assert.equal(x.relay.state.outgoing['mirror:answer:0'].status,'send_uncertain');
+ assert.equal(x.questionApprovals.length,1);
+ assert.equal(x.sends.length,0);
+ x.restart();
+ assert.equal((await x.mirror.tick()).status,'question_original_delivery_unknown');
+ assert.equal(x.questionApprovals.length,1);
+ assert.equal(x.relay.state.mirror.cursor,'echo');
+});
+test('forged provider receipt fails closed and cannot trigger fallback direct send',async()=>{
+ const x=fixture({withQuestionApproval:true,questionResponse:{
+  status:'accepted',question_delivery_state:'sent',source_message_id:'fake',provider_message_id:'201'
+ }});
+ await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),msg('answer','assistant','reply')]);
+ assert.equal((await settle(x)).status,'question_original_delivery_unknown');
+ assert.equal(x.sends.length,0);
+ assert.equal(x.mediaSends.length,0);
+ assert.equal(x.relay.state.outgoing['mirror:answer:0'].status,'send_uncertain');
+});
+test('question image never uses direct Telegram sendFile without original backend fence',async()=>{
+ const x=fixture({withQuestionApproval:true,media:[imageEntry(1)]});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  withImages('image-answer','assistant','picture')]);
+ assert.equal((await settle(x)).status,'question_media_original_fence_missing');
+ assert.equal(x.questionApprovals.length,0);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.mediaSends.length,0);
+ assert.equal(x.relay.state.outgoing['mirror:image-answer:media:0'],undefined);
+ assert.equal(x.relay.state.mirror.cursor,'echo');
+});
+test('multipart question reply requires exactly one existing original action',async()=>{
+ const x=fixture({withQuestionApproval:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  msg('long-answer','assistant','a'.repeat(7100))]);
+ assert.equal((await settle(x)).status,'question_multipart_original_fence_missing');
+ assert.equal(x.questionApprovals.length,0);
+ assert.equal(x.sends.length,0);
+});
+test('question source chain cannot cause a second approved send',async()=>{
+ const x=fixture({withQuestionApproval:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  msg('answer','assistant','first')]);
+ await settle(x);
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  msg('answer','assistant','first'),{...msg('followup','assistant','second'),reply_to:'answer'}]);
+ assert.equal((await settle(x)).status,'question_origin_requires_review');
+ assert.equal(x.questionApprovals.length,1);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.relay.state.mirror.cursor,'answer');
+});
+test('edit of approved Messenger question never invokes direct Telegram edit',async()=>{
+ const x=fixture({withQuestionApproval:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  msg('answer','assistant','first')]);
+ await settle(x);
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg question'),
+  msg('answer','assistant','modified')]);
+ await settle(x);
+ assert.equal(x.questionApprovals.length,1);
+ assert.equal(x.edits.length,0);
+ assert.equal(x.relay.state.mirror.held.answer.reason,'question_edit_requires_original_approval');
 });
