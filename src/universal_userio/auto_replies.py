@@ -59,6 +59,22 @@ class AutoReplyRules:
                 )
             """)
 
+    def chatgpt_live_ready(self) -> bool:
+        """True only after a trusted ChatGPT ingress adapter is actually registered.
+
+        The current ChatGPT web adapter reads conversations but does not ingest
+        verified ordinary/approval event types. No UI setting can enable it.
+        This internal capability must never be set from a user-supplied envelope.
+        """
+        return getattr(self.service, "_verified_chatgpt_inbound_ready", False) is True
+
+    def capabilities(self) -> dict[str, bool]:
+        return {"chatgpt_live": self.chatgpt_live_ready()}
+
+    def _require_live_chatgpt_if_enabled(self, chat: dict[str, str], enabled: bool) -> None:
+        if chat["source"].startswith("chatgpt") and enabled and not self.chatgpt_live_ready():
+            raise AutoReplyError("chatgpt_verified_ingress_unavailable")
+
     def _conversation(self, user_id: str, conversation_id: str,
                       *, chatgpt_opt_in: bool = False) -> dict[str, str]:
         if not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 128:
@@ -157,7 +173,8 @@ class AutoReplyRules:
     def create(self, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         fields = self._fields(payload)
         chat = self._conversation(user_id, payload.get("conversation_id"),
-                                  chatgpt_opt_in=fields["chatgpt_opt_in"])
+                                  chatgpt_opt_in=fields["chatgpt_opt_in"] or not fields["enabled"])
+        self._require_live_chatgpt_if_enabled(chat, fields["enabled"])
         now = time.time()
         rule_id = "ar_" + uuid.uuid4().hex
         with self.store._lock, self.store._connection:
@@ -189,7 +206,8 @@ class AutoReplyRules:
         self.get(user_id, rule_id)
         fields = self._fields(payload)
         chat = self._conversation(user_id, payload.get("conversation_id"),
-                                  chatgpt_opt_in=fields["chatgpt_opt_in"])
+                                  chatgpt_opt_in=fields["chatgpt_opt_in"] or not fields["enabled"])
+        self._require_live_chatgpt_if_enabled(chat, fields["enabled"])
         with self.store._lock, self.store._connection:
             cursor = self.store._connection.execute("""
                 UPDATE auto_reply_rules SET conversation_id=?, match_type=?, pattern=?, flags=?,
@@ -204,6 +222,12 @@ class AutoReplyRules:
     def toggle(self, user_id: str, rule_id: str, enabled: Any) -> dict[str, Any]:
         if not isinstance(enabled, bool):
             raise AutoReplyError("enabled_must_be_boolean")
+        rule = self.get(user_id, rule_id)
+        # Revoking an existing rule remains possible, but enabling ChatGPT
+        # requires its own opt-in even when the trusted adapter is available.
+        chat = self._conversation(user_id, rule["conversation_id"],
+                                  chatgpt_opt_in=rule["chatgpt_opt_in"] or not enabled)
+        self._require_live_chatgpt_if_enabled(chat, enabled)
         with self.store._lock, self.store._connection:
             cursor = self.store._connection.execute(
                 "UPDATE auto_reply_rules SET enabled=?, updated_at=? WHERE user_id=? AND id=?",
@@ -278,8 +302,14 @@ class AutoReplyRules:
                     user_id, conversation_id, chatgpt_opt_in=True)["source"]).startswith("chatgpt"):
                 continue
             if self._matches(rule, sample):
-                return {"matched": True, "rule_id": rule["id"], "reply_text": rule["reply_text"]}
-        return {"matched": False, "rule_id": None, "reply_text": None}
+                return {"matched": True, "rule_id": rule["id"], "reply_text": rule["reply_text"],
+                        "live_send_available": not self._conversation(
+                            user_id, conversation_id, chatgpt_opt_in=True)["source"].startswith("chatgpt")
+                        or self.chatgpt_live_ready()}
+        return {"matched": False, "rule_id": None, "reply_text": None,
+                "live_send_available": not self._conversation(
+                    user_id, conversation_id, chatgpt_opt_in=True)["source"].startswith("chatgpt")
+                or self.chatgpt_live_ready()}
 
     def claimed_for(self, user_id: str, conversation_id: str, message_id: str) -> bool:
         """Prevent an existing AI auto-send path from answering this event again."""
@@ -321,7 +351,7 @@ class AutoReplyRules:
             if rule["conversation_id"] != conversation_id or not rule["enabled"]:
                 continue
             if chat["source"].startswith("chatgpt"):
-                if not rule["chatgpt_opt_in"]:
+                if not rule["chatgpt_opt_in"] or not self.chatgpt_live_ready():
                     continue
                 # ChatGPT messages can carry requests for mandatory human
                 # approval. Current generic UserIO ingest has no authoritative
@@ -350,10 +380,12 @@ class AutoReplyRules:
         # Claim is durable before any external I/O; no retries of unknown outcomes.
         with self.store._lock, self.store._connection:
             current = self.store._connection.execute(
-                "SELECT enabled,conversation_id FROM auto_reply_rules WHERE user_id=? AND id=?",
+                "SELECT enabled,conversation_id,chatgpt_opt_in FROM auto_reply_rules WHERE user_id=? AND id=?",
                 (user_id, selected["id"]),
             ).fetchone()
             if current is None or not current["enabled"] or current["conversation_id"] != conversation_id:
+                return
+            if chat["source"].startswith("chatgpt") and not current["chatgpt_opt_in"]:
                 return
             cursor = self.store._connection.execute("""
                 INSERT OR IGNORE INTO auto_reply_deliveries

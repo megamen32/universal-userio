@@ -68,9 +68,11 @@ def test_auto_reply_http_tenant_scope_preview_and_persistence(tmp_path):
     try:
         assert request("/v1/auto-replies", token="invalid")[0] == 401
         assert request("/v1/auto-replies", token="test-service-token")[0] == 403
-        assert request("/v1/auto-replies")[1] == {"rules": []}
+        initial = request("/v1/auto-replies")[1]
+        assert initial["rules"] == []
+        assert initial["capabilities"] == {"chatgpt_live": False}
         assert request("/v1/auto-replies", "POST", owner_token, {**rule, "action": "create"})[0] == 200
-        assert request("/v1/auto-replies", token=other_token)[1] == {"rules": []}
+        assert request("/v1/auto-replies", token=other_token)[1]["rules"] == []
         assert request("/v1/auto-replies", "POST", other_token, {**rule, "action": "create"})[0] == 404
         assert request("/v1/auto-replies", "POST", owner_token, {**rule, "conversation_id": other_chat, "action": "create"})[0] == 404
         assert request("/v1/auto-replies/preview", "POST", owner_token, {

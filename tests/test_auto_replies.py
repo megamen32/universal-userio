@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from universal_userio.auto_replies import AutoReplyError, AutoReplyRules
+from universal_userio.contracts import InboxMessage
+from universal_userio.adapters import inbox_message_from_envelope
 
 
 @dataclass
@@ -178,22 +180,92 @@ class AutoReplyTests(unittest.TestCase):
         row = self.service._store._connection.execute("SELECT state FROM auto_reply_deliveries").fetchone()
         self.assertEqual(row[0], "unknown")
 
-    def test_chatgpt_explicit_opt_in_but_unclassified_approval_stays_human(self):
+    def test_chatgpt_opt_in_never_promises_unavailable_live_send(self):
         with self.assertRaises(AutoReplyError):
             self.rules.create("alice", self.payload(conversation_id="chat-gpt"))
-        rule = self.rules.create("alice", self.payload(conversation_id="chat-gpt",
-                                                      chatgpt_opt_in=True))
+        with self.assertRaisesRegex(AutoReplyError, "verified_ingress_unavailable"):
+            self.rules.create("alice", self.payload(
+                conversation_id="chat-gpt", chatgpt_opt_in=True, enabled=True))
+        rule = self.rules.create("alice", self.payload(
+            conversation_id="chat-gpt", chatgpt_opt_in=True, enabled=False))
         self.assertTrue(rule["chatgpt_opt_in"])
-        self.assertTrue(self.rules.preview("alice", {
-            "conversation_id": "chat-gpt", "sample_text": "hello",
-        })["matched"])
-        # Real generic ChatGPT ingress currently has no authoritative
-        # action/provenance metadata. Neither opt-in nor matching words
-        # satisfy a required human approval.
-        self.rules.on_inbound("alice", "chat-gpt", Inbound(source="chatgpt:owner"))
+        self.assertFalse(rule["enabled"])
+        self.assertFalse(self.rules.capabilities()["chatgpt_live"])
+        preview = self.rules.preview("alice", {
+            "conversation_id": "chat-gpt", "sample_text": "Hello",
+            "rule": self.payload(conversation_id="chat-gpt", chatgpt_opt_in=True),
+        })
+        self.assertTrue(preview["matched"])
+        self.assertFalse(preview["live_send_available"])
+        with self.assertRaisesRegex(AutoReplyError, "verified_ingress_unavailable"):
+            self.rules.toggle("alice", rule["id"], True)
+        with self.assertRaisesRegex(AutoReplyError, "verified_ingress_unavailable"):
+            self.rules.update("alice", rule["id"], self.payload(
+                conversation_id="chat-gpt", chatgpt_opt_in=True, enabled=True))
+        self.assertEqual(self.service.sent, [])
+
+    def test_chatgpt_trusted_ordinary_event_eligible_but_human_approval_never_sends(self):
+        # An authoritative adapter is not registered in production yet.
+        # Simulate only a registered, trusted provider for this contract test.
+        self.service._verified_chatgpt_inbound_ready = True
+        rule = self.rules.create("alice", self.payload(
+            conversation_id="chat-gpt", chatgpt_opt_in=True, enabled=True))
+        self.assertTrue(rule["enabled"])
+        self.assertTrue(self.rules.capabilities()["chatgpt_live"])
+        now = time.time()
+        scenarios = [
+            ("mandatory", "ordinary_message", True, True),
+            ("unverified", "ordinary_message", False, False),
+            ("unknown", "", None, False),
+            ("protected_action", "mandatory_human_approval", True, True),
+        ]
+        for message_id, kind, required, verified in scenarios:
+            self.rules.on_inbound("alice", "chat-gpt", InboxMessage(
+                source="chatgpt:owner", message_id=message_id, sender="assistant",
+                body="Hello", received_at=now, trusted_event_type=kind,
+                approval_required=required, provenance_verified=verified,
+            ))
         self.assertEqual(self.service.sent, [])
         self.assertEqual(self.service._store._connection.execute(
             "SELECT count(*) FROM auto_reply_deliveries").fetchone()[0], 0)
+        self.rules.on_inbound("alice", "chat-gpt", InboxMessage(
+            source="chatgpt:owner", message_id="normal", sender="assistant",
+            body="Hello", received_at=now, trusted_event_type="ordinary_message",
+            approval_required=False, provenance_verified=True,
+        ))
+        self.assertEqual(len(self.service.sent), 1)
+        self.assertEqual(self.service.prepared[0][2], "Hi there")
+
+    def test_chatgpt_opt_in_can_be_revoked_and_cannot_be_bypassed_by_toggle(self):
+        self.service._verified_chatgpt_inbound_ready = True
+        rule = self.rules.create("alice", self.payload(
+            conversation_id="chat-gpt", chatgpt_opt_in=True, enabled=False))
+        rule = self.rules.update("alice", rule["id"], self.payload(
+            conversation_id="chat-gpt", chatgpt_opt_in=False, enabled=False))
+        self.assertFalse(rule["chatgpt_opt_in"])
+        with self.assertRaisesRegex(AutoReplyError, "explicit_opt_in"):
+            self.rules.toggle("alice", rule["id"], True)
+        self.assertFalse(self.rules.get("alice", rule["id"])["enabled"])
+        self.assertEqual(self.service.sent, [])
+
+    def test_untrusted_envelope_cannot_forge_chatgpt_approval_provenance(self):
+        # Provider event classification must not be asserted by an ordinary
+        # authenticated UserIO envelope from an arbitrary sender.
+        message = inbox_message_from_envelope({
+            "schema": "universal.inbox.message.v1",
+            "source": "chatgpt:owner", "message_id": "fake-origin",
+            "sender": "assistant", "body": "Hello",
+            "trusted_event_type": "ordinary_message",
+            "approval_required": False, "provenance_verified": True,
+        }, received_at=time.time())
+        self.assertEqual(message.trusted_event_type, "")
+        self.assertIsNone(message.approval_required)
+        self.assertFalse(message.provenance_verified)
+        self.service._verified_chatgpt_inbound_ready = True
+        self.rules.create("alice", self.payload(
+            conversation_id="chat-gpt", chatgpt_opt_in=True))
+        self.rules.on_inbound("alice", "chat-gpt", message)
+        self.assertEqual(self.service.sent, [])
 
     def test_channel_manual_approval_lock_wins_over_enabled_rule(self):
         self.rules.create("alice", self.payload())

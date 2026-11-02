@@ -63,6 +63,12 @@ class InboxMessage:
     provider_reply_to: str = ""
     provider_thread_id: str = ""
     peer_profile: dict[str, str] | None = None
+    # Trusted provider-side classification only. Do not copy these fields from
+    # untrusted web/API envelope payloads. Missing metadata means no automatic
+    # approval-like ChatGPT reply, regardless of content or configured keywords.
+    trusted_event_type: str = ""
+    approval_required: bool | None = None
+    provenance_verified: bool = False
 
     @property
     def conversation_key(self) -> str:

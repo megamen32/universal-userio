@@ -1822,7 +1822,8 @@ def handler(
                 if principal.service_account:
                     self._reply(403, {"error": "personal_login_required"})
                     return
-                self._reply(200, {"rules": service.auto_reply_rules.list(user_id)},
+                self._reply(200, {"rules": service.auto_reply_rules.list(user_id),
+                                  "capabilities": service.auto_reply_rules.capabilities()},
                             headers={"Cache-Control": "no-store"})
                 return
             if path.startswith('/v1/exports/'):

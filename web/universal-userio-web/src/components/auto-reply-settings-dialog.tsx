@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button"
 export type AutoReplyChat = { id: string; source: string; sender: string; display_name?: string; account_ref?: string }
 type Rule = { id: string; conversation_id: string; match_type: "keyword" | "regex"; pattern: string; flags: string; reply_text: string; enabled: boolean; chatgpt_opt_in: boolean; position: number }
 type Draft = Omit<Rule, "id" | "position">
-type Preview = { matched: boolean; reply_text: string | null }
+type Preview = { matched: boolean; reply_text: string | null; live_send_available: boolean }
+type RuleList = { rules: Rule[]; capabilities: { chatgpt_live: boolean } }
 const initial = (): Draft => ({ conversation_id: "", match_type: "keyword", pattern: "", flags: "i", reply_text: "", enabled: false, chatgpt_opt_in: false })
 
 async function request<T>(path: string, payload?: object): Promise<T> {
@@ -17,6 +18,7 @@ async function request<T>(path: string, payload?: object): Promise<T> {
 
 export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolean; onClose: () => void; chats: AutoReplyChat[] }) {
   const [rules, setRules] = useState<Rule[]>([])
+  const [chatgptLive, setChatgptLive] = useState(false)
   const [draft, setDraft] = useState<Draft>(initial)
   const [editing, setEditing] = useState<string | null>(null)
   const [sample, setSample] = useState("")
@@ -25,12 +27,16 @@ export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolea
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState("")
-  const refresh = async () => setRules((await request<{ rules: Rule[] }>("/v1/auto-replies")).rules)
+  const refresh = async () => {
+    const data = await request<RuleList>("/v1/auto-replies")
+    setRules(data.rules)
+    setChatgptLive(data.capabilities?.chatgpt_live === true)
+  }
   useEffect(() => {
     if (!open) return
     let live = true
-    request<{ rules: Rule[] }>("/v1/auto-replies")
-      .then(result => { if (live) setRules(result.rules) })
+    request<RuleList>("/v1/auto-replies")
+      .then(result => { if (live) { setRules(result.rules); setChatgptLive(result.capabilities?.chatgpt_live === true) } })
       .catch(err => { if (live) setError(String(err)) })
       .finally(() => { if (live) setLoading(false) })
     return () => { live = false }
@@ -38,6 +44,8 @@ export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolea
   if (!open) return null
 
   const eligible = chats.filter(chat => Boolean(chat.account_ref) && chat.source !== "diagnostic")
+  const isChatGPT = (id: string) => chats.some(chat => chat.id === id && chat.source.startsWith("chatgpt"))
+  const activationUnavailable = isChatGPT(draft.conversation_id) && !chatgptLive
   const label = (id: string) => {
     const chat = chats.find(item => item.id === id)
     return chat ? (chat.display_name || chat.sender || chat.id) + " · " + chat.source : id
@@ -78,7 +86,7 @@ export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolea
         <div><h2 className="text-lg font-semibold">Автоответы</h2><p className="text-sm text-muted-foreground">Первое включённое совпавшее правило отвечает один раз на новое сообщение.</p></div>
         <Button variant="outline" size="icon" onClick={onClose} aria-label="Закрыть автоответы"><X /></Button>
       </header>
-      <p className="rounded-lg border p-3 text-xs text-muted-foreground">Для ChatGPT требуется отдельное включение в правиле. Обязательные подтверждения безопасности остаются за человеком. Пока нет подтверждённой классификации обычных событий ChatGPT, отправка по таким правилам не выполняется. Предпросмотр ничего не отправляет.</p>
+      <p className="rounded-lg border p-3 text-xs text-muted-foreground">Для ChatGPT требуется отдельный opt-in на каждое правило. Обязательные подтверждения безопасности остаются за человеком. Текущий ChatGPT Web Adapter не передаёт подтверждённую классификацию входящих событий: правило можно сохранить выключенным и проверить, но включить отправку пока нельзя. Предпросмотр ничего не отправляет.</p>
       {loading ? <p role="status">Загружаю правила…</p> : <section aria-label="Сохранённые правила" className="space-y-2">
         {rules.length === 0 && <p className="text-sm text-muted-foreground">Правил пока нет.</p>}
         {rules.map((rule, index) => <div key={rule.id} className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
@@ -86,8 +94,9 @@ export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolea
             <p className="break-words text-sm font-medium">{label(rule.conversation_id)}</p>
             <p className="break-all text-xs text-muted-foreground">{rule.match_type === "regex" ? "Regex" : "Ключевое слово"} · {rule.pattern}</p>
             <p className="line-clamp-2 break-words text-xs">{rule.reply_text}</p>
+            {isChatGPT(rule.conversation_id) && !chatgptLive && <p className="text-xs text-muted-foreground">Нет проверенного ChatGPT ingress: автоотправка недоступна</p>}
           </div>
-          <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={rule.enabled} disabled={busy} aria-label="Включить правило" onChange={e => void run({ action: "toggle", id: rule.id, enabled: e.target.checked })} />Вкл.</label>
+          <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={rule.enabled} disabled={busy || (isChatGPT(rule.conversation_id) && !chatgptLive && !rule.enabled)} aria-label="Включить правило" onChange={e => void run({ action: "toggle", id: rule.id, enabled: e.target.checked })} />Вкл.</label>
           <Button variant="outline" size="sm" disabled={busy || index === 0} onClick={() => void run({ action: "move", id: rule.id, direction: "up" })} aria-label="Поднять правило"><ArrowUp className="size-4" /></Button>
           <Button variant="outline" size="sm" disabled={busy || index === rules.length - 1} onClick={() => void run({ action: "move", id: rule.id, direction: "down" })} aria-label="Опустить правило"><ArrowDown className="size-4" /></Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => startEdit(rule)}>Изменить</Button>
@@ -100,7 +109,8 @@ export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolea
       <form className="space-y-3 border-t pt-4" onSubmit={e => { e.preventDefault(); save() }}>
         <h3 className="font-semibold">{editing ? "Изменение правила" : "Новое правило"}</h3>
         <label className="block space-y-1 text-sm">Чат
-          <select className={field} value={draft.conversation_id} onChange={e => { setDraft(cur => ({ ...cur, conversation_id: e.target.value })); setPreview(null) }}>
+          <select className={field} value={draft.conversation_id} onChange={e => { const id = e.target.value; setDraft(cur => ({ ...cur, conversation_id: id,
+              enabled: isChatGPT(id) && !chatgptLive ? false : cur.enabled })); setPreview(null) }}>
             <option value="">Выберите чат</option>
             {editing && draft.conversation_id && !eligible.some(chat => chat.id === draft.conversation_id) && <option value={draft.conversation_id}>{label(draft.conversation_id)}</option>}
             {eligible.map(chat => <option key={chat.id} value={chat.id}>{label(chat.id)}</option>)}
@@ -129,13 +139,16 @@ export function AutoReplySettingsDialog({ open, onClose, chats }: { open: boolea
             Разрешить это правило для обычных событий ChatGPT (opt-in)
           </label>
         )}
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.enabled} onChange={e => setDraft(cur => ({ ...cur, enabled: e.target.checked }))} />Правило включено</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.enabled} disabled={activationUnavailable && !draft.enabled} onChange={e => setDraft(cur => ({ ...cur, enabled: e.target.checked }))} />Правило включено</label>
+        {activationUnavailable && <p role="status" className="text-xs text-muted-foreground">Пока доступно только сохранение выключенного правила и предпросмотр: источник ChatGPT не подтверждает тип события и обязательность human approval.</p>}
         <div className="space-y-2 rounded-lg border p-3">
           <label className="block space-y-1 text-sm">Проверка на примере (без отправки)
             <textarea className={field} rows={2} maxLength={4096} value={sample} onChange={e => { setSample(e.target.value); setPreview(null) }} />
           </label>
           <Button type="button" variant="outline" disabled={busy} onClick={() => void test()}>Проверить</Button>
-          {preview && <p role="status" className="text-sm">{preview.matched ? "Совпадение. Ответ: " + preview.reply_text : "Совпадений нет"}</p>}
+          {preview && <p role="status" className="text-sm">{preview.matched
+            ? (preview.live_send_available ? "Совпадение. Ответ: " : "Только предпросмотр, отправка недоступна. Ответ: ") + preview.reply_text
+            : "Совпадений нет"}</p>}
         </div>
         {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         {success && <p className="text-sm" role="status">{success}</p>}
