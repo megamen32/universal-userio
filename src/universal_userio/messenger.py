@@ -769,13 +769,39 @@ class Messenger:
         return {'id':row['id'],'hash':row['hash'],'status':row['status'], 'created_at':row['created_at'],
                 'envelope':e,'receipt':json.loads(row['receipt']) if row['receipt'] else None}
 
-    def approve(self, action_id, expected_hash, confirm):
+    def approve(self, action_id, expected_hash, confirm, *, _question_fence=None):
         if confirm is not True: raise ValueError('exact_confirmation_required')
         action = self.get(action_id)
         if expected_hash != action['hash']: raise ValueError('action_snapshot_conflict')
-        return self._execute_action(action)
+        return self._execute_action(action, _question_fence=_question_fence)
 
-    def _execute_action(self, action):
+    def _enforce_question_action(self, action, _question_fence=None):
+        # Existing ordinary UserIO actions remain unchanged. Only an action
+        # explicitly joined to an addressed question requires the extra fence.
+        # This is a trusted in-process capability, NEVER a model/MCP argument.
+        if not self.store._table_exists('question_coordination'):
+            return
+        env = action['envelope']
+        original = 'messenger:' + str(env.get('request_id') or '')
+        with self.store._lock:
+            row = self.store._connection.execute(
+                'SELECT question_id,user_id,account_ref,conversation_id,holder,epoch,'
+                'state,delivery_state FROM question_coordination '
+                'WHERE user_id=? AND delivery_request_id=?',
+                (self.user, original),
+            ).fetchone()
+        if row is None:
+            return
+        if (row['account_ref'] != env.get('account_ref')
+                or row['conversation_id'] != env.get('conversation_id')
+                or row['state'] not in ('active', 'transferring')
+                or row['delivery_state'] != 'unknown'):
+            raise PermissionError('question_delivery_fence_conflict')
+        if not callable(_question_fence) or _question_fence(row, action) is not True:
+            raise PermissionError('question_delivery_fence_required')
+
+    def _execute_action(self, action, *, _question_fence=None):
+        self._enforce_question_action(action, _question_fence)
         action_id = action['id']; e = action['envelope']
         if e.get('action')=='telegram_admin':
             if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:

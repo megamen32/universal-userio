@@ -795,7 +795,7 @@ class UserIOService:
 
     def send_workspace_triage(
         self, *, event_seq: int, request_id: str, draft_id: str, actor: str,
-        confirm: bool, user_id: str | None = None,
+        confirm: bool, user_id: str | None = None, _question_fence=None,
     ) -> dict[str, object]:
         if confirm is not True:
             raise ValueError("exact_confirmation_required")
@@ -828,13 +828,18 @@ class UserIOService:
             "expected_chat_id": str(event["conversation_id"]),
             "expected_attachments": [],
         }
+        self._enforce_question_draft_fence(
+            draft_id, resolved_user, _question_fence,
+        )
         draft = self._store.claim_draft_send(
             draft_id, user_id=resolved_user, expected_snapshot=snapshot,
         )
         attempt_generation = int(self._store.draft_delivery_state(
             draft_id, user_id=resolved_user)["generation"])
         try:
-            send = self._prepare_claimed_draft(draft, user_id=resolved_user)
+            send = self._prepare_claimed_draft(
+                draft, user_id=resolved_user, _question_fence=_question_fence,
+            )
         except Exception:
             self._store.release_reconciled_delivery(draft_id, user_id=resolved_user,
                 expected_generation=attempt_generation, reason="preparation_failed_before_provider_io")
@@ -849,6 +854,9 @@ class UserIOService:
                 expected_generation=attempt_generation, reason="triage_claim_failed_before_provider_io")
             raise
         try:
+            self._enforce_question_draft_fence(
+                draft_id, resolved_user, _question_fence,
+            )
             receipt = send()
         except DeliveryNotSubmittedError:
             # Refused before provider IO: the triage claim and the draft claim
@@ -1560,10 +1568,14 @@ class UserIOService:
         return sync(self, user_id=user_id)
 
     def approve(self, draft_id: str, *, user_id: str | None = None,
-                expected_snapshot: dict[str, object] | None = None) -> ReplyDraft:
+                expected_snapshot: dict[str, object] | None = None,
+                _question_fence=None) -> ReplyDraft:
         resolved_user_id = self._store._user(user_id)
         if not self._store.send_enabled(user_id=resolved_user_id):
             raise DeliveryUnavailableError("outbound delivery is disabled by user policy")
+        self._enforce_question_draft_fence(
+            draft_id, resolved_user_id, _question_fence,
+        )
         current_draft = self._store.draft(draft_id, user_id=resolved_user_id)
         if current_draft.status in {"sending", "delivery_unknown"}:
             raise DeliveryUnavailableError(
@@ -1587,7 +1599,9 @@ class UserIOService:
         attempt_generation = int(self._store.draft_delivery_state(
             draft_id, user_id=resolved_user_id)["generation"])
         try:
-            send = self._prepare_claimed_draft(draft, user_id=resolved_user_id)
+            send = self._prepare_claimed_draft(
+                draft, user_id=resolved_user_id, _question_fence=_question_fence,
+            )
         except Exception:
             self._store.release_reconciled_delivery(
                 draft_id, user_id=resolved_user_id,
@@ -1596,6 +1610,9 @@ class UserIOService:
         # Once a provider may have accepted delivery, a timeout or receipt-store
         # failure is uncertain. Keep the durable claim; never retry blindly.
         try:
+            self._enforce_question_draft_fence(
+                draft_id, resolved_user_id, _question_fence,
+            )
             receipt = send()
         except DeliveryNotSubmittedError:
             self._store.release_reconciled_delivery(
@@ -1896,7 +1913,33 @@ class UserIOService:
             peer_id=peer_id, reader=outbox, user_id=resolved_user_id,
             expected_generation=expected_generation, expected_lease_owner=expected_lease_owner)
 
-    def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str):
+    def _enforce_question_draft_fence(self, draft_id: str, user_id: str,
+                                      _question_fence=None) -> None:
+        # Ordinary sends remain unchanged. An explicitly correlated question
+        # can be sent only via its trusted in-process, epoch-bound callback;
+        # public HTTP/MCP request bodies never contain this capability.
+        if not self._store._table_exists("question_coordination"):
+            return
+        with self._store._lock:
+            row = self._store._connection.execute(
+                "SELECT question_id,holder,epoch,state,delivery_state,"
+                "account_ref,conversation_id FROM question_coordination "
+                "WHERE user_id=? AND delivery_request_id=?",
+                (user_id, "draft:" + draft_id),
+            ).fetchone()
+        if row is None:
+            return
+        if (row["state"] not in ("active", "transferring")
+                or row["delivery_state"] != "unknown"):
+            raise PermissionError("question_delivery_fence_conflict")
+        if not callable(_question_fence) or _question_fence(row, draft_id) is not True:
+            raise PermissionError("question_delivery_fence_required")
+
+    def _prepare_claimed_draft(self, draft: ReplyDraft, *, user_id: str,
+                               _question_fence=None):
+        self._enforce_question_draft_fence(
+            draft.id, user_id, _question_fence,
+        )
         conversation = self._store.conversation(draft.conversation_id, user_id=user_id)
         if conversation is None:
             raise KeyError("conversation not found")
