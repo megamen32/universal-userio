@@ -25,6 +25,8 @@ class QuestionCoordinationTests(unittest.TestCase):
         self.conn = self.connect()
         self.now = [1000.0]
         self.result_refs = {"private-result-ref-1", "neighbor-result", "authorized-result-ref"}
+        self.human_approved = True  # trusted existing human-approval fixture
+        self.allow_sender = True    # trusted server-side live permission fixture
         self.actors = {
             "dot": Actor("tenant-1", "user-1", "dot", "authenticated-dot",
                          frozenset({"acct-1"}), frozenset({"manager"}), True),
@@ -110,6 +112,11 @@ class QuestionCoordinationTests(unittest.TestCase):
             resolve_actor=resolve_actor, resolve_binding=resolve_binding,
             journal_reserve=reserve_outgoing, journal_read=read_receipt,
             result_exists=lambda source, ref: ref in self.result_refs,
+            delivery_authorized=lambda actor, source, req: (
+                self.human_approved and self.allow_sender
+                and source["binding_id"].startswith("verified-binding:")
+                and actor.subject.startswith("authenticated-")
+            ),
             clock=lambda: self.now[0],
         )
 
@@ -399,6 +406,41 @@ class QuestionCoordinationTests(unittest.TestCase):
         with self.assertRaises((Rejected, AccessDenied)):
             self.engine.renew("manager", 1, "0", first["lease_token"],
                               first["epoch"], "post-handoff-renew")
+
+    def test_18_request_id_bound_to_real_caller_identity(self):
+        a = self.claim()
+        with self.assertRaises(Rejected):
+            self.claim(who="dot")
+        log = self.engine.audit("manager", 1)
+        self.assertEqual(1, len([x for x in log if x["action"] == "rejected"]))
+        self.assertEqual("manager", a["holder"])
+
+    def test_19_human_approval_required_before_outgoing_reservation(self):
+        c = self.claim()
+        self.save(c)
+        self.human_approved = False
+        with self.assertRaises(AccessDenied):
+            self.reserve(c)
+        self.assertEqual(0, self.journal_count())
+        self.assertIsNone(self.conn.execute(
+            "SELECT delivery_request_id FROM question_coordination").fetchone()[0])
+        self.human_approved = True
+        self.reserve(c)
+        self.assertEqual(1, self.journal_count())
+
+    def test_20_revoked_send_permission_fences_before_provider_io(self):
+        c = self.claim()
+        self.save(c)
+        self.reserve(c)
+        self.allow_sender = False
+        dispatched = []
+        with self.assertRaises(AccessDenied):
+            self.engine.send_fenced("manager", 1, "0", c["lease_token"],
+                                    c["epoch"], "dispatch-when-revoked",
+                                    lambda *args: dispatched.append(args))
+        self.assertEqual([], dispatched)
+        self.assertEqual("in_flight", self.conn.execute(
+            "SELECT delivery_state FROM question_coordination").fetchone()[0])
 
 
 if __name__ == "__main__":

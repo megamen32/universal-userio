@@ -76,6 +76,7 @@ class QuestionCoordination:
         journal_reserve: Callable[[sqlite3.Connection, dict, str], None],
         journal_read: Callable[[dict, str], dict | None],
         result_exists: Callable[[dict, str], bool],
+        delivery_authorized: Callable[[Actor, dict, str], bool],
         clock: Callable[[], float] = time.time,
     ):
         if not token_key or len(token_key) < 32:
@@ -88,6 +89,7 @@ class QuestionCoordination:
         self.journal_reserve = journal_reserve
         self.journal_read = journal_read
         self.result_exists = result_exists
+        self.delivery_authorized = delivery_authorized
         self.clock = clock
 
     def install(self) -> None:
@@ -187,7 +189,8 @@ class QuestionCoordination:
             json.dumps(identity, separators=(",", ":"), ensure_ascii=False).encode()
         ).hexdigest()
         src.update(question_id=question_id, tenant=actor.tenant, project=binding.project,
-                   binding_id=binding.binding_id, permitted_holders=binding.permitted_holders)
+                   binding_id=binding.binding_id, permitted_holders=binding.permitted_holders,
+                   caller_subject=actor.subject, caller_holder=actor.holder)
         return actor, src
 
     def _existing(self, source: dict):
@@ -221,8 +224,12 @@ class QuestionCoordination:
 
     def _seen(self, source, request_id, payload):
         self._required(request_id, "request_id")
+        # A request ID cannot be replayed by a different authenticated worker,
+        # even if the original untrusted payload bytes are unchanged.
         digest = hashlib.sha256(json.dumps(
-            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            {"actor": [source["tenant"], source["caller_subject"],
+                       source["caller_holder"]], "payload": payload},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode()).hexdigest()
         record = self.db.execute("""
             SELECT payload_sha256,response_json FROM question_operations
@@ -448,6 +455,10 @@ class QuestionCoordination:
                 raise Rejected("result_must_be_saved")
             if row["delivery_state"] != "none":
                 raise Busy("existing_delivery_must_be_reconciled")
+            # Explicit human approval and current send capability are resolved
+            # from the original UserIO approval + caller ACL, never request text.
+            if not self.delivery_authorized(actor, src, request_id):
+                raise AccessDenied("current_delivery_authorization_required")
             # Must be the same SQLite transaction, not a second outbox.
             self.journal_reserve(self.db, src, request_id)
             self.db.execute("""
@@ -487,13 +498,18 @@ class QuestionCoordination:
             # A deferred handoff only advances after a defined receipt.
             holder, epoch, status = row["holder"], row["epoch"], row["state"]
             if status == "transferring" and state in {"sent", "failed"} and row["pending_holder"]:
-                holder, epoch, status = row["pending_holder"], epoch + 1, "handoff"
-                self.db.execute("""
-                    UPDATE question_coordination SET holder=?,epoch=?,state=?,
-                       pending_holder=NULL,updated_at=? WHERE question_id=?
-                """, (holder, epoch, status, self.clock(), src["question_id"]))
-                self._audit(src, actor, "handoff", row["holder"], holder, epoch, request_id,
-                            reason="receipt_settled",receipt_ref=ref)
+                if row["pending_holder"] not in src["permitted_holders"]:
+                    # Never resume a revoked holder; leave the settled delivery
+                    # as transferring until a current authorized decision.
+                    status = "transferring"
+                else:
+                    holder, epoch, status = row["pending_holder"], epoch + 1, "handoff"
+                    self.db.execute("""
+                        UPDATE question_coordination SET holder=?,epoch=?,state=?,
+                           pending_holder=NULL,updated_at=? WHERE question_id=?
+                    """, (holder, epoch, status, self.clock(), src["question_id"]))
+                    self._audit(src, actor, "handoff", row["holder"], holder, epoch, request_id,
+                                reason="receipt_settled",receipt_ref=ref)
             result = dict(question_id=src["question_id"], holder=holder,
                           epoch=epoch,state=status,delivery_state=state,receipt_ref=ref)
             self._record(src, request_id, digest, result)
@@ -539,6 +555,10 @@ class QuestionCoordination:
             self._assert_owner(row, actor, token, epoch)
             if row["delivery_state"] != "in_flight" or not row["delivery_request_id"]:
                 raise Rejected("delivery_not_reserved")
+            # Recheck at the actual provider boundary. Revocation after reserve
+            # cannot be bypassed by an already-held lease.
+            if not self.delivery_authorized(actor, src, row["delivery_request_id"]):
+                raise AccessDenied("current_delivery_authorization_required")
             # This commit precedes any possible provider side-effect. A crash
             # after it is UNKNOWN and MUST NEVER replay this dispatch_id.
             self.db.execute("""

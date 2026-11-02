@@ -22,3 +22,12 @@ NOT DONE: actual UserIO journal adapter, both processors, real send fencing, del
 ## Baseline regression correction checkpoint
 
 Formerly failing UserIO workspace triage regression now PASS with explicit offline Matrix test account binding; 32/32 full workspace claims suite PASS, plus 17/17 new coordinator tests. Only a pre-existing pytest config warning remains. No real provider sends. This does not count as deployed dot/manager integration. Commit and production scope still require normal release guard.
+
+## Continuation: 2026-11-02 10:51 UTC onward
+
+- Verified ExManager installed source calls userio.workspace.poll (USERIO.md and userio.go), not workspace.claim and not question-level send fence. Existing ExManager userio owner resource is read-only; never widen/borrow it.
+- Herder exact ChatGPT peer 6ae80b0e-f2f4-83eb-bd28-84de2daec09b did not resolve (direct_session_invalid). Herder list-sessions reported partial warming / later child transport decode errors, not proof no other writers. No Send Message delivered. UserIO backend/frontend/voice remains owner-coordination gate, PR16 deploy refusal unchanged.
+- Hardened isolated candidate: request_id bound to verified caller subject/holder/tenant; fresh approved send permission required both at reserve and before provider IO; rejected current revocation cannot dispatch; pending handoff target permission rechecked on receipt reconciliation.
+- UserIO candidate tests now 20/20 PASS, existing UserIO claim regressions last 32/32 PASS after offline Matrix fixture correction, one pre-existing pytest unknown asyncio_default_fixture_loop_scope warning.
+- The new policy checks are REQUIRED callbacks from the existing authenticated UserIO server. No caller-supplied worker, inferred human approval, new messenger token, real route, runtime API endpoint or service has been created.
+- Gate to proceed safely: native Herder resolvable owner session or authoritative owner coordination for editing existing service.py/store.py/mcp_surface.py/http_api.py and ExManager's collector; installation of both consumers and original send journal still unimplemented. Do not call source-only tests production acceptance.
