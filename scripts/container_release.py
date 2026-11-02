@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import pwd
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -78,8 +79,8 @@ BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
 def install_platform_helper():
     if PLATFORM_DROPIN.exists():
         raise RuntimeError('platform helper already installed; reconcile before cutover')
-    payload = subprocess.check_output(['git', '-C', ROOT, 'show',
-        'HEAD:src/universal_userio/container_platform.py'])
+    payload = subprocess.check_output(repo_git_argv(ROOT, 'show',
+        'HEAD:src/universal_userio/container_platform.py'))
     helper = Path('/usr/local/lib/userio-container-platform.py')
     if helper.exists():
         raise RuntimeError('unexpected existing platform helper')
@@ -100,6 +101,27 @@ def command(argv, **kwargs):
 
 def output(argv) -> str:
     return command(argv, capture_output=True, text=True).stdout.strip()
+
+
+def repo_git_argv(repository: Path, *arguments: str) -> list[str]:
+    """Run immutable Git reads as the installed owner, never as privileged root.
+
+    Docker, locks and receipts still use root. Do not weaken Git trust, change
+    repository ownership, or permit Git modifications in this preflight.
+    """
+    if not arguments or arguments[0] not in {
+        'rev-parse', 'cat-file', 'merge-base', 'show', 'archive',
+    }:
+        raise ValueError('only read-only Git source preflight is permitted')
+    repo = Path(repository).resolve(strict=True)
+    argv = ['git', '-C', str(repo), *arguments]
+    if os.geteuid() != 0:
+        return argv
+    # ssh_args already uses this documented owner executor for SSH reads.
+    owner = pwd.getpwnam('roomhacker')
+    if repo.stat().st_uid != owner.pw_uid or (repo / '.git').stat().st_uid != owner.pw_uid:
+        raise RuntimeError('repository owner differs from supported Git executor')
+    return ['runuser', '-u', 'roomhacker', '--', *argv]
 
 
 def ssh_args(remote_command):
@@ -338,7 +360,7 @@ def assert_idle():
 
 def _published_tip() -> str:
     """The fetched published main tip of the canonical repository."""
-    return output(['git', '-C', ROOT, 'rev-parse', 'origin/main'])
+    return output(repo_git_argv(ROOT, 'rev-parse', 'origin/main'))
 
 
 def _resolve_published_revision(revision):
@@ -351,13 +373,13 @@ def _resolve_published_revision(revision):
     older commit can reach the release.
     """
     if revision is None:
-        head = output(['git', '-C', ROOT, 'rev-parse', 'HEAD'])
+        head = output(repo_git_argv(ROOT, 'rev-parse', 'HEAD'))
         if head != _published_tip():
             raise RuntimeError('build requires published main')
         return head, False
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise RuntimeError('revision must be an immutable commit id')
-    if output(['git', '-C', ROOT, 'cat-file', '-t', revision]) != 'commit':
+    if output(repo_git_argv(ROOT, 'cat-file', '-t', revision)) != 'commit':
         raise RuntimeError('revision must name a commit object')
     if revision != _published_tip():
         raise RuntimeError('revision must equal the published origin/main tip')
@@ -374,10 +396,10 @@ def _dispatcher_input():
     """The current published standalone dispatcher, as a pinned input."""
     foreign = Path('/home/roomhacker/agents-projects/hermes-unified-inbox')
     script = 'scripts/userio_hermes_dispatcher.py'
-    payload = subprocess.check_output(['git', '-C', foreign, 'show', 'HEAD:' + script])
+    payload = subprocess.check_output(repo_git_argv(foreign, 'show', 'HEAD:' + script))
     if payload != (foreign / script).read_bytes():
         raise RuntimeError('dispatcher has uncommitted changes; its owner must supply a published input')
-    return payload, output(['git', '-C', foreign, 'rev-parse', 'HEAD'])
+    return payload, output(repo_git_argv(foreign, 'rev-parse', 'HEAD'))
 
 
 def _host_additions():
@@ -398,7 +420,7 @@ def _host_additions():
 
 def build_context(destination: Path, *, portable_voice=False, revision=None):
     revision, pinned = _resolve_published_revision(revision)
-    archive = subprocess.check_output(['git', '-C', ROOT, 'archive', '--format=tar', revision])
+    archive = subprocess.check_output(repo_git_argv(ROOT, 'archive', '--format=tar', revision))
     if portable_voice:
         from voice_container import build_context as portable_context
         if pinned:
@@ -1243,8 +1265,8 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
 
     if os.getuid() != 0:
         raise RuntimeError('replace-backend requires root')
-    full_revision = output(['git', '-C', ROOT, 'rev-parse', revision])
-    command(['git', '-C', ROOT, 'merge-base', '--is-ancestor', full_revision, 'origin/main'])
+    full_revision = output(repo_git_argv(ROOT, 'rev-parse', revision))
+    command(repo_git_argv(ROOT, 'merge-base', '--is-ancestor', full_revision, 'origin/main'))
     image_id = api('GET', 'images/' + urllib.parse.quote(image, safe='') + '/json')['Id']
     receipt_file = receipt_directory / 'receipt.json'
     if receipt_file.exists():
@@ -1262,8 +1284,8 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
     paths = BACKEND_SOURCE_HASH_PATHS
     expected_hashes = {}
     for path in paths:
-        pinned = subprocess.check_output(['git', '-C', ROOT, 'show', full_revision + ':' + path])
-        if pinned != subprocess.check_output(['git', '-C', ROOT, 'show', 'origin/main:' + path]):
+        pinned = subprocess.check_output(repo_git_argv(ROOT, 'show', full_revision + ':' + path))
+        if pinned != subprocess.check_output(repo_git_argv(ROOT, 'show', 'origin/main:' + path)):
             raise RuntimeError('candidate source changed since pin: ' + path)
         destination = ('/opt/universal-userio/' + path if path.startswith('src/')
                        else '/opt/userio-telegram-qr/' + path.rsplit('/', 1)[1])
