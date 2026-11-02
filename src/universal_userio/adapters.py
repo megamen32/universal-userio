@@ -1742,6 +1742,48 @@ def _configured_chatgpt_cdp_client() -> ChatGPTCDPMcpClient:
         return _chatgpt_cdp_client
 
 
+def _chatgpt_stage_draft(
+    *, service: Any, user_id: str, chat_ref: str, chat: Mapping[str, Any],
+    text: str, account_ref: str = "",
+) -> ReplyDraft:
+    """Prepare a ChatGPT draft without a provider send or automatic AI listener."""
+    if not isinstance(text, str) or not text.strip() or len(text) > 16_000:
+        raise ValueError("ChatGPT draft text must be nonempty and at most 16000 characters")
+    if not isinstance(chat_ref, str) or not chat_ref or len(chat_ref) > 256:
+        raise ValueError("ChatGPT chat reference is invalid")
+    if not isinstance(chat, Mapping) or str(chat.get("id") or chat.get("chatRef") or "") != chat_ref:
+        raise ValueError("ChatGPT chat identity mismatch")
+    messages = chat.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("ChatGPT conversation has no verified message for a draft anchor")
+    latest = next(
+        (m for m in reversed(messages) if isinstance(m, Mapping)
+         and m.get("role") in {"user", "assistant"} and isinstance(m.get("text"), str)
+         and m["text"].strip()), None,
+    )
+    if latest is None:
+        raise ValueError("ChatGPT conversation has no valid draft anchor")
+    native_ref = str(latest.get("node_id") or latest.get("messageRef") or latest.get("id") or "")
+    if not native_ref or len(native_ref) > 256:
+        raise ValueError("ChatGPT latest message reference is unavailable")
+    source = "chatgpt:" + account_ref if account_ref else "chatgpt"
+    ingress = InboxMessage(
+        source, native_ref, chat_ref, latest["text"], time.time(),
+        reconciliation=True, peer_id=chat_ref,
+    )
+    conversation_id, _ = service.receive(ingress, route_id="chatgpt", user_id=user_id)
+    create = getattr(service, "create_manual_draft", None)
+    if callable(create):
+        return create(conversation_id, body=text, user_id=user_id)
+    # The current service exposes canonical persistence, not the legacy helper.
+    persist = getattr(service, "_persist_reply_draft", None)
+    if not callable(persist):
+        raise AdapterNotSupported("UserIO draft staging is unavailable")
+    draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, text, "proposed")
+    persist(draft, user_id=user_id)
+    return draft
+
+
 class ChatGPTCDPChannelAdapter:
     """Read page-visible ChatGPT chats via one explicitly configured CDP MCP sidecar."""
 
@@ -1774,6 +1816,13 @@ class ChatGPTCDPChannelAdapter:
         if not isinstance(chat, dict):
             raise RuntimeError("chatgpt-cdp-mcp returned an invalid chat export")
         return {"chat": chat}
+
+    def send(self, *, chat_id: str, text: str) -> ReplyDraft:
+        data = self.read(chat_id=chat_id)
+        return _chatgpt_stage_draft(
+            service=self._service, user_id=self._user_id,
+            chat_ref=chat_id, chat=data["chat"], text=text,
+        )
 
     def download(self, *, file_ref: str) -> ChannelFile:
         del file_ref
@@ -1934,6 +1983,14 @@ class ChatGPTWebChannelAdapter:
         _chatgpt_require_configured(self._username)
         slug = _chatgpt_resolve_account(self._username, chat_id or "")
         return {"chat": _chatgpt_conversation(self._username, slug, chat_id or ""), "account": slug}
+
+    def send(self, *, chat_id: str, text: str) -> ReplyDraft:
+        data = self.read(chat_id=chat_id)
+        return _chatgpt_stage_draft(
+            service=self._service, user_id=self._user_id,
+            chat_ref=chat_id, chat=data["chat"], text=text,
+            account_ref=str(data.get("account") or ""),
+        )
 
     def download(self, *, file_ref: str) -> ChannelFile:
         del file_ref
