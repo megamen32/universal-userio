@@ -1,7 +1,7 @@
 import './dot-test-policy.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {DotRelay,ROOM,OWNER,textHash} from './dot-relay.mjs';import {DotMirror,sensitiveText,mirrorParts,mirrorSendOptions} from './dot-mirror.mjs';
 const msg=(id,role,text)=>({id,role,text});
-function fixture(options={}){let rows=[msg('baseline','user','old history')],time=0,sends=[],edits=[],reads=0;const config={statePath:join(mkdtempSync(join(tmpdir(),'dot-mirror-')),'state.json'),botAccountId:'telegram:999999',agentId:'browser',tabId:18,browserCall:async()=>{reads++;return {ok:true,room:ROOM,cursor:rows.at(-1)?.id,messages:rows}},send:async(owner,text)=>{sends.push({owner,text});if(options.sendError)throw Error('unknown');return 'tg'+sends.length},edit:async(owner,receipt,text)=>{edits.push({owner,receipt,text});if(options.editError)throw Error('unknown')},wait:async()=>{}};let relay=new DotRelay(config),mirror=new DotMirror(relay,{now:()=>time,stableMs:10});return {get relay(){return relay},get mirror(){return mirror},rows:v=>{rows=v},advance:()=>{time+=11},sends,edits,reads:()=>reads,restart:()=>{relay=new DotRelay(config);mirror=new DotMirror(relay,{now:()=>time,stableMs:10})}};}
+function fixture(options={}){let rows=[msg('baseline','user','old history')],time=0,sends=[],edits=[],reads=0;const config={statePath:join(mkdtempSync(join(tmpdir(),'dot-mirror-')),'state.json'),botAccountId:'telegram:999999',agentId:'browser',tabId:18,browserCall:async()=>{reads++;return {ok:true,room:ROOM,cursor:rows.at(-1)?.id,messages:rows}},send:async(owner,text,replyTo=null)=>{sends.push(replyTo==null?{owner,text}:{owner,text,replyTo});if(options.sendError)throw Error('unknown');return options.numericReceipts?String(sends.length):'tg'+sends.length},edit:async(owner,receipt,text)=>{edits.push({owner,receipt,text});if(options.editError)throw Error('unknown')},wait:async()=>{}};let relay=new DotRelay(config),mirror=new DotMirror(relay,{now:()=>time,stableMs:10});return {get relay(){return relay},get mirror(){return mirror},rows:v=>{rows=v},advance:()=>{time+=11},sends,edits,reads:()=>reads,restart:()=>{relay=new DotRelay(config);mirror=new DotMirror(relay,{now:()=>time,stableMs:10})}};}
 async function settle(x){await x.mirror.tick();x.advance();return x.mirror.tick();}
 test('activation baseline skips all history, repeat does not send',async()=>{const x=fixture();assert.equal((await x.mirror.tick()).status,'baseline_initialized');await settle(x);assert.equal(x.sends.length,0)});
 test('both new authors labelled, restart and stable IDs prevent duplicates',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('u','user','hello'),msg('a','assistant','background result')]);await settle(x);assert.deepEqual(x.sends,[{owner:OWNER,text:'Test owner:\nhello'},{owner:OWNER,text:'dots:\nbackground result'}]);x.restart();await settle(x);assert.equal(x.sends.length,2)});
@@ -41,4 +41,76 @@ test('reply quotes accept only exact owner-directed outgoing target and hide sec
  assert.match(safeReplyContext({...m,message:'password: secret-value'},'3'),/скрыт/);
  assert.match(safeReplyContext({...m,message:'Bearer abcdefghijklmnopqrstuv'},'3'),/скрыт/);
  assert.ok(safeReplyContext({...m,message:'x'.repeat(2000)},'3').length<1600);
+});
+
+
+test('dot reply uses original Telegram receipt for a previously mirrored message',async()=>{
+ const x=fixture({numericReceipts:true});await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),msg('first','assistant','initial')]);
+ await settle(x);
+ x.rows([msg('baseline','user','old'),msg('first','assistant','initial'),{...msg('reply','user','followup'),reply_to:'first'}]);
+ await settle(x);
+ assert.deepEqual(x.sends,[{owner:OWNER,text:'dots:\ninitial'},{owner:OWNER,text:'Test owner:\nfollowup',replyTo:'1'}]);
+ assert.equal(x.relay.state.mirror.published.reply.reply_receipt,'1');
+ x.restart();await settle(x);assert.equal(x.sends.length,2);
+});
+test('dot assistant replying to an accepted Telegram echo uses original owner message ID',async()=>{
+ const x=fixture({numericReceipts:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={
+  source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),msg('echo','user','tg inbound'),{...msg('assistant-reply','assistant','response'),reply_to:'echo'}]);
+ await settle(x);
+ assert.deepEqual(x.sends,[{owner:OWNER,text:'dots:\nresponse',replyTo:'42'}]);
+});
+test('unverified dot reply target is held and cannot fall back to a silent plain message',async()=>{
+ const x=fixture();await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),{...msg('orphan','assistant','private answer'),reply_to:'not_mirrored'}]);
+ await settle(x);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.relay.state.mirror.held.orphan.reason,'reply_target_unresolved');
+ x.restart();await settle(x);assert.equal(x.sends.length,0);
+});
+test('pending or ambiguous incoming receipt never becomes a reply target',async()=>{
+ const x=fixture({numericReceipts:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={source:'telegram',status:'send_uncertain',echo:'echo',source_message_ids:['42']};
+ x.rows([msg('baseline','user','old'),{...msg('response','assistant','response'),reply_to:'echo'}]);
+ await settle(x);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.relay.state.mirror.held.response.reason,'reply_target_unresolved');
+});
+test('edited dot reply target does not silently relink an already delivered message',async()=>{
+ const x=fixture({numericReceipts:true});await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),msg('first','assistant','first'),msg('second','assistant','second')]);
+ await settle(x);
+ x.rows([msg('baseline','user','old'),msg('first','assistant','first'),msg('second','assistant','second'),{...msg('reply','assistant','response'),reply_to:'first'}]);
+ await settle(x);
+ assert.equal(x.sends.length,3);
+ x.rows([msg('baseline','user','old'),msg('first','assistant','first'),msg('second','assistant','second'),{...msg('reply','assistant','response modified'),reply_to:'second'}]);
+ await settle(x);
+ assert.equal(x.sends.length,3);assert.equal(x.edits.length,0);
+ assert.equal(x.relay.state.mirror.held.reply.reason,'reply_target_edited_requires_review');
+});
+test('native Telegram reply send options reject non-provider receipts and preserve literal formatting',()=>{
+ assert.deepEqual(mirrorSendOptions('text','42'),{message:'text',formattingEntities:[],linkPreview:false,replyTo:42});
+ for(const v of ['tg1','0','-1','123abc','9007199254740992'])assert.throws(()=>mirrorSendOptions('text',v),/invalid_mirror_reply_receipt/);
+});
+
+
+test('each long reply chunk retains the exact target, with no fallback to a plain send',async()=>{
+ const x=fixture({numericReceipts:true});await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),msg('first','assistant','initial')]);
+ await settle(x);
+ x.rows([msg('baseline','user','old'),msg('first','assistant','initial'),{...msg('reply','assistant','z'.repeat(6100)),reply_to:'first'}]);
+ await settle(x);
+ assert.equal(x.sends.length,4);
+ assert.deepEqual(x.sends.slice(1).map(m=>m.replyTo),['1','1','1']);
+});
+test('ambiguous native origin mapping is held rather than guessed',async()=>{
+ const x=fixture({numericReceipts:true});await x.mirror.tick();
+ x.relay.state.incoming['telegram:999999:'+OWNER+':42']={source:'telegram',status:'accepted',echo:'echo',source_message_ids:['42']};
+ x.relay.state.incoming['telegram:999999:'+OWNER+':43']={source:'telegram',status:'accepted',echo:'echo',source_message_ids:['43']};
+ x.rows([msg('baseline','user','old'),{...msg('reply','assistant','answer'),reply_to:'echo'}]);
+ await settle(x);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.relay.state.mirror.held.reply.reason,'reply_target_unresolved');
 });

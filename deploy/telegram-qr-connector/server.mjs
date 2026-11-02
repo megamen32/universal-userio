@@ -883,10 +883,10 @@ function getDotRelay(accountId,binding) {
       statePath: `${stateDir}/dot-relay-${accountId.split(":")[1]}.json`,
       botAccountId:accountId,agentId:"existing-mac-mini-mcp",tabId:binding.pageId,
       browserCall:dotBrowserCall,
-      send:async(owner,text)=>{
+      send:async(owner,text,replyReceipt=null)=>{
         if(owner!==DOT_OWNER)throw new Error("wrong_dot_owner");
         const live=boundLive();
-        const sent=await live.client.sendMessage(BigInt(owner),mirrorSendOptions(text));
+        const sent=await live.client.sendMessage(BigInt(owner),mirrorSendOptions(text,replyReceipt));
         if(!sent?.id)throw new Error("dot_bot_send_unknown");
         return sent.id;
       },

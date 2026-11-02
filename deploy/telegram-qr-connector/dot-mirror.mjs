@@ -12,7 +12,31 @@ export function safeReplyContext(message,replyId){
  if(text.length>1400)return text.slice(0,1400)+'\n[Цитата сокращена]';
  return text;
 }
-export const mirrorSendOptions=text=>({message:text,formattingEntities:[],linkPreview:false});
+// Only a durable native Telegram receipt may become a reply target.
+const nativeTelegramMessageId=value=>typeof value==='string'&&/^[1-9][0-9]*$/.test(value)&&Number.isSafeInteger(Number(value));
+export function resolveMirrorReply(relay,replyTo){
+ if(replyTo==null)return {status:'none',receipt:null};
+ if(typeof replyTo!=='string'||!replyTo)return {status:'unresolved',receipt:null};
+ const matches=new Set();
+ const published=relay.state.mirror?.published?.[replyTo];
+ if(published?.status==='accepted'&&Array.isArray(published.receipts)&&published.receipts.length>0&&published.receipts.every(nativeTelegramMessageId))matches.add(published.receipts[0]);
+ const prefix=relay.botAccountId+':'+OWNER+':';
+ for(const [key,record] of Object.entries(relay.state.incoming||{})){
+  if(!key.startsWith(prefix)||record.source!=='telegram'||record.status!=='accepted'||record.echo!==replyTo)continue;
+  const id=key.slice(prefix.length);
+  if(record.source_message_ids?.length!==1||record.source_message_ids[0]!==id||!nativeTelegramMessageId(id))continue;
+  matches.add(id);
+ }
+ return matches.size===1?{status:'resolved',receipt:[...matches][0]}:{status:'unresolved',receipt:null};
+}
+export function mirrorSendOptions(text,replyTo=null){
+ const options={message:text,formattingEntities:[],linkPreview:false};
+ if(replyTo!=null){
+  if(!nativeTelegramMessageId(String(replyTo)))throw Error('invalid_mirror_reply_receipt');
+  options.replyTo=Number(replyTo);
+ }
+ return options;
+}
 export function mirrorParts(message){
  const label=message.role==='user'?(DOT_POLICY?.ownerLabel||'Owner'):(DOT_POLICY?.assistantLabel||'Assistant');const text=String(message.text||'');
  const pieces=[];let offset=0;
@@ -61,19 +85,24 @@ export class DotMirror{
     if(sensitiveText(m.text)||!m.text.trim()){
      state.held[m.id]={reason:sensitiveText(m.text)?'sensitive_content':'no_visible_text',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
+    const reply=resolveMirrorReply(this.relay,m.reply_to);
+    if(reply.status==='unresolved'){
+     state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
+    }
     let parts;try{parts=mirrorParts(m);}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
-    const pub={hash:c.hash,role:m.role,receipts:[],partHashes:parts.map(textHash),status:'sending'};state.published[m.id]=pub;this.relay.save();
+    const pub={hash:c.hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,receipts:[],partHashes:parts.map(textHash),status:'sending'};state.published[m.id]=pub;this.relay.save();
     for(let n=0;n<parts.length;n++){
      const key='mirror:'+m.id+':'+n;
      if(this.relay.state.outgoing[key]){state.blocked='delivery_requires_review';this.relay.save();return {status:state.blocked};}
      this.relay.state.outgoing[key]={status:'send_uncertain',source_id:m.id,part:n};this.relay.save();
-     try{const receipt=await this.relay.send(OWNER,parts[n]);pub.receipts.push(String(receipt));this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
+     try{const receipt=await this.relay.send(OWNER,parts[n],reply.receipt);pub.receipts.push(String(receipt));this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
      catch{state.blocked='delivery_unknown';this.relay.save();return {status:state.blocked};}
     }
     pub.status='accepted';state.cursor=m.id;delete state.candidates[m.id];changed=true;this.relay.save();
    }
    for(const m of edits){
     const pub=state.published[m.id],c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)continue;
+    if((m.reply_to||null)!==(pub.reply_to||null)){state.held[m.id]={reason:'reply_target_edited_requires_review',hash:c.hash};continue;}
     if(sensitiveText(m.text)||!m.text.trim()){state.held[m.id]={reason:'sensitive_or_empty_update',hash:c.hash};continue;}
     let parts;try{parts=mirrorParts(m);}catch{state.held[m.id]={reason:'oversize_update',hash:c.hash};continue;}
     if(parts.length!==pub.receipts.length){state.held[m.id]={reason:'edit_part_count_changed',hash:c.hash};continue;}
