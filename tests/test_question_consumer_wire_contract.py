@@ -134,6 +134,17 @@ def test_production_shape_manager_claim_and_canonical_source_binding(tmp_path):
              "request_id": "read-only-forbidden"},
             principal=readonly,
         )["ok"] is False
+        # The global service principal is NOT a manager: it maps to dot,
+        # which requires a verified existing dot binding. No role override.
+        service_principal_attempt = surface.dispatch(
+            "userio.messenger.question.acquire",
+            {"event_seq": seq, "revision": "0",
+             "request_id": "service-cannot-claim-as-manager"},
+            principal=store.owner(),
+        )
+        assert service_principal_attempt == {
+            "ok": False, "error": "verified_dot_binding_unavailable",
+        }
         assert store._connection.execute(
             "SELECT COUNT(*) FROM question_coordination"
         ).fetchone()[0] == 1
