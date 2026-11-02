@@ -18,3 +18,7 @@ Existing UserIO workspace_claims TTL reclaims without outgoing receipt; send_wor
 New isolated candidate QuestionCoordination: authorized actor and saved binding injected by FUTURE server adapter, exact question identity/revision, epoch/lease CAS, stable request IDs, append-only audit and UNKNOWN no-replay. send_fenced in offline tests uses fake outgoing journal, real send untouched.
 Candidate focused tests 16 PASS. Existing workspace_claims: 31 PASS and 1 FAIL contact_account_required; see .agents/bugs/20261102-workspace-triage-missing-account-ref.md. One pytest config warning.
 NOT DONE: actual UserIO journal adapter, both processors, real send fencing, delivery/human approval/bot deny live tests, reviewed merge/build/deploy/readback and 11 real acceptance cases. No real external sends. PR16 safety-denied deployment not retried.
+
+## Baseline regression correction checkpoint
+
+Formerly failing UserIO workspace triage regression now PASS with explicit offline Matrix test account binding; 32/32 full workspace claims suite PASS, plus 17/17 new coordinator tests. Only a pre-existing pytest config warning remains. No real provider sends. This does not count as deployed dot/manager integration. Commit and production scope still require normal release guard.
