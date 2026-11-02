@@ -9,7 +9,7 @@ export function readDotPolicy(path=POLICY_PATH,{uid=process.getuid()}={}){
   const p=JSON.parse(readFileSync(fd,'utf8'));
   const keys=['owner','room','sourceAccountId','sourceUsername','browserUrl','sshTarget','pythonPath','mcpScriptPath','mcpEndpoint','ownerLabel','assistantLabel'];
   if(!p||Object.keys(p).some(k=>!keys.includes(k))||!/^\d{1,20}$/.test(p.owner)||! /^[a-f0-9]{32}$/.test(p.room)
-   ||!/^telegram:\d{1,20}$/.test(p.sourceAccountId)||! /^[A-Za-z0-9_]{3,64}$/.test(p.sourceUsername)
+   ||!/^telegram:\d{1,20}$/.test(p.sourceAccountId)||(p.sourceUsername!==undefined&&!/^[A-Za-z0-9_]{3,64}$/.test(p.sourceUsername))
    ||!/^https:\/\/chatgpt\.com\/dots\/[a-zA-Z0-9~-]+$/.test(p.browserUrl)
    ||! /^[a-zA-Z0-9_-]+@[a-zA-Z0-9.-]+$/.test(p.sshTarget)
    ||![p.pythonPath,p.mcpScriptPath].every(x=>typeof x==='string'&&/^\/[a-zA-Z0-9_./-]+$/.test(x)&&!x.includes('..'))

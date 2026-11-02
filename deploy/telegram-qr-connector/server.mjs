@@ -1402,7 +1402,7 @@ http.createServer(async (req, res) => {
     let botClient = null;
     try {
       const payload = await readJsonBody(req, 4096);
-      if (!DOT_POLICY || payload.source_account_id !== DOT_POLICY.sourceAccountId || payload.source_username !== DOT_POLICY.sourceUsername) throw Error("authorized_botfather_source_required");
+      if (!DOT_POLICY?.sourceUsername || payload.source_account_id !== DOT_POLICY.sourceAccountId || payload.source_username !== DOT_POLICY.sourceUsername) throw Error("authorized_botfather_source_required");
       const source = [...liveSlots].find(([id, item]) =>
         item.accountId === payload.source_account_id && enrollmentOwners.allowed(id, browserOwner.principal.user_id));
       if (!source) throw Error("owned_source_account_required");

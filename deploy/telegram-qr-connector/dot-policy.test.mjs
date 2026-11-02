@@ -10,6 +10,12 @@ test('protected policy accepts only the configured scope and safe transport synt
  try{
   const put=p=>writeFileSync(file,JSON.stringify(p),{mode:0o600});
   put(DOT_POLICY);assert.deepEqual(readDotPolicy(file),DOT_POLICY);
+  // A migrated, already bound bot needs no BotFather username.
+  // Enrollment remains disabled when that identity is unverified.
+  const {sourceUsername,...withoutEnrollment}=DOT_POLICY;
+  put(withoutEnrollment);assert.deepEqual(readDotPolicy(file),withoutEnrollment);
+  put({...withoutEnrollment,sourceUsername:''});assert.equal(readDotPolicy(file),null);
+  put(DOT_POLICY);
   for(const patch of [{owner:'bad'},{room:'wrong'},{sshTarget:'user@host;id'},{pythonPath:'/usr/bin/python3;id'},{mcpScriptPath:'/tmp/../private'},{mcpEndpoint:'http://example.invalid/mcp'},{browserUrl:'https://example.invalid/dots/test'},{unknown:true}]){
    put({...DOT_POLICY,...patch});assert.equal(readDotPolicy(file),null);
   }
