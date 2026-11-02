@@ -7,7 +7,7 @@ name = "universal-userio"
 version = "0.1.0"
 description = "Business control plane for AI-assisted cross-channel conversations"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["regex>=2024.11.6,<2027"]
 
 [project.scripts]
 universal-userio = "universal_userio.runtime:main"
