@@ -838,13 +838,39 @@ def test_triage_disabled_is_legacy_notify_all_and_safety_override_fails_open(tmp
     assert safety["drafts"] == []
 
 
-def test_triage_send_rechecks_policy_is_idempotent_and_rejects_conflicting_choice(tmp_path) -> None:
+def test_triage_send_rechecks_policy_is_idempotent_and_rejects_conflicting_choice(tmp_path, monkeypatch) -> None:
     store = SQLiteUserIOStore(tmp_path / "userio.sqlite3")
     outbox = Outbox()
     service = UserIOService(store, TriageGenerator(), outbox)
+    # Register an explicit offline test account instead of sending from a
+    # fabricated Matrix identity. The real adapter still requires source
+    # account binding; the provider is replaced by an in-memory sink only.
+    from universal_userio.account_connections import ConnectorSecrets
+    from universal_userio.channels import matrix as matrix_channel
+
+    account_ref = "matrix:offline-fixture"
+    store.register_account(
+        account_id=account_ref, provider="matrix", display_name="Fixture Matrix",
+        can_read=True, can_reply=True, credential_ref="connector:offline-fixture",
+    )
+    def fixture_secret(self, reference, *, user_id, provider):
+        assert reference == "connector:offline-fixture" and provider == "matrix"
+        return {"account_id": account_ref, "user_id": user_id,
+                "homeserver": "https://offline.invalid", "access_token": "offline-only"}
+
+    class FixtureMatrixSender:
+        def __init__(self, homeserver, token):
+            assert homeserver == "https://offline.invalid" and token == "offline-only"
+        def send(self, *, room_id, body, request_id):
+            outbox.calls.append({"room_id": room_id, "body": body, "request_id": request_id})
+            return "triage-receipt"
+
+    monkeypatch.setattr(ConnectorSecrets, "load", fixture_secret)
+    monkeypatch.setattr(matrix_channel, "MatrixSender", FixtureMatrixSender)
     conversation_id, _ = service.receive(
-        InboxMessage("matrix", "1", "anna", "Нужен ответ", 1.0, conversation_kind="direct"),
-        route_id="matrix",
+        InboxMessage("matrix", "1", "anna", "Нужен ответ", 1.0,
+                     conversation_kind="direct", peer_id="!offline:fixture.invalid"),
+        route_id="matrix", account_ref=account_ref,
     )
     event_seq = store.workspace_events()["events"][0]["seq"]
     result = service.triage_workspace_event(
@@ -869,8 +895,9 @@ def test_triage_send_rechecks_policy_is_idempotent_and_rejects_conflicting_choic
         )
 
     service.receive(
-        InboxMessage("matrix", "2", "anna", "Ещё вопрос", 2.0, conversation_kind="direct"),
-        route_id="matrix",
+        InboxMessage("matrix", "2", "anna", "Ещё вопрос", 2.0,
+                     conversation_kind="direct", peer_id="!offline:fixture.invalid"),
+        route_id="matrix", account_ref=account_ref,
     )
     next_seq = store.workspace_events()["events"][-1]["seq"]
     next_result = service.triage_workspace_event(
