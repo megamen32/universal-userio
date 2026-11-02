@@ -1,0 +1,50 @@
+# Shared dot / ExManager question wire contract — source checkpoint
+
+**Evidence base:** Universal UserIO `main=d5c1eb0fa0f8ef33c07de46ce23a2710c168852e` (installed backend/voice at 2026-11-02 21:02 UTC), containing PR13 `0e453378` and PR15 `defeae4b`. Source-only consumer contract; **no live two-consumer acceptance, no new credentials, no production change**.
+
+## Single canonical backend, no second fence
+
+The only authority is the already-merged `src/universal_userio/question_runtime.py` wrapping `question_coordination.py` with existing UserIO `messenger_actions`. `src/universal_userio/messenger.py::Messenger.approve(action_id,expected_hash,confirm,question=...)` performs the original provider-entry fence; `store.py::claim_draft_send` refuses the legacy draft path for a claimed *same* source. **Do not merge the stale PR12 alternative** `question_coordination_adapter.py` / `_question_fence`; reconcile any missing checks against the current merged backend in a single reviewed implementation. A separate JS/Go-only lock is not sufficient.
+
+### Existing RPC surfaces
+
+**ExManager**: native, already authorized UserIO MCP; tools are *exactly*
+`userio.messenger.question.{acquire,renew,pause,handoff,resume,result_saved,reconcile,complete,audit}`.
+Each tool requires the exact existing authenticated principal (current owner/account grants, send capability); never supply `worker_id`, `holder`, `tenant`, account IDs or a replacement token. No read-only or revoked account upgrade. The wire uses `revision`, **not** `source_revision`; `reconcile`, **not** `reconcile_delivery`. All successful MCP replies are **wrapped**:
+```json
+{"ok":true,"question":{"question_id":"<server-id>","holder":"manager","epoch":1,"lease_token":"<opaque-leased-token>","state":"active","result_ref":null,"lease_expires_at":1234.5}}
+```
+The example placeholders are not real IDs/tokens. Errors are `{"ok":false,"error":"<machine-reason>"}`; do not treat a partial response as an acquired lease. `acquire` inputs: `event_seq` (positive integer), `revision` (current source `edited_at` as string, `"0"` for unedited), `request_id` (stable idempotency ID); optional `ttl` 30–900s, `pending_question`, `card_id`. `renew` adds `lease_token,epoch`; `pause` requires `event_seq,revision,request_id`; `handoff` adds `target_holder="dot"|"manager"`; `resume` requires `event_seq,revision,request_id` (do not reuse old lease); `result_saved` adds current `lease_token,epoch,request_id,result_ref`; `reconcile` only `event_seq,revision,request_id`; `complete` adds current lease token/epoch; `audit` only `event_seq`.
+
+**dot**: existing UserIO service-token-only `POST /v1/questions/operation`, body `{"operation":"acquire","arguments":{"event_seq":1,"revision":"0","request_id":"<stable-id>"}}`. Reply is `{"ok":true,"question":{...}}`, not a flat record. Existing owner ingress service token + current verified file-owned/0600 `dot-binding.json` derive the `dot` holder for the **bound bot account + owner private chat only**. Nonservice HTTP caller gets 403; rejection gets 409; no provider-send endpoint is exposed here. The private token is not a credential to issue to another actor, and no `owner`/account override from JSON is permitted.
+
+### Canonical inbound source
+
+In `deploy/telegram-qr-connector/server.mjs::envelope` the saved `message_id` is **`${accountId}|${chatKey}:${message.id}`** (e.g., `telegram:123456789|12345:77`) for an account-bound Telegram ingress. The *raw* Telegram `77`, relay journal `botAccount:owner:77`, chat label, browser echo and `ROOM` are not this UserIO source ID. Persist the exact `account_ref`, `conversation_id`, `source='telegram'`, `message_id`, and current source revision; use the accepted original UserIO `workspace_events.seq` as `event_seq`. The existing `POST /v1/messages` returns `conversation_id` and `accepted` but **not** `event_seq`; resolve the actual persisted event through the existing `GET /v1/workspace/events?after=...&limit=...` (or existing authorized MCP workspace poll) and verify **all** source/account/conversation/message fields, direction incoming, current eligibility and sender not bot. No invented sequence, no claim based only on `postInbox.accepted`; if event is not present/eligible, fail closed. Do not disable policy for `telegram_bot` or edit/read-only accounts to force claims.
+
+### Single original outgoing send fence / receipt
+
+1. Claim before **either** `DotRelay.deliver` / `dot_send` (model input) or ExManager generation; if busy, paused, invalid binding, or UNKNOWN, do nothing and keep durable source.
+2. Save a real draft/action through `userio.messenger.propose` with original **UserIO** `source_message_id`, same authenticated account/conversation, action `reply`, stable original `request_id`, and bounded payload. This creates the existing `messenger_actions` row but does **not** send.
+3. `result_saved`: `result_ref="messenger:"+action.id` (not the raw provider message ID, not `request_id`, not ExManager card ID). A claim holder cannot invent this row; same saved source/user/account must match.
+4. Only after exact human approval where required, invoke the existing `userio.messenger.approve` with `action_id`, immutable `expected_hash`, `confirm=true`, and **`question`** proof `{"event_seq":...,"revision":...,"epoch":...,"lease_token":...}`. The backend rechecks live grants, source, CAS and journal and irrevocably records delivery `UNKNOWN` before provider I/O. It invokes existing transport once; no separate sender/queue or `_question_fence` callback from model JSON. No second call after unknown.
+5. Reconcile by `userio.messenger.question.reconcile` with the **same original journal action** and a *new stable ID for each receipt-read attempt*: the state machine memoizes `request_id`, so reusing an old unknown reconciliation ID returns the old snapshot. `userio.messenger.get({action_id})` is read-only supporting evidence. `accepted` in original `messenger_actions` plus nonempty receipt produces `delivery_state="sent"` and `receipt_ref="messenger:"+action.id`; otherwise `unknown`. No inferred failed/sent on timeout; `complete` needs real result and defined receipt.
+6. During unknown send, `handoff` remains pending `transferring`; do not automatically free/retry via `workspace.fail`. When receipt settles, reread current epoch/holder and explicitly `resume` before any new work. Completion-only adoption after expired TTL preserves original result/receipt and cannot resend.
+7. A dot mirror reply **must not** call `client.sendMessage` directly for a question claimed under this shared fence. It must use the original approved UserIO `messenger_actions` operation/receipt. Existing `DotMirror` multi-part output currently creates multiple provider sends; this per-question contract permits only **one** original outgoing operation. Route bounded one-part response or explicitly fail closed on oversize rather than introducing multiple untracked chunks or a second fence. Ordinary non-question mirror behavior stays owned by Mirror.
+
+### Exact file ownership (no overlapping writers)
+
+| Owner | Only their scoped files | Required work |
+|---|---|---|
+| **Mirror successor** (session prefix `6ae8637c`) | `deploy/telegram-qr-connector/dot-relay.mjs`, `dot-mirror.mjs`, `server.mjs`, and new Mirror-owned adapter/tests | Resolve original `event_seq` from UserIO; claim before browser submission; preserve original `source_message_id` through echo/mirror; use existing UserIO messenger proposed/approved outgoing action and receipt instead of direct Telegram send for *claimed* questions; no media/voice changes |
+| **ExManager owner** (session prefix `6ae780de`) | `airlock-agent/userio_question_coordination.go`, its own tests; only approved exact additions to `userio.go`/`telegram_chat.go` after existing PR16/board owners clear shared files | Repair PR17 legacy namespace, `source_revision`, `reconcile_delivery` and flat response assumptions. Register client at current owner-bound MCP resource; verify lease BEFORE generation, send only via saved Messenger action with immutable approval and real receipt; no automatic send or pretend success |
+| **One backend integrator / root release owner (not this contract writer)** | Existing merged PR13 UserIO `question_runtime.py`, `question_coordination.py`, `messenger.py`, `store.py`, MCP/http files; approved narrow changes only | Reconcile PR12's overlapping callbacks against PR13, review effective server-side fence with both consumer adapters; only one registered authoritative provider permit |
+| **Logging owner** (session prefix `6ae895e6`) | `adapters.py`, `chatgpt_request_trace.py`, their ChatGPT request tests | Passive tracing acceptance only; untouched by this contract |
+
+**Acceptance gate:** all 11 existing Todo cases require actual two-consumer integration and original receipt verification, after normal human review. Offline no-send test pass cannot be reported as runtime acceptance. During the current Airlock critical window: **no release lease, no Hub/UserIO restart, no production rollout, no real send, no new access rights**.
+
+## Source/test receipts
+
+- PR13 merged `0e453378` and PR15 merged `d5c1eb0` are ancestors of installed UserIO `d5c1eb0`.
+- `PYTHONPATH=src python3 -m pytest -q tests/test_question_runtime_adapter.py tests/test_question_coordination_native_recovery.py tests/test_question_coordination.py` on isolated `d5c1eb0`: **29/29 PASS**, existing pytest config warning `asyncio_default_fixture_loop_scope`.
+- PR16 `1d70cb8` is open, `scan=SUCCESS` but **no independent GitHub review/approval** at last observed 2026-11-02 21:02 UTC. Its separate untouched tests established 71/71 PASS. Do not claim merge/activation.
