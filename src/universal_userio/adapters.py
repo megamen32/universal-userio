@@ -29,6 +29,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping
 
 from . import chatgpt_sessions
+from .chatgpt_request_trace import CHATGPT_REQUEST_TRACE, classify_endpoint, retry_after_seconds
 from .channels.core import AdapterNotSupported
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 from .contracts import ChannelFile, ContactResolutionUnavailable, DeliveryNotSubmittedError, InboxMessage, ReplyDraft
@@ -1658,19 +1659,29 @@ class ChatGPTCDPMcpClient:
         self._lock = threading.Lock()
 
     def call(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            self._start()
-            result = self._request("tools/call", {"name": name, "arguments": dict(arguments)})
-        content = result.get("content")
-        if not isinstance(content, list) or not content or not isinstance(content[0], Mapping):
-            raise RuntimeError("chatgpt-cdp-mcp returned an invalid tool result")
-        text = content[0].get("text")
-        if not isinstance(text, str):
-            raise RuntimeError("chatgpt-cdp-mcp returned a non-text tool result")
-        value = json.loads(text)
-        if not isinstance(value, dict):
-            raise RuntimeError("chatgpt-cdp-mcp returned a non-object tool result")
-        return value
+        started = time.perf_counter()
+        try:
+            with self._lock:
+                self._start()
+                result = self._request("tools/call", {"name": name, "arguments": dict(arguments)})
+            content = result.get("content")
+            if not isinstance(content, list) or not content or not isinstance(content[0], Mapping):
+                raise RuntimeError("chatgpt-cdp-mcp returned an invalid tool result")
+            text = content[0].get("text")
+            if not isinstance(text, str):
+                raise RuntimeError("chatgpt-cdp-mcp returned a non-text tool result")
+            value = json.loads(text)
+            if not isinstance(value, dict):
+                raise RuntimeError("chatgpt-cdp-mcp returned a non-object tool result")
+            return value
+        finally:
+            try:
+                CHATGPT_REQUEST_TRACE.record(
+                    initiator="userio_cdp", executor="cdp_sidecar", kind="delegated",
+                    operation=name if name in {"list_chats", "export_chat", "send_message"} else "other",
+                    endpoint="cdp_sidecar", latency_ms=(time.perf_counter()-started)*1000)
+            except Exception:
+                pass  # A failed observer must not change the MCP delivery receipt.
 
     def _start(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -1731,6 +1742,48 @@ def _configured_chatgpt_cdp_client() -> ChatGPTCDPMcpClient:
         return _chatgpt_cdp_client
 
 
+def _chatgpt_stage_draft(
+    *, service: Any, user_id: str, chat_ref: str, chat: Mapping[str, Any],
+    text: str, account_ref: str = "",
+) -> ReplyDraft:
+    """Prepare a ChatGPT draft without a provider send or automatic AI listener."""
+    if not isinstance(text, str) or not text.strip() or len(text) > 16_000:
+        raise ValueError("ChatGPT draft text must be nonempty and at most 16000 characters")
+    if not isinstance(chat_ref, str) or not chat_ref or len(chat_ref) > 256:
+        raise ValueError("ChatGPT chat reference is invalid")
+    if not isinstance(chat, Mapping) or str(chat.get("id") or chat.get("chatRef") or "") != chat_ref:
+        raise ValueError("ChatGPT chat identity mismatch")
+    messages = chat.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("ChatGPT conversation has no verified message for a draft anchor")
+    latest = next(
+        (m for m in reversed(messages) if isinstance(m, Mapping)
+         and m.get("role") in {"user", "assistant"} and isinstance(m.get("text"), str)
+         and m["text"].strip()), None,
+    )
+    if latest is None:
+        raise ValueError("ChatGPT conversation has no valid draft anchor")
+    native_ref = str(latest.get("node_id") or latest.get("messageRef") or latest.get("id") or "")
+    if not native_ref or len(native_ref) > 256:
+        raise ValueError("ChatGPT latest message reference is unavailable")
+    source = "chatgpt:" + account_ref if account_ref else "chatgpt"
+    ingress = InboxMessage(
+        source, native_ref, chat_ref, latest["text"], time.time(),
+        reconciliation=True, peer_id=chat_ref,
+    )
+    conversation_id, _ = service.receive(ingress, route_id="chatgpt", user_id=user_id)
+    create = getattr(service, "create_manual_draft", None)
+    if callable(create):
+        return create(conversation_id, body=text, user_id=user_id)
+    # The current service exposes canonical persistence, not the legacy helper.
+    persist = getattr(service, "_persist_reply_draft", None)
+    if not callable(persist):
+        raise AdapterNotSupported("UserIO draft staging is unavailable")
+    draft = ReplyDraft("draft_" + uuid.uuid4().hex, conversation_id, text, "proposed")
+    persist(draft, user_id=user_id)
+    return draft
+
+
 class ChatGPTCDPChannelAdapter:
     """Read page-visible ChatGPT chats via one explicitly configured CDP MCP sidecar."""
 
@@ -1763,6 +1816,13 @@ class ChatGPTCDPChannelAdapter:
         if not isinstance(chat, dict):
             raise RuntimeError("chatgpt-cdp-mcp returned an invalid chat export")
         return {"chat": chat}
+
+    def send(self, *, chat_id: str, text: str) -> ReplyDraft:
+        data = self.read(chat_id=chat_id)
+        return _chatgpt_stage_draft(
+            service=self._service, user_id=self._user_id,
+            chat_ref=chat_id, chat=data["chat"], text=text,
+        )
 
     def download(self, *, file_ref: str) -> ChannelFile:
         del file_ref
@@ -1924,6 +1984,14 @@ class ChatGPTWebChannelAdapter:
         slug = _chatgpt_resolve_account(self._username, chat_id or "")
         return {"chat": _chatgpt_conversation(self._username, slug, chat_id or ""), "account": slug}
 
+    def send(self, *, chat_id: str, text: str) -> ReplyDraft:
+        data = self.read(chat_id=chat_id)
+        return _chatgpt_stage_draft(
+            service=self._service, user_id=self._user_id,
+            chat_ref=chat_id, chat=data["chat"], text=text,
+            account_ref=str(data.get("account") or ""),
+        )
+
     def download(self, *, file_ref: str) -> ChannelFile:
         del file_ref
         raise AdapterNotSupported("not supported by adapter")
@@ -2026,7 +2094,7 @@ def _chatgpt_bearer(user: str, slug: str) -> str:
     token = str(session.get("accessToken") or "")
     if not token:
         raise RuntimeError(
-            f"ChatGPT session cookie rejected for account {slug!r}: no accessToken; re-register the session"
+            "ChatGPT session cookie rejected: no accessToken; re-register the session"
         )
     _chatgpt_tokens[key] = (token, time.time() + 600)
     return token
@@ -2050,32 +2118,61 @@ def _chatgpt_raw(
     for chunk in _chatgpt_accounts(user).get(slug, []):
         if chunk["name"] == "oai-did":
             headers["OAI-Device-Id"] = chunk["value"]
+    # Cache hit means an existing, unexpired *local auth bearer* was reused.
+    # It does NOT mean the conversation HTTP call was avoided.
+    auth_cache_hit = False
     if bearer_needed:
+        cached = _chatgpt_tokens.get((user, slug))
+        auth_cache_hit = bool(cached and cached[0] and time.time() < cached[1])
         headers["Authorization"] = f"Bearer {_chatgpt_bearer(user, slug)}"
     if json_body is not None:
         headers["Content-Type"] = "application/json"
         headers["Accept"] = "text/event-stream"
     response = None
     last_error: Exception | None = None
-    for _ in range(3):  # chatgpt.com occasionally closes connections mid-transfer
+    operation, endpoint = classify_endpoint(url, method="POST" if json_body is not None else "GET")
+    for attempt in range(3):  # Each physical attempt gets one upstream record.
         client = _chatgpt_client(user, slug)
+        started = time.perf_counter()
         try:
             response = client.post(url, headers=headers, json=json_body) if json_body is not None \
                 else client.get(url, headers=headers)
-            break
         except Exception as error:  # curl_cffi raises its own hierarchy
             last_error = error
+            try:
+                CHATGPT_REQUEST_TRACE.record(
+                    initiator="userio_web", executor="curl_cffi", kind="upstream_http",
+                    operation=operation, endpoint=endpoint, latency_ms=(time.perf_counter()-started)*1000,
+                    retry_attempt=attempt, backoff_ms=1000,
+                    cache_hit=auth_cache_hit)
+            except Exception:
+                pass  # Telemetry must never change delivery outcomes.
             time.sleep(1)
+            continue
+        try:
+            retry_header = getattr(getattr(response, "headers", None), "get", lambda _key: None)("Retry-After")
+            CHATGPT_REQUEST_TRACE.record(
+                initiator="userio_web", executor="curl_cffi", kind="upstream_http",
+                operation=operation, endpoint=endpoint, status=int(response.status_code),
+                latency_ms=(time.perf_counter()-started)*1000,
+                retry_attempt=attempt, retry_after_s=retry_after_seconds(retry_header),
+                cache_hit=auth_cache_hit)
+        except Exception:
+            pass  # Only local metadata; no body/headers/URLs ever logged.
+        break
     if response is None:
-        raise RuntimeError(f"ChatGPT transport failed: {last_error}")
+        # Provider exceptions may embed URLs, query parameters, or header values.
+        # Return the exception class only; never interpolate the raw exception.
+        raise RuntimeError(
+            f"ChatGPT transport failed: {type(last_error).__name__ if last_error else 'unknown'}")
     if response.status_code in (401, 403):
         _chatgpt_tokens.pop((user, slug), None)
         raise RuntimeError(
-            f"ChatGPT rejected the request for account {slug!r} "
+            "ChatGPT rejected the request "
             f"(HTTP {response.status_code}); the session cookie likely expired"
         )
     if response.status_code != 200:
-        raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {url.split('?')[0]}")
+        raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {endpoint}")
     return response.text
 
 
