@@ -4,7 +4,28 @@ export async function pageAction(url, room, text, after, replyTo=null) {
     const rows = allRows.filter(e=>!e.closest?.('.reply-chain-panel[role="dialog"]'));
     const prefix = room + '~' + room + '~CalpicoMessage~';
     if (!rows.length || rows.some(e => !e.dataset.messageId.startsWith(prefix))) return {ok:false,error:'wrong_or_unloaded_room'};
-    const messages = rows.map(e => ({id:e.dataset.messageId,role:e.classList.contains('self')?'user':'assistant',text:e.querySelector('.message-text')?.innerText || '',attachment_names:[...(e.querySelectorAll?.('img.attachment-image')||[])].map(i=>i.alt).filter(Boolean),reply_to:e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId || null}));
+    const messages=[];
+    for(const e of rows){
+      const images=[...(e.querySelectorAll?.('img.attachment-image')||[])];
+      if(images.length>10)return {ok:false,error:'too_many_visible_attachments'};
+      const attachment_fingerprints=[];
+      for(const img of images){
+        const src=img.currentSrc||img.src||img.getAttribute?.('src')||'';
+        if(typeof src!=='string'||!src)return {ok:false,error:'media_source_unavailable'};
+        // Only a digest of the DOM source is returned; signed URLs never
+        // leave the authenticated page or enter the durable message journal.
+        let digest;
+        try{
+          digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(new URL(src,location.href).href));
+        }catch{return {ok:false,error:'media_fingerprint_requires_review'};}
+        attachment_fingerprints.push(Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join(''));
+      }
+      messages.push({id:e.dataset.messageId,role:e.classList.contains('self')?'user':'assistant',
+        text:e.querySelector('.message-text')?.innerText||'',
+        attachment_names:images.map(i=>i.alt).filter(Boolean),
+        attachment_count:images.length,attachment_fingerprints,
+        reply_to:e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||null});
+    }
     let editors = [...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e => e.getClientRects().length);
     if (text === null) {
       const index = after ? messages.findIndex(m=>m.id===after) : -1;
