@@ -2037,7 +2037,7 @@ def _chatgpt_bearer(user: str, slug: str) -> str:
     token = str(session.get("accessToken") or "")
     if not token:
         raise RuntimeError(
-            f"ChatGPT session cookie rejected for account {slug!r}: no accessToken; re-register the session"
+            "ChatGPT session cookie rejected: no accessToken; re-register the session"
         )
     _chatgpt_tokens[key] = (token, time.time() + 600)
     return token
@@ -2061,7 +2061,12 @@ def _chatgpt_raw(
     for chunk in _chatgpt_accounts(user).get(slug, []):
         if chunk["name"] == "oai-did":
             headers["OAI-Device-Id"] = chunk["value"]
+    # Cache hit means an existing, unexpired *local auth bearer* was reused.
+    # It does NOT mean the conversation HTTP call was avoided.
+    auth_cache_hit = False
     if bearer_needed:
+        cached = _chatgpt_tokens.get((user, slug))
+        auth_cache_hit = bool(cached and cached[0] and time.time() < cached[1])
         headers["Authorization"] = f"Bearer {_chatgpt_bearer(user, slug)}"
     if json_body is not None:
         headers["Content-Type"] = "application/json"
@@ -2081,7 +2086,8 @@ def _chatgpt_raw(
                 CHATGPT_REQUEST_TRACE.record(
                     initiator="userio_web", executor="curl_cffi", kind="upstream_http",
                     operation=operation, endpoint=endpoint, latency_ms=(time.perf_counter()-started)*1000,
-                    retry_attempt=attempt, backoff_ms=1000 if attempt < 2 else 0)
+                    retry_attempt=attempt, backoff_ms=1000,
+                    cache_hit=auth_cache_hit)
             except Exception:
                 pass  # Telemetry must never change delivery outcomes.
             time.sleep(1)
@@ -2092,20 +2098,24 @@ def _chatgpt_raw(
                 initiator="userio_web", executor="curl_cffi", kind="upstream_http",
                 operation=operation, endpoint=endpoint, status=int(response.status_code),
                 latency_ms=(time.perf_counter()-started)*1000,
-                retry_attempt=attempt, retry_after_s=retry_after_seconds(retry_header))
+                retry_attempt=attempt, retry_after_s=retry_after_seconds(retry_header),
+                cache_hit=auth_cache_hit)
         except Exception:
             pass  # Only local metadata; no body/headers/URLs ever logged.
         break
     if response is None:
-        raise RuntimeError(f"ChatGPT transport failed: {last_error}")
+        # Provider exceptions may embed URLs, query parameters, or header values.
+        # Return the exception class only; never interpolate the raw exception.
+        raise RuntimeError(
+            f"ChatGPT transport failed: {type(last_error).__name__ if last_error else 'unknown'}")
     if response.status_code in (401, 403):
         _chatgpt_tokens.pop((user, slug), None)
         raise RuntimeError(
-            f"ChatGPT rejected the request for account {slug!r} "
+            "ChatGPT rejected the request "
             f"(HTTP {response.status_code}); the session cookie likely expired"
         )
     if response.status_code != 200:
-        raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {url.split('?')[0]}")
+        raise RuntimeError(f"ChatGPT returned HTTP {response.status_code} for {endpoint}")
     return response.text
 
 

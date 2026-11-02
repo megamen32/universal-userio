@@ -77,10 +77,12 @@ def test_actual_http_429_is_attributed_without_new_headers_or_remote_calls(monke
     monkeypatch.setattr(adapters, "_chatgpt_client", lambda *_: client)
     secret = "AUTH_KEY_NOT_ALLOWED_IN_TRACE"
     with caplog.at_level(logging.INFO, logger="universal_userio.chatgpt_request_trace"):
-        with pytest.raises(RuntimeError, match="HTTP 429"):
+        with pytest.raises(RuntimeError, match="HTTP 429") as failure:
             adapters._chatgpt_raw("fixture_user", "fixture",
                                  "https://chatgpt.com/backend-api/conversation/"+secret+"?token=NEVER_LOG",
                                  bearer_needed=False)
+    assert secret not in str(failure.value)
+    assert "NEVER_LOG" not in str(failure.value)
     assert len(client.calls) == 1
     assert all(not k.lower().startswith(("x-trace", "x-correlation", "x-request-id"))
                for k in client.calls[0][1])
@@ -124,3 +126,122 @@ def test_minute_rollup_emits_without_timer_or_background_traffic(caplog):
     assert summary["events"] == 2
     assert summary["upstream_http"] == 1
     assert summary["http_429"] == 0
+
+
+def test_active_web_transport_auth_cache_and_429_are_not_double_counted(monkeypatch, caplog):
+    """One nested auth mint plus 3 explicit HTTP calls means exactly four upstream attempts."""
+    trace = ChatGPTRequestTrace()
+    monkeypatch.setattr(adapters, "CHATGPT_REQUEST_TRACE", trace)
+    monkeypatch.setattr(adapters, "_chatgpt_accounts", lambda *_: {"fixture": []})
+    monkeypatch.setattr(adapters, "_chatgpt_user_agent", lambda *_: "fixture-agent")
+    monkeypatch.setattr(adapters, "_chatgpt_tokens", {})
+
+    private = "MOCK_SECRET_NOT_FOR_LOGS"
+    class Response:
+        def __init__(self, status, text, headers=None):
+            self.status_code, self.text, self.headers = status, text, headers or {}
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+        def get(self, url, headers):
+            self.calls.append((url, tuple(headers)))
+            if "/api/auth/session" in url:
+                return Response(200, json.dumps({"accessToken": private}))
+            if "/backend-api/conversation/" in url:
+                return Response(429, "limited", {"Retry-After": "17"})
+            return Response(200, '{"items":[]}')
+    client=Client()
+    monkeypatch.setattr(adapters, "_chatgpt_client", lambda *_: client)
+    with caplog.at_level(logging.WARNING, logger="universal_userio.chatgpt_request_trace"):
+        for _ in range(2):
+            assert adapters._chatgpt_request(
+                "fixture_user", "fixture",
+                "https://chatgpt.com/backend-api/conversations?state=OAUTH_STATE_PRIVATE"
+            ) == {"items": []}
+        with pytest.raises(RuntimeError, match="HTTP 429"):
+            adapters._chatgpt_request(
+                "fixture_user", "fixture",
+                "https://chatgpt.com/backend-api/conversation/PRIVATE_CHAT_ID?code=PRIVATE_CODE"
+            )
+    events=[json.loads(x.getMessage().split(" ", 1)[1]) for x in caplog.records
+            if x.getMessage().startswith("chatgpt_request ")]
+    assert [x["operation"] for x in events] == [
+        "auth_session", "conversation_list", "conversation_list", "conversation_read"
+    ]
+    assert len(client.calls)==4
+    assert [x["upstream_count"] for x in events]==[1,1,1,1]
+    assert [x["cache_hit"] for x in events]==[False,False,True,True]
+    assert sum(x["http_429"] for x in trace.minute_snapshot())==1
+    assert sum(x["upstream_http"] for x in trace.minute_snapshot())==4
+    assert sum(x["cache_hits"] for x in trace.minute_snapshot())==2
+    for forbidden in (private, "OAUTH_STATE_PRIVATE", "PRIVATE_CODE", "PRIVATE_CHAT_ID",
+                      "fixture_user"):
+        assert forbidden not in caplog.text
+
+
+def test_retry_error_strips_url_query_and_counts_all_physical_attempts(monkeypatch, caplog):
+    trace = ChatGPTRequestTrace()
+    monkeypatch.setattr(adapters, "CHATGPT_REQUEST_TRACE", trace)
+    monkeypatch.setattr(adapters, "_chatgpt_accounts", lambda *_: {"fixture":[]})
+    monkeypatch.setattr(adapters, "_chatgpt_user_agent", lambda *_: "")
+    slept=[]
+    monkeypatch.setattr(adapters.time, "sleep", lambda delay: slept.append(delay))
+
+    class Broken:
+        calls=0
+        def get(self, url, headers):
+            self.calls += 1
+            raise RuntimeError("private request ?access_token=SHOULD_NEVER_ESCAPE")
+    fake=Broken()
+    monkeypatch.setattr(adapters, "_chatgpt_client", lambda *_: fake)
+    with caplog.at_level(logging.WARNING, logger="universal_userio.chatgpt_request_trace"):
+        with pytest.raises(RuntimeError, match="ChatGPT transport failed: RuntimeError") as result:
+            adapters._chatgpt_raw("fixture_user", "fixture",
+                    "https://chatgpt.com/backend-api/conversations?code=HIDDEN_CODE",
+                    bearer_needed=False)
+    assert fake.calls==3
+    assert slept==[1,1,1]  # existing retry pacing retained
+    assert "SHOULD_NEVER_ESCAPE" not in str(result.value)
+    assert "HIDDEN_CODE" not in str(result.value)
+    events=[json.loads(x.getMessage().split(" ",1)[1]) for x in caplog.records
+            if x.getMessage().startswith("chatgpt_request ")]
+    assert [x["retry_attempt"] for x in events]==[0,1,2]
+    assert [x["backoff_ms"] for x in events]==[1000,1000,1000]
+    assert sum(x["upstream_http"] for x in trace.minute_snapshot())==3
+    assert sum(x["http_429"] for x in trace.minute_snapshot())==0
+    assert "SHOULD_NEVER_ESCAPE" not in caplog.text
+    assert "HIDDEN_CODE" not in caplog.text
+
+
+def test_web_send_post_operation_and_status_redacted(monkeypatch, caplog):
+    trace=ChatGPTRequestTrace()
+    monkeypatch.setattr(adapters, "CHATGPT_REQUEST_TRACE", trace)
+    monkeypatch.setattr(adapters, "_chatgpt_accounts", lambda *_: {"fixture":[]})
+    monkeypatch.setattr(adapters, "_chatgpt_user_agent", lambda *_: "")
+    class Response:
+        status_code=429
+        headers={"Retry-After":"42"}
+        text="not used"
+    class Client:
+        def __init__(self):self.calls=[]
+        def post(self,url,headers,json):
+            self.calls.append((url,set(headers),json))
+            return Response()
+    client=Client()
+    monkeypatch.setattr(adapters, "_chatgpt_client", lambda *_: client)
+    with caplog.at_level(logging.WARNING, logger="universal_userio.chatgpt_request_trace"):
+        with pytest.raises(RuntimeError, match="HTTP 429"):
+            adapters._chatgpt_raw("fixture_user","fixture",
+                                 "https://chatgpt.com/backend-api/conversation?code=OAUTH_CODE_PRIVATE",
+                                 bearer_needed=False, json_body={"prompt":"MOCK_PRIVATE_MESSAGE"})
+    assert len(client.calls)==1
+    events=[json.loads(x.getMessage().split(" ",1)[1]) for x in caplog.records
+            if x.getMessage().startswith("chatgpt_request ")]
+    assert len(events)==1
+    assert events[0]["operation"]=="message_send"
+    assert events[0]["endpoint"]=="/backend-api/conversation"
+    assert events[0]["retry_after_s"]==42
+    assert events[0]["upstream_count"]==1
+    assert "OAUTH_CODE_PRIVATE" not in caplog.text
+    assert "MOCK_PRIVATE_MESSAGE" not in caplog.text
