@@ -422,3 +422,19 @@ def test_http_unknown_receipt_explicitly_refuses_replay(fixture):
         app.shutdown()
         app.server_close()
         t.join(timeout=4)
+
+
+def test_stdio_like_messenger_without_runtime_cannot_bypass_claimed_source(fixture):
+    store, service, consent, provider, dot, human, action, lease, seq, _ = fixture
+    # The standalone stdio UserIO MCP runs without HTTP handler(runtime).
+    # A claimed original must not fall through as a normal Messenger action.
+    runtime = service.question_runtime
+    service.question_runtime = None
+    try:
+        with pytest.raises(PermissionError, match="claimed_question_runtime_unavailable"):
+            Messenger(store, service, dot).approve(
+                action["id"], action["hash"], True)
+        assert provider.calls == 0
+        assert Messenger(store, service, dot).get(action["id"])["status"] == "proposed"
+    finally:
+        service.question_runtime = runtime

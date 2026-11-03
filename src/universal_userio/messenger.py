@@ -824,6 +824,21 @@ class Messenger:
         if provider is None or getattr(provider,'account_ref',None)!=e['account_ref']:
             raise ValueError('provider_account_conflict')
         question_runtime = getattr(self.service, 'question_runtime', None)
+        if (question_runtime is None and e.get('source_message_id')
+                and self.store._table_exists('question_coordination')):
+            # Stdio MCP and other in-process Messenger entrypoints can exist
+            # without the HTTP-installed runtime. A claimed source must never
+            # fall through to provider.execute merely because that guard is
+            # absent in this transport.
+            with self.store._lock:
+                held = self.store._connection.execute("""
+                    SELECT 1 FROM question_coordination
+                    WHERE user_id=? AND account_ref=? AND conversation_id=?
+                      AND message_id=? AND tenant='userio' LIMIT 1
+                """, (self.user, e.get('account_ref'),
+                      e.get('conversation_id'), e.get('source_message_id'))).fetchone()
+            if held is not None:
+                raise PermissionError('claimed_question_runtime_unavailable')
         question_receipt_context = None
         if e['action'] == 'reply' and question_runtime is not None:
             # Exactly one already human-approved original action may reach

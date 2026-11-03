@@ -34,3 +34,11 @@ The existing UserIO bearer authenticates the bound dot service principal. The ex
 ## Before production acceptance
 
 Independent backend security review and dedicated source regression, update Mirror PR19 and ExManager PR17 adapters by their actual owners, review normal build/deploy gates, then verify the **11 actual user acceptance cases** and original provider receipts. No offline/synthetic result alone is runtime acceptance.
+
+## Additional provider-entry and cross-consumer review
+
+- The standalone UserIO stdio MCP entrypoint in `src/universal_userio/__main__.py` constructs `UserIOMcpSurface` without an HTTP-installed `QuestionRuntime`. The same existing `Messenger` now **fails closed** for a persisted claimed original source when the runtime is absent; a process cannot escape the PR13 fence by selecting stdio instead of HTTP. This does not grant a new transport or route.
+- **Exact PR19 validator interoperability (offline):** from fake UserIO provider consent → backend flat original receipt JSON → loaded the `dot-question-consumer.mjs` `verifiedOriginalMessengerReceipt` from Mirror commit `fb4509f` into an isolated `/tmp` copy. The validator accepted the exact original action/receipt and rejected a mutated `question_delivery_state=unknown`. Receipt: `EXACT_PR19_VALIDATOR_PASS`; this is a source-only cross-language smoke check, NOT runtime arrival or production sending.
+- The staged approval callback is **not installed in Mirror PR19**. The human must open the returned `approval_path` in a logged-in UserIO browser session; the callback cannot click it or impersonate that session. The callback can return `HTTP 202 unknown` with `retryable=false` when the original provider result cannot be proven, and must never be replayed without read-only original action reconciliation.
+
+Remaining security review: verify every possible in-process `Messenger` constructor, source edits during approval, web Host/Origin forwarding, production cookie path/domain, identical original provider receipt across connector implementations, and human UI discovery/notification with existing NoticePlace policy. These are review gates, not claims of acceptance.
