@@ -500,6 +500,14 @@ def handler(
                                       "retryable": False},
                                 {"Cache-Control": "no-store"})
                     return
+                except Exception:
+                    # Provider may already have accepted it. Never suggest an
+                    # automatic retry with this or a new request ID.
+                    self._reply(202, {"status": "unknown", "retryable": False,
+                        "action_id": payload["action_id"],
+                        "error": "original_delivery_unknown_read_original_receipt"},
+                        {"Cache-Control": "no-store"})
+                    return
                 self._reply(200, result, {"Cache-Control": "no-store"})
                 return
             if path.startswith("/v1/questions/actions/") and path.endswith("/approve"):

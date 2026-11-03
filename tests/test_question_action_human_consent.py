@@ -375,3 +375,50 @@ def test_historical_accepted_receipt_without_human_record_is_not_approval(fixtur
     with pytest.raises(AccessDenied, match="original_human_consent_required"):
         consent.project_original_receipt(dot, action["id"], seq, "0", lease["epoch"])
     assert provider.calls == 1
+
+
+def test_http_unknown_receipt_explicitly_refuses_replay(fixture):
+    store, service, consent, provider, dot, human, action, lease, seq, binding = fixture
+    approve_human(consent, human, action)
+    provider.lose_response = True
+    app = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        handler(service, token="fixture-global-service-not-real"),
+    )
+    service.question_runtime.dot_binding_path = binding
+    service.question_action_consent.runtime = service.question_runtime
+    service.question_runtime.human_consent = service.question_action_consent
+    t = Thread(target=app.serve_forever, daemon=True)
+    t.start()
+    try:
+        url = ("http://127.0.0.1:" + str(app.server_port)
+               + "/v1/questions/approved-original-send")
+        body = json.dumps({
+            "action_id": action["id"], "expected_hash": action["hash"],
+            **proof(lease, seq),
+        }).encode("utf-8")
+        def submit():
+            req = Request(url, data=body, method="POST", headers={
+                "Authorization": "Bearer fixture-global-service-not-real",
+                "Content-Type": "application/json",
+            })
+            try:
+                with urlopen(req, timeout=5) as result:
+                    return result.status, json.loads(result.read())
+            except HTTPError as result:
+                return result.code, json.loads(result.read())
+        code, first = submit()
+        assert code == 202
+        assert first == {
+            "status": "unknown", "retryable": False,
+            "action_id": action["id"],
+            "error": "original_delivery_unknown_read_original_receipt",
+        }
+        assert provider.calls == 1
+        code, repeat = submit()
+        assert code == 409 and repeat["retryable"] is False
+        assert provider.calls == 1
+    finally:
+        app.shutdown()
+        app.server_close()
+        t.join(timeout=4)
