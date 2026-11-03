@@ -494,3 +494,30 @@ def test_new_request_id_cannot_create_second_original_question_action(fixture):
         (dot.user_id,),
     ).fetchone()[0] == 1
     assert provider.calls == 0
+
+
+def test_two_concurrent_approved_original_requests_never_double_send(fixture):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store, service, consent, provider, dot, human, action, lease, seq, _ = fixture
+    approve_human(consent, human, action)
+
+    def same_approved_request(_):
+        try:
+            return consent.send_approved_original(
+                dot, action_id=action["id"], expected_hash=action["hash"],
+                **proof(lease, seq),
+            )
+        except (Busy, AccessDenied, ValueError):
+            return {"status": "blocked"}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(same_approved_request, range(2)))
+
+    assert provider.calls == 1, "concurrent approved requests must not replay provider IO"
+    assert any(r.get("status") == "accepted" for r in responses)
+    assert all(r.get("status") in {"accepted", "blocked"} for r in responses)
+    assert store._connection.execute(
+        "SELECT COUNT(*) FROM messenger_actions WHERE user_id=?",
+        (dot.user_id,),
+    ).fetchone()[0] == 1

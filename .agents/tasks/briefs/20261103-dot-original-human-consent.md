@@ -22,3 +22,5 @@ Independent source-readonly PR19 compatibility receipt: exact fb4509f dot-questi
 2026-11-03 new no-send proof: dot→manager handoff with resumed epoch, exact one stored action and separately confirmed owner consent → original provider receipt, PASS. New request_id with existing persisted result_ref denied before new action insert; 15/15 new fake-provider approval tests PASS. All observed effects are synthetic local SQLite/provider fixtures.
 
 Source-matrix: PR20 7511b9d overlaid with PR16 1d70cb8 in detached independent worktree, no merge. 115/115 combined Messenger/relay/Workspace/Question source tests PASS. Human review for both PRs and full E2E remain outstanding.
+
+2026-11-03 concurrency: two simultaneous identical approved requests in offline fake-provider fixture => exactly one provider execute and one original action; 3 targeted tests PASS including manager handoff and different request-id negative. PR16+PR20 detached source matrix remains 115/115 PASS. Do not conflate with E2E runtime.
