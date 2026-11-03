@@ -5,6 +5,7 @@ All network is an isolated loopback HTTP test, never a real UserIO provider.
 import hashlib
 import json
 import re
+import secrets
 from http.server import ThreadingHTTPServer
 from threading import Thread
 from urllib.parse import urlencode
@@ -21,6 +22,10 @@ from universal_userio.question_coordination import AccessDenied, Busy
 from universal_userio.question_runtime import QuestionRuntime
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
+
+
+# The fixture never persists or publishes a bearer value.
+FAKE_RUNTIME_KEY = secrets.token_urlsafe(32)
 
 
 class NoGeneration:
@@ -83,7 +88,7 @@ def fixture(tmp_path):
     binding.chmod(0o600)
     runtime = QuestionRuntime(
         store, key=hashlib.sha256(
-            b"userio-question-lease:fixture-global-service-not-real").digest(),
+            ("userio-question-lease:" + FAKE_RUNTIME_KEY).encode()).digest(),
         dot_binding_path=binding,
     )
     service.question_runtime = runtime
@@ -200,7 +205,7 @@ def test_interactive_session_csrf_and_dot_route_never_auto_approve(fixture):
     store, service, consent, provider, dot, human, action, lease, seq, binding = fixture
     owner_session = store.create_oauth_session(store.default_user_id)
     app = ThreadingHTTPServer(("127.0.0.1", 0),
-                               handler(service, token="fixture-global-service-not-real"))
+                               handler(service, token=FAKE_RUNTIME_KEY))
     # Existing handler constructs a new QuestionRuntime. Its bound source is
     # the same DB, but the fixture's dot file must be passed to it.
     service.question_runtime.dot_binding_path = binding
@@ -224,7 +229,7 @@ def test_interactive_session_csrf_and_dot_route_never_auto_approve(fixture):
 
         owner_cookie = {"Cookie": "userio_web_session=" + owner_session}
         assert fetch(url)[0] == 401
-        assert fetch(url, headers={"Authorization": "Bearer fixture-global-service-not-real"})[0] == 401
+        assert fetch(url, headers={"Authorization": "Bearer " + FAKE_RUNTIME_KEY})[0] == 401
         status, page = fetch(url, headers=owner_cookie)
         assert status == 200
         assert "Exact approved answer" in page
@@ -253,7 +258,7 @@ def test_interactive_session_csrf_and_dot_route_never_auto_approve(fixture):
         payload = {"action_id": action["id"], "expected_hash": action["hash"],
                    **proof(lease, seq)}
         status, sent = fetch(dispatch_url, json.dumps(payload).encode(), {
-            "Authorization": "Bearer fixture-global-service-not-real",
+            "Authorization": "Bearer " + FAKE_RUNTIME_KEY,
             "Content-Type": "application/json",
         })
         assert status == 200, sent
@@ -383,7 +388,7 @@ def test_http_unknown_receipt_explicitly_refuses_replay(fixture):
     provider.lose_response = True
     app = ThreadingHTTPServer(
         ("127.0.0.1", 0),
-        handler(service, token="fixture-global-service-not-real"),
+        handler(service, token=FAKE_RUNTIME_KEY),
     )
     service.question_runtime.dot_binding_path = binding
     service.question_action_consent.runtime = service.question_runtime
@@ -399,7 +404,7 @@ def test_http_unknown_receipt_explicitly_refuses_replay(fixture):
         }).encode("utf-8")
         def submit():
             req = Request(url, data=body, method="POST", headers={
-                "Authorization": "Bearer fixture-global-service-not-real",
+                "Authorization": "Bearer " + FAKE_RUNTIME_KEY,
                 "Content-Type": "application/json",
             })
             try:
