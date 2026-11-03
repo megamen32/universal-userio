@@ -42,3 +42,7 @@ Independent backend security review and dedicated source regression, update Mirr
 - The staged approval callback is **not installed in Mirror PR19**. The human must open the returned `approval_path` in a logged-in UserIO browser session; the callback cannot click it or impersonate that session. The callback can return `HTTP 202 unknown` with `retryable=false` when the original provider result cannot be proven, and must never be replayed without read-only original action reconciliation.
 
 Remaining security review: verify every possible in-process `Messenger` constructor, source edits during approval, web Host/Origin forwarding, production cookie path/domain, identical original provider receipt across connector implementations, and human UI discovery/notification with existing NoticePlace policy. These are review gates, not claims of acceptance.
+
+## Original action uniqueness follow-up
+
+Source-only regression: a live dot claim with an already persisted `result_ref=messenger:<action_id>` cannot stage a second proposed action under a different request ID. Identical original request+exact body may retrieve the same existing proposed action without provider effects; mismatched text fails closed. A fake-provider dot→manager handoff after result_saved also reuses the SAME original action, requires a fresh owner human approval for the resumed epoch, and completes only on the original receipt. Both tests PASS, no live sends. These checks do not replace a future concurrency/restart integration review.

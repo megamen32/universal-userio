@@ -364,10 +364,24 @@ class QuestionActionConsent:
         if row["delivery_state"] != "none":
             raise Busy("original_delivery_must_be_reconciled")
         messenger = Messenger(self.store, self.service, principal)
-        action = messenger.propose(
-            src["account_ref"], src["conversation_id"], src["message_id"],
-            "reply", {"text": body}, request_id,
-        )
+        if row["result_ref"]:
+            # A second request ID must not create a competing proposed
+            # original action even if the older action has not been sent.
+            existing_ref = str(row["result_ref"])
+            if not existing_ref.startswith("messenger:"):
+                raise Busy("original_result_already_saved")
+            action = messenger.get(existing_ref.removeprefix("messenger:"))
+            envelope = action["envelope"]
+            if (action["status"] != "proposed"
+                    or envelope.get("request_id") != request_id
+                    or envelope.get("source_message_id") != src["message_id"]
+                    or envelope.get("payload", {}).get("text") != body):
+                raise Busy("original_result_already_saved")
+        else:
+            action = messenger.propose(
+                src["account_ref"], src["conversation_id"], src["message_id"],
+                "reply", {"text": body}, request_id,
+            )
         if action["status"] != "proposed":
             raise Busy("existing_original_outgoing_action_not_proposed")
         result_ref = "messenger:" + action["id"]

@@ -443,3 +443,54 @@ def test_stdio_like_messenger_without_runtime_cannot_bypass_claimed_source(fixtu
         assert Messenger(store, service, dot).get(action["id"])["status"] == "proposed"
     finally:
         service.question_runtime = runtime
+
+
+def test_dot_to_manager_handoff_uses_same_action_and_owner_confirmed_send(fixture):
+    store, service, consent, provider, dot, human, action, lease, seq, _ = fixture
+    runtime = service.question_runtime
+    paused = runtime.dispatch(dot, "pause", {
+        "event_seq": seq, "revision": "0", "request_id": "manager-transfer-pause",
+    })
+    assert paused["state"] == "paused"
+    transferred = runtime.dispatch(dot, "handoff", {
+        "event_seq": seq, "revision": "0", "request_id": "manager-transfer-handoff",
+        "target_holder": "manager",
+    })
+    assert transferred["state"] == "handoff"
+    resumed = runtime.dispatch(human, "resume", {
+        "event_seq": seq, "revision": "0", "request_id": "manager-transfer-resume",
+    })
+    assert resumed["holder"] == "manager"
+    with pytest.raises(AccessDenied, match="original_human_consent_required"):
+        Messenger(store, service, human).approve(
+            action["id"], action["hash"], True, question=proof(resumed, seq))
+    assert provider.calls == 0
+    approval = approve_human(consent, human, action)
+    assert approval["epoch"] == resumed["epoch"]
+    sent = Messenger(store, service, human).approve(
+        action["id"], action["hash"], True, question=proof(resumed, seq))
+    assert sent["status"] == "accepted"
+    assert provider.calls == 1
+    assert sent["question_reconciliation"]["state"] == "sent"
+    completed = runtime.dispatch(human, "complete", {
+        "event_seq": seq, "revision": "0",
+        "epoch": resumed["epoch"], "lease_token": resumed["lease_token"],
+        "request_id": "manager-transfer-completed",
+    })
+    assert completed["receipt_ref"] == "messenger:" + action["id"]
+
+
+def test_new_request_id_cannot_create_second_original_question_action(fixture):
+    store, service, consent, provider, dot, human, action, lease, seq, _ = fixture
+    with pytest.raises(Busy, match="original_result_already_saved"):
+        consent.propose_dot_original(
+            dot, event_seq=seq, revision="0", epoch=lease["epoch"],
+            lease_token=lease["lease_token"],
+            request_id="different-original-send-id-0002",
+            body="dots:\nExact approved answer",
+        )
+    assert store._connection.execute(
+        "SELECT COUNT(*) FROM messenger_actions WHERE user_id=?",
+        (dot.user_id,),
+    ).fetchone()[0] == 1
+    assert provider.calls == 0
