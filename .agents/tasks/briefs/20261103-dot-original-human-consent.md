@@ -20,3 +20,5 @@ Independent source-readonly PR19 compatibility receipt: exact fb4509f dot-questi
 - PR20 is draft; source and no-send tests only. Installed runtime main remains d5c1eb0; Mirror PR19 and ExManager PR17 are unwired, 11 actual acceptance cases not executed. GitHub repo collaborator inventory contains only megamen32; no independent reviewer is assigned to PR20 or PR16. Do NOT self-approve, merge or deploy. Existing Herder release lease not acquired, no Hub/UserIO restart/voice change.
 
 2026-11-03 new no-send proof: dot→manager handoff with resumed epoch, exact one stored action and separately confirmed owner consent → original provider receipt, PASS. New request_id with existing persisted result_ref denied before new action insert; 15/15 new fake-provider approval tests PASS. All observed effects are synthetic local SQLite/provider fixtures.
+
+Source-matrix: PR20 7511b9d overlaid with PR16 1d70cb8 in detached independent worktree, no merge. 115/115 combined Messenger/relay/Workspace/Question source tests PASS. Human review for both PRs and full E2E remain outstanding.

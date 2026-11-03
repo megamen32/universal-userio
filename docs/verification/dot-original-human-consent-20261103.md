@@ -46,3 +46,10 @@ Remaining security review: verify every possible in-process `Messenger` construc
 ## Original action uniqueness follow-up
 
 Source-only regression: a live dot claim with an already persisted `result_ref=messenger:<action_id>` cannot stage a second proposed action under a different request ID. Identical original request+exact body may retrieve the same existing proposed action without provider effects; mismatched text fails closed. A fake-provider dot→manager handoff after result_saved also reuses the SAME original action, requires a fresh owner human approval for the resumed epoch, and completes only on the original receipt. Both tests PASS, no live sends. These checks do not replace a future concurrency/restart integration review.
+
+
+## PR16 + PR20 isolated source-matrix receipt (2026-11-03)
+
+- A **temporary detached worktree** at `/home/roomhacker/agents-projects/universal-userio/.worktrees/dot-consent-pr16-source-matrix-20261103` was created from PR20 HEAD `7511b9d` (with PR20's original consent and idempotency changes). Applied PR16 `1d70cb8` with `git cherry-pick --no-commit` **ONLY in that throwaway detached worktree** for compatibility testing. Neither PR branch, shared main, installed backend, nor source-owner files were overwritten or merged.
+- Composite no-send command: `PYTHONPATH=src python3 -m pytest -q tests/test_messenger.py tests/test_messenger_telegram_reply.py tests/test_messenger_relay.py tests/test_messenger_formatting_contract.py tests/test_workspace_claims.py tests/test_question_action_human_consent.py tests/test_question_runtime_adapter.py tests/test_question_coordination_native_recovery.py tests/test_question_coordination.py` → **115 passed, 1 pre-existing pytest warning, duration 90.07s**, no external provider calls.
+- The 4 baseline failures on unmodified current `main d5c1eb0` are covered only by PR16; human review of that PR remains outstanding. Matrix test is NOT independent approval, merge, installation, or 11 genuine E2E acceptance receipts.
