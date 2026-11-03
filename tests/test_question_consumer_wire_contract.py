@@ -150,3 +150,99 @@ def test_production_shape_manager_claim_and_canonical_source_binding(tmp_path):
         ).fetchone()[0] == 1
     finally:
         store.close()
+
+
+def test_dot_has_no_existing_human_attested_messenger_approval_bridge(tmp_path):
+    """Characterize the installed source gap, never execute a provider send.
+
+    Dot has a question-control endpoint and UserIO has Messenger.approve, but
+    no existing per-action human approval attestation connects these paths.
+    """
+    import inspect
+
+    import pytest
+
+    from universal_userio.mcp_catalog import MESSENGER_SPECS
+    from universal_userio.messenger import Messenger
+    from universal_userio.question_coordination import Rejected
+
+    spec = next(s for s in MESSENGER_SPECS
+                if s.name == "userio.messenger.approve")
+    assert set(spec.input_schema["properties"]) == {
+        "action_id", "expected_hash", "confirm", "question",
+    }
+    assert set(spec.input_schema["required"]) == {
+        "action_id", "expected_hash", "confirm",
+    }
+    # No server-verifiable approved-by-user or approval-receipt input.
+    assert list(inspect.signature(Messenger.approve).parameters) == [
+        "self", "action_id", "expected_hash", "confirm", "question",
+    ]
+
+    store = SQLiteUserIOStore(tmp_path / "approval-gap.sqlite3")
+    try:
+        service = UserIOService(store, ForbiddenGenerator(), ForbiddenSend())
+        runtime = QuestionRuntime(
+            store, key=b"no-real-userio-question-approval-test-key-32",
+            dot_binding_path=tmp_path / "absent-dot-binding",
+        )
+        service.question_runtime = runtime
+        with pytest.raises(Rejected, match="unsupported_question_operation"):
+            runtime.dispatch(store.owner(), "approve", {})
+        messenger = Messenger(store, service, store.owner())
+        messenger._init_actions()
+        cols = {
+            row["name"] for row in store._connection.execute(
+                "PRAGMA table_info(messenger_actions)"
+            )
+        }
+        # The existing original action journal records provider receipt and
+        # immutable proposal hash, not a trusted approval event.
+        assert {"hash", "status", "receipt", "request_id"}.issubset(cols)
+        assert {"approved_by", "approval_receipt", "approved_at"}.isdisjoint(cols)
+        assert store._connection.execute(
+            "SELECT COUNT(*) FROM messenger_actions"
+        ).fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+def test_existing_messenger_readback_is_nested_not_mirror_projection(tmp_path):
+    """Read the ORIGINAL synthetic Messenger row without provider I/O."""
+    import json
+
+    from universal_userio.messenger import Messenger
+
+    store = SQLiteUserIOStore(tmp_path / "original-journal.sqlite3")
+    try:
+        account = "telegram:123456789"
+        store.register_account(
+            account_id=account, provider="telegram", display_name="Fixture",
+            can_read=True, can_reply=True, credential_ref="telegram-qr:fixture",
+        )
+        service = UserIOService(store, ForbiddenGenerator(), ForbiddenSend())
+        Messenger(store, service, store.owner())._init_actions()
+        aid = "action_" + "b" * 64
+        with store._lock, store._connection:
+            store._connection.execute(
+                "INSERT INTO messenger_actions "
+                "(user_id,id,request_id,envelope,hash,status,created_at,receipt) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (store.default_user_id, aid, "original-fixture-id-123456",
+                 json.dumps({"account_ref": account}), "immutable-fixture-hash",
+                 "accepted", 1.0, json.dumps({"receipt": "fixture-only"})),
+            )
+        response = UserIOMcpSurface(store, service).dispatch(
+            "userio.messenger.get", {"action_id": aid}, principal=store.owner(),
+        )
+        assert response["ok"] is True
+        assert response["action"]["id"] == aid
+        assert response["action"]["status"] == "accepted"
+        assert response["action"]["receipt"]["receipt"] == "fixture-only"
+        # Mirror PR19's flat, verifiedOriginalMessengerReceipt projection is
+        # not a native UserIO result; trusted source correlation is required.
+        assert "question_delivery_state" not in response
+        assert "receipt_ref" not in response
+        assert "provider_message_id" not in response
+    finally:
+        store.close()
