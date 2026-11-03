@@ -1,0 +1,35 @@
+# Human-consented original question reply — backend source candidate
+
+**Date:** 2026-11-03 (UTC). **Base:** installed/published UserIO `d5c1eb0` with merged question coordinator PR13. **Stage:** isolated source-only draft, NOT installed, no production sender/credential changes.
+
+## Purpose
+
+Bridge the exact missing approval contract found in Mirror PR19 while retaining **ONE** UserIO `Messenger.approve` / `QuestionRuntime.begin_original_send` outgoing fence and the original `messenger_actions` receipt. Dot's service credential and `confirm=true` are **not** user approval.
+
+## Existing permissions, no new service
+
+The existing UserIO bearer authenticates the bound dot service principal. The existing logged-in UserIO owner web session (cookie `userio_web_session`) is the only actor allowed to record human consent for the exact action. No new bearer, impersonated owner, second delivery journal, worker or provider sender is created. The new SQLite `question_action_consents` table is **audit metadata** bound to an existing action+question epoch, not a send queue.
+
+### Minimal flow
+
+1. Existing `POST /v1/questions/operation` acquires a verified UserIO `event_seq` and current source `revision` for the exact dedicated dot binding. A lease holder has `epoch,lease_token`; no model-provided role.
+2. **Propose only**, no send: `POST /v1/questions/propose-original-reply`, existing dot service bearer, JSON with *exactly* `event_seq,revision,epoch,lease_token,request_id,body`. Checks active dot lease and saved account/source binding, calls existing `Messenger.propose(reply, original source_message_id, original request_id)` and `result_saved(messenger:<action_id>)`. Returns `status=awaiting_human_approval`, `action_id`, `expected_hash`, and relative `approval_path` only. Repeated request ID cannot change body. **No provider I/O**.
+3. User opens `GET /v1/questions/actions/<action_id>/review` in their existing authenticated UserIO browser session. HTML shows **original question, exact outgoing text, account, target, epoch**. Session-specific HMAC CSRF, strict same-origin POST, CSP and no-cache protect the click.
+4. User presses **Подтверждаю именно этот ответ**. `POST /v1/questions/actions/<action_id>/approve` accepts only the exact form from that live interactive owner web session and records `approved_by,approved_at,approval_ref` with original action/hash, body hash, source id, question and epoch. This step **does not send**. A service token, bearer/API-only request, model-generated `confirm=true`, expired/foreign session, CSRF mismatch, revoked account, changed text/source or changed epoch cannot produce consent.
+5. Dot calls `POST /v1/questions/approved-original-send` with the **existing dot service bearer** and `action_id,expected_hash,event_seq,revision,epoch,lease_token` (no separate sender). Backend reads the saved consent at the **existing PR13 provider-entry fence**, rechecks immutable source/grants/lease, marks the original action as UNKNOWN *before* provider I/O, then calls the existing `Messenger.approve` once. Without human consent it fails closed **before** the provider.
+6. Only the original saved `messenger_actions` receipt is projected to the Mirror's verified shape: `status=accepted`, `question_delivery_state=sent`, exact `account_ref,peer_id,source_provider_message_id,source_message_id,conversation_id,event_seq,revision,epoch,request_id,action_id,receipt_ref=messenger:<action_id>,provider_message_id,message_sha256`. Repeated accepted requests return the original result without provider replay. Missing/mismatched consent, changed source, missing/forged provider ID or UNKNOWN => refused, never fabricated success. `userio.messenger.question.reconcile` may read the original journal later; it does not send.
+7. Hold media, multipart and edit for claimed questions until the original-action-specific policy is independently reviewed. The existing `Messenger` now rejects an additional non-reply action aimed at the **same** already claimed source.
+
+## Security and integration gates
+
+- **Only one provider fence**: merged `QuestionRuntime.begin_original_send` remains the sole provider-entry send CAS. This candidate adds a *prerequisite* (audited human action consent), not an alternate `_question_fence` from PR12.
+- Full server and DOM path requires action ID and current source/owner grant; no long-lived lease_token stored in a browser consent record or mirror journal.
+- `QuestionRuntime` direct unit fixtures without the production HTTP handler remain backward-compatible for existing offline source tests. Production handler installs the guarded consent component; independent review must verify there are no alternative production entrypoints constructing a runtime without it.
+- **Mirror successor (PR19)** must adapt `questionApproval` to this exact staged approval URL and later authorized dispatch, holding the correlated reply until human action + original receipt. The current Mirror callback is explicitly unwired; this PR does NOT change its JS files.
+- **ExManager owner (PR17)** must keep its own exact native human approval and owner-principal source gate; current Go adapter only consumes claims/receipts. Its existing `userio_approve_send` is a **draft** gate, NOT equivalent to this consent record.
+- **PR16** 71/71 fixture-only baseline fix remains under independent human review. PR12 conflicting second fence remains unmerged. Logging owner PR15 files and working voice/UI are untouched.
+- During root Airlock critical window: **no release lease, no merge/deploy/restart, no provider sends, no new credentials or rights**. Offline tests use fake provider and loopback HTTP only.
+
+## Before production acceptance
+
+Independent backend security review and dedicated source regression, update Mirror PR19 and ExManager PR17 adapters by their actual owners, review normal build/deploy gates, then verify the **11 actual user acceptance cases** and original provider receipts. No offline/synthetic result alone is runtime acceptance.

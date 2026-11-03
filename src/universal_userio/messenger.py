@@ -826,12 +826,17 @@ class Messenger:
         question_runtime = getattr(self.service, 'question_runtime', None)
         question_receipt_context = None
         if e['action'] == 'reply' and question_runtime is not None:
-            # The exact immutable Messenger approval has already passed.
-            # Begin the existing provider send only after durable lease fence.
+            # Exactly one already human-approved original action may reach
+            # the existing QuestionRuntime UNKNOWN-before-provider fence.
             question_receipt_context = question_runtime.before_existing_messenger_send(
                 self.principal, e, question_proof)
         elif question_proof is not None:
             raise ValueError('question_proof_not_supported_for_action')
+        elif (question_runtime is not None
+              and question_runtime._question_for_action(self.principal, e) is not None):
+            # A second media/edit/reaction send attached to the SAME original
+            # question cannot escape through another Messenger operation.
+            raise PermissionError('question_non_reply_action_requires_review')
         with self.store._lock, self.store._connection:
             # Lock the writer before reading source/claiming: a concurrent
             # source update cannot slip between the snapshot and the claim.

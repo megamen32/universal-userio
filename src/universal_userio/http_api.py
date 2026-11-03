@@ -143,6 +143,13 @@ def handler(
             key=hashlib.sha256(("userio-question-lease:" + token).encode()).digest(),
         ) if token else None
     )
+    # The human admission is stored beside the ORIGINAL Messenger action.
+    # It never creates an alternate outbox or an authorization credential.
+    from .question_action_consent import QuestionActionConsent
+    service.question_action_consent = (
+        QuestionActionConsent(service._store, service, service.question_runtime)
+        if service.question_runtime is not None else None
+    )
     surface = UserIOMcpSurface(service._store, service)
     oauth = OAuthProvider(service._store)
     personal_tokens = PersonalTokens(service._store)
@@ -340,6 +347,32 @@ def handler(
             morsel = cookie.get(name)
             return None if morsel is None else service._store.oauth_session_user(morsel.value)
 
+        def _question_owner_session(self):
+            # Only the existing interactive UserIO web cookie can admit
+            # human approval. A bearer, dot service token or proxy header
+            # must never impersonate a click in the owner's browser.
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except (CookieError, ValueError):
+                return None, None
+            session = cookie.get("userio_web_session")
+            if session is None:
+                return None, None
+            principal = service._store.oauth_session_user(session.value)
+            if (principal is None or principal.service_account
+                    or principal.read_only or principal.role != "owner"):
+                return None, None
+            return principal, session.value
+
+        def _question_csrf(self, session, snapshot):
+            payload = json.dumps([
+                session, snapshot["action_id"], snapshot["action_hash"],
+                snapshot["body_sha256"], snapshot["question_id"],
+                snapshot["epoch"],
+            ], separators=(",", ":"), ensure_ascii=False).encode()
+            return hmac.new(token.encode(), payload, hashlib.sha256).hexdigest()
+
         def _oauth_session(self) -> UserPrincipal | None:
             # Use the account currently selected in the cabinet, including
             # after switching users; a short-lived prior consent is fallback.
@@ -409,6 +442,104 @@ def handler(
                     return
                 self._reply(200, {"ok": True, "question": outcome},
                             {"Cache-Control": "no-store"})
+                return
+            if path == "/v1/questions/propose-original-reply":
+                try:
+                    bounded = 0 < int(self.headers.get("Content-Length", "0")) <= 131072
+                except ValueError:
+                    bounded = False
+                if not bounded:
+                    self._reply(413, {"error": "bounded_question_action_body_required"})
+                    return
+                if restricted is None or not restricted.service_account:
+                    self._reply(403, {"error": "bound_dot_service_principal_required"})
+                    return
+                consent = getattr(service, "question_action_consent", None)
+                if consent is None:
+                    self._reply(503, {"error": "human_consent_bridge_unavailable"})
+                    return
+                payload = self._json()
+                fields = {"event_seq", "revision", "epoch", "lease_token",
+                          "request_id", "body"}
+                if not isinstance(payload, dict) or set(payload) != fields:
+                    self._reply(400, {"error": "exact_original_reply_required"})
+                    return
+                try:
+                    result = consent.propose_dot_original(restricted, **payload)
+                except (PermissionError, ValueError, KeyError) as error:
+                    self._reply(409, {"error": str(error).strip("'"),
+                                      "retryable": False})
+                    return
+                self._reply(202, result, {"Cache-Control": "no-store"})
+                return
+            if path == "/v1/questions/approved-original-send":
+                try:
+                    bounded = 0 < int(self.headers.get("Content-Length", "0")) <= 4096
+                except ValueError:
+                    bounded = False
+                if not bounded:
+                    self._reply(413, {"error": "bounded_question_action_body_required"})
+                    return
+                if restricted is None or not restricted.service_account:
+                    self._reply(403, {"error": "bound_dot_service_principal_required"})
+                    return
+                consent = getattr(service, "question_action_consent", None)
+                if consent is None:
+                    self._reply(503, {"error": "human_consent_bridge_unavailable"})
+                    return
+                payload = self._json()
+                required = {"action_id", "expected_hash", "event_seq",
+                            "revision", "epoch", "lease_token"}
+                if not isinstance(payload, dict) or set(payload) != required:
+                    self._reply(400, {"error": "exact_original_action_required"})
+                    return
+                try:
+                    result = consent.send_approved_original(restricted, **payload)
+                except (PermissionError, ValueError, KeyError) as error:
+                    self._reply(409, {"error": str(error).strip("'"),
+                                      "retryable": False},
+                                {"Cache-Control": "no-store"})
+                    return
+                self._reply(200, result, {"Cache-Control": "no-store"})
+                return
+            if path.startswith("/v1/questions/actions/") and path.endswith("/approve"):
+                # This route records a human decision. It NEVER sends.
+                consent = getattr(service, "question_action_consent", None)
+                owner, session = self._question_owner_session()
+                if consent is None or owner is None or not token:
+                    self._reply(403, {"error": "interactive_owner_session_required"})
+                    return
+                if not self.headers.get("Origin") or not self._mcp_origin_allowed():
+                    self._reply(403, {"error": "same_origin_owner_approval_required"})
+                    return
+                if (self.headers.get("Content-Type", "").split(";", 1)[0].strip()
+                        != "application/x-www-form-urlencoded"
+                        or not 0 < int(self.headers.get("Content-Length", "0")) <= 8192):
+                    self._reply(400, {"error": "bounded_approval_form_required"})
+                    return
+                action_id = path.removeprefix("/v1/questions/actions/").removesuffix("/approve").strip("/")
+                if not action_id or "/" in action_id:
+                    self._reply(404, {"error": "action_not_found"})
+                    return
+                values = self._form()
+                if set(values) != {"action_hash", "body_sha256", "question_id",
+                                   "epoch", "csrf", "decision"} or values["decision"] != "approve":
+                    self._reply(400, {"error": "exact_human_decision_required"})
+                    return
+                try:
+                    snapshot = consent.preview(owner, action_id)
+                    csrf = self._question_csrf(session, snapshot)
+                    if not hmac.compare_digest(values["csrf"], csrf):
+                        raise PermissionError("approval_session_csrf_invalid")
+                    result = consent.record(owner, action_id=action_id,
+                        expected_hash=values["action_hash"],
+                        expected_body_sha256=values["body_sha256"],
+                        question_id=values["question_id"],
+                        epoch=int(values["epoch"]))
+                except (PermissionError, ValueError, KeyError) as error:
+                    self._reply(409, {"error": str(error).strip("'")})
+                    return
+                self._reply(200, {"ok": True, **result}, {"Cache-Control": "no-store"})
                 return
             if restricted is not None and restricted.meeting_recorder and not meeting_recorder_http_allowed(self.command, urlparse(self.path).path):
                 self._reply(403, {'error': 'meeting_recording_scope_only'})
@@ -1733,6 +1864,63 @@ def handler(
                 return
             if restricted is not None and restricted.messenger_accounts is not None and requested_path!='/mcp':
                 self._reply(403, {'error':'messenger_scope_only'})
+                return
+            if (requested_path.startswith("/v1/questions/actions/")
+                    and requested_path.endswith("/review")):
+                consent = getattr(service, "question_action_consent", None)
+                owner, session = self._question_owner_session()
+                if consent is None or owner is None or not token:
+                    self._reply(401, {"error": "interactive_owner_session_required"})
+                    return
+                action_id = requested_path.removeprefix(
+                    "/v1/questions/actions/").removesuffix("/review").strip("/")
+                if not action_id or "/" in action_id:
+                    self._reply(404, {"error": "action_not_found"})
+                    return
+                try:
+                    snapshot = consent.preview(owner, action_id)
+                except (PermissionError, ValueError, KeyError) as error:
+                    self._reply(409, {"error": str(error).strip("'")})
+                    return
+                csrf = self._question_csrf(session, snapshot)
+                def esc(value):
+                    return html.escape(str(value), quote=True)
+                page = (
+                    '<!doctype html><html lang="ru"><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                    '<title>Подтверждение исходного ответа UserIO</title>'
+                    '<main style="max-width:45rem;margin:2rem auto;font:16px system-ui">'
+                    '<h1>Подтвердить точный ответ</h1>'
+                    '<p>Ничего не отправляется до отдельного шага исполнителя.</p>'
+                    '<p>Отправитель: ' + esc(snapshot["account_ref"]) + '</p>'
+                    '<p>Источник: ' + esc(snapshot["source_message_id"]) + '</p>'
+                    '<p>Получатель: ' + esc(snapshot["peer_id"]) + '</p>'
+                    '<p>Эпоха: ' + esc(snapshot["epoch"]) + '</p>'
+                    '<h2>Исходный вопрос</h2>'
+                    '<pre style="white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #888;padding:1rem">'
+                    + esc(snapshot["source_body"]) + '</pre>'
+                    '<h2>Точный ответ для подтверждения</h2>'
+                    '<pre style="white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #888;padding:1rem">'
+                    + esc(snapshot["body"]) + '</pre>'
+                    '<form method="post" action="/v1/questions/actions/' + esc(action_id) + '/approve">'
+                    + "".join(
+                        '<input type="hidden" name="' + esc(key) + '" value="' + esc(value) + '">'
+                        for key, value in {
+                            "action_hash": snapshot["action_hash"],
+                            "body_sha256": snapshot["body_sha256"],
+                            "question_id": snapshot["question_id"],
+                            "epoch": snapshot["epoch"], "csrf": csrf,
+                            "decision": "approve",
+                        }.items()
+                    )
+                    + '<button type="submit">Подтверждаю именно этот ответ</button></form></main></html>'
+                )
+                self._html(200, page.encode("utf-8"), {
+                    "Cache-Control": "no-store",
+                    "Content-Security-Policy":
+                        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+                    "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
+                })
                 return
             if requested_path == "/.well-known/oauth-protected-resource":
                 self._reply(200, oauth.protected_resource_metadata(self._base_url()))
