@@ -1864,13 +1864,15 @@ http.createServer(async (req, res) => {
     let raw = "";
     req.on("data", (chunk) => { raw += chunk; });
     req.on("end", async () => {
+      // Error receipts need these bindings even when parsing or sending fails.
+      let chatId = "", wantAccount = "", attemptId = "";
       try {
         const payload = JSON.parse(raw || "{}");
         const chat = String(payload.chat || "").trim();
-        const chatId = String(payload.chat_id || "").trim();
-        const wantAccount = String(payload.account_id || "").trim();
+        chatId = String(payload.chat_id || "").trim();
+        wantAccount = String(payload.account_id || "").trim();
         const wantSlot = String(payload.slot || "").trim();
-        const attemptId = String(payload.attempt_id || payload.request_id || "").trim();
+        attemptId = String(payload.attempt_id || payload.request_id || "").trim();
         // An approved send is idempotent per attempt id. A recorded delivery
         // returns its receipt without sending again, and an attempt that may
         // already be on the wire is never replayed. The unknown answer is a
