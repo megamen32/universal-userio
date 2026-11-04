@@ -61,6 +61,10 @@ def test_effective_caps_never_upgrade_readonly_or_other_account(case, legacy):
 
 def test_reaction_removal_uses_same_approved_path_without_whitespace(case):
     p, cid = case[2:4]
+    # This synthetic provider explicitly supports reaction removal. Merely
+    # exposing a react operation is NOT permission to remove a reaction.
+    p.reaction_remove_supported = True
+    assert dispatch(case, 'capabilities', {'account_ref':p.account_ref})['operations']['react']['removal_supported']
     result = dispatch(case, 'propose', {'account_ref':p.account_ref,
         'conversation_id':cid,'source_message_id':p.account_ref+'|-10042:77',
         'action':'react','payload':{'emoji':''},'request_id':'remove-reaction-12345678'})
@@ -72,6 +76,23 @@ def test_reaction_removal_uses_same_approved_path_without_whitespace(case):
     assert not dispatch(case,'propose',{'account_ref':p.account_ref,
         'conversation_id':cid,'source_message_id':p.account_ref+'|-10042:77',
         'action':'react','payload':{'emoji':' '},'request_id':'invalid-reaction-12345678'})['ok']
+
+
+def test_reaction_removal_rejected_before_send_when_provider_has_no_support(case):
+    p, cid = case[2:4]
+    caps = dispatch(case, 'capabilities', {'account_ref':p.account_ref})
+    assert caps['operations']['react']['allowed'] is True
+    assert caps['operations']['react']['removal_supported'] is False
+    refused = dispatch(case, 'propose', {
+        'account_ref':p.account_ref,'conversation_id':cid,
+        'source_message_id':p.account_ref+'|-10042:77',
+        'action':'react','payload':{'emoji':''},
+        'request_id':'reaction-remove-unsupported-001',
+    })
+    assert refused == {'ok':False,'error':'reaction_removal_not_supported'}
+    assert p.calls == []
+    # Refusal happens before a Messenger action journal even needs creation.
+    assert case[0]._table_exists('messenger_actions') is False
 
 
 def test_paged_history_exact_source_author_thread_and_opaque_id(case):
