@@ -2,6 +2,7 @@ import {DOT_POLICY} from './dot-policy.mjs';
 import {OWNER,ROOM,textHash} from './dot-relay.mjs';
 import {MAX_IMAGES} from './dot-media.mjs';
 import {verifyDotTelegramMedia} from './dot-egress.mjs';
+import {findOriginalTelegramQuestion,verifiedOriginalMessengerReceipt} from './dot-question-consumer.mjs';
 export function sensitiveText(text){
  const s=String(text);
  return /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/.test(s)||/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/.test(s)||/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/.test(s)||/\bBearer\s+[A-Za-z0-9._~+\/-]{12,}/i.test(s)||/(?:password|passwd|passphrase|парол[ьяь]|токен|token|api[_ -]?key|секрет|secret|session[_ -]?(?:id|key)|cookie)\s*(?::|=|\bis\b|это)/i.test(s)||/(?:парол[ьяь]|password|passphrase|api[_ -]?key|токен)/i.test(s);
@@ -105,6 +106,50 @@ export class DotMirror{
      state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
     let parts;try{parts=m.text.trim()?mirrorParts(m):[];}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
+    const question=findOriginalTelegramQuestion(this.relay,m,rows,OWNER);
+    if(question.status!=='none'){
+     // Do not turn a dot browser ID into a UserIO source_message_id.
+     // The only allowed outbound question operation is the ORIGINAL
+     // backend Messenger.approve action, including its human authorization,
+     // source revision, claim epoch, durable UNKNOWN and provider receipt.
+     const refuse=reason=>{state.status=reason;state.blocked=reason;
+      state.held[m.id]={reason,hash:c.hash};this.relay.save();return {status:reason};};
+     if(question.status!=='linked')return refuse('question_origin_requires_review');
+     if(imageCount)return refuse('question_media_original_fence_missing');
+     if(parts.length!==1)return refuse('question_multipart_original_fence_missing');
+     if(typeof this.relay.questionApproval!=='function')return refuse('question_original_approval_not_wired');
+     const key='mirror:'+m.id+':0';
+     if(this.relay.state.outgoing[key])return refuse('question_existing_delivery_requires_review');
+     const pub={hash:c.hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,
+      receipts:[],media_receipts:[],media_count:0,partHashes:parts.map(textHash),
+      question_source:question.source,status:'sending'};
+     state.published[m.id]=pub;
+     this.relay.state.outgoing[key]={status:'send_uncertain',source_id:m.id,part:0,
+      kind:'original_question',source_provider_message_id:question.source.source_provider_message_id};
+     this.relay.save();
+     try{
+      // This callback must wrap exactly one ALREADY-PROPOSED,
+      // human-approved backend Messenger.approve action. It never calls the
+      // connector's direct Telegram send/sendFile or mints a second claim.
+      const response=await this.relay.questionApproval({
+       source:question.source,dot_source_id:m.id,body:parts[0],
+       original_reply_receipt:reply.receipt});
+      const verified=verifiedOriginalMessengerReceipt(question.source,parts[0],response);
+      pub.receipts=[verified.provider_message_id];
+      pub.question_source={...question.source,
+       source_message_id:verified.source_message_id,
+       conversation_id:verified.conversation_id};
+      pub.question_receipt_ref=verified.receipt_ref;
+      this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:0,
+       kind:'original_question',source_provider_message_id:verified.source_provider_message_id,
+       source_message_id:verified.source_message_id,
+       action_id:verified.action_id,request_id:verified.request_id,
+       receipt_ref:verified.receipt_ref,receipt:verified.provider_message_id};
+      pub.status='accepted';state.cursor=m.id;delete state.candidates[m.id];
+      changed=true;this.relay.save();continue;
+     }catch{state.blocked='question_original_delivery_unknown';this.relay.save();
+      return {status:state.blocked};}
+    }
     let media=null,caption=null;
     if(imageCount){
      if(typeof this.relay.sendMedia!=='function'){state.status='media_transport_requires_review';this.relay.save();return {status:state.status};}
@@ -151,6 +196,7 @@ export class DotMirror{
    }
    for(const m of edits){
     const pub=state.published[m.id],c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)continue;
+    if(pub.question_source){state.held[m.id]={reason:'question_edit_requires_original_approval',hash:c.hash};this.relay.save();continue;}
     if(pub.media_count||(m.attachment_count??m.attachment_names?.length??0)>0){state.held[m.id]={reason:'media_edit_requires_review',hash:c.hash};this.relay.save();continue;}
     if((m.reply_to||null)!==(pub.reply_to||null)){state.held[m.id]={reason:'reply_target_edited_requires_review',hash:c.hash};continue;}
     if(sensitiveText(m.text)||!m.text.trim()){state.held[m.id]={reason:'sensitive_or_empty_update',hash:c.hash};continue;}
