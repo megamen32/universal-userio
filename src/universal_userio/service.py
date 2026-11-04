@@ -1820,6 +1820,17 @@ class UserIOService:
                         "reason": "provider_peer_mismatch", "retry_allowed": False,
                         "evidence": self._delivery_evidence(record, draft.id)}
             receipt = f"telegram-qr:{slot}:{message_id}:{draft.id}"
+            if str(record.get("kind") or "send") == "reply":
+                anchor = self._store.draft_reply_anchor(draft.id, user_id=resolved_user_id)
+                reply_to = str(record.get("reply_to_id") or "")
+                topic_id = str(record.get("thread_id") or "")
+                if not (anchor and reply_to.isdigit()
+                        and str(anchor.get("provider_message_id") or "") == reply_to
+                        and str(anchor.get("thread_id") or "") == topic_id):
+                    return {"resolution":"unknown", "draft_id":draft.id,
+                            "status":draft.status, "reason":"reply_source_binding_missing",
+                            "retry_allowed":False, "evidence":self._delivery_evidence(record, draft.id)}
+                receipt += f":reply_to:{reply_to}:thread:{topic_id}"
             applied = self._store.approve_reconciled_delivery(
                 draft.id, receipt, user_id=resolved_user_id,
                 expected_generation=expected_generation,

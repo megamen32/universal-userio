@@ -7,6 +7,8 @@ import vm from 'node:vm';
 import test from 'node:test';
 import { SendAttemptLedger, attemptState } from './send-attempts.mjs';
 import { duplicateReceipt, replyAttemptFields } from './send-receipt.mjs';
+import { captureTelegramState, confirmTelegramUpdate, reconcileTelegramDifference,
+  sendTelegramText, stableTelegramRandomId } from './telegram-send-recovery.mjs';
 
 // Execute the actual send branch with an isolated ledger and provider doubles.
 // Never import server.mjs: importing it would start live connectors/listeners.
@@ -30,16 +32,36 @@ function fixture(t, options = {}) {
   let sendCalls = 0, replyCalls = 0;
   const item = {accountId: account,
     labelPeers: {idPeers: new Map([[peerId, {id: peerId}]]), labelPeers: new Map()},
-    client: {async sendMessage() {
-      sendCalls++;
-      if (options.sendError) throw options.sendError;
-      return {id: 9101, date: 1700000000};
-    }},
+    client: {
+      async getInputEntity(peer) { return peer; },
+      async invoke(request) {
+        if (request.className === 'updates.GetState') {
+          if (options.stateError) throw new Error('synthetic pre-send state refusal');
+          return {pts: 100, qts: 0, date: 1700000000};
+        }
+        if (request.className === 'messages.SendMessage') {
+          sendCalls++;
+          if (options.sendError) throw options.sendError;
+          return {className: 'UpdateShortSentMessage', id: 9101, date: 1700000001};
+        }
+        throw new Error('unexpected request type: ' + request.className);
+      },
+    },
   };
   const bindings = {
     url: {pathname: '/send'}, process: {env: {USERIO_API_TOKEN: token}},
     console: {log() {}, error() {}}, sendAttempts: ledger,
     attemptState, duplicateReceipt, replyAttemptFields, TelegramReplyRefused,
+    captureTelegramState, confirmTelegramUpdate, reconcileTelegramDifference,
+    sendTelegramText, stableTelegramRandomId,
+    Api: {updates: {
+      GetState: class {className = 'updates.GetState';},
+      GetDifference: class {className = 'updates.GetDifference';},
+    }, messages: {SendMessage: class {
+      className = 'messages.SendMessage';
+      constructor(fields) { Object.assign(this, fields); }
+    }}},
+
     liveSlots: options.disconnected ? new Map() : new Map([[slot, item]]),
     slots: new Map([[slot, {accountId: account}]]), syncs: new Map(),
     slotProfiles: {[slot]: account},
@@ -165,4 +187,44 @@ test('a successful reply retains its source binding in the duplicate receipt', a
   assert.equal(second.thread_id, '9004');
   assert.equal(f.calls().replyCalls, 1);
   assert.equal(f.calls().sendCalls, 0);
+});
+
+test('a failed send persists its random_id and pre-send update checkpoint', async t => {
+  const f = fixture(t, {sendError: new Error('synthetic lost response')});
+  assert.equal((await f.request()).status, 502);
+  const row = f.ledger.get(f.payload.attempt_id);
+  assert.match(row.random_id, /^-?[1-9][0-9]*$/);
+  assert.deepEqual(row.update_state, {pts: 100, qts: 0, date: 1700000000});
+  f.restart();
+  assert.equal((await f.request()).status, 502);
+  assert.equal(f.calls().sendCalls, 1);
+});
+
+test('an updateMessageID receipt survives a late failing send response', async t => {
+  const f = fixture(t, {sendError: new Error('synthetic lost response')});
+  const original = await f.request();
+  assert.equal(original.status, 502);
+  const entry = f.ledger.get(f.payload.attempt_id);
+  const receipt = confirmTelegramUpdate(f.ledger, f.account, {
+    className:'UpdateMessageID', randomId: BigInt(entry.random_id), id: 9103});
+  assert.equal(receipt.status,'delivered');
+  assert.equal(f.ledger.get(f.payload.attempt_id).state,'sent');
+  assert.equal((await f.request()).duplicate,true);
+  assert.equal(f.calls().sendCalls,1);
+});
+
+test('a missing stable operation id is refused before any provider call',async t=>{
+  const f=fixture(t);
+  const result=await f.request({...f.payload,attempt_id:''});
+  assert.equal(result.status,400);
+  assert.equal(result.submitted,false);
+  assert.equal(f.calls().sendCalls,0);
+});
+test('a missing pre-send MTProto checkpoint refuses without sending',async t=>{
+  const f=fixture(t,{stateError:true});
+  const result=await f.request();
+  assert.equal(result.status,409);
+  assert.equal(result.submitted,false);
+  assert.equal(result.code,'mtproto_update_checkpoint_unavailable');
+  assert.equal(f.calls().sendCalls,0);
 });

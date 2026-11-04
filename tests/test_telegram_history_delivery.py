@@ -8,7 +8,7 @@ import urllib.error
 import pytest
 
 from test_telegram_delivery_reconciliation import (
-    _JournalOutbox, _insert_provider_message, _make_due, _telegram_service,
+    _JournalOutbox, _insert_provider_message, _make_due, _telegram_service, _uncertain_draft,
 )
 from universal_userio.delivery_reconciliation import TelegramDeliveryReconciliationWorker
 from universal_userio.adapters import TelegramQrHttpOutbox
@@ -181,3 +181,35 @@ def test_stale_cached_text_is_never_accepted_instead_of_fresh_provider_payload(t
     TelegramDeliveryReconciliationWorker(service).run_once()
     assert service._store.draft(draft_id).status == 'sending'
     assert len(outbox.sent) == 1
+
+def test_mtproto_recovered_source_bound_reply_preserves_exact_anchor(tmp_path):
+    service, draft_id = _uncertain_draft(tmp_path, {
+        "state":"sent", "kind":"reply", "slot":"account-1",
+        "account_id":"telegram:540308572", "peer_id":"-1003724214344",
+        "message_id":"450", "reply_to_id":"305", "thread_id":""})
+    user_id=service._store.default_user_id
+    draft=service._store.draft(draft_id)
+    message_key="telegram:540308572|-1003724214344:305"
+    original=service._store.message(message_key,source="telegram")
+    with service._store._connection:
+        service._store._connection.execute(
+            "INSERT INTO draft_reply_origins "
+            "(user_id,draft_id,conversation_id,account_ref,peer_id,message_key,provider_message_id,source_body_sha256) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (user_id,draft_id,draft.conversation_id,"telegram:540308572","-1003724214344",
+             message_key,"305",hashlib.sha256(original["body"].encode()).hexdigest()))
+    result=service.reconcile_draft_delivery(draft_id)
+    assert result["resolution"]=="delivered"
+    assert result["receipt"] == f"telegram-qr:account-1:450:{draft_id}:reply_to:305:thread:"
+    assert service._store.draft(draft_id).status=="approved"
+
+
+def test_mtproto_reply_provider_id_alone_does_not_approve_without_bound_origin(tmp_path):
+    service,draft_id=_uncertain_draft(tmp_path,{
+        "state":"sent", "kind":"reply", "slot":"account-1",
+        "account_id":"telegram:540308572", "peer_id":"-1003724214344",
+        "message_id":"450", "reply_to_id":"305", "thread_id":""})
+    result=service.reconcile_draft_delivery(draft_id)
+    assert result["resolution"]=="unknown"
+    assert result["reason"]=="reply_source_binding_missing"
+    assert service._store.draft(draft_id).status=="sending"

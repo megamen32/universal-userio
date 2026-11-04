@@ -67,3 +67,32 @@ test("refuses a source changed on Telegram before sending", async () => {
   }), error => error.code === "source_changed" && error.submitted === false);
   assert.equal(sent, false);
 });
+
+test('source-bound reply uses the same MTProto random_id without losing its anchor',async()=>{
+  const calls=[], first={id:77,message:'source',replyTo:{replyToTopId:70}};
+  const last={id:78,message:'answer',date:1700,out:true,
+    replyTo:{replyToMsgId:77,replyToTopId:70}};
+  const client={
+    async getMessages(_peer,{ids}) {return [ids[0]===77 ? first : last];},
+    async getInputEntity(peer) {return peer;},
+    async invoke(request) {
+      calls.push(request);
+      return {className:'UpdateShortSentMessage',id:78,date:1700,out:true};
+    },
+    async sendMessage() {throw new Error('legacy path must not be called');},
+  };
+  const Api={InputReplyToMessage:class {constructor(v){Object.assign(this,v);}},
+    messages:{SendMessage:class {constructor(v){Object.assign(this,v);}}},
+  };
+  let before=null;
+  const result=await sendTelegramReply({client,peer:'owned-peer',messageId:'77',
+    expectedText:'source',text:'answer',threadId:'70',Api,randomId:'922337',
+    beforeSend:async v=>{before=v;}});
+  assert.equal(before.formattedText,'answer');
+  assert.equal(before.replyToId,'77');
+  assert.equal(calls.length,1);
+  assert.equal(String(calls[0].randomId),'922337');
+  assert.equal(calls[0].replyTo.replyToMsgId,77);
+  assert.equal(calls[0].replyTo.topMsgId,70);
+  assert.equal(result.messageId,'78');
+});

@@ -1,3 +1,4 @@
+import { sendTelegramText } from './telegram-send-recovery.mjs';
 import { formatTelegramMessage, sameTelegramEntities } from './message-format.mjs';
 
 export class TelegramReplyRefused extends Error {
@@ -11,7 +12,7 @@ export class TelegramReplyRefused extends Error {
 const nativeId = value => typeof value === "string" && /^[1-9][0-9]*$/.test(value)
   && Number.isSafeInteger(Number(value)) && Number(value) <= 0x7fffffff;
 
-export async function sendTelegramReply({ client, peer, messageId, threadId = "", expectedText, text, format }) {
+export async function sendTelegramReply({ client, peer, messageId, threadId = "", expectedText, text, format, Api, randomId, beforeSend }) {
   if (!peer || !nativeId(messageId)) {
     throw new TelegramReplyRefused("invalid_reply_target", "A valid Telegram chat and source message id are required");
   }
@@ -48,7 +49,14 @@ export async function sendTelegramReply({ client, peer, messageId, threadId = ""
     ...(format ? {formattingEntities: formatted.entities} : {}) };
   const effectiveThreadId = threadId || sourceThreadId;
   if (effectiveThreadId) options.topMsgId = Number(effectiveThreadId);
-  const sent = await client.sendMessage(peer, options);
+  if (typeof beforeSend === 'function') {
+    await beforeSend({formattedText: formatted.text, replyToId: messageId,
+      threadId: effectiveThreadId});
+  }
+  const sent = Api && randomId
+    ? await sendTelegramText({client, Api, peer, text: formatted.text, randomId,
+        replyToId: messageId, topMsgId: effectiveThreadId, entities: formatted.entities})
+    : await client.sendMessage(peer, options);
   if (!sent || !nativeId(String(sent.id || ""))) {
     throw new Error("Telegram reply outcome is unknown; send response had no message id");
   }

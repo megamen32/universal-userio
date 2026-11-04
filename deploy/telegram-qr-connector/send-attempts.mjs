@@ -10,7 +10,8 @@
 // The journal also makes an approved send idempotent: a repeated attempt id
 // never produces a second message.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 
 function now() {
@@ -35,31 +36,39 @@ export class SendAttemptLedger {
   }
 
   load() {
-    try {
-      if (!existsSync(this.path)) return;
-      const raw = JSON.parse(readFileSync(this.path, "utf8") || "{}");
-      this.startedAt = Number(raw.started_at) || this.startedAt;
-      const rows = Array.isArray(raw.entries) ? raw.entries : [];
-      for (const row of rows) {
-        if (row && typeof row.attempt_id === "string" && row.attempt_id) {
-          this.entries.set(row.attempt_id, row);
-        }
+    if (!existsSync(this.path)) return;
+    // A corrupt journal must stop the connector, not erase prior delivery identities.
+    const raw = JSON.parse(readFileSync(this.path, "utf8"));
+    if (!raw || !Array.isArray(raw.entries) || !Number.isSafeInteger(raw.started_at)) {
+      throw new Error("Telegram send journal is corrupt; refusing to lose provider identities");
+    }
+    this.startedAt = raw.started_at;
+    for (const row of raw.entries) {
+      if (!row || typeof row.attempt_id !== "string" || !row.attempt_id) {
+        throw new Error("Telegram send journal has an invalid entry");
       }
-    } catch (error) {
-      this.entries = new Map();
+      if (this.entries.has(row.attempt_id)) throw new Error("Duplicate journal attempt ID");
+      this.entries.set(row.attempt_id, row);
     }
   }
 
   save() {
+    // The provider call must happen only after the full attempt is durable.
+    mkdirSync(dirname(this.path), { recursive: true });
+    const temp = this.path + ".tmp-" + randomUUID();
+    let fd = null, parent = null;
     try {
-      mkdirSync(dirname(this.path), { recursive: true });
-      const rows = [];
-      for (const row of this.entries.values()) rows.push(row);
-      const temp = `${this.path}.tmp`;
-      writeFileSync(temp, JSON.stringify({ started_at: this.startedAt, entries: rows }, null, 2), { mode: 0o600 });
+      fd = openSync(temp, "wx", 0o600);
+      writeSync(fd, JSON.stringify({started_at: this.startedAt, entries: [...this.entries.values()]}, null, 2));
+      fsyncSync(fd);
+      closeSync(fd); fd = null;
       renameSync(temp, this.path);
-    } catch (error) {
-      console.error("send attempt journal write failed:", (error && error.message) || error);
+      parent = openSync(dirname(this.path), "r");
+      fsyncSync(parent);
+    } finally {
+      if (fd !== null) closeSync(fd);
+      if (parent !== null) closeSync(parent);
+      if (existsSync(temp)) unlinkSync(temp);
     }
   }
 
@@ -71,6 +80,12 @@ export class SendAttemptLedger {
   record(attemptId, patch) {
     if (!attemptId) return null;
     const current = this.entries.get(attemptId) || { attempt_id: attemptId, created_at: now() };
+    // A late exception must never downgrade a concurrently recovered receipt.
+    if (current.state === "sent" && patch.state && patch.state !== "sent") return current;
+    if (current.state === "sent" && patch.state === "sent"
+        && current.message_id && patch.message_id && current.message_id !== patch.message_id) {
+      throw new Error("provider receipt identity conflict");
+    }
     const next = Object.assign({}, current, patch, { attempt_id: attemptId, updated_at: now() });
     this.entries.set(attemptId, next);
     this.trim();
@@ -82,7 +97,10 @@ export class SendAttemptLedger {
     const rows = Array.from(this.entries.values());
     if (rows.length <= this.limit) return;
     rows.sort((a, b) => Number(a.updated_at || 0) - Number(b.updated_at || 0));
-    const drop = rows.slice(0, rows.length - this.limit);
+    // Keep every in-flight attempt and every MTProto nonce permanently; losing
+    // these identifiers would make later updates impossible to correlate.
+    const drop = rows.filter(row => !["pending", "unknown"].includes(row.state) && !row.random_id)
+      .slice(0, Math.max(0, rows.length - this.limit));
     for (const row of drop) this.entries.delete(row.attempt_id);
   }
 }

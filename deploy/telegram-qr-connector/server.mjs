@@ -46,6 +46,8 @@ import { entityLabel, entityName, resolveDialogLabel } from "./dialog-label.mjs"
 import { TelegramAdminJournal, executeTelegramAdmin, prepareTelegramAdmin } from "./telegram-admin.mjs";
 import { assertDeclaredMediaWithinLimit, boundedMediaLimit } from "./media-download-limit.mjs";
 import { SendAttemptLedger, attemptState } from "./send-attempts.mjs";
+import { captureTelegramState, confirmTelegramUpdate, confirmTelegramReplyUpdate,
+  reconcileTelegramDifference, sendTelegramText, stableTelegramRandomId } from "./telegram-send-recovery.mjs";
 import { attachmentResponseHeaders } from "./attachment-response.mjs";
 import { historyEvidence } from './history-evidence.mjs';
 import { tmpdir } from "node:os";
@@ -736,6 +738,22 @@ async function reconcileDialog(slot, client, accountId, labels, self, peer, chat
 
 async function ingestProviderState(slot, client, accountId, update) {
   const name = update.className;
+  if (name === "UpdateMessageID") {
+    // Authenticated Raw update binds a durable random_id to the provider ID.
+    const outcome = confirmTelegramUpdate(sendAttempts, accountId, update);
+    if (outcome.status === "not_found") {
+      const live = liveSlots.get(slot);
+      await confirmTelegramReplyUpdate(sendAttempts, accountId, update, {
+        client, peer: null, // Never infer another account or peer from a bare message ID.
+        ...(live ? {peer: [...sendAttempts.entries.values()]
+          .filter(row => row.kind === "reply" && row.account_id === accountId
+            && row.random_id === String(update.randomId))
+          .map(row => live.labelPeers.idPeers.get(row.peer_id)).find(Boolean)} : {}),
+      });
+    }
+    if (outcome.status === "delivered") console.log("Telegram send receipt recovered");
+    return;
+  }
   if (name === "UpdateUserName") {
     const live = liveSlots.get(slot);
     if (live) {
@@ -1891,6 +1909,11 @@ http.createServer(async (req, res) => {
               code: "send_outcome_unknown", submitted: "unknown" }));
           }
         }
+        if (!attemptId) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({error: "stable attempt_id is required",
+            code: "attempt_id_required", submitted: false}));
+        }
         const rawText = String(payload.body || "");
         const replyToId = String(payload.reply_to_id || "").trim();
         const threadId = String(payload.thread_id || "").trim();
@@ -1936,8 +1959,16 @@ http.createServer(async (req, res) => {
           if (!peer || !item.client) return false;
           const peerId = chatId || String(await item.client.getPeerId(peer, true));
           if (replyToId) {
-            const sent = await sendTelegramReply({ client: item.client, peer, messageId: replyToId,
-              threadId, expectedText, text, format });
+            const randomId = stableTelegramRandomId(attemptId, item.accountId, peerId);
+          const sent = await sendTelegramReply({ client: item.client, peer, messageId: replyToId,
+              threadId, expectedText, text, format, Api, randomId,
+              beforeSend: async ({formattedText, replyToId: sourceId, threadId: topicId}) => {
+                const updateState = await captureTelegramState(item.client, Api);
+                sendAttempts.record(attemptId, {state:"pending", slot, account_id:item.accountId,
+                  peer_id:peerId, kind:"reply", random_id:randomId, update_state:updateState,
+                  reply_to_id:sourceId, thread_id:topicId,
+                  body_sha256:createHash("sha256").update(formattedText).digest("hex")});
+              }});
             console.log(`reply ${slot}: ${chatId} msg ${sent.messageId} to ${replyToId}`);
             sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
               peer_id: peerId, message_id: String(sent.messageId), date: sent.date, kind: "reply",
@@ -1951,12 +1982,14 @@ http.createServer(async (req, res) => {
           }
           // Record the attempt before the provider call, so an outcome that
           // never comes back stays honestly in flight instead of unknown.
+          const randomId = stableTelegramRandomId(attemptId, item.accountId, peerId);
+          const updateState = await captureTelegramState(item.client, Api);
           sendAttempts.record(attemptId, { state: "pending", slot, account_id: item.accountId,
-            peer_id: peerId, kind: "send" });
-          const sent = await item.client.sendMessage(peer, { message: text });
+            peer_id: peerId, kind: "send", random_id: randomId, update_state: updateState });
+          const sent = await sendTelegramText({client: item.client, Api, peer, text, randomId});
           console.log(`send ${slot}: "${chat || chatId}" msg ${sent && sent.id}`);
           sendAttempts.record(attemptId, { state: "sent", slot, account_id: item.accountId,
-            peer_id: peerId, message_id: String(sent && sent.id), date: sent && sent.date });
+            peer_id: peerId, message_id: String(sent.id), date: sent.date });
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ ok: true, slot, account_id: item.accountId, message_id: String(sent && sent.id) }));
           return true;
@@ -1997,15 +2030,22 @@ http.createServer(async (req, res) => {
           code: "chat_not_known", submitted: false }));
       } catch (error) {
         if (error instanceof TelegramReplyRefused || error?.submitted === false) {
-          sendAttempts.record(attemptId, { state: "refused", code: error.code || "reply_refused",
-            account_id: wantAccount, peer_id: chatId });
+          try {
+            sendAttempts.record(attemptId, { state: "refused", code: error.code || "reply_refused",
+              account_id: wantAccount, peer_id: chatId });
+          } catch { console.error("Telegram delivery journal is unavailable"); }
           res.writeHead(409, { "content-type": "application/json" });
           return res.end(JSON.stringify({ error: error.message || "Telegram reply refused before send",
             code: error.code || "reply_refused", submitted: false }));
         }
         console.error("send error:", (error && error.message) || error);
-        sendAttempts.record(attemptId, { state: "unknown", code: "send_outcome_unknown",
-          account_id: wantAccount, peer_id: chatId });
+        // Raw updateMessageID may have recovered this attempt while invoke failed.
+        if (attemptState(sendAttempts.get(attemptId)) !== "sent") {
+          try {
+            sendAttempts.record(attemptId, { state: "unknown", code: "send_outcome_unknown",
+              account_id: wantAccount, peer_id: chatId });
+          } catch { console.error("Telegram delivery journal is unavailable"); }
+        }
         res.writeHead(502, { "content-type": "application/json" });
         // An exception can arrive with a message already on the wire, so the
         // caller must keep its durable claim instead of assuming non-delivery.
@@ -2184,7 +2224,23 @@ http.createServer(async (req, res) => {
         res.writeHead(400, { "content-type": "application/json" });
         return res.end(JSON.stringify({ error: "attempt_id is required" }));
       }
-      const entry = sendAttempts.get(attemptId);
+      let entry = sendAttempts.get(attemptId);
+      if (entry && ["pending", "unknown"].includes(entry.state)
+          && entry.random_id && entry.update_state) {
+        const live = [...liveSlots.values()].find(item => item.accountId === entry.account_id);
+        if (live?.client) {
+          try {
+            // This is updates.getDifference only: no provider send or retry.
+            await reconcileTelegramDifference({client: live.client, Api,
+              ledger: sendAttempts, attemptId,
+              resolvePeer: row => live.labelPeers.idPeers.get(row.peer_id)});
+            entry = sendAttempts.get(attemptId);
+          } catch (error) {
+            console.warn("Telegram read-only delivery difference unavailable",
+              error?.constructor?.name || "unknown");
+          }
+        }
+      }
       if (!entry) {
         res.writeHead(404, { "content-type": "application/json" });
         return res.end(JSON.stringify({ state: "absent", attempt_id: attemptId,
@@ -2196,6 +2252,8 @@ http.createServer(async (req, res) => {
         slot: entry.slot || "", account_id: entry.account_id || "", peer_id: entry.peer_id || "",
         message_id: entry.message_id ? String(entry.message_id) : "",
         date: entry.date || 0, code: entry.code || "", kind: entry.kind || "send",
+        ...(entry.kind === "reply" ? {reply_to_id:entry.reply_to_id || "",
+          thread_id:entry.thread_id || ""} : {}),
         recorded_at: entry.updated_at || 0,
       }));
     } catch (error) {
