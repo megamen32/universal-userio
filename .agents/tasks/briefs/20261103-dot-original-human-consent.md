@@ -1,0 +1,26 @@
+# LHC task — dot original human-confirmed Messenger action
+
+Base: current UserIO main d5c1eb0 in independent clean worktree /home/roomhacker/agents-projects/universal-userio/.worktrees/dot-action-consent-20261103. Scoped objective: fill the exact missing user-action approval bridge identified in Mirror PR19, using only the original Messenger action, PR13 UNKNOWN provider fence and existing owner web session/dot service bearer.
+
+Code scope (own isolated branch only): new question_action_consent.py; minimum additions to question_runtime.py, messenger.py and http_api.py; new test_question_action_human_consent.py; source runbook. No edits to Mirror PR19 files, ExManager PR17 Go files, logging PR15 files, shared dirty main or voice. No second provider fence, new token, direct provider sender, runtime rollout or real provider sends.
+
+Current acceptance: source-only fake-provider tests verify direct confirm without human record fails, original action approval idempotent, stable receipt projection, unknown and no replay, invalid epoch, revoked account and edited source, optional duplicate action bypass, authenticated owner-cookie CSRF form and service-to-original dispatch, original approval record before send. Existing QuestionRuntime tests remain green (29/29). Human consent is separate from boolean confirm, and both are enforced by backend at existing provider entry in production HTTP handler.
+
+Human review required (including explicit audit of all production constructors and origin/CSRF behavior). Original Todo card stays REVIEW until both consumers wired, review completed, guarded deploy and 11 true acceptance receipts. Prior PR16 independent reviewer still absent. No Codex/Work or background timer.
+
+Additional 2026-11-03 source receipt: fake-provider HTTP 202 UNKNOWN/nonretryable + follow-up 409/zero replay test passed (12 new tests PASS). The existing guarded review accepts only current owner web session, CSRF and the exact original action; Mirror PR19 and ExManager PR17 will need owner-specific wiring, not completed by this branch.
+
+Independent source-readonly PR19 compatibility receipt: exact fb4509f dot-question-consumer.mjs validator accepted a fake-provider projection from this backend and rejected mutated UNKNOWN. No PR19 files changed. Stdio MCP without question runtime was found and fail-closed guarded in Messenger; targeted question suite 42/42 PASS. Full updated HTTP/OAuth/question 74/74 PASS from previous step before this latest stdio-only patch; rerun scope-specific suite after patch.
+
+
+2026-11-03 source acceptance addendum:
+- Original PR20 had CI credentials scan red due a hardcoded fake bearer-looking string in the synthetic HTTP fixture (NOT a real credential). Removed this literal entirely; test key now generated ephemerally at runtime, no real secret committed. Normal unmodified scripts/validate_no_credentials.py: PASS, 1045 tracked files; GitHub scan SUCCESS at commit 96ea584, run 41614534262.
+- After explicit UNKNOWN HTTP 202/nonretryable and runtime-less stdio provider-entry refusal, current new consent tests 13/13 PASS and exact affected question native suite 42/42 PASS. Combined HTTP/OAuth/question 74/74 PASS. Real PR19 fb4509f original Messenger receipt validator accepted backend fake projection, rejected mutated UNKNOWN. No real provider calls.
+- Full existing Messenger/Telegram/relay/Workspace regression: 66 PASS / 4 FAIL (exactly the four previous unchanged baseline failures already fixed in separate PR16 1d70cb8, which has 71/71 PASS but no independent review). No new PR20 regression observed; checks not disabled/xfail'd. Existing pytest asyncio_default_fixture_loop_scope warning remains.
+- PR20 is draft; source and no-send tests only. Installed runtime main remains d5c1eb0; Mirror PR19 and ExManager PR17 are unwired, 11 actual acceptance cases not executed. GitHub repo collaborator inventory contains only megamen32; no independent reviewer is assigned to PR20 or PR16. Do NOT self-approve, merge or deploy. Existing Herder release lease not acquired, no Hub/UserIO restart/voice change.
+
+2026-11-03 new no-send proof: dot→manager handoff with resumed epoch, exact one stored action and separately confirmed owner consent → original provider receipt, PASS. New request_id with existing persisted result_ref denied before new action insert; 15/15 new fake-provider approval tests PASS. All observed effects are synthetic local SQLite/provider fixtures.
+
+Source-matrix: PR20 7511b9d overlaid with PR16 1d70cb8 in detached independent worktree, no merge. 115/115 combined Messenger/relay/Workspace/Question source tests PASS. Human review for both PRs and full E2E remain outstanding.
+
+2026-11-03 concurrency: two simultaneous identical approved requests in offline fake-provider fixture => exactly one provider execute and one original action; 3 targeted tests PASS including manager handoff and different request-id negative. PR16+PR20 detached source matrix remains 115/115 PASS. Do not conflate with E2E runtime.

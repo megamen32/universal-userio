@@ -824,14 +824,34 @@ class Messenger:
         if provider is None or getattr(provider,'account_ref',None)!=e['account_ref']:
             raise ValueError('provider_account_conflict')
         question_runtime = getattr(self.service, 'question_runtime', None)
+        if (question_runtime is None and e.get('source_message_id')
+                and self.store._table_exists('question_coordination')):
+            # Stdio MCP and other in-process Messenger entrypoints can exist
+            # without the HTTP-installed runtime. A claimed source must never
+            # fall through to provider.execute merely because that guard is
+            # absent in this transport.
+            with self.store._lock:
+                held = self.store._connection.execute("""
+                    SELECT 1 FROM question_coordination
+                    WHERE user_id=? AND account_ref=? AND conversation_id=?
+                      AND message_id=? AND tenant='userio' LIMIT 1
+                """, (self.user, e.get('account_ref'),
+                      e.get('conversation_id'), e.get('source_message_id'))).fetchone()
+            if held is not None:
+                raise PermissionError('claimed_question_runtime_unavailable')
         question_receipt_context = None
         if e['action'] == 'reply' and question_runtime is not None:
-            # The exact immutable Messenger approval has already passed.
-            # Begin the existing provider send only after durable lease fence.
+            # Exactly one already human-approved original action may reach
+            # the existing QuestionRuntime UNKNOWN-before-provider fence.
             question_receipt_context = question_runtime.before_existing_messenger_send(
                 self.principal, e, question_proof)
         elif question_proof is not None:
             raise ValueError('question_proof_not_supported_for_action')
+        elif (question_runtime is not None
+              and question_runtime._question_for_action(self.principal, e) is not None):
+            # A second media/edit/reaction send attached to the SAME original
+            # question cannot escape through another Messenger operation.
+            raise PermissionError('question_non_reply_action_requires_review')
         with self.store._lock, self.store._connection:
             # Lock the writer before reading source/claiming: a concurrent
             # source update cannot slip between the snapshot and the claim.

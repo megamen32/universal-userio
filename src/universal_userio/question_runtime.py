@@ -44,6 +44,9 @@ class QuestionRuntime:
     def __init__(self, store, *, key: bytes, dot_binding_path=DOT_BINDING):
         self.store = store
         self.dot_binding_path = dot_binding_path
+        # Production HTTP entrypoint installs one owner-session consent guard.
+        # The original question lease / Messenger outgoing journal is unchanged.
+        self.human_consent = None
         self.coordinator = QuestionCoordination(
             store._connection, store._lock, tenant="userio",
             token_key=key, resolve_actor=self._actor,
@@ -200,6 +203,13 @@ class QuestionRuntime:
         if question is None:
             if question_proof is not None:
                 raise Rejected("no_claim_for_provided_question_proof")
+            if self.human_consent is not None and principal.service_account:
+                dot = trusted_dot_binding(self.dot_binding_path)
+                if dot and (envelope.get("account_ref") == dot["account"]
+                            and str(envelope.get("peer_id")) == dot["owner"]):
+                    # A dot service bearer cannot avoid the approval guard
+                    # by sending to the original owner source without a claim.
+                    raise AccessDenied("dot_original_question_claim_required")
             return None
         if not isinstance(question_proof, dict) or set(question_proof) != {
                 "event_seq", "revision", "epoch", "lease_token"}:
@@ -213,6 +223,10 @@ class QuestionRuntime:
         action_id = envelope.get("action_id")
         if not isinstance(req, str) or not isinstance(action_id, str):
             raise Rejected("original_messenger_identity_required")
+        if self.human_consent is not None:
+            actor, src = self.coordinator._scope(principal, seq, revision)
+            self.human_consent.verify_before_provider(
+                principal, envelope, src["question_id"], question_proof["epoch"])
         result = self.coordinator.begin_original_send(
             principal, seq, revision, question_proof["lease_token"],
             question_proof["epoch"], "provider-start:" + action_id, req)
