@@ -7,6 +7,24 @@ import pytest
 from universal_userio import chatgpt_sessions, vault
 
 
+def test_chatgpt_email_users_are_isolated(tmp_path, monkeypatch):
+    monkeypatch.setattr(chatgpt_sessions, "SESSION_DIR", tmp_path)
+    for user, token in [("airlock@example.com", "first"), ("other+test@example.com", "second")]:
+        chatgpt_sessions.save_session({"account_ref": "same", "session_token": token}, user=user)
+        assert len(chatgpt_sessions.list_sessions(user=user)) == 1
+        assert chatgpt_sessions.load_session("same", user=user)["cookie_chunks"][0]["value"] == token
+    chatgpt_sessions.delete_session("same", user="airlock@example.com")
+    assert chatgpt_sessions.list_sessions(user="airlock@example.com") == []
+    assert len(chatgpt_sessions.list_sessions(user="other+test@example.com")) == 1
+
+
+@pytest.mark.parametrize("user", ["..", ".", "../other", "a/b", "a\\b", "bad\x00name", "alice\n"])
+def test_chatgpt_rejects_unsafe_usernames(tmp_path, monkeypatch, user):
+    monkeypatch.setattr(chatgpt_sessions, "SESSION_DIR", tmp_path)
+    with pytest.raises(ValueError):
+        chatgpt_sessions.list_sessions(user=user)
+
+
 def test_chatgpt_sessions_are_user_scoped_and_private(tmp_path, monkeypatch):
     monkeypatch.setattr(chatgpt_sessions, "SESSION_DIR", tmp_path / "chatgpt")
     payload = {"email": "same@example.com", "session_token": "secret-a"}

@@ -1,22 +1,10 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>VK connector settings</title>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Подключения · UserIO</title>
 <style>
-  body { font: 16px system-ui, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 20px; background: #1c1c1c; color: #eaeaea; }
-  h1 { font-size: 22px; }
-  label { display: block; margin-top: 16px; font-size: 13px; color: #aaa; }
-  input { display: block; width: 100%; padding: 9px; margin: 6px 0 0; box-sizing: border-box; background: #2a2a2a; color: #eaeaea; border: 1px solid #3a3a3a; border-radius: 6px; font: inherit; }
-  button { margin-top: 18px; padding: 9px 18px; background: #4a7dff; color: white; border: none; border-radius: 6px; cursor: pointer; }
-  .status { margin-left: 12px; color: #6dcc6d; }
-  p { color: #aaa; font-size: 13px; }
-</style>
-<h1>VK connector</h1>
-<p>Расширение использует открытую VK Web-сессию в этом профиле Chrome. VK-токен не извлекается.</p>
-
-<label>UserIO endpoint<input id="endpoint" placeholder="http://127.0.0.1:18093"></label>
-<label>UserIO API token (опционально; хранится только в этом профиле)<input id="token" type="password" autocomplete="off"></label>
-<label>route_id (привязка к UserIO)<input id="routeId" placeholder="vk-browser"></label>
-
-<button id="save">Сохранить</button><span class="status" id="status"></span>
-
-<script src="options.js"></script>
+:root { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:#1c2840; background:#f5f7fb; } * { box-sizing:border-box } body { margin:0; padding:56px 22px } main { max-width:680px; margin:auto } .eyebrow { color:#5a6bf1; font-size:12px; font-weight:750; letter-spacing:.12em; text-transform:uppercase } h1 { font-size:30px; letter-spacing:-.035em; margin:8px 0 } .intro { color:#718098; line-height:1.5; margin:0 0 28px } .card { background:#fff; border:1px solid #e6eaf2; border-radius:18px; padding:24px; margin:14px 0; box-shadow:0 8px 28px #26385f08 } .heading { display:flex; align-items:center; gap:14px } .icon { display:grid; place-items:center; width:42px; height:42px; border-radius:13px; background:#edf0ff; color:#596afa; font-weight:800; font-size:19px } .icon.chat { background:#e5f5ef; color:#198668 } h2 { font-size:17px; margin:0 } .desc { color:#8190a6; font-size:13px; margin:3px 0 0 } .status { color:#536177; font-size:14px; margin:18px 0 0; overflow-wrap:anywhere } .accounts { display:grid; gap:8px; margin-top:14px } .account { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:11px 13px; background:#f7f9fc; border-radius:10px; overflow-wrap:anywhere } button { border:0; border-radius:10px; padding:10px 14px; font:600 13px inherit; cursor:pointer; background:#5a6bf1; color:#fff; margin:14px 8px 0 0 } button:hover { filter:brightness(.95) } button:disabled { opacity:.5; cursor:wait } button.danger { color:#ba4650; background:#fff0f1; margin:0; flex-shrink:0 } button.secondary { color:#4b5bc7; background:#edf0ff } button[hidden] { display:none } details { margin:22px 0; color:#748299; font-size:13px } summary { cursor:pointer } label { display:block; margin:12px 0; color:#66758c } input { display:block; width:100%; padding:10px; margin-top:6px; border:1px solid #dce2ed; border-radius:9px; font:inherit } .help { font-size:12px; color:#8a98a9; line-height:1.5; margin:12px 0 0 } [hidden] { display:none !important }
+</style></head><body><main>
+<div class="eyebrow">UserIO · браузер</div><h1>Подключения</h1><p class="intro">Управляйте аккаунтами, которые подключены к UserIO в этом браузере.</p>
+<section class="card"><div class="heading"><div class="icon">U</div><div><h2>Аккаунт UserIO</h2><p class="desc">Связь расширения с вашим аккаунтом</p></div></div><p id="userioStatus" class="status" role="status">Проверяем подключение…</p><button id="userioConnect" hidden>Войти в UserIO</button><button id="userioDisconnect" class="secondary" hidden>Выйти на этом устройстве</button></section>
+<section class="card"><div class="heading"><div class="icon chat">✳</div><div><h2>ChatGPT</h2><p class="desc">Аккаунты, подключённые к UserIO</p></div></div><p id="chatgptStatus" class="status" role="status">Проверяем подключение…</p><div id="chatgptAccounts" class="accounts"></div><button id="chatgptSelect" hidden>Подключить ChatGPT</button><button id="chatgptConnect" hidden>Подтвердить подключение</button><p class="help">При подключении данные выбранной сессии передаются в UserIO после вашего подтверждения. При отключении они удаляются из UserIO.</p></section>
+<details><summary>Дополнительные настройки</summary><label>Адрес UserIO<input id="endpoint" placeholder="https://msg.bezrabotnyi.com"></label><label>Маршрут интеграции<input id="routeId" placeholder="vk-browser"></label><button id="save" class="secondary">Сохранить</button><span id="status" role="status"></span></details>
+</main><script src="lib/config.js"></script><script src="options.js"></script></body></html>

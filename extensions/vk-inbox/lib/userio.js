@@ -21,11 +21,14 @@
     return { ...DEFAULTS, ...s };
   };
 
+  lib.accessToken = () => root.UserIOOAuth.accessToken();
+
   async function call(method, path, body) {
     const s = await lib.settings();
     const url = s.endpoint.replace(/\/+$/, "") + path;
     const headers = { "Content-Type": "application/json" };
-    if (s.token) headers["Authorization"] = "Bearer " + s.token;
+    const token = await lib.accessToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
     const res = await fetch(url, {
       method,
       headers,
