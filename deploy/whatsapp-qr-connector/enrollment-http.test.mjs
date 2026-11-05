@@ -48,6 +48,29 @@ try{
  assert.equal((await sent.json()).slot,slot);
  const wrong=await fetch(base+'/send',{method:'POST',headers:{Authorization:'Bearer fixture-service','Content-Type':'application/json'},body:JSON.stringify({user_id:'bob',account_ref:account.id,chatId:'target@s.whatsapp.net',message:'unsent'})});
  assert.ok(wrong.status>=400);
+ const original={user_id:'alice',account_ref:account.id,chatId:'target@s.whatsapp.net',
+   message:'test durable',attempt_id:'draft-pinned-wa-001'};
+ const request=async payload=>fetch(base+'/send',{method:'POST',
+   headers:{Authorization:'Bearer fixture-service','Content-Type':'application/json'},
+   body:JSON.stringify(payload)});
+ const first=await request(original);
+ assert.equal(first.status,200);
+ const accepted=await first.json();
+ assert.equal(accepted.messageId,'3EB0MOCKNATIVE00001');
+ const attemptUrl=base+'/send-attempt?'+new URLSearchParams({
+   attempt_id:original.attempt_id,user_id:'alice',
+   account_ref:account.id,chat_id:original.chatId});
+ const status=await fetch(attemptUrl,{headers:{Authorization:'Bearer fixture-service'}});
+ assert.equal(status.status,200);
+ const proof=await status.json();
+ assert.equal(proof.state,'sent');
+ assert.equal(proof.message_id,accepted.messageId);
+ const repeated=await request(original);
+ assert.equal(repeated.status,200);
+ assert.equal((await repeated.json()).duplicate,true);
+ const wrongAttempt=await fetch(attemptUrl.replace('user_id=alice','user_id=bob'),{
+   headers:{Authorization:'Bearer fixture-service'}});
+ assert.equal(wrongAttempt.status,404);
  const links=JSON.parse(readFileSync(join(tmp,'slot-accounts.json')));assert.equal(links[slot].owner,'alice');assert.equal(links[slot].account_ref,account.id);
  console.log('WhatsApp personal HTTP registration/source/send and foreign rejection: PASS');
 }catch(e){console.error(output.slice(-1200));throw e;}

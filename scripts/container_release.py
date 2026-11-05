@@ -69,11 +69,25 @@ PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-
 BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
     'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
     'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
-    'delivery_reconciliation.py', 'provider_readback.py', 'gmail_sent_reconciliation.py', 'channels/max_client.py', 'store.py', 'adapters.py', 'runtime.py',
+    'delivery_reconciliation.py', 'provider_readback.py', 'gmail_sent_reconciliation.py', 'channels/max_client.py', 'channels/whatsapp.py', 'store.py', 'adapters.py', 'runtime.py',
     'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
     'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
     'matrix_calls.py', 'noticeplace_calls.py', 'telemost/meetings.py', 'static/telemost.html')) + tuple(
-    'deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs'))
+    'deploy/telegram-qr-connector/' + f for f in ('server.mjs', 'account-card.mjs')) + (
+    'deploy/whatsapp-qr-connector/server.mjs',
+    'deploy/whatsapp-qr-connector/whatsapp-send-recovery.mjs',
+)
+
+
+
+def backend_source_target(path: str) -> str:
+    if path.startswith('src/universal_userio/'):
+        return '/opt/universal-userio/' + path
+    if path.startswith('deploy/telegram-qr-connector/'):
+        return '/opt/userio-telegram-qr/' + path.rsplit('/', 1)[1]
+    if path.startswith('deploy/whatsapp-qr-connector/'):
+        return '/opt/userio-whatsapp-qr/' + path.rsplit('/', 1)[1]
+    raise ValueError('unrecognized backend source path')
 
 
 def install_platform_helper():
@@ -706,8 +720,7 @@ def reconcile_backend(*, revision: str, expected_container: str,
         expected_hashes = {}
         for source in BACKEND_SOURCE_HASH_PATHS:
             blob = subprocess.check_output(repo_git_argv(ROOT, 'show', revision + ':' + source), timeout=12)
-            target = ('/opt/universal-userio/' + source if source.startswith('src/')
-                      else '/opt/userio-telegram-qr/' + source.rsplit('/', 1)[1])
+            target = backend_source_target(source)
             expected_hashes[target] = hashlib.sha256(blob).hexdigest()
         recorded = base.get('candidate') or {}
         if (recorded.get('hashes') != expected_hashes
@@ -1517,8 +1530,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         pinned = subprocess.check_output(repo_git_argv(ROOT, 'show', full_revision + ':' + path))
         if pinned != subprocess.check_output(repo_git_argv(ROOT, 'show', 'origin/main:' + path)):
             raise RuntimeError('candidate source changed since pin: ' + path)
-        destination = ('/opt/universal-userio/' + path if path.startswith('src/')
-                       else '/opt/userio-telegram-qr/' + path.rsplit('/', 1)[1])
+        destination = backend_source_target(path)
         expected_hashes[destination] = hashlib.sha256(pinned).hexdigest()
     code = ('import pathlib,hashlib,json; print(json.dumps({"release":json.loads(pathlib.Path('
             '"/opt/universal-userio/.userio-release.json").read_text()),"hashes":{p:hashlib.sha256('
