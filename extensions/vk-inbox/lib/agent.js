@@ -512,6 +512,22 @@
         if (!root.Vault) return { ok: false, error: "vault module missing" };
         return root.Vault.del(String(args.name || ""));
       }
+      case "dot_inspect": {
+        const tabs = (await chrome.tabs.query({})).filter(t => t.url === args.url);
+        if (!args.url || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url) || tabs.length !== 1)
+          return {ok:false,error:"dot_tab_not_unique"};
+        const [r] = await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:()=>({url:location.href,ids:[...document.querySelectorAll("article.message-row[data-message-id]")].filter(e=>!e.closest(".reply-chain-panel[role=dialog]")).map(e=>e.dataset.messageId),composers:[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length).length})});
+        return {ok:true,tab_id:tabs[0].id,...r.result};
+      }
+      case "dot_action": {
+        if (!root.UserIODot || !["snapshot","send"].includes(args.operation) || typeof args.room!=="string" || !args.room || typeof args.url!=="string" || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)) return {ok:false,error:"invalid_dot_request"};
+        const tabs = (await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
+        const text=args.operation==="snapshot"?null:args.text;
+        if(args.operation==="send"&&(typeof text!=="string"||!text.trim()||text.length>16000))return {ok:false,error:"invalid_dot_text"};
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.pageAction,args:[args.url,args.room,text,args.after||null,args.reply_to||null]});
+        return r?.result || {ok:false,error:"dot_result_unknown"};
+      }
       case "gpt_identity": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
         return root.ChatGPT.identity();
