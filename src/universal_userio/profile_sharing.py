@@ -162,6 +162,9 @@ class ProfileSharing:
             if not row:
                 raise PermissionError('share_not_found')
             account = row['account_ref']
+            accounts = {item['id']: item for item in self.store.accounts(user_id=row['owner_id'])}
+            if account not in accounts or not accounts[account]['enabled'] or accounts[account]['provider'] != 'telegram':
+                raise PermissionError('share_account_unavailable')
             peers = set(json.loads(row['peers'])) & _folder(account, row['folder_id'])
             chats = []
             for peer in peers:

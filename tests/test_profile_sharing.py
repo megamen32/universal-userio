@@ -157,3 +157,14 @@ def test_authenticated_json_rpc_consumer_can_read_and_cannot_escape(env):
     assert result['result']['structuredContent']['ok'] is True
     request['params']['arguments']['operation'] = 'userio.workspace.poll'
     assert json_rpc_response(surface, request, principal=principal)['result']['isError'] is True
+
+
+def test_disabled_source_account_cannot_be_read(env):
+    store, owner, recipient, _, surface, _ = env
+    share = create(env)
+    with store._lock, store._connection:
+        store._connection.execute('UPDATE provider_accounts SET enabled=0 WHERE user_id=? AND id=?', (owner.user_id, 'telegram:1'))
+    result = run(surface, recipient, 'call', share_id=share, operation='userio.channels.list', arguments={})
+    assert result['error'] == 'share_account_unavailable'
+    events = run(surface, owner, 'audit', share_id=share)['events']
+    assert events[0]['outcome'] == 'denied' and events[0]['actor_id'] == recipient.user_id
