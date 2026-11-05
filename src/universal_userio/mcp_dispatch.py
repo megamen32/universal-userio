@@ -54,6 +54,10 @@ class UserIOToolDispatcher:
     def dispatch(
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal
     ) -> dict[str, Any]:
+        if name in {"search", "fetch"}:
+            from .mcp_company_search import dispatch
+            return dispatch(name, arguments, store=self._store, principal=principal,
+                            call=lambda child, args: self.dispatch(child, args, principal=principal))
         if name.startswith("userio.messenger.question."):
             if (principal.read_only or principal.meeting_recorder
                     or (principal.messenger_grants is not None

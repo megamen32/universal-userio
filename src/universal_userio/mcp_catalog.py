@@ -15,11 +15,14 @@ class ToolSpec:
     input_schema: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": self.input_schema,
-        }
+        result = {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
+        if self.name in {"search", "fetch", "userio.channels.search", "userio.workspace.poll"}:
+            result["annotations"] = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+        if self.name == "search":
+            result["outputSchema"] = {"type": "object", "properties": {"results": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"}}, "required": ["id", "title", "url"]}}}, "required": ["results"]}
+        elif self.name == "fetch":
+            result["outputSchema"] = {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "text": {"type": "string"}, "url": {"type": "string"}, "metadata": {"type": "object"}}, "required": ["id", "title", "text", "url"]}
+        return result
 
 
 def schema(
@@ -47,6 +50,8 @@ IGNORED_CHATS_SCHEMA = {
 
 
 TOOL_SPECS = (
+    ToolSpec("search", "Search automatically eligible user messages across UserIO channels.", schema({"query": {"type": "string", "minLength": 1, "maxLength": 256}}, ["query"])),
+    ToolSpec("fetch", "Fetch the exact automatically eligible message returned by search.", schema({"id": {"type": "string", "minLength": 1, "maxLength": 2048}}, ["id"])),
     ToolSpec(
         "userio.channels.list",
         "List this user's chats across connected channels, or search their retained history when a search query is given. "
@@ -579,6 +584,7 @@ DIAGNOSTIC_SPECS = (
 TOOL_SPECS = (*TOOL_SPECS, *DIAGNOSTIC_SPECS)
 
 TOOL_CAPABILITIES = {
+    "search": "read", "fetch": "read",
     "userio.messages.prepare": "send",
     'userio.diagnostic.create':'send','userio.diagnostic.get':'read','userio.diagnostic.message':'send',
     'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send',

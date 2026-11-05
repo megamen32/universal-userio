@@ -29,7 +29,14 @@ class ToolSpec:
     input_schema: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
+        result = {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
+        if self.name in {"search", "fetch", "userio.channels.search", "userio.workspace.poll"}:
+            result["annotations"] = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+        if self.name == "search":
+            result["outputSchema"] = {"type": "object", "properties": {"results": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"}}, "required": ["id", "title", "url"]}}}, "required": ["results"]}
+        elif self.name == "fetch":
+            result["outputSchema"] = {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "text": {"type": "string"}, "url": {"type": "string"}, "metadata": {"type": "object"}}, "required": ["id", "title", "text", "url"]}
+        return result
 
 
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -40,6 +47,8 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 
 
 TOOL_SPECS = (
+    ToolSpec("search", "Search automatically eligible user messages across UserIO channels.", _schema({"query": {"type": "string", "minLength": 1, "maxLength": 256}}, ["query"])),
+    ToolSpec("fetch", "Fetch the exact automatically eligible message returned by search.", _schema({"id": {"type": "string", "minLength": 1, "maxLength": 2048}}, ["id"])),
     ToolSpec("userio.channels.list", "List this user's chats across connected channels, or search their retained history when a search query is given. Read chats from the MCP CallToolResult `structuredContent.chats` array (or `chats` if your client unwraps it); do not assume `chats` is a top-level property on the MCP wrapper.", _schema({
         "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -223,6 +232,7 @@ from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS, MESSAGE_SEND_SP
 TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS, *MESSAGE_SEND_SPECS)
 
 TOOL_CAPABILITIES = {
+    "search": "read", "fetch": "read",
     "userio.messages.prepare": "send",
     'userio.messenger.capabilities': 'read',
     'userio.messenger.events': 'read',
@@ -306,6 +316,7 @@ class UserIOMcpSurface:
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
                  or principal.messenger_grants is not None and spec.name in {
+                    'search','fetch',
                     'userio.accounts.list','userio.channels.list','userio.channels.search',
                     'userio.channels.export','userio.channels.read','userio.channels.download',
                     'userio.contacts.resolve','userio.messages.prepare'}
@@ -543,6 +554,10 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if name in {"search", "fetch"}:
+            from .mcp_company_search import dispatch
+            return dispatch(name, arguments, store=self._store, principal=principal,
+                            call=lambda child, args: self.dispatch(child, args, principal=principal))
         if name.startswith("userio.messenger.question."):
             if (principal.read_only or principal.meeting_recorder
                     or (principal.messenger_grants is not None
