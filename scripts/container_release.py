@@ -587,6 +587,236 @@ def replace_backend(*, image: str, revision: str, expected_container: str, recei
                                 receipt_directory=receipt_directory)
 
 
+
+def _backend_resume_snapshot_proof(*, baseline: dict, intent: dict,
+                                   candidate: dict, current: dict,
+                                   revision: str, expected_container: str,
+                                   current_accounts: list[str],
+                                   current_others: dict,
+                                   original_compose: bytes,
+                                   current_compose: bytes) -> dict:
+    """Pure fail-closed proof of a partially installed but healthy backend.
+
+    No Docker, network, shell or file mutation is performed here.
+    """
+    if not all(isinstance(row, dict) for row in (baseline, intent, candidate, current)):
+        raise RuntimeError('backend recovery evidence is malformed')
+    old = baseline.get('backend')
+    others = baseline.get('others')
+    if not isinstance(old, dict) or not isinstance(others, dict):
+        raise RuntimeError('backend recovery baseline is incomplete')
+    if (intent.get('revision') != revision
+            or intent.get('expected_container') != old.get('Id')
+            or baseline.get('image_id') != intent.get('image_id')
+            or candidate.get('Id') != expected_container
+            or current.get('Id') != expected_container
+            or candidate.get('Image') != intent.get('image_id')
+            or current.get('Image') != intent.get('image_id')
+            or not current.get('State', {}).get('Running')):
+        raise RuntimeError('backend recovery candidate or target changed')
+    image = candidate.get('Config', {}).get('Image')
+    if not isinstance(image, str) or not image.startswith('universal-userio-backend:sha-'):
+        raise RuntimeError('backend recovery image identity unavailable')
+    expected = _backend_replacement_config(old['Config'], image=image, revision=revision)
+    def normalized_host(value):
+        node = dict(value)
+        if node.get('OomKillDisable') is None:
+            node['OomKillDisable'] = False
+        return node
+    if (current.get('Config') != expected
+            or candidate.get('Config') != expected
+            or normalized_host(current.get('HostConfig') or {}) != normalized_host(old['HostConfig'])
+            or sorted(current.get('Mounts') or [], key=lambda item: item['Destination'])
+               != sorted(old.get('Mounts') or [], key=lambda item: item['Destination'])):
+        raise RuntimeError('backend recovery configuration or mounts changed')
+    if sorted(current_accounts) != sorted(baseline.get('account_ids') or []):
+        raise RuntimeError('backend recovery account identity differs')
+    if not isinstance(current_others, dict) or set(current_others) != set(others):
+        raise RuntimeError('backend recovery unrelated-container inventory changed')
+    for name, prior in others.items():
+        now = current_others[name]
+        if any(now.get(k) != prior.get(k) for k in ('Id', 'Image', 'Config', 'HostConfig')):
+            raise RuntimeError('backend recovery unrelated-container configuration changed')
+    configured = json.loads(original_compose)
+    configured.setdefault('services', {}).setdefault('backend', {})['image'] = image
+    installed = json.dumps(configured, indent=2).encode()
+    if current_compose not in (original_compose, installed):
+        raise RuntimeError('backend recovery compose differs from both permitted versions')
+    return {'image': image, 'image_id': intent['image_id'],
+            'container_id': current['Id'],
+            'previous_image_id': old['Image'],
+            'installed_compose': installed,
+            'compose_update_needed': current_compose == original_compose}
+
+
+def reconcile_backend(*, revision: str, expected_container: str,
+                      receipt_directory: Path, dry_run: bool = False):
+    """Finish a verified interrupted backend replacement without another restart.
+
+    The supported recovery takes exactly the prior intent/backup/created candidate
+    and verifies source, all original runtime identities, health and accounts.
+    It never replays a send, touches the UserIO DB or substitutes a new image.
+    """
+    import fcntl
+    import urllib.request
+    import tempfile
+    if os.getuid() != 0:
+        raise RuntimeError('backend recovery requires root')
+    with open('/run/lock/userio-backend-release.lock', 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError('another routine backend replacement is active') from error
+        source_root = Path('/var/backups/universal-userio').resolve(strict=True)
+        if receipt_directory.is_symlink():
+            raise RuntimeError('backend recovery directory cannot be a symlink')
+        directory = receipt_directory.resolve(strict=True)
+        if directory == source_root or not directory.is_relative_to(source_root):
+            raise RuntimeError('backend recovery path is outside protected backup root')
+        info = directory.stat()
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o700:
+            raise RuntimeError('backend recovery backup directory owner/mode is unsafe')
+        documents = {}
+        for name in ('baseline.json', 'compose.host.json', 'intent.json', 'candidate.json'):
+            item = directory / name
+            if item.is_symlink() or not item.is_file():
+                raise RuntimeError('backend recovery artifact missing or symlinked')
+            entry = item.stat()
+            if entry.st_uid != 0 or stat.S_IMODE(entry.st_mode) != 0o600:
+                raise RuntimeError('backend recovery artifact owner/mode is unsafe')
+            documents[name] = item.read_bytes()
+        if (directory / 'receipt.json').exists():
+            raise RuntimeError('release already has a receipt; use the normal idempotent verification')
+        base = json.loads(documents['baseline.json'])
+        intent = json.loads(documents['intent.json'])
+        candidate = json.loads(documents['candidate.json'])
+        if not re.fullmatch(r'[a-f0-9]{40}', revision):
+            raise RuntimeError('backend recovery revision must be an immutable commit')
+        if not re.fullmatch(r'[a-f0-9]{64}', expected_container):
+            raise RuntimeError('backend recovery candidate container ID invalid')
+        if output(repo_git_argv(ROOT, 'cat-file', '-t', revision)) != 'commit':
+            raise RuntimeError('backend recovery source object not a commit')
+        command(repo_git_argv(ROOT, 'merge-base', '--is-ancestor', revision, 'origin/main'))
+        image = str(candidate.get('Config', {}).get('Image') or '')
+        inspected = subprocess.run(['docker', 'image', 'inspect', '--format', '{{.Id}}', image],
+                                   capture_output=True, text=True, timeout=12, check=True).stdout.strip()
+        if inspected != intent.get('image_id'):
+            raise RuntimeError('backend recovery image tag no longer matches intent')
+        # Reprove the image bytes against the original published immutable source.
+        expected_hashes = {}
+        for source in BACKEND_SOURCE_HASH_PATHS:
+            blob = subprocess.check_output(repo_git_argv(ROOT, 'show', revision + ':' + source), timeout=12)
+            target = ('/opt/universal-userio/' + source if source.startswith('src/')
+                      else '/opt/userio-telegram-qr/' + source.rsplit('/', 1)[1])
+            expected_hashes[target] = hashlib.sha256(blob).hexdigest()
+        recorded = base.get('candidate') or {}
+        if (recorded.get('hashes') != expected_hashes
+                or (recorded.get('release') or {}).get('commit') != revision):
+            raise RuntimeError('backend recovery source provenance differs from baseline')
+        def docker_inspect(name):
+            process = subprocess.run(['docker', 'inspect', name], capture_output=True,
+                                     timeout=15, check=True)
+            entries = json.loads(process.stdout)
+            if len(entries) != 1:
+                raise RuntimeError('backend recovery Docker identity unavailable')
+            return entries[0]
+        current = docker_inspect('userio-backend')
+        active_others = {name: docker_inspect(name) for name in base['others']}
+        # Hash the actual installed sources in the already running container.
+        code = ('import hashlib,pathlib,json;paths=' + repr(list(expected_hashes))
+                + ';print(json.dumps({p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths}))')
+        process = subprocess.run(['docker', 'exec', 'userio-backend', 'python', '-c', code],
+                                 capture_output=True, text=True, timeout=25, check=True)
+        if json.loads(process.stdout) != expected_hashes:
+            raise RuntimeError('backend recovery installed source hash mismatch')
+        marker = subprocess.run(['docker', 'exec', 'userio-backend', 'python', '-c',
+                                 'import pathlib;print(pathlib.Path("/opt/universal-userio/.userio-release.json").read_text())'],
+                                capture_output=True, text=True, timeout=15, check=True)
+        if json.loads(marker.stdout) != recorded['release']:
+            raise RuntimeError('backend recovery installed manifest differs from baseline')
+        health = subprocess.run(['docker', 'exec', 'userio-backend', 'python', '-m',
+                                 'universal_userio.container_runtime', '--health'],
+                                capture_output=True, timeout=25, check=False)
+        if health.returncode:
+            raise RuntimeError('backend recovery supervisor is unhealthy')
+        processes = json.loads((CONFIG / 'processes.json').read_text())['processes']
+        telegram = next(row for row in processes if row['name'] == 'telegram')
+        environment = telegram.get('environment', telegram.get('env', {}))
+        req = urllib.request.Request('http://127.0.0.1:18093/v1/accounts',
+            headers={'Authorization': 'Bearer ' + environment['USERIO_API_TOKEN']})
+        with urllib.request.urlopen(req, timeout=20) as response:
+            accounts_payload = json.load(response)
+        rows = accounts_payload['accounts'] if isinstance(accounts_payload, dict) else accounts_payload
+        account_ids = sorted(row['id'] for row in rows)
+        current_compose = (CONFIG / 'compose.host.json').read_bytes()
+        proof = _backend_resume_snapshot_proof(baseline=base, intent=intent,
+            candidate=candidate, current=current, revision=revision,
+            expected_container=expected_container, current_accounts=account_ids,
+            current_others=active_others,
+            original_compose=documents['compose.host.json'],
+            current_compose=current_compose)
+        public = {'status': 'ready' if dry_run else 'installed', 'revision': revision,
+            'image': proof['image'], 'image_id': proof['image_id'],
+            'container_id': proof['container_id'],
+            'previous_image_id': proof['previous_image_id'],
+            'compose_sha256': hashlib.sha256(proof['installed_compose']).hexdigest(),
+            'supervisor_healthy': True, 'account_ids_unchanged': True,
+            'frontend_voice_configuration_unchanged': True,
+            'backup': str(directory)}
+        if dry_run:
+            print(json.dumps(dict(public, source_hashes_verified=len(expected_hashes),
+                compose_update_needed=proof['compose_update_needed'])))
+            return
+        # Compare-and-swap the old config: no other config owner may intervene.
+        if (CONFIG / 'compose.host.json').read_bytes() != current_compose:
+            raise RuntimeError('backend recovery compose changed after preflight')
+        # The lease is a coordination fence, not a substitute for a fresh
+        # in-process Docker CAS before committing the persistent service pointer.
+        final_container = docker_inspect('userio-backend')
+        if (final_container.get('Id') != current.get('Id')
+                or final_container.get('Image') != current.get('Image')
+                or final_container.get('Config') != current.get('Config')
+                or not final_container.get('State', {}).get('Running')):
+            raise RuntimeError('backend recovery canonical container changed after proof')
+        if proof['compose_update_needed']:
+            fd, temp = tempfile.mkstemp(prefix='.compose.backend-recovery-', dir=CONFIG)
+            try:
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, 'wb') as stream:
+                    stream.write(proof['installed_compose'])
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temp, CONFIG / 'compose.host.json')
+                folder = os.open(CONFIG, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(folder)
+                finally:
+                    os.close(folder)
+            finally:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+        # Atomic private receipt; retries after interruption are safe to inspect.
+        fd, temp = tempfile.mkstemp(prefix='.receipt.backend-recovery-', dir=directory)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(public, stream, ensure_ascii=False, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if (directory / 'receipt.json').exists():
+                raise RuntimeError('backend recovery receipt appeared concurrently')
+            os.replace(temp, directory / 'receipt.json')
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+        print(json.dumps(public))
+
+
 def _backend_replacement_config(previous: dict, *, image: str, revision: str) -> dict:
     """Keep runtime settings exact while recording the reviewed image revision."""
     labels = dict(previous.get('Labels') or {})
@@ -1385,7 +1615,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend', 'archive-voice', 'install-voice'))
+    parser.add_argument('action', choices=('prepare', 'prepare_voice', 'context', 'cutover', 'rollback', 'finalize', 'replace-backend', 'reconcile-backend', 'archive-voice', 'install-voice'))
     parser.add_argument('--portable-voice', action='store_true')
     parser.add_argument('--role', choices=('standby', 'calls-primary'))
     parser.add_argument('--name', default='userio-voice')
@@ -1397,6 +1627,7 @@ def main():
     parser.add_argument('--revision')
     parser.add_argument('--expected-container')
     parser.add_argument('--receipt-directory', type=Path)
+    parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     if args.action == 'install-voice':
         from voice_container import install
@@ -1408,6 +1639,13 @@ def main():
         if not args.receipt_directory:
             parser.error('archive-voice requires --receipt-directory')
         print(json.dumps(archive_voice(args.receipt_directory), sort_keys=True))
+        return
+    if args.action == 'reconcile-backend':
+        if not all((args.revision, args.expected_container, args.receipt_directory)):
+            parser.error('reconcile-backend requires --revision, --expected-container and --receipt-directory')
+        reconcile_backend(revision=args.revision,
+                          expected_container=args.expected_container,
+                          receipt_directory=args.receipt_directory, dry_run=args.dry_run)
         return
     if args.action == 'replace-backend':
         if not all((args.image, args.revision, args.expected_container, args.receipt_directory)):
