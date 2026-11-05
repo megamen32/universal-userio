@@ -20,3 +20,9 @@ test('dot send validates payload before injection',async()=>{
  const x=setup([{id:1,url}]);for(const text of ['',null,'x'.repeat(16001)])assert.equal((await x.execute({action:'dot_action',args:{url,room:'r',operation:'send',text}})).ok,false);
  assert.equal(x.calls.length,0);assert.equal((await x.execute({action:'dot_action',args:{url,room:'r',operation:'send',text:'hi'}})).ok,true);assert.equal(x.calls.length,1);
 });
+test('backgrounded Dot tab retains message text for durable echo matching',async()=>{
+ const room='fixture';const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null,classList:{contains:()=>true},querySelector:s=>s==='.message-text'?{innerText:'',textContent:'expected message'}:null,querySelectorAll:()=>[]};
+ const self={};const document={querySelectorAll:s=>s.startsWith('article')?[row]:[],querySelector:()=>null};const location={href:url};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location,URL,TextEncoder,crypto:globalThis.crypto});
+ const result=await self.UserIODot.pageAction(url,room,null,null);assert.equal(result.messages[0].text,'expected message');
+});

@@ -22,7 +22,7 @@ async function pageAction(url, room, text, after, replyTo=null) {
         attachment_fingerprints.push(Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join(''));
       }
       messages.push({id:e.dataset.messageId,role:e.classList.contains('self')?'user':'assistant',
-        text:e.querySelector('.message-text')?.innerText||'',
+        text:e.querySelector('.message-text')?.innerText||e.querySelector('.message-text')?.textContent||'',
         attachment_names:images.map(i=>i.alt).filter(Boolean),
         attachment_count:images.length,attachment_fingerprints,
         reply_to:e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||null});
