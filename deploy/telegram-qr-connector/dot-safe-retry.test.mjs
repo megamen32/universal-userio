@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {claimNotAccepted} from './dot-safe-retry.mjs';
+const hash='a'.repeat(64),approval='b'.repeat(32),good={status:'not_accepted',reason:'wrong_or_unloaded_room',text_hash:hash};
+test('retry is limited to proven pre-submit failures',()=>{for(const change of [{status:'send_uncertain'},{status:'submitted_unconfirmed'},{status:'accepted'},{reason:'other'},{cursor:'old'},{echo:'id'},{text_hash:'bad'}])assert.throws(()=>claimNotAccepted({...good,...change},hash,approval,'backup'));let r={...good};claimNotAccepted(r,hash,approval,'backup');assert.equal(r.status,'queued');assert.equal(r.safe_retries[0].status,'not_accepted')});

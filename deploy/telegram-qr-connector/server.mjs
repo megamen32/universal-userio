@@ -7,6 +7,7 @@ import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding} from "./dot-group-binding.mjs";
 import {createGroupBotSender} from "./dot-group-send.mjs";
 import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
+import {claimNotAccepted} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
@@ -1516,7 +1517,18 @@ http.createServer(async (req, res) => {
       if(!sender||sender.className!=='User'||sender.bot===true||String(sender.id)!==String(input.sender_id))throw Error('group_replay_sender_mismatch');
       const relay=await getGroupRelay(binding),event={accountId:binding.botAccountId,peerId:binding.peerId,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text:String(message.message||''),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
       if(sensitiveText(event.text))throw Error('group_replay_sensitive');
-      const result=await relay.prepareReceive(event,async()=> '[Контекст недоступен]');
+      const recordId=binding.botAccountId+':'+binding.peerId+':'+input.message_id,existing=relay.state.incoming[recordId];
+      let result;
+      if(existing?.status==='not_accepted'){
+        if(relay.busy||groupMirror.running||event.replyTo||!/^[a-f0-9]{32}$/.test(allowed.request_id||''))throw Error('group_replay_busy_or_unsupported');
+        const original=JSON.stringify(relay.state),backup=stateDir+'/dot-group-retry-'+allowed.request_id+'.json';
+        // Validate before creating any backup or changing journal state.
+        claimNotAccepted({...existing},input.text_hash,allowed.request_id,backup);
+        const fd=openSync(backup,'wx',0o600);try{writeFileSync(fd,original);fsyncSync(fd)}finally{closeSync(fd)}
+        const dir=openSync(stateDir,'r');try{fsyncSync(dir)}finally{closeSync(dir)}
+        claimNotAccepted(existing,input.text_hash,allowed.request_id,backup);relay.save();
+        relay.busy=true;const run=()=>relay.deliver(recordId,event.text);relay.tail=relay.tail.then(run,run);result=await relay.tail;
+      }else result=await relay.prepareReceive(event,async()=> '[Контекст недоступен]');
       res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({status:result.status,duplicate:!!result.duplicate}));
     }catch{res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'group_replay_refused'}));}
   }
