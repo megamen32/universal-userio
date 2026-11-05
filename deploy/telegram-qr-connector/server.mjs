@@ -1508,9 +1508,11 @@ http.createServer(async (req, res) => {
       if(!approvalStat.isFile()||(approvalStat.mode&0o777)!==0o600||approvalStat.uid!==process.getuid())throw Error('group_replay_approval_unsafe');
       const allowed=JSON.parse(readFileSync(approvalPath,'utf8'));
       if(!allowed||allowed.bot_account!==binding.botAccountId||allowed.peer_id!==binding.peerId||input.message_id!==allowed.message_id||String(input.sender_id)!==allowed.sender_id||input.text_hash!==allowed.text_hash)throw Error('group_replay_not_authorized');
-      const source=[...liveSlots.entries()].find(([slot,item])=>item.accountId===allowed.source_account&&enrollmentOwners.allowed(slot,'user_owner'))?.[1];
-      const target=source?.labelPeers.idPeers.get(binding.peerId);
-      if(!source||!target)throw Error('group_source_not_observed');
+      const sources=[...liveSlots.entries()].filter(([slot,item])=>item.accountId===allowed.source_account&&enrollmentOwners.allowed(slot,'user_owner'));
+      const source=(sources.find(([,item])=>item.labelPeers.idPeers.has(binding.peerId))||sources[0])?.[1];
+      if(!source)throw Error('group_source_not_observed');
+      let target=source.labelPeers.idPeers.get(binding.peerId);
+      if(!target){try{target=await source.client.getEntity(binding.peerId)}catch{throw Error('group_source_not_observed')}}
       const message=(await source.client.getMessages(target,{ids:[input.message_id]}))?.[0];
       if(!message||String(await source.client.getPeerId(message.peerId,true))!==binding.peerId||message.media||textHash(String(message.message||''))!==input.text_hash)throw Error('group_replay_source_mismatch');
       const sender=await message.getSender();
@@ -1530,7 +1532,7 @@ http.createServer(async (req, res) => {
         relay.busy=true;const run=()=>relay.deliver(recordId,event.text);relay.tail=relay.tail.then(run,run);result=await relay.tail;
       }else result=await relay.prepareReceive(event,async()=> '[Контекст недоступен]');
       res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({status:result.status,duplicate:!!result.duplicate}));
-    }catch{res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'group_replay_refused'}));}
+    }catch(error){const reason=/^(?:group_[a-z_]+|retry_not_proven_safe)$/.test(String(error?.message||''))?error.message:'group_replay_refused';res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:reason}));}
   }
 
   if ((url.pathname === '/dot/resync-preview' && req.method === 'GET') ||
