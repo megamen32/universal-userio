@@ -2,7 +2,9 @@ import {DOT_POLICY} from './dot-policy.mjs';
 import {DotMediaIngress,hasSupportedImage,MAX_IMAGE_BYTES} from './dot-media.mjs';
 import { createBoardDotNodeMount } from "./board-dot-mount.mjs";
 import { ROOM as DOT_BOARD_ROOM } from "./dot-relay.mjs";
-import { DotMirror, mirrorSendOptions, safeReplyContext } from "./dot-mirror.mjs";
+import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from "./dot-mirror.mjs";
+import {createExtensionCaller} from "./dot-extension-agent.mjs";
+import {readGroupBinding} from "./dot-group-binding.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
@@ -10,7 +12,7 @@ import http from "node:http";
 import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken, enrollExplicitBot } from "./bot-enrollment.mjs";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, closeSync, createWriteStream, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, createWriteStream, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { CustomFile } from 'telegram/client/uploads.js';
 import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';
@@ -940,6 +942,72 @@ function getDotRelay(accountId,binding) {
   if(relay.tabId!==binding.pageId)throw new Error("dot_page_binding_changed");
   return relay;
 }
+// The second binding uses the same connector and DotRelay/DotMirror engine;
+// no second Telegram client or process is created.
+const groupBindingPath=stateDir+'/dot-group-binding.json';
+const groupTokenPath=stateDir+'/dot-group-agent-token.age';
+let groupRelay=null,groupMirror=null,groupIdentity='',groupPending=null,groupPendingIdentity='';
+async function getGroupRelay(binding){
+ const identity=JSON.stringify(binding);
+ if(groupRelay){if(groupIdentity!==identity)throw Error('group_binding_changed_requires_review');return groupRelay;}
+ if(groupPending){if(groupPendingIdentity!==identity)throw Error('group_binding_changed_requires_review');return groupPending;}
+ groupPendingIdentity=identity;groupPending=initializeGroupRelay(binding,identity);
+ try{return await groupPending;}finally{groupPending=null;groupPendingIdentity='';}
+}
+async function initializeGroupRelay(binding,identity){
+ const file=lstatSync(groupTokenPath);if(!file.isFile()||(file.mode&0o777)!==0o600||file.uid!==process.getuid())throw Error('unsafe_group_agent_credential');
+ const dec=spawnSync('age',['--decrypt','-i',keyPath,groupTokenPath],{encoding:'utf8',maxBuffer:16384});
+ if(dec.status!==0||!dec.stdout.trim())throw Error('group_agent_credential_unavailable');
+ const token=dec.stdout.trim();
+ const check=await fetch(new URL('/v1/connection-principal',userIoUrl),{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(5000)});
+ if(!check.ok||(await check.json()).user_id!==binding.owner)throw Error('group_agent_owner_mismatch');
+ const browserCall=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:binding.url,room:binding.room,token});
+ const boundLive=()=>{
+  const current=readGroupBinding(groupBindingPath);
+  if(JSON.stringify(current)!==identity)throw Error('group_binding_changed');
+  const pair=[...liveSlots.entries()].find(([slot,item])=>item.accountId===binding.botAccountId&&item.self?.bot===true&&enrollmentOwners.allowed(slot,binding.owner));
+  if(!pair)throw Error('group_bot_disconnected');
+  return pair[1];
+ };
+ const send=async(peer,text,replyTo)=>{
+  if(peer!==binding.peerId)throw Error('wrong_group');
+  const live=boundLive(),target=live.labelPeers.idPeers.get(binding.peerId);
+  if(!target)throw Error('group_entity_not_observed');
+  const sent=await live.client.sendMessage(target,mirrorSendOptions(text,replyTo));
+  if(!sent?.id)throw Error('group_send_unknown');return sent.id;
+ };
+ const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send});
+ relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
+ groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;
+}
+function relayGroupMessage(client,accountId,self,message,chatKey,isEdit){
+ let binding;try{binding=readGroupBinding(groupBindingPath)}catch{return false}
+ if(!binding||accountId!==binding.botAccountId)return false;
+ if(chatKey!==binding.peerId||!self.bot||message.out||isEdit)return true;
+ void (async()=>{
+  const sender=await message.getSender();
+  if(!sender||sender.className!=='User'||sender.bot===true||!sender.id)return;
+  const text=String(message.message||'');
+  if(!text.trim()||sensitiveText(text)||message.media)return;
+  const relay=await getGroupRelay(binding);
+  const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text,replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+  await relay.prepareReceive(event,async()=> '[Контекст недоступен]');
+ })().catch(()=>console.error('group dot relay requires review'));
+ return true;
+}
+let groupMirrorRunning=false,groupMirrorNext=0;
+async function tickGroupMirror(){
+ if(groupMirrorRunning||Date.now()<groupMirrorNext)return;
+ groupMirrorRunning=true;
+ try{
+  const binding=readGroupBinding(groupBindingPath);if(!binding)return;
+  await getGroupRelay(binding);
+  const result=await groupMirror.tick();
+  groupMirrorNext=Date.now()+(['idle','cursor_not_visible','snapshot_unavailable'].includes(result.status)?30000:15000);
+  if(!['idle','incoming_busy','stabilizing'].includes(result.status))console.log('group dot mirror',result.status);
+ }catch{groupMirrorNext=Date.now()+30000;console.error('group dot mirror requires review');}
+ finally{groupMirrorRunning=false;}
+}
 function relayDotMessage(client,accountId,self,message,chatKey,isEdit) {
   const binding=readDotBinding(undefined,true);
   if(!isDedicatedDotBot(accountId,binding))return false;
@@ -1028,7 +1096,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   }
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
-  const isDotBot = relayDotMessage(client, accountId, self, message, chatKey, isEdit);
+  const isDotBot = relayGroupMessage(client, accountId, self, message, chatKey, isEdit) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
   if (!isDotBot && !isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
@@ -2634,4 +2702,4 @@ http.createServer(async (req, res) => {
 }).listen(port, "127.0.0.1");
 
 // One bounded observer for the single explicitly bound dot room.
-setInterval(()=>{void tickDotMirror();},15000).unref();
+setInterval(()=>{void tickDotMirror();void tickGroupMirror();},15000).unref();

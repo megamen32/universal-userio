@@ -44,3 +44,9 @@ test('image-only owner input keeps manifest and requires image filenames in echo
  assert.deepEqual(admitted[3].source_message_ids,['80','81']);
  assert.equal(relay.allowed({...e,senderId:'other'}),false);assert.equal(relay.allowed({...e,media:[]}),false);
 });
+test('group binding admits only verified human messages in the exact group',async()=>{
+ const x=setup();const relay=new DotRelay({...x.config,statePath:x.path+'-group',room:'group-room',peerId:'-1004352022764',group:true});
+ const e={...event,peerId:'-1004352022764',senderId:'123',private:false,senderIsBot:false};
+ assert.equal(relay.allowed(e),true);
+ for(const change of [{peerId:'-1001'},{private:true},{senderIsBot:true},{senderIsBot:undefined},{senderId:''},{out:true}]) assert.equal(relay.allowed({...e,...change}),false);
+});

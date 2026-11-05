@@ -24,7 +24,7 @@ export function resolveMirrorReply(relay,replyTo){
  const matches=new Set();
  const published=relay.state.mirror?.published?.[replyTo];
  if(published?.status==='accepted'&&Array.isArray(published.receipts)&&published.receipts.length>0&&published.receipts.every(nativeTelegramMessageId))matches.add(published.receipts[0]);
- const prefix=relay.botAccountId+':'+OWNER+':';
+ const prefix=relay.botAccountId+':'+(relay.peerId||OWNER)+':';
  for(const [key,record] of Object.entries(relay.state.incoming||{})){
   if(!key.startsWith(prefix)||record.source!=='telegram'||record.status!=='accepted'||record.echo!==replyTo)continue;
   const id=key.slice(prefix.length);
@@ -41,8 +41,8 @@ export function mirrorSendOptions(text,replyTo=null){
  }
  return options;
 }
-export function mirrorParts(message){
- const label=message.role==='user'?(DOT_POLICY?.ownerLabel||'Owner'):(DOT_POLICY?.assistantLabel||'Assistant');const text=String(message.text||'');
+export function mirrorParts(message,labels=DOT_POLICY){
+ const label=message.role==='user'?(labels?.ownerLabel||'Owner'):(labels?.assistantLabel||'Assistant');const text=String(message.text||'');
  const pieces=[];let offset=0;
  while(offset<text.length){let end=Math.min(offset+3000,text.length);if(end<text.length&&/[\uD800-\uDBFF]/.test(text[end-1]))end--;pieces.push(text.slice(offset,end));offset=end;if(pieces.length>12)throw Error('message_too_large');}
  return pieces.map((body,i)=>label+(pieces.length>1?` (${i+1}/${pieces.length})`:'')+':\n'+body);
@@ -71,7 +71,7 @@ export class DotMirror{
    if(!mirror||unsafe()||(mirror.resyncs||[]).some(r=>r.requestId===requestId))return refused;
    const before=JSON.stringify(state);
    let snap;try{snap=await this.relay.browserCall('dot_snapshot',{tab_id:this.relay.tabId});}catch{return refused;}
-   if(unsafe()||before!==JSON.stringify(state)||!snap.ok||snap.room!==ROOM||!snap.cursor||snap.cursor!==targetCursor||
+   if(unsafe()||before!==JSON.stringify(state)||!snap.ok||snap.room!==(this.relay.room||ROOM)||!snap.cursor||snap.cursor!==targetCursor||
       !Array.isArray(snap.messages)||!snap.messages.length||snap.messages.at(-1)?.id!==targetCursor||
       snap.messages.some(m=>m.id===expectedCursor))return refused;
    const backupPath=join(dirname(this.relay.statePath),'dot-resync-'+requestId+'.json');
@@ -105,7 +105,7 @@ export class DotMirror{
     return {status:'snapshot_read_failed'};
    }
    if(state){state.readFailures=0;delete state.nextReadAttemptAt;delete state.lastReadErrorAt;}
-   if(!snap.ok||snap.room!==ROOM||!snap.cursor)return {status:'snapshot_unavailable'};
+   if(!snap.ok||snap.room!==(this.relay.room||ROOM)||!snap.cursor)return {status:'snapshot_unavailable'};
    const rows=snap.messages||[];
    if(!state){state=this.relay.state.mirror={baselineAt:this.now(),cursor:snap.cursor,candidates:{},published:{},held:{}};this.relay.save();return {status:'baseline_initialized',cursor:state.cursor};}
    const index=rows.findIndex(m=>m.id===state.cursor);
@@ -134,7 +134,7 @@ export class DotMirror{
     if(reply.status==='unresolved'){
      state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
-    let parts;try{parts=m.text.trim()?mirrorParts(m):[];}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
+    let parts;try{parts=m.text.trim()?mirrorParts(m,this.relay.labels):[];}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     let media=null,caption=null;
     if(imageCount){
      if(typeof this.relay.sendMedia!=='function'){state.status='media_transport_requires_review';this.relay.save();return {status:state.status};}
@@ -148,7 +148,7 @@ export class DotMirror{
       this.relay.save();return {status:state.status};
      }
      const inline=parts.length===1&&parts[0].length<=900;
-     caption=inline?parts[0]:mirrorParts({...m,text:'[изображение]'})[0];
+     caption=inline?parts[0]:mirrorParts({...m,text:'[изображение]'},this.relay.labels)[0];
      if(inline)parts=[];
     }
     const pub={hash:c.hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,
@@ -163,7 +163,7 @@ export class DotMirror{
      try{
       // No competing claim: propagate the immutable original source identity.
       // Native claim fence integration belongs to the existing UserIO owner.
-      const receipts=await this.relay.sendMedia(OWNER,media,caption,reply.receipt,{source_message_id:m.id});
+      const receipts=await this.relay.sendMedia(this.relay.peerId||OWNER,media,caption,reply.receipt,{source_message_id:m.id});
       if(!Array.isArray(receipts)||!receipts.length||receipts.some(id=>!/^[1-9][0-9]*$/.test(String(id))))throw Error('media_provider_receipt_unknown');
       pub.media_receipts=receipts.map(String);pub.receipts.push(...pub.media_receipts);
       this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,kind:'media',part:0,receipts:pub.media_receipts};
@@ -174,7 +174,7 @@ export class DotMirror{
      const key='mirror:'+m.id+':'+n;
      if(this.relay.state.outgoing[key]){state.blocked='delivery_requires_review';this.relay.save();return {status:state.blocked};}
      this.relay.state.outgoing[key]={status:'send_uncertain',source_id:m.id,part:n};this.relay.save();
-     try{const receipt=await this.relay.send(OWNER,parts[n],reply.receipt);pub.receipts.push(String(receipt));this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
+     try{const receipt=await this.relay.send(this.relay.peerId||OWNER,parts[n],reply.receipt);pub.receipts.push(String(receipt));this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
      catch{state.blocked='delivery_unknown';this.relay.save();return {status:state.blocked};}
     }
     pub.status='accepted';state.cursor=m.id;delete state.candidates[m.id];changed=true;this.relay.save();
@@ -184,11 +184,11 @@ export class DotMirror{
     if(pub.media_count||(m.attachment_count??m.attachment_names?.length??0)>0){state.held[m.id]={reason:'media_edit_requires_review',hash:c.hash};this.relay.save();continue;}
     if((m.reply_to||null)!==(pub.reply_to||null)){state.held[m.id]={reason:'reply_target_edited_requires_review',hash:c.hash};continue;}
     if(sensitiveText(m.text)||!m.text.trim()){state.held[m.id]={reason:'sensitive_or_empty_update',hash:c.hash};continue;}
-    let parts;try{parts=mirrorParts(m);}catch{state.held[m.id]={reason:'oversize_update',hash:c.hash};continue;}
+    let parts;try{parts=mirrorParts(m,this.relay.labels);}catch{state.held[m.id]={reason:'oversize_update',hash:c.hash};continue;}
     if(parts.length!==pub.receipts.length){state.held[m.id]={reason:'edit_part_count_changed',hash:c.hash};continue;}
     if(typeof this.relay.edit!=='function'){state.blocked='edit_unavailable';this.relay.save();return {status:state.blocked};}
     pub.status='edit_uncertain';this.relay.save();
-    try{for(let n=0;n<parts.length;n++)await this.relay.edit(OWNER,pub.receipts[n],parts[n],pub.partHashes?.[n]);}
+    try{for(let n=0;n<parts.length;n++)await this.relay.edit(this.relay.peerId||OWNER,pub.receipts[n],parts[n],pub.partHashes?.[n]);}
     catch{state.blocked='edit_unknown';this.relay.save();return {status:state.blocked};}
     pub.hash=c.hash;pub.partHashes=parts.map(textHash);pub.status='accepted';delete state.candidates[m.id];changed=true;this.relay.save();
    }
