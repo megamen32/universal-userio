@@ -7,7 +7,7 @@ import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding} from "./dot-group-binding.mjs";
 import {createGroupBotSender} from "./dot-group-send.mjs";
 import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
-import {claimNotAccepted} from "./dot-safe-retry.mjs";
+import {claimNotAccepted,validateReplayReply} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
@@ -1522,7 +1522,8 @@ http.createServer(async (req, res) => {
       const recordId=binding.botAccountId+':'+binding.peerId+':'+input.message_id,existing=relay.state.incoming[recordId];
       let result;
       if(existing?.status==='not_accepted'){
-        if(relay.busy||groupMirror.running||event.replyTo||!/^[a-f0-9]{32}$/.test(allowed.request_id||''))throw Error('group_replay_busy_or_unsupported');
+        if(relay.busy||groupMirror.running||!/^[a-f0-9]{32}$/.test(allowed.request_id||''))throw Error('group_replay_busy_or_unsupported');
+        validateReplayReply(existing,event.replyTo,reply=>relay.replyTarget(reply));
         const original=JSON.stringify(relay.state),backup=stateDir+'/dot-group-retry-'+allowed.request_id+'.json';
         // Validate before creating any backup or changing journal state.
         claimNotAccepted({...existing},input.text_hash,allowed.request_id,backup);

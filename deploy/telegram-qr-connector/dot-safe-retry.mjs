@@ -5,3 +5,9 @@ export function claimNotAccepted(record,expectedHash,approvalId,backup){
  const prior={status:record.status,reason:record.reason,at:Date.now(),approval_id:approvalId,backup};
  record.status='queued';delete record.reason;(record.safe_retries||=[]).push(prior);return prior;
 }
+export function validateReplayReply(record,replyTo,resolve){
+ const source=replyTo?String(replyTo):null;
+ if((record.provider_reply_to||null)!==source)throw Error('retry_reply_changed');
+ if(source&&(!record.reply_to_main||resolve(source)!==record.reply_to_main))throw Error('retry_reply_unverified');
+ return true;
+}
