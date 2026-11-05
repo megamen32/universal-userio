@@ -142,3 +142,18 @@ def test_multiple_local_conversations_for_same_peer_are_granted(env):
     result = run(surface, recipient, 'call', share_id=share, operation='userio.messenger.history',
                  arguments={'account_ref':'telegram:1', 'conversation_id':'second-local-record'})
     assert result['ok'], result
+
+
+def test_authenticated_json_rpc_consumer_can_read_and_cannot_escape(env):
+    from universal_userio.mcp_transport import json_rpc_response
+    store, owner, recipient, _, surface, _ = env
+    share = create(env)
+    principal = store.authenticate_token(store.issue_access_token(recipient.user_id))
+    chat = store._connection.execute("SELECT id FROM conversations WHERE peer_id='101'").fetchone()['id']
+    request = {'jsonrpc':'2.0', 'id':1, 'method':'tools/call', 'params':{
+        'name':'userio.profile_share.call', 'arguments':{'share_id':share,
+        'operation':'userio.messenger.history', 'arguments':{'account_ref':'telegram:1','conversation_id':chat}}}}
+    result = json_rpc_response(surface, request, principal=principal)
+    assert result['result']['structuredContent']['ok'] is True
+    request['params']['arguments']['operation'] = 'userio.workspace.poll'
+    assert json_rpc_response(surface, request, principal=principal)['result']['isError'] is True

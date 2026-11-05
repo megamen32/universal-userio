@@ -131,6 +131,18 @@ class ProfileSharing:
             return {'ok': True, 'events': [dict(r) for r in rows]}
 
     def call(self, actor, share_id, operation, arguments):
+        try:
+            return self._call(actor, share_id, operation, arguments)
+        except (PermissionError, ValueError, KeyError):
+            # Record denials only when the authenticated user is the recipient;
+            # do not create audit rows for arbitrary guessed share identifiers.
+            with self.store._lock:
+                row = self.store._connection.execute('SELECT 1 FROM profile_shares WHERE id=? AND grantee_id=?', (share_id, actor.user_id)).fetchone()
+                if row:
+                    self._audit(share_id, actor.user_id, str(operation)[:128], 'denied')
+            raise
+
+    def _call(self, actor, share_id, operation, arguments):
         _full(actor)
         if operation not in _ALLOWED or not isinstance(arguments, dict):
             raise PermissionError('share_operation_denied')
@@ -176,5 +188,4 @@ class ProfileSharing:
                 self._audit(share_id, actor.user_id, operation, 'ok' if result.get('ok') else 'denied', action_id)
                 return result
             except Exception:
-                self._audit(share_id, actor.user_id, operation, 'denied', action_id)
                 raise
