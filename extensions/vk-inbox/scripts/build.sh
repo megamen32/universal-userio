@@ -5,10 +5,9 @@
 #   vk-userio-extension.zip       - current MV3 package
 #   vk-userio-extension-mv3.zip   - same bytes (legacy alias)
 #
-# Build-time deployment config (baked into lib/config.js) so a fresh install
-# talks to the global UserIO host without touching the options page:
-#   USERIO_PUBLIC_ENDPOINT   e.g. http://192.168.2.100:18093
-#   USERIO_API_TOKEN         bearer token for that host
+# Public package defaults (baked into lib/config.js) so a fresh install
+# knows the global UserIO host without including deployment credentials:
+#   USERIO_PUBLIC_ENDPOINT   defaults to https://msg.bezrabotnyi.com
 #   USERIO_AGENT_ID          agent name for the /v1/agent channel
 set -euo pipefail
 
@@ -24,6 +23,10 @@ if ! command -v python3 >/dev/null; then echo "python3 not found" >&2; exit 1; f
 
 cd "${ROOT}"
 python3 -c "import json; json.load(open('manifest.json'))" >/dev/null || { echo "manifest.json invalid" >&2; exit 1; }
+if [[ -n "${USERIO_API_TOKEN:-}" ]]; then
+    echo "Refusing to package USERIO_API_TOKEN; users authenticate through UserIO OAuth after installation." >&2
+    exit 1
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
@@ -32,12 +35,12 @@ mkdir -p "${PKG}"
 cp manifest.json background.js popup.html popup.css popup.js options.html options.js README.md "${PKG}/"
 cp -r lib content "${PKG}/"
 
-# Bake deployment config into the PACKAGE only — the repo copy of
-# lib/config.js keeps safe empty defaults so secrets never enter git.
-python3 - "${PKG}/lib/config.js" "${USERIO_PUBLIC_ENDPOINT:-}" "${USERIO_API_TOKEN:-}" "${USERIO_AGENT_ID:-vk-browser}" <<'PY'
+# Bake public configuration into the package only. The shared ZIP must never
+# contain a deployment token; users connect their account through OAuth after installation.
+python3 - "${PKG}/lib/config.js" "${USERIO_PUBLIC_ENDPOINT:-https://msg.bezrabotnyi.com}" "${USERIO_AGENT_ID:-vk-browser}" <<'PY'
 import json, sys
-path, endpoint, token, agent_id = sys.argv[1:5]
-cfg = {"endpoint": endpoint, "token": token, "agentId": agent_id}
+path, endpoint, agent_id = sys.argv[1:4]
+cfg = {"endpoint": endpoint, "token": "", "agentId": agent_id}
 body = (
     "// Build-time configuration baked by scripts/build.sh; storage overrides.\n"
     "(function (root) {\n"

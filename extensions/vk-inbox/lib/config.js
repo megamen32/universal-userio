@@ -1,10 +1,8 @@
-// Build-time configuration baked by scripts/build.sh. Safe defaults live
-// here; a deployed package carries the real global host endpoint/token so a
-// fresh install on any machine (e.g. the Mac) talks to UserIO without any
-// manual options-page setup. chrome.storage.local values still override.
+// Build-time public defaults. User-specific OAuth tokens are issued after
+// installation and never belong in this file or the shared package.
 (function (root) {
   root.USERIO_CONFIG = {
-    endpoint: "",
+    endpoint: "https://msg.bezrabotnyi.com",
     token: "",
     agentId: "",
   };

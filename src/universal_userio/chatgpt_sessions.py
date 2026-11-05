@@ -20,7 +20,7 @@ SESSION_DIR = Path(os.environ.get(
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 _LOCK = threading.Lock()
-_USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_USER_RE = re.compile(r"[A-Za-z0-9_.@+-]{1,64}")
 
 
 def _slugify(raw: str) -> str:
@@ -31,8 +31,8 @@ def _slugify(raw: str) -> str:
 
 
 def _user_dir(user: str) -> Path:
-    user = str(user or "").strip()
-    if not _USER_RE.match(user):
+    user = str(user or "")
+    if user in {".", ".."} or not _USER_RE.fullmatch(user):
         raise ValueError("invalid UserIO username for session namespace")
     return SESSION_DIR / user.lower()
 

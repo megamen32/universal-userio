@@ -1,52 +1,12 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>Universal UserIO Agent</title>
+<title>UserIO</title>
 <link rel="stylesheet" href="popup.css">
-<header>
-  <strong>Universal UserIO Agent</strong>
-  <button id="openOptions" title="Настройки">⚙</button>
-</header>
-<nav>
-  <button data-tab="chats" class="active">Чаты</button>
-  <button data-tab="search">Поиск</button>
-  <button data-tab="compose">Отправить</button>
-  <button data-tab="vault">Облако</button>
-</nav>
-<section id="tab-chats" class="active">
-  <div class="list" id="chatList"><div class="empty">Нет данных. Откройте VK Web.</div></div>
-</section>
-<section id="tab-search">
-  <input id="searchInput" placeholder="Поиск по всем чатам…" autofocus>
-  <div class="list" id="searchResults"><div class="empty">Введите запрос.</div></div>
-</section>
-<section id="tab-compose">
-  <label>Peer
-    <input id="composePeer" placeholder="peer_id или screen_name">
-  </label>
-  <label>Сообщение
-    <textarea id="composeBody" rows="4" placeholder="Текст…"></textarea>
-  </label>
-  <button id="composeSend" class="primary">Отправить через VK Web</button>
-  <div id="composeStatus" class="status"></div>
-</section>
-<section id="tab-vault">
-  <label>Имя сессии
-    <input id="vaultName" placeholder="vk-m1-main">
-  </label>
-  <label>Пароль (необязательно, шифрует бэкап)
-    <input id="vaultPass" type="password" placeholder="пусто = без шифрования">
-  </label>
-  <div class="row gap">
-    <button id="vaultSaveBtn" class="primary">Сохранить в облако</button>
-    <button id="vaultRestoreBtn">Восстановить</button>
-  </div>
-  <div id="vaultStatus" class="status"></div>
-  <div class="list" id="vaultList"><div class="empty">Загрузка…</div></div>
-</section>
-<footer>
-  <span id="stats">…</span>
-  <span id="collect">сбор: …</span>
-  <button id="collectRun" title="Выполнить задачи сбора сейчас">↻</button>
-  <button id="purge" title="Очистить локальный кеш">Очистить</button>
-</footer>
+<main>
+  <header><strong>UserIO</strong><button id="settings" aria-label="Настройки">⚙</button></header>
+  <div class="card"><div class="row"><b>Аккаунт UserIO</b><span id="userioBadge">Проверка…</span></div><p id="userioAccount"></p><button id="userioLogin" hidden>Войти в UserIO</button></div>
+  <div class="card"><div class="row"><b>ChatGPT</b><span id="chatgptBadge">Проверка…</span></div><p id="chatgptAccount"></p><button id="chatgptSetup">Подключить</button></div>
+  <p id="versionStatus" class="hint" role="status">Проверяем версию…</p>
+  <button id="downloadUpdate" hidden>Скачать обновление</button>
+</main>
 <script src="popup.js"></script>

@@ -5,7 +5,7 @@
 // lib/*.js attach themselves to `self.UserIODB` / `self.UserIO` /
 // `self.Collect` / `self.Agent`; importScripts loads them in order.
 
-importScripts("lib/config.js", "lib/db.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/agent.js");
+importScripts("lib/config.js", "lib/update.js", "lib/db.js", "lib/oauth.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/agent.js");
 
 const DB = self.UserIODB;
 const USERIO = self.UserIO;
@@ -328,11 +328,53 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "vaultStatus":
           sendResponse({ ok: true, state: await VAULT.state() });
           break;
+        case "extensionVersion":
+          sendResponse(await self.UserIOUpdate.check());
+          break;
+        case "gptConnectionStatus":
+          sendResponse({ ok: true, ...(await self.UserIO.call("GET", "/v1/chatgpt/sessions")), ...(await chrome.storage.local.get({ gptSyncReport: null })) });
+          break;
+        case "gptDisconnect": {
+          if (sender?.url !== chrome.runtime.getURL("options.html")) {
+            sendResponse({ ok: false, error: "Отключение доступно только в настройках." });
+            break;
+          }
+          const slug = String(msg.slug || "");
+          const { accounts } = await self.UserIO.call("GET", "/v1/chatgpt/sessions");
+          if (!Array.isArray(accounts) || !accounts.some(account => account.slug === slug)) {
+            sendResponse({ ok: false, error: "Аккаунт не найден. Обновите страницу." });
+            break;
+          }
+          const result = await self.UserIO.call("DELETE", "/v1/accounts/" + encodeURIComponent("chatgpt:" + slug));
+          if (!result.deleted) { sendResponse({ ok: false, error: "UserIO не подтвердил отключение." }); break; }
+          const readback = await self.UserIO.call("GET", "/v1/chatgpt/sessions");
+          sendResponse({ ok: Array.isArray(readback.accounts) && !readback.accounts.some(account => account.slug === slug), error: "Не удалось подтвердить отключение." });
+          break;
+        }
         case "gptIdentity":
-          sendResponse(await GPT.identity());
+          sendResponse(sender?.url === chrome.runtime.getURL("options.html")
+            ? await GPT.describe()
+            : { ok: false, error: "Проверка аккаунта доступна только в настройках расширения." });
           break;
         case "gptRegister":
-          sendResponse(await GPT.register());
+          sendResponse(await GPT.register({
+            userInitiated: msg.userInitiated === true
+              && sender?.url === chrome.runtime.getURL("options.html"),
+            expectedFingerprint: msg.expectedFingerprint,
+          }));
+          break;
+        case "userioConnect":
+          sendResponse(sender?.url === chrome.runtime.getURL("options.html")
+            ? await self.UserIOOAuth.connect()
+            : { ok: false, error: "Вход доступен только в настройках расширения." });
+          break;
+        case "userioStatus":
+          sendResponse(await self.UserIOOAuth.status());
+          break;
+        case "userioDisconnect":
+          sendResponse(sender?.url === chrome.runtime.getURL("options.html")
+            ? await self.UserIOOAuth.disconnect()
+            : { ok: false, error: "Сброс доступен только в настройках расширения." });
           break;
         case "purge":
           await DB.purgeAll();

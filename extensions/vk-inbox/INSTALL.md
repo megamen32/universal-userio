@@ -8,8 +8,10 @@ It does **not** store or transmit VK cookies, tokens, or any
 auth material — it only reads the live DOM of `vk.com` / `vk.ru`, the local
 IndexedDB, and the response bodies of tasks published by your UserIO server.
 
-UserIO never sees your browser session. The UserIO HTTP API only sees the
-captured message envelopes and the manual `send` requests; nothing more.
+The VK browser session stays in Chrome. ChatGPT cookies are transferred to
+UserIO only through the separate account choice and explicit confirmation
+described below. The UserIO HTTP API receives captured message envelopes and
+manual `send` requests.
 
 ## 1. Choose the logged-in Chrome profile
 
@@ -67,9 +69,16 @@ right-click the extension icon → **Options**. Set:
 
 | Field           | Default                       | Notes |
 |-----------------|-------------------------------|-------|
-| UserIO endpoint | `http://127.0.0.1:18093`      | Loopback only — the extension talks to a UserIO server on the same machine. |
-| UserIO API token | *(empty)*                     | Only if your UserIO is configured with `USERIO_API_TOKEN`. Stored in `chrome.storage.local`. |
+| UserIO endpoint | `http://127.0.0.1:18093`      | HTTP разрешён только для loopback; удалённому UserIO нужен HTTPS. |
 | `route_id`      | `vk-browser`                  | Must match the entry you registered in `USERIO_ROUTES_JSON`. |
+
+In extension settings click **Войти в UserIO**. Complete login and consent in
+the UserIO window. The account shown by UserIO is the one being authorized;
+the extension verifies the issued access by reading its inbox. The shared
+download contains no user token.
+
+ChatGPT is connected separately: inspect the profile account first, then
+explicitly confirm sending its cookies to UserIO.
 
 ## 5. Verify the canary
 

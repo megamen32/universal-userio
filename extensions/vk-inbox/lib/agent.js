@@ -76,7 +76,8 @@
     const base = s.endpoint.replace(/\/+$/, "");
     const url = `${base}/v1/agent/poll?agent_id=${encodeURIComponent(s.agentId)}&wait=${POLL_WAIT_SEC}`;
     const headers = {};
-    if (s.token) headers["Authorization"] = "Bearer " + s.token;
+    const token = await root.UserIO.accessToken();
+    if (token) headers["Authorization"] = "Bearer " + token;
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error(`poll HTTP ${res.status}`);
     const data = await res.json().catch(() => ({}));

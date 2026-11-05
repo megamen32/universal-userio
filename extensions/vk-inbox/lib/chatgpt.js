@@ -12,6 +12,12 @@
   const COOKIE_PREFIX = "__Secure-next-auth.session-token";
   const ORIGIN = "https://chatgpt.com";
 
+  async function fingerprint(identity) {
+    const source = JSON.stringify({ id: identity.account_id, email: identity.email.toLowerCase() });
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
   function chunkOrder(name) {
     if (name === COOKIE_PREFIX) return -1;
     const match = name.slice(COOKIE_PREFIX.length).match(/^\.(\d+)$/);
@@ -39,23 +45,41 @@
     }
     let email = "";
     let name = "";
+    let accountId = "";
     try {
       const res = await fetch(ORIGIN + "/api/auth/session", { credentials: "include" });
       if (res.ok) {
         const session = await res.json();
+        accountId = String((session.user && session.user.id) || "");
         email = String((session.user && session.user.email) || "");
         name = String((session.user && session.user.name) || "");
       }
     } catch (_) { /* offline; cookies alone are still exportable */ }
-    return { ok: true, cookies, session_chunks: sessionChunks, email, name, user_agent: navigator.userAgent };
+    if (!accountId && !email) return { ok: false, error: "Не удалось подтвердить аккаунт ChatGPT. Войдите в ChatGPT и повторите проверку." };
+    return { ok: true, cookies, session_chunks: sessionChunks, account_id: accountId, email, name, user_agent: navigator.userAgent };
   };
 
-  lib.register = async () => {
+  lib.describe = async () => {
     const identity = await lib.identity();
     if (!identity.ok) return identity;
+    return {
+      ok: true, email: identity.email, name: identity.name,
+      fingerprint: await fingerprint(identity),
+    };
+  };
+
+  lib.register = async ({ userInitiated = false, expectedFingerprint = "" } = {}) => {
+    if (!userInitiated) {
+      return { ok: false, error: "Выберите аккаунт ChatGPT и подтвердите передачу в окне расширения." };
+    }
+    const identity = await lib.identity();
+    if (!identity.ok) return identity;
+    if (!expectedFingerprint || await fingerprint(identity) !== expectedFingerprint) {
+      return { ok: false, error: "Аккаунт ChatGPT изменился после выбора. Проверьте его снова." };
+    }
     const platform = await chrome.runtime.getPlatformInfo().catch(() => ({}));
     const agentId = (await root.UserIO.settings()).agentId;
-    return root.UserIO.call("POST", "/v1/chatgpt/sessions", {
+    const result = await root.UserIO.call("POST", "/v1/chatgpt/sessions", {
       cookies: identity.cookies,
       email: identity.email,
       name: identity.name,
@@ -64,6 +88,8 @@
       agent: "universal-userio-agent/" + chrome.runtime.getManifest().version,
       profile_hint: agentId + "@" + (platform.os || ""),
     });
+    if (!result || result.accepted !== true) return { ok: false, error: "UserIO не подтвердил сохранение аккаунта." };
+    return { ok: true, account_id: result.account_id || "", email: identity.email };
   };
 
   // --- self-pulled inbox sync: no operator push needed --------------------
@@ -95,10 +121,15 @@
     const email = String((session.user && session.user.email) || "");
     const slug = email ? email.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[.-]+|[.-]+$/g, "").slice(0, 64) : "";
     const source = slug ? "chatgpt:" + slug : "chatgpt";
+    const remote = await root.UserIO.call("GET", "/v1/chatgpt/sessions");
+    if (!slug || !Array.isArray(remote.accounts) || !remote.accounts.some(account => account.slug === slug)) {
+      return { ok: false, error: "Аккаунт ChatGPT не подключён к UserIO" };
+    }
     const headers = { Authorization: "Bearer " + token };
     const convs = await fetch(ORIGIN + "/backend-api/conversations?offset=0&limit=10&order=updated&is_archived=false", {
       headers, credentials: "include",
     }).then((r) => r.json()).catch(() => null);
+    if (!convs || !Array.isArray(convs.items)) throw new Error("Не удалось получить чаты ChatGPT");
     let forwarded = 0;
     for (const item of (convs && convs.items) || []) {
       const chatId = String(item.id || "");
@@ -107,6 +138,7 @@
       const conv = await fetch(ORIGIN + "/backend-api/conversation/" + chatId, {
         headers, credentials: "include",
       }).then((r) => r.json()).catch(() => null);
+      if (!conv || !conv.mapping) throw new Error("Не удалось получить историю чата ChatGPT");
       let best = null;
       for (const node of Object.values((conv && conv.mapping) || {})) {
         const m = node && node.message;
@@ -134,7 +166,7 @@
       }
       state[chatId] = updated;
     }
-    await chrome.storage.local.set({ gptSync: state });
+    await chrome.storage.local.set({ gptSync: state, gptSyncReport: { email, completedAt: Date.now() } });
     return { ok: true, forwarded };
   };
 
