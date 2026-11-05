@@ -81,6 +81,40 @@ class AndroidSmsGatewayClient:
         if not isinstance(receipt,str) or not receipt: raise RuntimeError('Android SMS Gateway returned no accepted-message receipt')
         if result.get('status') not in {'accepted_by_android','queued_for_device'}: raise RuntimeError('Android SMS Gateway did not accept the message')
         return receipt
+    def original_send_status(self, *, to: str, body: str,
+                             idempotency_key: str,
+                             device_id: str = '') -> dict[str, Any] | None:
+        """Read the original provider task via exact key + payload hashes only.
+
+        The gateway checks its durable queue. No send, enqueue, or retry
+        occurs here. Missing/unknown/cancelled states are not negative proof.
+        """
+        import hashlib
+        if (not all(isinstance(v, str) for v in (to, body, idempotency_key, device_id))
+                or not to or not body.strip() or not idempotency_key):
+            raise ValueError('Exact original SMS attempt required')
+        query = urllib.parse.urlencode({
+            'recipient_sha256': hashlib.sha256(to.encode()).hexdigest(),
+            'body_sha256': hashlib.sha256(body.strip().encode()).hexdigest(),
+            **({'device_id': device_id} if device_id else {}),
+        })
+        try:
+            row = self._request('GET', '/v1/original-send?' + query,
+                                idempotency_key=idempotency_key)
+        except RuntimeError as error:
+            if str(error) == 'Android SMS Gateway returned HTTP 404':
+                return None
+            raise
+        if not isinstance(row, dict) or row.get('id') is None:
+            raise RuntimeError('SMS original status response is invalid')
+        if device_id and row.get('device_id') != device_id:
+            raise RuntimeError('SMS original status returned a foreign device')
+        if row.get('status') not in {
+                'sent', 'ok', 'queued_for_device', 'sending',
+                'unknown', 'expired', 'failed'}:
+            raise RuntimeError('SMS original status is unrecognized')
+        return row
+
     def enroll(self, *, user_id: str, device_id: str, account_id: str) -> dict[str, Any]:
         return self._request('POST','/v1/agent/enroll',{'user_id':user_id,'device_id':device_id,'account_id':account_id},success_statuses=(200,201,202))
     def _request(self, method: str, path: str, payload: Mapping[str,str] | None=None, *, idempotency_key: str = '', timeout: float = 8, success_statuses: tuple[int,...] = (200,202)) -> dict[str,Any]:

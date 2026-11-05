@@ -69,7 +69,7 @@ PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-
 BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
     'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
     'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
-    'delivery_reconciliation.py', 'provider_readback.py', 'gmail_sent_reconciliation.py', 'channels/max_client.py', 'channels/whatsapp.py', 'store.py', 'adapters.py', 'runtime.py',
+    'delivery_reconciliation.py', 'provider_readback.py', 'gmail_sent_reconciliation.py', 'channels/max_client.py', 'channels/whatsapp.py', 'channels/sms_gateway.py', 'store.py', 'adapters.py', 'runtime.py',
     'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
     'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
     'matrix_calls.py', 'noticeplace_calls.py', 'telemost/meetings.py', 'static/telemost.html')) + tuple(

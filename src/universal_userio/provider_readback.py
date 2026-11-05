@@ -231,6 +231,47 @@ def original_provider_receipt(service: Any, draft: Any, conversation: dict, *,
     source = str(conversation.get('source') or '')
     account_ref = str(conversation.get('account_ref') or '')
     peer = str(conversation.get('peer_id') or '')
+    if source == 'sms':
+        # Only an original key used by UserIO is eligible; the gateway's
+        # read-only endpoint binds it to the actual durable queue payload.
+        if service.sms_gateway is None or not conversation.get('sender'):
+            return None
+        device_id = ''
+        if account_ref.startswith('sms:'):
+            matches = [entry for entry in service._store.accounts(user_id=user_id)
+                       if entry['id'] == account_ref and entry['provider'] == 'sms'
+                       and entry['enabled'] and 'read' in entry['capabilities']
+                       and 'reply' in entry['capabilities']]
+            if len(matches) != 1:
+                return None
+            ref = str(matches[0].get('credential_ref') or '')
+            if ref.startswith('sms-agent:'):
+                device_id = ref.removeprefix('sms-agent:')
+                if not device_id:
+                    return None
+                if user_id != service.sms_user_id:
+                    prefix = 'user-' + hashlib.sha256(user_id.encode()).hexdigest()[:16] + '-'
+                    if not device_id.startswith(prefix) or account_ref != 'sms:' + device_id:
+                        return None
+            elif ref != 'sms-native:default' or user_id != service.sms_user_id:
+                return None
+        elif user_id != service.sms_user_id or account_ref:
+            return None
+        reader = getattr(service.sms_gateway, 'original_send_status', None)
+        if not callable(reader):
+            return None
+        result = reader(to=str(conversation['sender']), body=draft.body,
+                        idempotency_key=draft.id, device_id=device_id)
+        if not isinstance(result, dict) or result.get('status') != 'sent':
+            return None
+        evidence = result.get('evidence')
+        if evidence not in {'android_sms_sent_callback', 'termux_sms_sent'}:
+            return None
+        native_id = result.get('id')
+        if not isinstance(native_id, str) or not re.fullmatch(
+                r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', native_id):
+            return None
+        return native_id
     if source == 'whatsapp':
         # Only personal source-bound QR accounts have a durable journal.
         # Old legacy bridge sends have no native ID and stay UNKNOWN.
