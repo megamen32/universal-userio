@@ -229,7 +229,18 @@ TOOL_SPECS = (
 
 
 from .mcp_catalog import MESSENGER_SPECS, MESSAGE_PREPARE_SPECS, MESSAGE_SEND_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS, *MESSAGE_SEND_SPECS)
+TOOL_SPECS = (*TOOL_SPECS, *MESSENGER_SPECS, *MESSAGE_PREPARE_SPECS, *MESSAGE_SEND_SPECS,
+    ToolSpec("userio.profile_share.create", "Grant one UserIO profile access to explicit peers in a live Telegram folder.", _schema({
+        "grantee_id": {"type": "string"}, "account_ref": {"type": "string"},
+        "folder_id": {"type": "integer"}, "peers": {"type": "array", "items": {"type": "string"}, "maxItems": 256},
+    }, ["grantee_id", "account_ref", "folder_id", "peers"])),
+    ToolSpec("userio.profile_share.revoke", "Revoke a grant owned by this profile.", _schema({"share_id": {"type": "string"}}, ["share_id"])),
+    ToolSpec("userio.profile_share.list", "List grants involving this profile.", _schema({})),
+    ToolSpec("userio.profile_share.audit", "Read an owned grant's audit trail.", _schema({"share_id": {"type": "string"}}, ["share_id"])),
+    ToolSpec("userio.profile_share.call", "Use an explicitly granted chat; replies use the existing propose and approve flow.", _schema({
+        "share_id": {"type": "string"}, "operation": {"type": "string"}, "arguments": {"type": "object"},
+    }, ["share_id", "operation", "arguments"])),
+)
 
 TOOL_CAPABILITIES = {
     "search": "read", "fetch": "read",
@@ -554,6 +565,16 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if name.startswith("userio.profile_share."):
+            from .profile_sharing import ProfileSharing
+            try:
+                sharing = ProfileSharing(self._store, self._service)
+                operation = name.removeprefix("userio.profile_share.")
+                if operation not in {"create", "revoke", "list", "audit", "call"}:
+                    raise KeyError("unknown_share_operation")
+                return getattr(sharing, operation)(principal, **arguments)
+            except (PermissionError, ValueError, KeyError, TypeError) as error:
+                return {"ok": False, "error": str(error).strip("'" )}
         if name in {"search", "fetch"}:
             from .mcp_company_search import dispatch
             return dispatch(name, arguments, store=self._store, principal=principal,
