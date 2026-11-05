@@ -1622,6 +1622,9 @@ def handler(
                         credential_ref=f"chatgpt-session:{slug}", enabled=True,
                         user_id=user_id,
                     )
+                    service._store.bind_channel_route(
+                        user_id=user_id, source=f"chatgpt:{slug}", route_id="chatgpt",
+                    )
                     self._reply(202, {"accepted": True, "account_id": f"chatgpt:{slug}", "slug": slug})
                     return
                 if path == "/v1/agent/commands":
