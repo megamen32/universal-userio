@@ -64,3 +64,21 @@ unchanged. Stock replace-backend validates revision, hashes, exact live
 container CAS, idle calls/meetings, account IDs, health and rollback.
 Preserve Telegram journal and historical UNKNOWN drafts. No real-person
 sends or phone tests for acceptance.
+
+
+## ChatGPT CDP original-send recovery
+
+Only the configured, unscoped, owner-bound ChatGPT CDP sender can read
+the exact original draft idempotency key via the local sidecar tool
+get_send_status. Its durable journal records the request before one
+browser submission and persists the opaque messageRef after a positive
+page-observed result. A matching original key, chatRef, text and
+evidence=page_observed permits UserIO to close its original draft using
+the existing generation/lease CAS. This is page acceptance, not a human
+read receipt. Missing, inaccessible, ambiguous or foreign-account
+records remain UNKNOWN, never allowing a second message submission.
+
+The live UserIO container does not currently configure a CDP sidecar.
+Do not invent a browser login, cookie, long-lived access or automatic
+account assignment. Activation requires the existing owner's supported
+CDP session/context and explicitly configured sidecar launcher.
