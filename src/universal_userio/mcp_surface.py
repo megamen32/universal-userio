@@ -193,7 +193,7 @@ TOOL_SPECS = (
     ToolSpec("userio.draft.delete", "Delete a local unsent/rejected draft.", _schema({
         "draft_id": {"type": "string"},
     }, ["draft_id"])),
-    ToolSpec("userio.draft.reconcile_delivery", "Resolve one in-flight Telegram delivery against the provider record.", _schema({
+    ToolSpec("userio.draft.reconcile_delivery", "Read original provider receipt for a claimed delivery; never resend an unknown attempt.", _schema({
         "draft_id": {"type": "string"}, "confirm": {"type": "boolean"},
         "expected_text": {"type": "string"},
         "expected_chat_id": {"type": "string", "description": "Exact stored draft conversation_id."},

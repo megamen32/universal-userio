@@ -312,7 +312,7 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.draft.reconcile_delivery",
-        "Resolve one in-flight Telegram delivery against the provider record.",
+        "Read original provider receipt for a claimed delivery; never resend an unknown attempt.",
         schema(
             {
                 "draft_id": {"type": "string"},

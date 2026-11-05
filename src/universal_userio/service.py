@@ -1786,8 +1786,30 @@ class UserIOService:
         conversation = self._store.conversation(draft.conversation_id, user_id=resolved_user_id)
         if conversation is None:
             raise KeyError("conversation not found")
-        if str(conversation.get("source")) != "telegram":
-            raise DeliveryUnavailableError("Сверка доставки доступна только для Telegram.")
+        source = str(conversation.get("source") or "")
+        if source != "telegram":
+            if source not in {"vk", "yandex", "matrix"} and not source.startswith("matrix:"):
+                raise DeliveryUnavailableError("У этого канала нет подтверждённого метода сверки.")
+            from .provider_readback import original_provider_receipt
+            receipt = original_provider_receipt(self, draft, conversation, user_id=resolved_user_id)
+            if receipt is None:
+                return {"resolution":"unknown", "draft_id":draft.id, "status":draft.status,
+                        "reason":"provider_readback_no_exact_match", "retry_allowed":False,
+                        "evidence":{"attempt_id":draft.id, "channel":source}}
+            applied = self._store.approve_reconciled_delivery(
+                draft.id, receipt, user_id=resolved_user_id,
+                expected_generation=expected_generation,
+                expected_lease_owner=expected_lease_owner,
+                expected_text=draft.body,
+                expected_conversation_id=draft.conversation_id)
+            resolution = "delivered" if applied["applied"] else "unknown"
+            return {"resolution":resolution, "draft_id":draft.id,
+                    "status":applied["status"],
+                    "receipt":applied["receipt"] if resolution=="delivered" else None,
+                    "reason":"exact_native_provider_receipt" if resolution=="delivered"
+                           else "stale_generation_or_lease",
+                    "retry_allowed":False,
+                    "evidence":{"attempt_id":draft.id, "channel":source}}
         outbox = getattr(self.telegram_outbox, "send_attempt", None)
         if not callable(outbox):
             raise DeliveryUnavailableError("Сверка доставки Telegram недоступна.")
