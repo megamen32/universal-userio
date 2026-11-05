@@ -1392,7 +1392,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/dot/replay'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1403,6 +1403,33 @@ http.createServer(async (req, res) => {
       if(slot&&!enrollmentOwners.allowed(slot,browserOwner.principal.user_id))throw Error('Not your enrollment');
       if(!['/','/state'].includes(url.pathname)&&!browserOwner.principal.can_manage)throw Error('Personal login required');
     }catch(error){res.writeHead(403,{'content-type':'application/json'});return res.end(JSON.stringify({error:'Войдите в свой UserIO для подключения аккаунта'}));}
+  }
+
+  if ((url.pathname === '/dot/resync-preview' && req.method === 'GET') ||
+      (url.pathname === '/dot/resync' && req.method === 'POST')) {
+    try {
+      const binding=readDotBinding();
+      if(!binding || binding.mirrorEnabled!==true)throw Error('binding_disabled');
+      const source=[...liveSlots].find(([id,item])=>item.accountId===binding.botAccountId &&
+        item.self?.bot===true && enrollmentOwners.allowed(id,browserOwner.principal.user_id));
+      if(!source)throw Error('owned_bot_required');
+      const relay=getDotRelay(binding.botAccountId,binding),mirror=dotMirrors.get(binding.botAccountId);
+      if(url.pathname==='/dot/resync-preview'){
+        if(mirror.running||relay.busy||relay.state.mirror?.status!=='cursor_not_visible')throw Error('not_ready');
+        const snap=await relay.browserCall('dot_snapshot',{tab_id:binding.pageId});
+        if(!snap.ok||snap.room!==DOT_BOARD_ROOM||!snap.cursor||!snap.messages?.length||
+           snap.messages.at(-1)?.id!==snap.cursor)throw Error('snapshot_unavailable');
+        res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+        return res.end(JSON.stringify({expectedCursor:relay.state.mirror.cursor,targetCursor:snap.cursor,
+          visibleMessages:snap.messages.length,gap:'not_delivered'}));
+      }
+      const payload=await readJsonBody(req,4096);
+      if(payload.confirm!=='skip_unavailable_gap')throw Error('confirmation_required');
+      const result=await mirror.resync(payload);
+      if(result.status!=='resynced')throw Error('resync_refused');
+      res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+      return res.end(JSON.stringify({status:result.status,gap:'not_delivered'}));
+    }catch(_){res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'resync_refused'}));}
   }
 
   if (url.pathname === "/dot/replay" && req.method === "POST") {

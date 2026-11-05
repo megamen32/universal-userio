@@ -283,3 +283,26 @@ test('corrupted image hash cannot create an uncertain provider send record',asyn
  x.restart();assert.equal((await x.mirror.tick()).status,'media_source_requires_review');
  assert.equal(x.mediaSends.length,0);
 });
+
+test('resync requires exact cursor and current room head; preserves journal and backup',async()=>{
+ const x=fixture();await x.mirror.tick();x.relay.state.incoming.unknown={status:'echo_timeout_requires_review',text_hash:'keep'};x.relay.state.outgoing.old={status:'accepted'};x.relay.save();
+ x.rows([msg('new-head','assistant','current')]);await x.mirror.tick();
+ assert.equal((await x.mirror.resync({requestId:'0123456789abcdef0123456789abcdef',expectedCursor:'wrong',targetCursor:'new-head'})).status,'resync_refused');
+ const r=await x.mirror.resync({requestId:'0123456789abcdef0123456789abcdef',expectedCursor:'baseline',targetCursor:'new-head'});
+ assert.equal(r.status,'resynced');assert.equal(x.relay.state.mirror.cursor,'new-head');assert.equal(x.relay.state.incoming.unknown.status,'echo_timeout_requires_review');assert.equal(x.relay.state.outgoing.old.status,'accepted');
+ const {readFileSync}=await import('node:fs');const backup=JSON.parse(readFileSync(r.backupPath,'utf8'));assert.equal(backup.state.mirror.cursor,'baseline');assert.equal(backup.snapshot.messages[0].id,'new-head');
+ await settle(x);assert.equal(x.sends.length,0);x.restart();assert.equal(x.relay.state.mirror.cursor,'new-head');
+});
+test('resync fails closed on unknown sends and changed head',async()=>{
+ const x=fixture();await x.mirror.tick();x.rows([msg('head','assistant','new')]);await x.mirror.tick();x.relay.state.outgoing.unknown={status:'send_uncertain'};
+ assert.equal((await x.mirror.resync({requestId:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',expectedCursor:'baseline',targetCursor:'head'})).status,'resync_refused');
+ delete x.relay.state.outgoing.unknown;
+ assert.equal((await x.mirror.resync({requestId:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',expectedCursor:'baseline',targetCursor:'stale'})).status,'resync_refused');
+ assert.equal(x.relay.state.mirror.cursor,'baseline');
+});
+test('resync rejects concurrent admission while reading the room',async()=>{
+ const x=fixture();await x.mirror.tick();x.rows([msg('head','assistant','new')]);await x.mirror.tick();
+ const original=x.relay.browserCall;x.relay.browserCall=async(...args)=>{const snap=await original(...args);x.relay.state.incoming.concurrent={status:'queued'};return snap;};
+ const r=await x.mirror.resync({requestId:'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',expectedCursor:'baseline',targetCursor:'head'});
+ assert.equal(r.status,'resync_refused');assert.equal(x.relay.state.mirror.cursor,'baseline');assert.equal(x.relay.state.incoming.concurrent.status,'queued');
+});

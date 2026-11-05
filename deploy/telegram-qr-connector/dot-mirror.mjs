@@ -2,6 +2,8 @@ import {DOT_POLICY} from './dot-policy.mjs';
 import {OWNER,ROOM,textHash} from './dot-relay.mjs';
 import {MAX_IMAGES} from './dot-media.mjs';
 import {verifyDotTelegramMedia} from './dot-egress.mjs';
+import {openSync,writeFileSync,fsyncSync,closeSync} from 'node:fs';
+import {dirname,join} from 'node:path';
 export function sensitiveText(text){
  const s=String(text);
  return /\b\d{6,12}:[A-Za-z0-9_-]{30,}\b/.test(s)||/\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/.test(s)||/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/.test(s)||/\bBearer\s+[A-Za-z0-9._~+\/-]{12,}/i.test(s)||/(?:password|passwd|passphrase|парол[ьяь]|токен|token|api[_ -]?key|секрет|secret|session[_ -]?(?:id|key)|cookie)\s*(?::|=|\bis\b|это)/i.test(s)||/(?:парол[ьяь]|password|passphrase|api[_ -]?key|токен)/i.test(s);
@@ -57,6 +59,34 @@ export function mirrorSourceHash(m){
 }
 export class DotMirror{
  constructor(relay,{now=()=>Date.now(),stableMs=8000}={}){this.relay=relay;this.now=now;this.stableMs=stableMs;this.running=false;}
+ async resync({requestId,expectedCursor,targetCursor}){
+  const refused={status:'resync_refused'};
+  if(this.running||this.relay.busy||! /^[a-f0-9]{32}$/.test(requestId||''))return refused;
+  this.running=true;
+  try{
+   const state=this.relay.state,mirror=state.mirror;
+   const unsafe=()=>this.relay.busy||mirror?.blocked||mirror?.status!=='cursor_not_visible'||mirror?.cursor!==expectedCursor||
+    Object.values(mirror?.published||{}).some(p=>['sending','edit_uncertain'].includes(p.status))||
+    Object.values(state.outgoing||{}).some(p=>p.status!=='accepted');
+   if(!mirror||unsafe()||(mirror.resyncs||[]).some(r=>r.requestId===requestId))return refused;
+   const before=JSON.stringify(state);
+   let snap;try{snap=await this.relay.browserCall('dot_snapshot',{tab_id:this.relay.tabId});}catch{return refused;}
+   if(unsafe()||before!==JSON.stringify(state)||!snap.ok||snap.room!==ROOM||!snap.cursor||snap.cursor!==targetCursor||
+      !Array.isArray(snap.messages)||!snap.messages.length||snap.messages.at(-1)?.id!==targetCursor||
+      snap.messages.some(m=>m.id===expectedCursor))return refused;
+   const backupPath=join(dirname(this.relay.statePath),'dot-resync-'+requestId+'.json');
+   let fd,dirFd;try{
+    fd=openSync(backupPath,'wx',0o600);
+    writeFileSync(fd,JSON.stringify({state,snapshot:snap}));fsyncSync(fd);
+    dirFd=openSync(dirname(backupPath),'r');fsyncSync(dirFd);
+   }catch{return refused;}finally{if(fd!==undefined)closeSync(fd);if(dirFd!==undefined)closeSync(dirFd);}
+   mirror.cursor=targetCursor;
+   mirror.status='resynced';
+   (mirror.resyncs||=([])).push({requestId,oldCursor:expectedCursor,newCursor:targetCursor,at:this.now(),gap:'not_delivered',backup:backupPath});
+   try{this.relay.save();}catch(error){this.relay.state=JSON.parse(before);throw error;}
+   return {status:'resynced',backupPath};
+  }finally{this.running=false;}
+ }
  async tick(){
   if(this.running||this.relay.busy)return {status:'incoming_busy'};
   this.running=true;

@@ -44,6 +44,19 @@ forwarding instead of resetting the baseline. Recovery may load older messages
 through the native UI until that exact cursor is visible, then resume only
 previously authorized messages after it. It must not send pre-baseline history.
 
+When the owner explicitly accepts an unavailable history gap, the account owner
+may use the authenticated connector endpoints `GET /dot/resync-preview` and
+`POST /dot/resync`. The latter accepts `requestId` (32 lowercase hex digits),
+`expectedCursor` and `targetCursor` from the preview, and the explicit
+`confirm: "skip_unavailable_gap"`. It requires the existing personal UserIO
+management authorization and ownership of the bound live bot. A changed room,
+head or journal, an active delivery, a previous unknown outgoing operation or a
+visible old cursor refuses the request. Refresh the preview after a refusal;
+never repeat an unknown provider send. A successful operation writes a private
+exclusive backup of the complete old relay journal and the visible snapshot,
+then records both cursor identities and `not_delivered` in the relay journal.
+The intervening unavailable messages are not claimed as delivered.
+
 Prepared photo support accepts JPEG, PNG and WebP only, up to 8 MiB each,
 20 MiB per album and ten images. Downloads use the same authenticated live
 Telegram client without read acknowledgments. Temporary files are owner-only,
