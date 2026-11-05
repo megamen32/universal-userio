@@ -1788,7 +1788,7 @@ class UserIOService:
             raise KeyError("conversation not found")
         source = str(conversation.get("source") or "")
         if source != "telegram":
-            if (source not in {"vk", "yandex", "matrix", "gmail", "max"}
+            if (source not in {"vk", "yandex", "matrix", "gmail", "max", "whatsapp"}
                     and not source.startswith(("matrix:", "gmail:"))):
                 raise DeliveryUnavailableError("У этого канала нет подтверждённого метода сверки.")
             from .provider_readback import original_provider_receipt
@@ -2118,7 +2118,8 @@ class UserIOService:
                 raise DeliveryUnavailableError('Ваш аккаунт WhatsApp недоступен для отправки')
             send = partial(self.whatsapp_outbox.send,
                 chat_id=str(conversation.get('peer_id') or conversation["sender"]), text=draft.body,
-                **({'user_id':user_id,'account_ref':account_ref} if personal else {})
+                **({'user_id':user_id,'account_ref':account_ref,
+                    'attempt_id':draft.id} if personal else {})
             )
         else:
             send = partial(self._outbox.send_reply,

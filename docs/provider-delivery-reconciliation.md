@@ -28,6 +28,14 @@ only writer of approval/receipt state via generation/lease compare-and-swap.
   sender, chat, unedited body and absence of file/reply context. MAX file sends,
   older attempts without the recorded CID, ambiguous or missing provider
   details remain UNKNOWN; no resend is authorized.
+- WhatsApp personal QR: the bridge reserves and durably fsyncs a Baileys
+  messageId bound to draft, user, connected account, slot, peer and exact
+  text before the first provider call. The same key is passed to sendMessage.
+  Authenticated outbound fromMe messages.upsert/history events can positively
+  confirm that ID; a source-scoped GET /send-attempt reads it without sending.
+  Legacy unpinned attempts stay UNKNOWN, including crashes before submission.
+  The shared backend keeps generation/lease CAS and never reissues a write.
+
 
 Negative matches, inaccessible history, truncated updates, missing IDs,
 duplicate matches, changed payloads and provider errors stay UNKNOWN.
@@ -36,7 +44,7 @@ stored nonce cannot be resolved by inventing one.
 
 ## Other channels
 
-WhatsApp, SMS and ChatGPT retain their existing durable
+SMS and ChatGPT retain their existing durable
 claim and UNKNOWN safety behavior. Each needs independently reviewed
 native readback before enabling positive reconciliation. Do not infer
 success from HTTP 200 or message text alone, or non-submission from

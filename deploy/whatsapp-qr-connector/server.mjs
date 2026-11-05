@@ -1,15 +1,17 @@
 import http from "node:http";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, renameSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, fetchLatestWaWebVersion, useMultiFileAuthState } from "@whiskeysockets/baileys";
+import makeWASocket, { Browsers, DisconnectReason, fetchLatestBaileysVersion, fetchLatestWaWebVersion, generateMessageIDV2, useMultiFileAuthState } from "@whiskeysockets/baileys";
 import QRCode from "qrcode";
 import { EnrollmentOwners, enrollmentPrincipal } from "./enrollment-owner.mjs";
 import { accountRef, senderSlots, personalEnvelope } from "./tenant-routing.mjs";
+import { WhatsAppSendJournal } from "./whatsapp-send-recovery.mjs";
 
 const port = Number(process.env.PORT || 18096);
 const publicPrefix = (process.env.PUBLIC_PREFIX ?? "/whatsapp-qr").replace(/\/$/, "");
 const stateDir = process.env.USERIO_WHATSAPP_STATE_DIR || "/var/lib/universal-userio/whatsapp-qr";
 const sessionsDir = join(stateDir, "sessions");
+const sendJournal = new WhatsAppSendJournal(join(stateDir,"send-attempts.json"));
 const userIoUrl = process.env.UNIVERSAL_USERIO_URL || "http://127.0.0.1:18093";
 mkdirSync(stateDir,{recursive:true,mode:0o700});
 const owners=new EnrollmentOwners(join(stateDir,"slot-owners.json"),process.env.USERIO_WHATSAPP_USER_ID||"user_owner");
@@ -148,6 +150,9 @@ async function start(slot) {
     for (const message of messages) {
       const chatJid = normSender(String((message.key && message.key.remoteJid) || ""));
       if (chatJid) rememberMessage(chatJid,message,slot);
+      try { sendJournal.acceptEvent(slot,message); } catch(error) {
+        console.error("WhatsApp durable send receipt unavailable",error.constructor.name);
+      }
       try { await ingest(slot, message, type!=="notify"); } catch (error) { console.error("WhatsApp ingest failed", error.message); }
     }
   });
@@ -156,6 +161,9 @@ async function start(slot) {
     for (const message of messages || []) {
       const chatJid = normSender(String((message.key && message.key.remoteJid) || ""));
       if (chatJid) rememberMessage(chatJid,message,slot);
+      try { sendJournal.acceptEvent(slot,message); } catch(error) {
+        console.error("WhatsApp history send receipt unavailable",error.constructor.name);
+      }
       try { await ingest(slot, message,true); } catch (error) { console.error("WhatsApp history ingest failed", error.message); }
     }
   });
@@ -325,6 +333,28 @@ http.createServer(async (request, response) => {
     });
     return;
   }
+  if (url.pathname === "/send-attempt" && request.method === "GET") {
+    const expected = "Bearer " + (process.env.USERIO_API_TOKEN || "");
+    if (!process.env.USERIO_API_TOKEN || request.headers.authorization !== expected) {
+      response.writeHead(401,{"content-type":"application/json"});
+      return response.end(JSON.stringify({error:"unauthorized"}));
+    }
+    const attempt_id=String(url.searchParams.get("attempt_id")||"");
+    const user_id=String(url.searchParams.get("user_id")||"");
+    const account_ref=String(url.searchParams.get("account_ref")||"");
+    const chat_id=String(url.searchParams.get("chat_id")||"");
+    if (![attempt_id,user_id,account_ref,chat_id].every(Boolean)) {
+      response.writeHead(400,{"content-type":"application/json"});
+      return response.end(JSON.stringify({error:"original attempt binding required"}));
+    }
+    const receipt=sendJournal.scopedStatus({attempt_id,user_id,account_ref,chat_id});
+    if (!receipt) {
+      response.writeHead(404,{"content-type":"application/json"});
+      return response.end(JSON.stringify({error:"no durable original attempt"}));
+    }
+    response.writeHead(200,{"content-type":"application/json"});
+    return response.end(JSON.stringify(receipt));
+  }
   if (url.pathname === "/send" && request.method === "POST") {
     // Operator-only: send a text message on behalf of a connected WhatsApp slot.
     // Guarded by the same bearer token as /send-self-test, /seed-test-message
@@ -343,6 +373,13 @@ http.createServer(async (request, response) => {
         const chatId = String(payload.chatId || payload.chat_id || "").trim();
         const text = String(payload.message || payload.text || "");
         const replyTo = payload.replyTo || payload.reply_to || null;
+        const attemptId = String(payload.attempt_id || "");
+        const userId = String(payload.user_id || "");
+        const accountRef = String(payload.account_ref || "");
+        if (attemptId && (!userId || !accountRef)) {
+          response.writeHead(400,{"content-type":"application/json"});
+          return response.end(JSON.stringify({error:"exact WhatsApp account required",submitted:false}));
+        }
         if (!chatId || !text) {
           response.writeHead(400, { "content-type": "application/json" });
           return response.end(JSON.stringify({ error: "chatId and message are required" }));
@@ -353,15 +390,43 @@ http.createServer(async (request, response) => {
         for (const slot of candidateSlots) {
           const item = slots.get(slot);
           if (!item || !item.socket || item.status !== "connected") continue;
-          const sent = await item.socket.sendMessage(chatId, { text }, replyTo ? { quoted: lookupMessage(chatId,String(replyTo),slot) } : {});
-          const sentId = String(sent && sent.key && sent.key.id || "");
+          let sendId = "";
+          if (attemptId) {
+            const existing=sendJournal.get(attemptId);
+            sendId=existing?.message_id || generateMessageIDV2(item.socket.user?.id);
+            const pinned=sendJournal.prepare({attempt_id:attemptId,user_id:userId,
+              account_ref:accountRef,slot,chat_id:chatId,body:text,
+              reply_id:String(replyTo||""),message_id:sendId});
+            if (pinned.state!=="pending" || existing) {
+              if (pinned.state==="sent") {
+                return response.end(JSON.stringify({ok:true,slot,
+                  duplicate:true,messageId:pinned.message_id,chat_id:chatId}));
+              }
+              response.writeHead(409,{"content-type":"application/json"});
+              return response.end(JSON.stringify({error:"original send outcome unknown",
+                state:pinned.state,submitted:true,retry_allowed:false}));
+            }
+          }
+          let sent;
+          try {
+            sent=await item.socket.sendMessage(chatId,{text},
+              {...(replyTo?{quoted:lookupMessage(chatId,String(replyTo),slot)}:{}),
+               ...(sendId?{messageId:sendId}:{})});
+          } catch(error) {
+            if (attemptId && sendJournal.get(attemptId)?.state!=="sent") {
+              sendJournal.update(attemptId,"unknown");
+            }
+            throw error;
+          }
+          const sentId=String(sent?.key?.id||"");
+          if (attemptId && sentId!==sendId) {
+            if (sendJournal.get(attemptId)?.state!=="sent") sendJournal.update(attemptId,"unknown");
+            throw new Error("provider message identity mismatch; do not resend");
+          }
+          if (attemptId) sendJournal.update(attemptId,"sent",sentId);
           if (sentId) rememberMessage(chatId,sent,slot);
-          return response.end(JSON.stringify({
-            ok: true, slot,
-            messageId: sentId,
-            messageIds: sentId ? [sentId] : [],
-            chat_id: chatId,
-          }));
+          return response.end(JSON.stringify({ok:true,slot,messageId:sentId,
+             messageIds:sentId?[sentId]:[],chat_id:chatId}));
         }
         response.writeHead(404, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "no connected account" }));

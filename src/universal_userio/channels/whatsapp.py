@@ -100,12 +100,16 @@ class WhatsAppBridgeClient:
         return list(result or [])
 
     def send(self, *, chat_id: str, text: str, reply_to: str | None = None,
-             user_id: str = "", account_ref: str = "") -> str:
+             user_id: str = "", account_ref: str = "", attempt_id: str = "") -> str:
         payload: dict[str, Any] = {"chatId": chat_id, "message": text}
         if user_id or account_ref:
             if not user_id or not account_ref:
                 raise ValueError("exact WhatsApp user and account required")
             payload.update(user_id=user_id,account_ref=account_ref)
+        if attempt_id:
+            if not user_id or not account_ref:
+                raise ValueError("original WhatsApp attempt requires user and account")
+            payload["attempt_id"] = attempt_id
         if reply_to:
             payload["replyTo"] = reply_to
         result = self._request("POST", "/send", payload)
@@ -113,6 +117,30 @@ class WhatsAppBridgeClient:
         if not message_id:
             raise RuntimeError("bridge did not return a messageId")
         return str(message_id)
+
+    def original_send_status(self, *, chat_id: str, user_id: str,
+                             account_ref: str, attempt_id: str) -> dict[str, Any] | None:
+        """Read one source-scoped send journal entry; no provider send call."""
+        import urllib.error
+        import urllib.parse
+        if not all(isinstance(v, str) and v for v in
+                   (chat_id, user_id, account_ref, attempt_id)):
+            raise ValueError("original WhatsApp attempt identity required")
+        query = urllib.parse.urlencode({
+            "chat_id": chat_id, "user_id": user_id,
+            "account_ref": account_ref, "attempt_id": attempt_id,
+        })
+        try:
+            row = self._request("GET", "/send-attempt?" + query)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        if not isinstance(row, dict) or any(row.get(key) != expected for key, expected in (
+                ("attempt_id", attempt_id), ("account_ref", account_ref),
+                ("chat_id", chat_id))):
+            raise RuntimeError("WhatsApp original journal identity conflict")
+        return row
 
     def disconnect(self, *, user_id: str, account_ref: str) -> None:
         self._request('POST','/account/disconnect',{'user_id':user_id,'account_ref':account_ref})

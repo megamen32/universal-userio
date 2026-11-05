@@ -231,6 +231,34 @@ def original_provider_receipt(service: Any, draft: Any, conversation: dict, *,
     source = str(conversation.get('source') or '')
     account_ref = str(conversation.get('account_ref') or '')
     peer = str(conversation.get('peer_id') or '')
+    if source == 'whatsapp':
+        # Only personal source-bound QR accounts have a durable journal.
+        # Old legacy bridge sends have no native ID and stay UNKNOWN.
+        if not account_ref or ':account-' not in account_ref or not peer:
+            return None
+        matches = [a for a in service._store.accounts(user_id=user_id)
+                   if a['id'] == account_ref and a['provider'] == 'whatsapp'
+                   and a['enabled'] and 'read' in a['capabilities']
+                   and str(a.get('credential_ref') or '').startswith('whatsapp-qr:')]
+        if len(matches) != 1 or service.whatsapp_outbox is None:
+            return None
+        checker = getattr(service.whatsapp_outbox, 'original_send_status', None)
+        if not callable(checker):
+            return None
+        state = checker(chat_id=peer, user_id=user_id,
+                        account_ref=account_ref, attempt_id=draft.id)
+        if state is None:
+            return None
+        if not isinstance(state, dict) or any(state.get(key) != value for key, value in (
+                ('attempt_id', draft.id), ('account_ref', account_ref),
+                ('chat_id', peer))):
+            raise RuntimeError('WhatsApp original journal identity conflict')
+        if state.get('state') != 'sent':
+            return None
+        message_id = state.get('message_id')
+        if not isinstance(message_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', message_id):
+            return None
+        return message_id
     if source == 'max':
         claim = service._store.draft_delivery_state(draft.id, user_id=user_id)
         native = (claim.get('evidence') or {}).get('native_claim')
