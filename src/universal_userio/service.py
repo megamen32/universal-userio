@@ -1788,7 +1788,7 @@ class UserIOService:
             raise KeyError("conversation not found")
         source = str(conversation.get("source") or "")
         if source != "telegram":
-            if (source not in {"vk", "yandex", "matrix", "gmail", "max", "whatsapp", "sms"}
+            if (source not in {"vk", "yandex", "matrix", "gmail", "max", "whatsapp", "sms", "chatgpt"}
                     and not source.startswith(("matrix:", "gmail:"))):
                 raise DeliveryUnavailableError("У этого канала нет подтверждённого метода сверки.")
             from .provider_readback import original_provider_receipt
@@ -1810,9 +1810,10 @@ class UserIOService:
                     "reason":("smtp_accepted_sent_copy_verified" if source == "gmail"
                                or source.startswith("gmail:") else
                                "android_sms_sent_callback" if source == "sms"
+                               else "cdp_page_observed" if source == "chatgpt"
                                else "exact_native_provider_receipt")
                               if resolution=="delivered" else "stale_generation_or_lease",
-                    "delivery_confirmed":False if source in {"gmail", "sms"}
+                    "delivery_confirmed":False if source in {"gmail", "sms", "chatgpt"}
                         or source.startswith("gmail:") else resolution=="delivered",
                     "retry_allowed":False,
                     "evidence":{"attempt_id":draft.id, "channel":source}}

@@ -231,6 +231,30 @@ def original_provider_receipt(service: Any, draft: Any, conversation: dict, *,
     source = str(conversation.get('source') or '')
     account_ref = str(conversation.get('account_ref') or '')
     peer = str(conversation.get('peer_id') or '')
+    if source == 'chatgpt':
+        # Only the account-local CDP sender can confirm this exact original.
+        # ChatGPT Web/account-scoped routes do not share this driver identity.
+        import os
+        if (account_ref or user_id != service._store.default_user_id
+                or not peer.startswith('cdpchat:v1:chat:')
+                or str(conversation.get('sender') or '') != peer
+                or not os.environ.get('USERIO_CHATGPT_CDP_MCP_COMMAND')):
+            return None
+        from .adapters import _configured_chatgpt_cdp_client
+        receipt = _configured_chatgpt_cdp_client().call('get_send_status', {
+            'chatRef': peer, 'text': draft.body, 'idempotencyKey': draft.id,
+        })
+        if (not isinstance(receipt, dict) or receipt.get('state') != 'sent'
+                or receipt.get('evidence') != 'page_observed'
+                or receipt.get('recipientDeliveryConfirmed') is not False
+                or receipt.get('idempotencyKey') != draft.id
+                or receipt.get('chatRef') != peer):
+            return None
+        message_ref = receipt.get('messageRef')
+        if (not isinstance(message_ref, str)
+                or not re.fullmatch(r'cdpchat:v1:message:[A-Za-z0-9_-]{1,128}',message_ref)):
+            return None
+        return message_ref
     if source == 'sms':
         # Only an original key used by UserIO is eligible; the gateway's
         # read-only endpoint binds it to the actual durable queue payload.
