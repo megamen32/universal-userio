@@ -15,6 +15,13 @@ only writer of approval/receipt state via generation/lease compare-and-swap.
   account, peer, body and no unexpected attachments or reply context.
 - Yandex Messenger: native history with original stable PayloadId, account
   GUID, peer, unedited body and no unexpected media.
+- Gmail SMTP: native mailbox inventory finds a unique Sent folder, including
+  localized paths such as Gmail/Отправленные, without changing account settings.
+  Bounded Sent search requires the original deterministic RFC Message-ID,
+  configured sender, recipient, exact plain-text MIME body and no unexpected
+  attachments. This proves an account Sent copy; it is represented as
+  SMTP-accepted, not recipient-delivered. The same native folder is used for
+  saving Sent copies after successful SMTP sends.
 
 Negative matches, inaccessible history, truncated updates, missing IDs,
 duplicate matches, changed payloads and provider errors stay UNKNOWN.
@@ -23,7 +30,7 @@ stored nonce cannot be resolved by inventing one.
 
 ## Other channels
 
-Gmail SMTP, WhatsApp, MAX, SMS and ChatGPT retain their existing durable
+WhatsApp, MAX, SMS and ChatGPT retain their existing durable
 claim and UNKNOWN safety behavior. Each needs independently reviewed
 native readback before enabling positive reconciliation. Do not infer
 success from HTTP 200 or message text alone, or non-submission from

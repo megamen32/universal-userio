@@ -891,10 +891,18 @@ class HimalayaGmailOutbox:
         failure here cannot undo the send. It is reported as an explicit
         reason so no consumer believes a Sent copy exists when it does not.
         """
+        # Discover the provider's native Sent folder, which may be localized.
+        # A discovery failure preserves legacy behavior and never retries SMTP.
+        native_mailbox = self._sent_mailbox
+        try:
+            from .gmail_sent_reconciliation import resolve_native_sent_mailbox
+            native_mailbox = resolve_native_sent_mailbox(self, account) or self._sent_mailbox
+        except (RuntimeError, OSError, ValueError):
+            pass
         try:
             completed = self._runner(
                 [self._binary, "--config", self._config, "--account", account,
-                 "message", "add", "--mailbox", self._sent_mailbox],
+                 "message", "add", "--mailbox", native_mailbox],
                 input=raw, text=True, capture_output=True, timeout=30, check=False,
             )
         except (OSError, subprocess.TimeoutExpired):

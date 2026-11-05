@@ -1788,7 +1788,8 @@ class UserIOService:
             raise KeyError("conversation not found")
         source = str(conversation.get("source") or "")
         if source != "telegram":
-            if source not in {"vk", "yandex", "matrix"} and not source.startswith("matrix:"):
+            if (source not in {"vk", "yandex", "matrix", "gmail"}
+                    and not source.startswith(("matrix:", "gmail:"))):
                 raise DeliveryUnavailableError("У этого канала нет подтверждённого метода сверки.")
             from .provider_readback import original_provider_receipt
             receipt = original_provider_receipt(self, draft, conversation, user_id=resolved_user_id)
@@ -1806,8 +1807,11 @@ class UserIOService:
             return {"resolution":resolution, "draft_id":draft.id,
                     "status":applied["status"],
                     "receipt":applied["receipt"] if resolution=="delivered" else None,
-                    "reason":"exact_native_provider_receipt" if resolution=="delivered"
-                           else "stale_generation_or_lease",
+                    "reason":("smtp_accepted_sent_copy_verified" if source == "gmail"
+                               or source.startswith("gmail:") else "exact_native_provider_receipt")
+                              if resolution=="delivered" else "stale_generation_or_lease",
+                    "delivery_confirmed":False if source == "gmail"
+                        or source.startswith("gmail:") else resolution=="delivered",
                     "retry_allowed":False,
                     "evidence":{"attempt_id":draft.id, "channel":source}}
         outbox = getattr(self.telegram_outbox, "send_attempt", None)

@@ -226,9 +226,11 @@ def test_the_mail_receipt_carries_the_provider_message_id_and_the_sent_copy():
     assert fields["sent_copy"]["saved"] == "true"
     # One SMTP send plus one IMAP APPEND of the very same letter.
     assert runner.calls[0][0][-2:] == ["message", "send"]
-    assert runner.calls[1][0][-4:] == ["message", "add", "--mailbox", "sent"]
-    assert runner.calls[1][0][-4:] == ["message", "add", "--mailbox", "sent"]
-    assert runner.calls[0][1] == runner.calls[1][1]
+    appends = [item for item in runner.calls if item[0][-4:] ==
+               ["message", "add", "--mailbox", "sent"]]
+    assert len(appends) == 1
+    assert runner.calls[0][1] == appends[0][1]
+    # A read-only native mailbox discovery may precede the IMAP APPEND.
 
 
 def test_a_missing_sent_copy_is_named_and_never_faked():
