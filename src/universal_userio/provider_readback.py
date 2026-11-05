@@ -166,12 +166,94 @@ def matrix_transaction_readback(homeserver: str, token: str, *, room_id: str,
     return _unique_provider_id(matches)
 
 
+
+def max_client_id_readback(client: Any, *, peer_id: str,
+                           own_id: str, client_id: int,
+                           body: str, pages: int = 2) -> str | None:
+    """Read MAX history then GET_MESSAGE for an exact original stable CID.
+
+    GET_HISTORY can omit CID; the single-message response includes it.
+    No text-only match is proof, and no request here is a provider mutation.
+    """
+    if (not peer_id or not own_id or not isinstance(body, str) or not body
+            or type(client_id) is not int or not 0 < client_id < 2**53):
+        raise ValueError('Pinned MAX original identity is required')
+    matches = []
+    cursor = None
+    examined = set()
+    for _ in range(max(1, min(pages, 2))):
+        rows = client.history(peer_id, backward=100, before=cursor)
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise RuntimeError('Invalid MAX provider history')
+        timestamps = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            stamp = row.get('time')
+            if type(stamp) is int and stamp > 0:
+                timestamps.append(stamp)
+            if str(row.get('sender') or '') != own_id or row.get('text') != body:
+                continue
+            if row.get('attaches') or row.get('link') or row.get('updateTime'):
+                continue
+            mid = str(row.get('id') or '')
+            if not mid.isdecimal() or mid == '0' or mid in examined:
+                continue
+            examined.add(mid)
+            if len(examined) > 8:
+                return None
+            native = client.get_message(chat_id=peer_id, message_id=mid)
+            if not isinstance(native, dict):
+                continue
+            if (str(native.get('id') or '') != mid
+                    or str(native.get('sender') or '') != own_id
+                    or native.get('text') != body
+                    or str(native.get('cid') or '') != str(client_id)
+                    or native.get('attaches') or native.get('link')
+                    or native.get('updateTime') or native.get('type') not in (None, 'USER')):
+                continue
+            matches.append(mid)
+            if len(matches) > 1:
+                return None
+        if len(rows) < 100 or not timestamps:
+            break
+        oldest = min(timestamps)
+        if cursor is not None and oldest >= cursor:
+            break
+        cursor = oldest
+    return _unique_provider_id(matches)
+
+
+
 def original_provider_receipt(service: Any, draft: Any, conversation: dict, *,
                               user_id: str) -> str | None:
     """Use only existing user-scoped credentials and read-only native APIs."""
     source = str(conversation.get('source') or '')
     account_ref = str(conversation.get('account_ref') or '')
     peer = str(conversation.get('peer_id') or '')
+    if source == 'max':
+        claim = service._store.draft_delivery_state(draft.id, user_id=user_id)
+        native = (claim.get('evidence') or {}).get('native_claim')
+        if not isinstance(native, dict) or (
+                native.get('version') != 1 or native.get('source') != 'max'
+                or native.get('account_ref') != (account_ref or 'max')
+                or native.get('peer_id') != peer):
+            return None
+        cid = int(hashlib.sha256(draft.id.encode()).hexdigest()[:13], 16)
+        if native.get('native_id') != str(cid):
+            return None
+        client = service.max_client_for(conversation, user_id)
+        from .max_ingress import _own_id
+        own = _own_id(client)
+        if not own:
+            # The first read also initializes the provider's connected profile.
+            client.history(peer, backward=1)
+            own = _own_id(client)
+        if not own or (getattr(client,'expected_user_id','') and
+                       str(client.expected_user_id) != own):
+            return None
+        return max_client_id_readback(client,peer_id=peer,own_id=own,
+                                      client_id=cid,body=draft.body)
     if source == 'gmail' or source.startswith('gmail:'):
         from .gmail_sent_reconciliation import reconcile_original_gmail_sent
         alias = 'gmail' if source == 'gmail' else source.partition(':')[2]
