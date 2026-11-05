@@ -389,10 +389,12 @@ class MaxClient:
                 "Не удалось подключиться к MAX. Сообщение не отправлено; попробуйте ещё раз."
             ) from error
 
-    def send(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+    def send(self, *, chat_id: int | str, text: str, cid: int | None = None) -> dict[str, Any]:
+        if cid is not None and (type(cid) is not int or not 0 < cid < 2**53):
+            raise ValueError('MAX stable client ID is invalid')
         with self._lock:
             self._fresh_write_connection()
-            return self._send_message(chat_id=chat_id, text=text)
+            return self._send_message(chat_id=chat_id, text=text, cid=cid)
 
     def _send_message(self, *, chat_id: int | str, text: str,
                       reply_to: str = '', cid: int | None = None,

@@ -22,6 +22,12 @@ only writer of approval/receipt state via generation/lease compare-and-swap.
   attachments. This proves an account Sent copy; it is represented as
   SMTP-accepted, not recipient-delivered. The same native folder is used for
   saving Sent copies after successful SMTP sends.
+- MAX (text-only original approved drafts): persist a stable native CID before
+  the first possible provider submission, then use bounded native history to
+  locate outgoing candidates and GET_MESSAGE to verify the exact original CID,
+  sender, chat, unedited body and absence of file/reply context. MAX file sends,
+  older attempts without the recorded CID, ambiguous or missing provider
+  details remain UNKNOWN; no resend is authorized.
 
 Negative matches, inaccessible history, truncated updates, missing IDs,
 duplicate matches, changed payloads and provider errors stay UNKNOWN.
@@ -30,7 +36,7 @@ stored nonce cannot be resolved by inventing one.
 
 ## Other channels
 
-WhatsApp, MAX, SMS and ChatGPT retain their existing durable
+WhatsApp, SMS and ChatGPT retain their existing durable
 claim and UNKNOWN safety behavior. Each needs independently reviewed
 native readback before enabling positive reconciliation. Do not infer
 success from HTTP 200 or message text alone, or non-submission from

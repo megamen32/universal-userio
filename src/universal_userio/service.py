@@ -1788,7 +1788,7 @@ class UserIOService:
             raise KeyError("conversation not found")
         source = str(conversation.get("source") or "")
         if source != "telegram":
-            if (source not in {"vk", "yandex", "matrix", "gmail"}
+            if (source not in {"vk", "yandex", "matrix", "gmail", "max"}
                     and not source.startswith(("matrix:", "gmail:"))):
                 raise DeliveryUnavailableError("У этого канала нет подтверждённого метода сверки.")
             from .provider_readback import original_provider_receipt
@@ -2041,8 +2041,17 @@ class UserIOService:
             if file:return partial(files.send_file,max_client,conversation,draft,file)
             chat_id = str(conversation.get("peer_id") or conversation.get("sender") or "")
 
-            def _send_max(client=max_client, chat_id=chat_id, body=draft.body) -> str:
-                receipt = client.send(chat_id=chat_id, text=body)
+            # The same native CID as the existing MAX file sender. Persist it
+            # inside this approved draft claim before any provider write. A
+            # historical UNKNOWN with no pinned CID cannot be reconciled by
+            # retroactively deriving one from its draft ID.
+            cid = int(hashlib.sha256(draft.id.encode()).hexdigest()[:13], 16)
+            self._store.pin_native_delivery_request(draft.id, user_id=user_id,
+                source='max', account_ref=str(conversation.get('account_ref') or 'max'),
+                peer_id=chat_id, native_id=str(cid))
+
+            def _send_max(client=max_client, chat_id=chat_id, body=draft.body, cid=cid) -> str:
+                receipt = client.send(chat_id=chat_id, text=body, cid=cid)
                 if isinstance(receipt, dict):
                     return str(receipt.get("message_id") or receipt.get("receipt") or "max-sent")
                 return str(receipt)

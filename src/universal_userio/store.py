@@ -3302,6 +3302,45 @@ class SQLiteUserIOStore:
         return {"status": str(final["status"]),
                 "generation": int(final["delivery_attempt_generation"] or 0), "applied": applied}
 
+    def pin_native_delivery_request(self, draft_id: str, *, user_id: str, source: str,
+                                    account_ref: str, peer_id: str,
+                                    native_id: str) -> None:
+        """Bind a source-native nonce BEFORE the first possible provider write.
+
+        Durable source identity is required for future positive reconciliation.
+        Historical UNKNOWN attempts without this binding must not be inferred
+        from matching message bodies or a derived nonce invented afterward.
+        """
+        if (source != 'max' or not account_ref or not peer_id or not native_id
+                or not native_id.isdecimal() or not native_id.isascii()):
+            raise ValueError('MAX native operation identity is invalid')
+        user = self._user(user_id)
+        claim = {'version': 1, 'source':source, 'account_ref':account_ref,
+                 'peer_id':peer_id, 'native_id':native_id}
+        with self._lock, self._connection:
+            self._connection.execute('BEGIN IMMEDIATE')
+            row = self._connection.execute(
+                """SELECT d.status,d.delivery_evidence_json,c.source,c.account_ref,c.peer_id
+                   FROM drafts d JOIN conversations c ON c.user_id=d.user_id
+                   AND c.id=d.conversation_id WHERE d.user_id=? AND d.id=?""",
+                (user,draft_id)).fetchone()
+            if (not row or row['status'] != 'sending' or row['source'] != source
+                    or str(row['account_ref'] or '') != account_ref
+                    or str(row['peer_id'] or '') != peer_id):
+                raise ValueError('MAX original sending claim or account changed')
+            current = json.loads(row['delivery_evidence_json'] or '{}')
+            if not isinstance(current, dict):
+                raise ValueError('Invalid original delivery evidence')
+            prior = current.get('native_claim')
+            if prior is not None and prior != claim:
+                raise ValueError('MAX original nonce already bound to another operation')
+            current['native_claim'] = claim
+            encoded = json.dumps(current, ensure_ascii=False, sort_keys=True,
+                                 separators=(',', ':'))
+            self._connection.execute(
+                "UPDATE drafts SET delivery_evidence_json=? WHERE user_id=? AND id=? AND status='sending'",
+                (encoded,user,draft_id))
+
     def draft_delivery_state(self, draft_id: str, *, user_id: str | None = None) -> dict[str, object]:
         """Read the durable delivery bookkeeping of one draft."""
         with self._lock:
@@ -3360,7 +3399,7 @@ class SQLiteUserIOStore:
                      ON c.user_id=d.user_id AND c.id=d.conversation_id
                    LEFT JOIN draft_delivery_reconciliation_leases l
                      ON l.user_id=d.user_id AND l.draft_id=d.id
-                   WHERE d.status IN ('sending','delivery_unknown') AND (c.source IN ('telegram','vk','yandex','matrix','gmail') OR c.source LIKE 'matrix:%' OR c.source LIKE 'gmail:%')
+                   WHERE d.status IN ('sending','delivery_unknown') AND (c.source IN ('telegram','vk','yandex','matrix','gmail','max') OR c.source LIKE 'matrix:%' OR c.source LIKE 'gmail:%')
                      AND (d.delivery_next_check_at IS NULL OR d.delivery_next_check_at<=?)
                      AND (l.lease_until IS NULL OR l.lease_until<=?)
                    ORDER BY COALESCE(d.delivery_next_check_at,0),d.sending_at LIMIT ?""",
@@ -3398,16 +3437,19 @@ class SQLiteUserIOStore:
         user = self._user(user_id)
         now = time.time()
         payload = evidence or {}
-        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         reason = str(result.get("reason") or result.get("resolution") or "provider_state_unreported")
         with self._lock, self._connection:
             self._connection.execute("BEGIN IMMEDIATE")
             row = self._connection.execute(
-                "SELECT status,delivery_state,delivery_attempts,delivery_attempt_generation,outbox_receipt FROM drafts WHERE user_id=? AND id=?",
+                "SELECT status,delivery_state,delivery_attempts,delivery_attempt_generation,outbox_receipt,delivery_evidence_json FROM drafts WHERE user_id=? AND id=?",
                 (user, draft_id),
             ).fetchone()
             if row is None:
                 raise KeyError("draft not found")
+            previous_evidence = json.loads(row["delivery_evidence_json"] or "{}")
+            if isinstance(previous_evidence, dict) and isinstance(previous_evidence.get("native_claim"), dict):
+                payload = dict(payload, native_claim=previous_evidence["native_claim"])
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             prior_status = previous_status or str(row["status"])
             prior_state = previous_delivery_state if previous_delivery_state is not None else str(row["delivery_state"] or "")
             generation_matches = (expected_generation is None or
