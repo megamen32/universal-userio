@@ -1788,7 +1788,7 @@ class UserIOService:
             raise KeyError("conversation not found")
         source = str(conversation.get("source") or "")
         if source != "telegram":
-            if (source not in {"vk", "yandex", "matrix", "gmail", "max", "whatsapp"}
+            if (source not in {"vk", "yandex", "matrix", "gmail", "max", "whatsapp", "sms"}
                     and not source.startswith(("matrix:", "gmail:"))):
                 raise DeliveryUnavailableError("У этого канала нет подтверждённого метода сверки.")
             from .provider_readback import original_provider_receipt
@@ -1808,9 +1808,11 @@ class UserIOService:
                     "status":applied["status"],
                     "receipt":applied["receipt"] if resolution=="delivered" else None,
                     "reason":("smtp_accepted_sent_copy_verified" if source == "gmail"
-                               or source.startswith("gmail:") else "exact_native_provider_receipt")
+                               or source.startswith("gmail:") else
+                               "android_sms_sent_callback" if source == "sms"
+                               else "exact_native_provider_receipt")
                               if resolution=="delivered" else "stale_generation_or_lease",
-                    "delivery_confirmed":False if source == "gmail"
+                    "delivery_confirmed":False if source in {"gmail", "sms"}
                         or source.startswith("gmail:") else resolution=="delivered",
                     "retry_allowed":False,
                     "evidence":{"attempt_id":draft.id, "channel":source}}
@@ -2032,7 +2034,8 @@ class UserIOService:
             else:
                 if user_id != self.sms_user_id:
                     raise ValueError('Android SMS adapter is not configured for this UserIO user')
-                send = partial(self.sms_gateway.send, to=str(conversation["sender"]), body=draft.body)
+                send = partial(self.sms_gateway.send, to=str(conversation["sender"]),
+                               body=draft.body, idempotency_key=draft.id)
         elif conversation["source"] == "max":
             self.require_max_reply_account(conversation,user_id)
             max_client=self.max_client_for(conversation,user_id)

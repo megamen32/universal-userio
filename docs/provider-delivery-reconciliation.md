@@ -42,9 +42,16 @@ duplicate matches, changed payloads and provider errors stay UNKNOWN.
 They never authorize a second send. Older Telegram attempts without a
 stored nonce cannot be resolved by inventing one.
 
+- Android SMS (APK and Termux): exact Idempotency-Key, device identity,
+  SHA-256 of original recipient/body, and native sent status from the owned
+  gateway's read-only GET /v1/original-send. The UserIO draft and existing
+  generation/lease CAS remain authoritative. A native sent callback means
+  phone-side send acceptance, not recipient delivery. Missing/queued/unknown
+  status keeps UNKNOWN; no second SMS send.
+
 ## Other channels
 
-SMS and ChatGPT retain their existing durable
+ChatGPT retains its existing durable
 claim and UNKNOWN safety behavior. Each needs independently reviewed
 native readback before enabling positive reconciliation. Do not infer
 success from HTTP 200 or message text alone, or non-submission from
