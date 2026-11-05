@@ -6,6 +6,7 @@ import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from ".
 import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding} from "./dot-group-binding.mjs";
 import {createGroupBotSender} from "./dot-group-send.mjs";
+import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
@@ -1461,7 +1462,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot-group/replay','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot-group/replay','/dot-group/reconcile-incoming','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1472,6 +1473,28 @@ http.createServer(async (req, res) => {
       if(slot&&!enrollmentOwners.allowed(slot,browserOwner.principal.user_id))throw Error('Not your enrollment');
       if(!['/','/state'].includes(url.pathname)&&!browserOwner.principal.can_manage)throw Error('Personal login required');
     }catch(error){res.writeHead(403,{'content-type':'application/json'});return res.end(JSON.stringify({error:'Войдите в свой UserIO для подключения аккаунта'}));}
+  }
+
+  if(url.pathname==='/dot-group/reconcile-incoming' && req.method==='POST'){
+    let relay=null,claimed=false;
+    try{
+      const binding=readGroupBinding(groupBindingPath),input=await readJsonBody(req,4096);
+      if(!binding||browserOwner.principal.user_id!==binding.owner||!Number.isSafeInteger(input.message_id)||input.message_id<=0||!/^[a-f0-9]{64}$/.test(input.expected_hash||'')||!/^[a-f0-9]{32}$/.test(input.request_id||''))throw Error('incoming_reconcile_invalid');
+      relay=await getGroupRelay(binding);
+      if(relay.busy||groupMirror.running)throw Error('incoming_reconcile_busy');
+      relay.busy=true;claimed=true;
+      const id=binding.botAccountId+':'+binding.peerId+':'+input.message_id,record=relay.state.incoming[id];
+      if(record?.status==='accepted'&&record.text_hash===input.expected_hash){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({status:'accepted',duplicate:true}));}
+      const before=JSON.stringify(relay.state),snap=await relay.browserCall('dot_snapshot',{tab_id:binding.pageId,after:record?.cursor});
+      if(before!==JSON.stringify(relay.state))throw Error('incoming_reconcile_changed');
+      const echo=verifiedIncomingEcho(record,snap,binding.room,input.expected_hash);
+      const backup=stateDir+'/dot-group-reconcile-'+input.request_id+'.json';
+      const fd=openSync(backup,'wx',0o600);try{writeFileSync(fd,before);fsyncSync(fd)}finally{closeSync(fd)}
+      const dir=openSync(stateDir,'r');try{fsyncSync(dir)}finally{closeSync(dir)}
+      record.echo=echo;record.status='accepted';record.reconciled={request_id:input.request_id,at:Date.now(),backup};relay.save();
+      res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({status:'accepted',duplicate:false}));
+    }catch{res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'incoming_reconcile_refused'}));}
+    finally{if(claimed)relay.busy=false;}
   }
 
   if(url.pathname==='/dot-group/replay' && req.method==='POST'){
