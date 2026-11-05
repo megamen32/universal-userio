@@ -1480,8 +1480,10 @@ http.createServer(async (req, res) => {
       if(!binding||browserOwner.principal.user_id!==binding.owner||!Number.isSafeInteger(input.message_id)||input.message_id<=0||!/^[1-9][0-9]*$/.test(String(input.sender_id||''))||!/^[a-f0-9]{64}$/.test(input.text_hash||''))throw Error('group_replay_invalid');
       const pair=[...liveSlots.entries()].find(([slot,item])=>item.accountId===binding.botAccountId&&item.self?.bot===true&&enrollmentOwners.allowed(slot,binding.owner));
       if(!pair)throw Error('group_bot_disconnected');
-      const allowed=binding.replay;
-      if(!allowed||input.message_id!==allowed.message_id||String(input.sender_id)!==allowed.sender_id||input.text_hash!==allowed.text_hash)throw Error('group_replay_not_authorized');
+      const approvalPath=stateDir+'/dot-group-replay-approval.json',approvalStat=lstatSync(approvalPath);
+      if(!approvalStat.isFile()||(approvalStat.mode&0o777)!==0o600||approvalStat.uid!==process.getuid())throw Error('group_replay_approval_unsafe');
+      const allowed=JSON.parse(readFileSync(approvalPath,'utf8'));
+      if(!allowed||allowed.bot_account!==binding.botAccountId||allowed.peer_id!==binding.peerId||input.message_id!==allowed.message_id||String(input.sender_id)!==allowed.sender_id||input.text_hash!==allowed.text_hash)throw Error('group_replay_not_authorized');
       const source=[...liveSlots.entries()].find(([slot,item])=>item.accountId===allowed.source_account&&enrollmentOwners.allowed(slot,'user_owner'))?.[1];
       const target=source?.labelPeers.idPeers.get(binding.peerId);
       if(!source||!target)throw Error('group_source_not_observed');
