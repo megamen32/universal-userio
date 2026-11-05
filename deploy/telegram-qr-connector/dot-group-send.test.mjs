@@ -1,0 +1,4 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {createGroupBotSender} from './dot-group-send.mjs';
+const peerId='-1004352022764',botId='123456',token=botId+':'+('x'.repeat(35));
+test('send pins recipient and requires matching provider receipt',async()=>{let count=0;const send=createGroupBotSender({token,peerId,botId,fetcher:async(_u,o)=>{count++;assert.equal(JSON.parse(o.body).chat_id,peerId);return {ok:true,json:async()=>({ok:true,result:{message_id:22,chat:{id:Number(peerId)},from:{id:Number(botId)}}})}}});assert.equal(await send(peerId,'hi'),22);await assert.rejects(send('-1009','hi'),/invalid_group_send/);assert.equal(count,1)});
+test('unknown outcome is never retried by sender',async()=>{let count=0;const send=createGroupBotSender({token,peerId,botId,fetcher:async()=>{count++;throw Error('network')}});await assert.rejects(send(peerId,'hi'),/unknown/);assert.equal(count,1)});

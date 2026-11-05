@@ -5,11 +5,12 @@ import { ROOM as DOT_BOARD_ROOM } from "./dot-relay.mjs";
 import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from "./dot-mirror.mjs";
 import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding} from "./dot-group-binding.mjs";
+import {createGroupBotSender} from "./dot-group-send.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
 import http from "node:http";
-import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken, enrollExplicitBot } from "./bot-enrollment.mjs";
+import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken, enrollExplicitBot, botCredentialPath } from "./bot-enrollment.mjs";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, createWriteStream, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -969,13 +970,13 @@ async function initializeGroupRelay(binding,identity){
   if(!pair)throw Error('group_bot_disconnected');
   return pair[1];
  };
- const send=async(peer,text,replyTo)=>{
-  if(peer!==binding.peerId)throw Error('wrong_group');
-  const live=boundLive(),target=live.labelPeers.idPeers.get(binding.peerId);
-  if(!target)throw Error('group_entity_not_observed');
-  const sent=await live.client.sendMessage(target,mirrorSendOptions(text,replyTo));
-  if(!sent?.id)throw Error('group_send_unknown');return sent.id;
- };
+ const botId=binding.botAccountId.split(':')[1];
+ const botPath=botCredentialPath(stateDir+'/credentials/bots',binding.owner,botId),botFile=lstatSync(botPath);
+ if(!botFile.isFile()||(botFile.mode&0o777)!==0o600||botFile.uid!==process.getuid())throw Error('unsafe_group_bot_credential');
+ const decryptedBot=spawnSync('age',['--decrypt','-i',keyPath,botPath],{encoding:'utf8',maxBuffer:16384});
+ if(decryptedBot.status!==0)throw Error('group_bot_credential_unavailable');
+ const providerSend=createGroupBotSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
+ const send=async(peer,text,replyTo)=>{boundLive();return providerSend(peer,text,replyTo);};
  const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send});
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;
@@ -1460,7 +1461,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot-group/replay','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1471,6 +1472,28 @@ http.createServer(async (req, res) => {
       if(slot&&!enrollmentOwners.allowed(slot,browserOwner.principal.user_id))throw Error('Not your enrollment');
       if(!['/','/state'].includes(url.pathname)&&!browserOwner.principal.can_manage)throw Error('Personal login required');
     }catch(error){res.writeHead(403,{'content-type':'application/json'});return res.end(JSON.stringify({error:'Войдите в свой UserIO для подключения аккаунта'}));}
+  }
+
+  if(url.pathname==='/dot-group/replay' && req.method==='POST'){
+    try{
+      const binding=readGroupBinding(groupBindingPath),input=await readJsonBody(req,4096);
+      if(!binding||browserOwner.principal.user_id!==binding.owner||!Number.isSafeInteger(input.message_id)||input.message_id<=0||!/^[1-9][0-9]*$/.test(String(input.sender_id||''))||!/^[a-f0-9]{64}$/.test(input.text_hash||''))throw Error('group_replay_invalid');
+      const pair=[...liveSlots.entries()].find(([slot,item])=>item.accountId===binding.botAccountId&&item.self?.bot===true&&enrollmentOwners.allowed(slot,binding.owner));
+      if(!pair)throw Error('group_bot_disconnected');
+      const allowed=binding.replay;
+      if(!allowed||input.message_id!==allowed.message_id||String(input.sender_id)!==allowed.sender_id||input.text_hash!==allowed.text_hash)throw Error('group_replay_not_authorized');
+      const source=[...liveSlots.entries()].find(([slot,item])=>item.accountId===allowed.source_account&&enrollmentOwners.allowed(slot,'user_owner'))?.[1];
+      const target=source?.labelPeers.idPeers.get(binding.peerId);
+      if(!source||!target)throw Error('group_source_not_observed');
+      const message=(await source.client.getMessages(target,{ids:[input.message_id]}))?.[0];
+      if(!message||String(await source.client.getPeerId(message.peerId,true))!==binding.peerId||message.media||textHash(String(message.message||''))!==input.text_hash)throw Error('group_replay_source_mismatch');
+      const sender=await message.getSender();
+      if(!sender||sender.className!=='User'||sender.bot===true||String(sender.id)!==String(input.sender_id))throw Error('group_replay_sender_mismatch');
+      const relay=await getGroupRelay(binding),event={accountId:binding.botAccountId,peerId:binding.peerId,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text:String(message.message||''),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+      if(sensitiveText(event.text))throw Error('group_replay_sensitive');
+      const result=await relay.prepareReceive(event,async()=> '[Контекст недоступен]');
+      res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({status:result.status,duplicate:!!result.duplicate}));
+    }catch{res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'group_replay_refused'}));}
   }
 
   if ((url.pathname === '/dot/resync-preview' && req.method === 'GET') ||
