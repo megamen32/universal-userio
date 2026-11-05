@@ -7,7 +7,7 @@ import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
 import http from "node:http";
-import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken } from "./bot-enrollment.mjs";
+import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken, enrollExplicitBot } from "./bot-enrollment.mjs";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -1392,7 +1392,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1455,6 +1455,19 @@ http.createServer(async (req, res) => {
       res.writeHead(400, {"content-type":"application/json"});
       return res.end(JSON.stringify({error:"dot_replay_refused"}));
     }
+  }
+
+  if (url.pathname === "/bot/enroll" && req.method === "POST") {
+    try {
+      const input=await readJsonBody(req,4096), root=stateDir+'/credentials/bots';
+      const result=await enrollExplicitBot({input,principal:browserOwner.principal,headers:browserOwner.headers,
+        slots,slotProfiles,inFlight:botEnrollments,owners:enrollmentOwners,newClient,credentials,
+        hasSavedToken:(_owner,id)=>existsSync(root)&&readdirSync(root).some(name=>name.endsWith('-bot-'+id+'.age')),
+        saveToken:(owner,expected)=>saveEncryptedBotToken(root,keyPath,owner,expected),
+        allocateSlot:()=>"account-"+nextSlot++,finishLogin});
+      res.writeHead(result.ok?200:202,{'content-type':'application/json','cache-control':'no-store'});
+      return res.end(JSON.stringify(result));
+    }catch(_){res.writeHead(400,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'bot_enrollment_failed',token_returned:false}));}
   }
 
   if (url.pathname === "/bot/enroll-from-botfather" && req.method === "POST") {
