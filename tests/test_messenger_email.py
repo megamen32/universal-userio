@@ -16,7 +16,7 @@ from universal_userio.store import SQLiteUserIOStore
 def setup_mail(tmp_path, *, fail=False):
     store=SQLiteUserIOStore(tmp_path/'mail.db');calls=[]
     def run(argv, **kwargs):
-        calls.append((argv,kwargs['input']))
+        calls.append((argv,kwargs.get('input')))
         if fail:raise TimeoutError('unknown provider state')
         return SimpleNamespace(returncode=0,stdout='',stderr='')
     outbox=HimalayaGmailOutbox(runner=run)
@@ -53,11 +53,11 @@ def test_stored_mail_source_history_and_exact_rfc_reply(tmp_path):
     assert wire['Message-ID'].strip('<>')==sent['receipt']['provider_message_id']
     assert 'Ответ с маркером' in wire.get_payload(decode=True).decode()
     assert api.approve(action['id'],action['hash'],True)['receipt']==sent['receipt']
-    # One SMTP send plus one IMAP APPEND of the same letter into Sent.
-    assert len(calls)==2
+    # A native read-only folder lookup may precede the exact Sent append.
     assert calls[0][0][-2:]==['message','send']
-    assert calls[1][0][-4:]==['message','add','--mailbox','sent']
-    assert calls[1][1]==calls[0][1]
+    appends=[item for item in calls if item[0][-4:]==['message','add','--mailbox','sent']]
+    assert len(appends)==1
+    assert appends[0][1]==calls[0][1]
     assert sent['receipt']['sent_copy']['saved']=='true'
     history=api.history('gmail-care',cid)
     outgoing=history['messages'][-1]

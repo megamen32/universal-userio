@@ -172,6 +172,23 @@ def original_provider_receipt(service: Any, draft: Any, conversation: dict, *,
     source = str(conversation.get('source') or '')
     account_ref = str(conversation.get('account_ref') or '')
     peer = str(conversation.get('peer_id') or '')
+    if source == 'gmail' or source.startswith('gmail:'):
+        from .gmail_sent_reconciliation import reconcile_original_gmail_sent
+        alias = 'gmail' if source == 'gmail' else source.partition(':')[2]
+        candidates = [a for a in service._store.accounts(user_id=user_id)
+            if a['provider']=='gmail' and a['credential_ref']=='himalaya:'+alias
+            and a['enabled'] and 'read' in a['capabilities']]
+        if len(candidates) != 1:
+            return None
+        account = candidates[0]
+        if account_ref and account_ref not in (alias, str(account['id'])):
+            return None
+        if service.gmail_outbox is None:
+            return None
+        return reconcile_original_gmail_sent(service.gmail_outbox,account=alias,
+            sender=str(account.get('display_name') or ''),
+            recipient=str(conversation.get('sender') or ''),draft_id=draft.id,
+            body=draft.body)
     if not account_ref or not peer:
         return None
     if source == 'vk' and account_ref.startswith('vk:'):
