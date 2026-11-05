@@ -86,7 +86,7 @@ async function pageAction(url, room, text, after, replyTo=null) {
       const close=[...ownedPanel.querySelectorAll('button')].find(b=>['Закрыть ветку ответов','Close reply thread','Close replies'].includes(b.getAttribute('aria-label')));
       close?.click();
     }
-    return {ok:true,status:'submitted_unconfirmed',cursor:messages.at(-1)?.id};
+    return {ok:true,status:'submitted_unconfirmed',cursor:messages.at(-1)?.id,verified_reply_to:ownedPanel?replyTo:null};
 }
 
 root.UserIODot={pageAction};

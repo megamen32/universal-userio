@@ -50,3 +50,9 @@ test('group binding admits only verified human messages in the exact group',asyn
  assert.equal(relay.allowed(e),true);
  for(const change of [{peerId:'-1001'},{private:true},{senderIsBot:true},{senderIsBot:undefined},{senderId:''},{out:true}]) assert.equal(relay.allowed({...e,...change}),false);
 });
+test('verified native reply target permits a unique echo when the main list omits reply metadata',async()=>{
+ let sent=0;const room=ROOM,target=room+'~'+room+'~CalpicoMessage~target';
+ const path=join(mkdtempSync(join(tmpdir(),'dot-reply-')),'state.json');
+ const r=new DotRelay({statePath:path,botAccountId:event.accountId,agentId:'browser',tabId:7,wait:async()=>{},send:async()=>{},browserCall:async(action,args)=>{if(action==='dot_send'){sent++;return {ok:true,verified_reply_to:target}};return args.after?{ok:true,room,cursor:'new',messages:[{id:'echo',role:'user',text:'hello',reply_to:null}]}:{ok:true,room,cursor:'old'}}});
+ r.state.mirror={published:{[target]:{status:'accepted',receipts:['55']}}};const result=await r.receive({...event,replyTo:'55'});assert.equal(result.status,'accepted');assert.equal(sent,1);
+});

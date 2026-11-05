@@ -92,12 +92,13 @@ export class DotRelay {
    Object.assign(record,{status:'send_uncertain',cursor:baseline.cursor});this.save();
    let submitted;try{submitted=await this.browserCall('dot_send',{tab_id:this.tabId,request_id:id,text,reply_to:record.reply_to_main||null,media:record.media||[]});}catch{return record;}
    if(!submitted.ok){record.status='requires_review';record.reason=String(submitted.error||'browser_preflight_failed').replace(/[^a-z0-9_]/gi,'').slice(0,100);this.save();return record;}
+   if(record.reply_to_main&&submitted.verified_reply_to===record.reply_to_main)record.verified_reply_to=record.reply_to_main;
    record.status='submitted_unconfirmed';this.save();
    for(let n=0;n<20;n++){
     await this.wait(Math.min(5000+n*1000,15000));
     let snapshot;try{snapshot=await this.browserCall('dot_snapshot',{tab_id:this.tabId,after:record.cursor});}catch{record.status='echo_unknown';this.save();return record;}
     if(!snapshot.ok||snapshot.room!==(this.room||ROOM)){record.status='echo_requires_review';this.save();return record;}
-    const matches=(snapshot.messages||[]).filter(m=>m.role==='user'&&m.text.trim()===text.trim()&&(!record.reply_to_main||m.reply_to===record.reply_to_main)&&(!(record.media?.length)||(m.attachment_names?.length===record.media.length&&record.media.every(f=>m.attachment_names.includes(f.filename)))));
+    const matches=(snapshot.messages||[]).filter(m=>m.role==='user'&&m.text.trim()===text.trim()&&(!record.reply_to_main||m.reply_to===record.reply_to_main||(!m.reply_to&&record.verified_reply_to===record.reply_to_main))&&(!(record.media?.length)||(m.attachment_names?.length===record.media.length&&record.media.every(f=>m.attachment_names.includes(f.filename)))));
     if(matches.length>1){record.status='ambiguous_echo_requires_review';this.save();return record;}
     if(matches.length===1){record.echo=matches[0].id;record.status='accepted';this.save();return record;}
    }
