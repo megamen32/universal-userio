@@ -183,7 +183,19 @@ class ProfileSharing:
             principal = UserPrincipal(row['owner_id'], owner['username'], owner['role'], messenger_accounts=(account,), messenger_grants=(grant,))
             try:
                 enforce(self.store, principal, operation, arguments)
-                result = dispatch_scoped(self.store, self.service, principal, operation, arguments)
+                if operation == 'userio.channels.list' and not arguments:
+                    # Filter in SQL before the page limit, otherwise permitted
+                    # older chats disappear behind unrelated recent chats.
+                    ids = [chat['conversation_id'] for chat in chats]
+                    rows = []
+                    for offset in range(0, len(ids), 100):
+                        rows.extend(self.store.conversations(user_id=row['owner_id'], account_ref=account,
+                                                            source='telegram', exact_source=True,
+                                                            conversation_ids=ids[offset:offset + 100], limit=100))
+                    result = {'ok': True, 'chats': [{'id': item['id'], 'title': item.get('display_name') or item.get('sender') or item['id'],
+                              'last_message_snippet': str(item.get('preview') or '')[:500]} for item in rows]}
+                else:
+                    result = dispatch_scoped(self.store, self.service, principal, operation, arguments)
                 if operation == 'userio.messenger.propose' and result.get('ok'):
                     action_id = result['action']['id']
                     with self.store._connection:

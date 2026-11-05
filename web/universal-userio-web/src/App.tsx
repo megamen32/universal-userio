@@ -1,3 +1,4 @@
+import { SharedChats } from "./shared-chats"
 import { conversationDrafts, conversationTimeline } from "./conversation-drafts"
 import { groupMatrixChatRows } from "./matrix-chat-groups"
 import { messageAuthor } from './message-author'
@@ -240,6 +241,7 @@ const MessageBody = ({ message, conversationId, onAttachmentClick }: { message: 
 }
 
 export function App() {
+  const [sharedChatsOpen, setSharedChatsOpen] = useState(false)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [chats, setChats] = useState<Chat[]>([])
   const [conversation, setConversation] = useState<Conversation | null>(null)
@@ -1343,7 +1345,10 @@ export function App() {
     </div>
   </>
 
+  if (sharedChatsOpen) return <SharedChats onClose={() => setSharedChatsOpen(false)} />
+
   return <main className="userio-inbox relative flex h-svh min-h-0 overflow-hidden bg-background text-foreground">
+    <button className="absolute right-3 top-2 z-20 rounded border bg-card px-3 py-1 text-sm" onClick={() => setSharedChatsOpen(true)}>Общие чаты</button>
     <InboxNavigation accounts={accounts} platforms={platforms} selectedAccount={selectedAccount} selectedChannel={selectedChannel} provider={providerForSource} label={displayChannel} icon={channelIcon} unread={unreadByPlatform}
       onSelect={(channel, accountId) => { setSelectedChannel(channel); setSelectedAccount(accountId); inboxFolders.select("all"); setMobilePane("chats") }}
       expanded={sidebarOpen} onExpand={() => setSidebarOpen(open => !open)} mobileChat={mobilePane === "chat" && !!selectedChat} onSettings={() => setDrawerOpen(true)}

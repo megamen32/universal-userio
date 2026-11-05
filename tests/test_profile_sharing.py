@@ -168,3 +168,57 @@ def test_disabled_source_account_cannot_be_read(env):
     assert result['error'] == 'share_account_unavailable'
     events = run(surface, owner, 'audit', share_id=share)['events']
     assert events[0]['outcome'] == 'denied' and events[0]['actor_id'] == recipient.user_id
+
+
+def test_shared_http_routes_auth_scope_revoke_and_origin(env):
+    import json, threading
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+    from http.server import ThreadingHTTPServer
+    from universal_userio.http_api import handler
+    store, owner, recipient, outsider, surface, _ = env
+    share = create(env)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), handler(surface._service, token='fixture-service-token'))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f'http://127.0.0.1:{server.server_port}'
+    recipient_token = store.issue_access_token(recipient.user_id)
+    outsider_token = store.issue_access_token(outsider.user_id)
+    def request(path, token, payload=None, origin=None):
+        headers = {'Authorization': 'Bearer '+token}
+        if payload is not None: headers['Content-Type'] = 'application/json'
+        if origin: headers['Origin'] = origin
+        data = None if payload is None else json.dumps(payload).encode()
+        req = Request(base+path, data=data, headers=headers)
+        try:
+            with urlopen(req) as response: return response.status, json.load(response)
+        except HTTPError as e: return e.code, json.load(e)
+    try:
+        assert request('/v1/profile-shares', '')[0] == 401
+        assert request('/v1/profile-shares', recipient_token)[1]['shares'][0]['id'] == share
+        assert request('/v1/profile-shares', outsider_token)[1]['shares'] == []
+        payload = {'share_id':share, 'operation':'userio.channels.list', 'arguments':{}}
+        assert request('/v1/profile-shares/call', recipient_token, payload, 'https://untrusted.example')[0] == 403
+        status, result = request('/v1/profile-shares/call', recipient_token, payload)
+        assert status == 200 and len(result['chats']) == 1
+        assert request('/v1/profile-shares/call', outsider_token, payload)[0] == 403
+        payload['operation'] = 'userio.workspace.poll'
+        assert request('/v1/profile-shares/call', recipient_token, payload)[0] == 400
+        assert run(surface, owner, 'revoke', share_id=share)['ok']
+        payload['operation'] = 'userio.channels.list'
+        assert request('/v1/profile-shares/call', recipient_token, payload)[0] == 403
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_shared_list_filters_before_limit(env, monkeypatch):
+    store, owner, recipient, _, surface, _ = env
+    share = create(env)
+    seen = []
+    original = store.conversations
+    def conversations(**kwargs):
+        seen.append(kwargs)
+        return original(**kwargs)
+    monkeypatch.setattr(store, 'conversations', conversations)
+    result = run(surface, recipient, 'call', share_id=share, operation='userio.channels.list', arguments={})
+    assert result['ok'] and len(result['chats']) == 1
+    assert seen and seen[0]['conversation_ids'] == [result['chats'][0]['id']]

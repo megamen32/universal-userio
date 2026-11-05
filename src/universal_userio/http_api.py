@@ -670,6 +670,14 @@ def handler(
                         self._reply(200, response)
                     return
                 user_id = principal.user_id
+                if path == "/v1/profile-shares/call":
+                    if not self._mcp_origin_allowed() or self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                        self._reply(403, {"error": "origin_or_content_type_denied"}); return
+                    payload = self._json()
+                    if not isinstance(payload, dict) or set(payload) != {"share_id", "operation", "arguments"} or payload.get("operation") not in {"userio.channels.list", "userio.messenger.history", "userio.messenger.propose", "userio.messenger.approve", "userio.messenger.get"}:
+                        self._reply(400, {"error": "invalid_share_request"}); return
+                    result = surface.dispatch("userio.profile_share.call", payload, principal=principal)
+                    self._reply(200 if result.get("ok") else 403, result, {"Cache-Control": "no-store"}); return
                 if path in {"/v1/auto-replies", "/v1/auto-replies/preview"}:
                     if principal.service_account:
                         self._reply(403, {"error": "personal_login_required"})
@@ -1851,6 +1859,11 @@ def handler(
                 self._reply(403, {"error": "read_only_token"})
                 return
             user_id = principal.user_id
+            if path == "/v1/profile-shares":
+                result = surface.dispatch("userio.profile_share.list", {}, principal=principal)
+                if result.get("ok"):
+                    result["shares"] = [row for row in result["shares"] if row["grantee_id"] == user_id and row["revoked_at"] is None]
+                self._reply(200 if result.get("ok") else 403, result, {"Cache-Control": "no-store"}); return
             if path == "/v1/auto-replies":
                 if principal.service_account:
                     self._reply(403, {"error": "personal_login_required"})
