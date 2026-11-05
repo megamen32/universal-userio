@@ -24,7 +24,7 @@ test('explicit enrollment binds owner and refuses duplicates and competing owner
  const owners={bind:(id,p)=>bound.set(id,p.user_id),allowed:(id,user)=>bound.get(id)===user};
  const principal={user_id:'airlock',can_manage:true};
  const deps={input:{token,username:'AirlockDotsBot'},principal,headers:{},slots,slotProfiles,inFlight,owners,
-  hasSavedToken:()=>false,newClient:()=>({connect:async()=>calls.push('connect'),disconnect:async()=>{},signInBot:async()=>({bot:true,id:123456789,username:'AirlockDotsBot'})}),
+  hasSavedToken:()=>false,reserve:()=>{},newClient:()=>({connect:async()=>calls.push('connect'),disconnect:async()=>{},signInBot:async()=>({bot:true,id:123456789,username:'AirlockDotsBot'})}),
   credentials:()=>({}),saveToken:(owner)=>calls.push('save:'+owner),allocateSlot:()=> 'slot1',
   finishLogin:async(slot)=>slots.set(slot,{status:'connected',accountId:'telegram:123456789'})};
  assert.equal((await enrollExplicitBot(deps)).status,'connected');assert.equal(bound.get('slot1'),'airlock');
@@ -40,12 +40,17 @@ test('explicit enrollment never connects when credential outcome is unknown',asy
 
 test('explicit enrollment rejects non-manager and mismatched provider identity',async()=>{
  const {enrollExplicitBot}=await import('./bot-enrollment.mjs');let connected=0,saved=0;
- const base={input:{token,username:'AirlockDotsBot'},principal:{user_id:'airlock',can_manage:false},slots:new Map(),slotProfiles:{},inFlight:new Set(),owners:{},hasSavedToken:()=>false,newClient:()=>{connected++;return {connect:async()=>{},disconnect:async()=>{},signInBot:async()=>({bot:true,id:123456789,username:'differentbot'})}},credentials:()=>({}),saveToken:()=>saved++};
+ const base={input:{token,username:'AirlockDotsBot'},principal:{user_id:'airlock',can_manage:false},slots:new Map(),slotProfiles:{},inFlight:new Set(),owners:{},hasSavedToken:()=>false,reserve:()=>{},newClient:()=>{connected++;return {connect:async()=>{},disconnect:async()=>{},signInBot:async()=>({bot:true,id:123456789,username:'differentbot'})}},credentials:()=>({}),saveToken:()=>saved++};
  await assert.rejects(enrollExplicitBot(base));assert.equal(connected,0);
  await assert.rejects(enrollExplicitBot({...base,principal:{user_id:'airlock',can_manage:true}}));assert.equal(connected,1);assert.equal(saved,0);
 });
 test('explicit enrollment prevents a simultaneous second authentication',async()=>{
  const {enrollExplicitBot}=await import('./bot-enrollment.mjs');let release;const waiting=new Promise(r=>{release=r});let clients=0;
- const base={input:{token,username:'AirlockDotsBot'},principal:{user_id:'airlock',can_manage:true},headers:{},slots:new Map(),slotProfiles:{},inFlight:new Set(),owners:{bind(){}},hasSavedToken:()=>false,newClient:()=>{clients++;return {connect:async()=>waiting,disconnect:async()=>{},signInBot:async()=>({bot:true,id:123456789,username:'AirlockDotsBot'})}},credentials:()=>({}),saveToken:()=>{},allocateSlot:()=> 'a',finishLogin:async()=>{}};
+ const base={input:{token,username:'AirlockDotsBot'},principal:{user_id:'airlock',can_manage:true},headers:{},slots:new Map(),slotProfiles:{},inFlight:new Set(),owners:{bind(){}},hasSavedToken:()=>false,reserve:()=>{},newClient:()=>{clients++;return {connect:async()=>waiting,disconnect:async()=>{},signInBot:async()=>({bot:true,id:123456789,username:'AirlockDotsBot'})}},credentials:()=>({}),saveToken:()=>{},allocateSlot:()=> 'a',finishLogin:async()=>{}};
  const first=enrollExplicitBot(base);await assert.rejects(enrollExplicitBot(base),/bot_enrollment_in_progress/);release();await first;assert.equal(clients,1);
+});
+test('durable reservation prevents repeating an unknown enrollment after restart',async()=>{
+ const {enrollExplicitBot}=await import('./bot-enrollment.mjs');let reserved=false,clients=0;
+ const base={input:{token,username:'AirlockDotsBot'},principal:{user_id:'airlock',can_manage:true},slots:new Map(),slotProfiles:{},inFlight:new Set(),owners:{},hasSavedToken:()=>false,reserve:()=>{if(reserved)throw Error('already_reserved');reserved=true},newClient:()=>{clients++;throw Error('connection_unknown')}};
+ await assert.rejects(enrollExplicitBot(base),/connection_unknown/);await assert.rejects(enrollExplicitBot(base),/already_reserved/);assert.equal(clients,1);
 });

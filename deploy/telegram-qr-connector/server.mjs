@@ -10,7 +10,7 @@ import http from "node:http";
 import { botTokenFromMessage, assertBotIdentity, saveEncryptedBotToken, redactBotFatherToken, enrollExplicitBot } from "./bot-enrollment.mjs";
 import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, createWriteStream, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
 import { CustomFile } from 'telegram/client/uploads.js';
 import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';
@@ -1463,6 +1463,9 @@ http.createServer(async (req, res) => {
       const result=await enrollExplicitBot({input,principal:browserOwner.principal,headers:browserOwner.headers,
         slots,slotProfiles,inFlight:botEnrollments,owners:enrollmentOwners,newClient,credentials,
         hasSavedToken:(_owner,id)=>existsSync(root)&&readdirSync(root).some(name=>name.endsWith('-bot-'+id+'.age')),
+        reserve:(owner,id)=>{const dir=stateDir+'/bot-enrollments';mkdirSync(dir,{recursive:true,mode:0o700});
+          const fd=openSync(dir+'/'+id+'.json','wx',0o600);try{writeFileSync(fd,JSON.stringify({owner,account_id:'telegram:'+id,created_at:Date.now()}));fsyncSync(fd);}finally{closeSync(fd);}
+          const d=openSync(dir,'r');try{fsyncSync(d);}finally{closeSync(d);}},
         saveToken:(owner,expected)=>saveEncryptedBotToken(root,keyPath,owner,expected),
         allocateSlot:()=>"account-"+nextSlot++,finishLogin});
       res.writeHead(result.ok?200:202,{'content-type':'application/json','cache-control':'no-store'});

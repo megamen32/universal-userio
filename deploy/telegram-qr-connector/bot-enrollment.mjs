@@ -30,7 +30,7 @@ export function assertBotIdentity(user, expected) {
 // The existing connector remains the sole live client owner. Reservations are
 // made before any provider IO; an unresolved earlier slot must be reconciled.
 export async function enrollExplicitBot({input,principal,headers,slots,slotProfiles,inFlight,
-    owners,newClient,credentials,saveToken,hasSavedToken,finishLogin,allocateSlot}) {
+    owners,newClient,credentials,saveToken,hasSavedToken,reserve,finishLogin,allocateSlot}) {
   const expected=botTokenFromInput(input), accountId='telegram:'+expected.botId;
   if(!principal?.can_manage || !principal.user_id)throw Error('personal_login_required');
   const matches=[...slots].filter(([id,state])=>(state.accountId||slotProfiles[id])===accountId);
@@ -42,6 +42,9 @@ export async function enrollExplicitBot({input,principal,headers,slots,slotProfi
   if(inFlight.has(accountId))throw Error('bot_enrollment_in_progress');
   inFlight.add(accountId);let client=null;
   try{
+    // A process crash or lost response after authentication must never cause a
+    // second authentication attempt. Reservation contains no credentials.
+    reserve(principal.user_id,expected.botId);
     client=newClient();await client.connect();
     const user=await client.signInBot(credentials(),{botAuthToken:expected.token});
     assertBotIdentity(user,expected);
