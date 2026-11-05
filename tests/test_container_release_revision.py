@@ -509,3 +509,15 @@ def test_archive_voice_rejects_mounted_config_drift_during_capture(tmp_path, mon
         raise AssertionError('archive must reject a changing mounted config')
     assert not (archive_root / 'voice-config-drift').exists()
     assert not list(archive_root.glob('.voice-archive-*'))
+
+def test_unsupported_dry_run_never_invokes_backend_replacement(monkeypatch):
+    import sys
+    import pytest
+    release = _load_release_module()
+    called = []
+    monkeypatch.setattr(release, 'replace_backend', lambda **kwargs: called.append(kwargs))
+    monkeypatch.setattr(sys, 'argv', ['container_release.py', 'replace-backend', '--dry-run', '--image', 'candidate', '--revision', 'revision', '--expected-container', 'old', '--receipt-directory', '/tmp/unused'])
+    with pytest.raises(SystemExit) as error:
+        release.main()
+    assert error.value.code == 2
+    assert called == []

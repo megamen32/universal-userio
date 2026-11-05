@@ -1641,6 +1641,8 @@ def main():
     parser.add_argument('--receipt-directory', type=Path)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    if args.dry_run and args.action != 'reconcile-backend':
+        parser.error('--dry-run is supported only for reconcile-backend')
     if args.action == 'install-voice':
         from voice_container import install
         if not args.role or not args.image:
