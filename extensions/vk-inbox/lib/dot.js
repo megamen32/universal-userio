@@ -60,9 +60,20 @@ async function pageAction(url, room, text, after, replyTo=null) {
     if(buttons.length!==1) return {ok:false,error:'ambiguous_send'};
     editor.focus();
     if(!document.execCommand('insertText',false,text)) return {ok:false,error:'insert_failed'};
-    await new Promise(resolve=>setTimeout(resolve,100));
-    const ready=[...scope.querySelectorAll('button')].filter(e=>e.getClientRects().length && ['Отправить','Send'].includes(e.getAttribute('aria-label')));
-    if(editor.innerText.trim()!==text.trim() || ready.length!==1 || ready[0].disabled) return {ok:false,error:'draft_requires_review'};
+    // Only wait for the UI to enable this same, unchanged draft. Never insert
+    // again, clear a draft, or retry a click. A slow render is not a send failure.
+    let ready=[];
+    for(let attempt=0;attempt<50;attempt++){
+      await new Promise(resolve=>setTimeout(resolve,100));
+      if(location.href!==url)return {ok:false,error:'navigation_requires_review'};
+      const currentEditors=[...scope.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
+      if(editor.isConnected===false || currentEditors.length!==1 || currentEditors[0]!==editor)return {ok:false,error:'draft_requires_review',draft_issue:'composer_changed'};
+      if(editor.innerText.trim()!==text.trim())return {ok:false,error:'draft_requires_review',draft_issue:'text_changed'};
+      ready=[...scope.querySelectorAll('button')].filter(e=>e.getClientRects().length && ['Отправить','Send'].includes(e.getAttribute('aria-label')));
+      if(ready.length===1 && !ready[0].disabled)break;
+      ready=[];
+    }
+    if(ready.length!==1)return {ok:false,error:'draft_requires_review',draft_issue:'send_not_ready'};
     if(location.href!==url) return {ok:false,error:'navigation_requires_review'};
     if([...document.querySelectorAll('article.message-row[data-message-id]')].some(e=>!e.dataset.messageId.startsWith(prefix))) return {ok:false,error:'room_changed_requires_review'};
     if(ownedPanel){
