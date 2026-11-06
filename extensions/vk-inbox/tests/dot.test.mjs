@@ -80,6 +80,12 @@ test('Dot snapshot retains the target of a labelled link',async()=>{
  const result=await self.UserIODot.pageAction(url,room,null,null);
  assert.deepEqual(JSON.parse(JSON.stringify(result.messages[0].entities)),[{type:'text_url',offset:9,length:4,url:'https://example.org/path'}]);
 });
+test('Dot snapshot preserves a blockquote range',async()=>{
+ const room='fixture',quote={tagName:'BLOCKQUOTE',childNodes:[{nodeType:3,nodeValue:'цитата'}]},content={innerText:'цитата',textContent:'цитата',childNodes:[quote]};
+ const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null,classList:{contains:()=>false},querySelector:s=>s==='.message-text'?content:null,querySelectorAll:()=>[]};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document:{querySelectorAll:s=>s.startsWith('article')?[row]:[],querySelector:()=>null},location:{href:url},URL,TextEncoder,crypto:globalThis.crypto});
+ const result=await self.UserIODot.pageAction(url,room,null,null);assert.deepEqual(JSON.parse(JSON.stringify(result.messages[0].entities)),[{type:'blockquote',offset:0,length:6}]);
+});
 test('Dot snapshot preserves a link after a rendered paragraph break',async()=>{
  const room='fixture';const a={tagName:'A',getAttribute:n=>n==='href'?'https://example.org/':null,childNodes:[{nodeType:3,nodeValue:'сайт'}]};
  const content={innerText:'Первый абзац\nОткройте сайт',textContent:'Первый абзацОткройте сайт',childNodes:[{nodeType:3,nodeValue:'Первый абзацОткройте '},a]};

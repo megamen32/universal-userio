@@ -3,7 +3,7 @@ function formatEntities(text,entities){
  if(!Array.isArray(entities))throw Error('invalid_group_entities');
  return entities.map(e=>{
   const type=e.type==='text_url'?'text_link':e.type;
-  if(!['text_link','bold','italic','strike','underline','code','pre'].includes(type)||!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>text.length)throw Error('invalid_group_entity');
+  if(!['text_link','bold','italic','strike','underline','code','pre','blockquote'].includes(type)||!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>text.length)throw Error('invalid_group_entity');
   if(type==='text_link'){let u;try{u=new URL(e.url)}catch{throw Error('invalid_group_entity')};if(!['http:','https:'].includes(u.protocol))throw Error('invalid_group_entity');return {type,offset:e.offset,length:e.length,url:u.href};}
   return {type,offset:e.offset,length:e.length};
  });

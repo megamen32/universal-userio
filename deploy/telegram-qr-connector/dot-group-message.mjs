@@ -22,10 +22,10 @@ export function groupDotText(sender,message,options={}){
 }
 export function groupDotEntities(sender,message,options={}){
  const raw=String(message?.message||''),text=groupDotText(sender,message,options),prefix=text.length-raw.length;
- const kinds={MessageEntityBold:'bold',MessageEntityItalic:'italic',MessageEntityStrike:'strike',MessageEntityUnderline:'underline',MessageEntityCode:'code',MessageEntityPre:'pre',MessageEntityTextUrl:'text_url'};
+ const kinds={MessageEntityBold:'bold',MessageEntityItalic:'italic',MessageEntityStrike:'strike',MessageEntityUnderline:'underline',MessageEntityCode:'code',MessageEntityPre:'pre',MessageEntityBlockquote:'blockquote',MessageEntityTextUrl:'text_url'};
  const plain=new Set(['MessageEntityUrl','MessageEntityEmail','MessageEntityMention','MessageEntityHashtag','MessageEntityBotCommand','MessageEntityCashtag','MessageEntityPhone']);
  return (message.entities||[]).flatMap(e=>{
-  const type=kinds[e.className];if(!type&&plain.has(e.className))return [];
+  const type=e.className==='MessageEntityBlockquote'&&e.collapsed?null:kinds[e.className];if(!type&&plain.has(e.className))return [];
   if(!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>raw.length)throw Error('invalid_telegram_format');
   if(!type)return [{type:'unsupported',provider_type:line(e.className)||'unknown',offset:prefix+e.offset,length:e.length}];
   const item={type,offset:prefix+e.offset,length:e.length};

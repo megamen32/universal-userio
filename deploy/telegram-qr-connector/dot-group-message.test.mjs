@@ -11,6 +11,10 @@ test('Telegram formatted link remains bound to the correct text after sender pre
  const message={message:'Наш сайт',entities:[{className:'MessageEntityTextUrl',offset:4,length:4,url:'https://example.org/'}]};
  assert.deepEqual(groupDotEntities(sender,message),[{type:'text_url',offset:'Оля Карпова:\n'.length+4,length:4,url:'https://example.org/'}]);
 });
+test('Telegram blockquote keeps its range after the sender prefix',()=>{
+ const sender={firstName:'Оля',id:43},message={message:'цитата',entities:[{className:'MessageEntityBlockquote',offset:0,length:6}]};
+ assert.deepEqual(groupDotEntities(sender,message),[{type:'blockquote',offset:5,length:6}]);
+});
 test('unsupported provider formatting remains explicit instead of throwing away the message',()=>{
  const sender={firstName:'Оля',id:43},message={message:'секрет',entities:[{className:'MessageEntitySpoiler',offset:0,length:6}]};
  assert.deepEqual(groupDotEntities(sender,message),[{type:'unsupported',provider_type:'MessageEntitySpoiler',offset:5,length:6}]);

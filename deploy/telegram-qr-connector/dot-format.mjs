@@ -1,7 +1,7 @@
 // Convert normalized, UTF-16 source ranges to the installed GramJS types.
 export function telegramEntities(text,entities=[],api){
  if(!Array.isArray(entities))throw Error('invalid_format_entities');
- const kinds={bold:'MessageEntityBold',italic:'MessageEntityItalic',strike:'MessageEntityStrike',underline:'MessageEntityUnderline',code:'MessageEntityCode',pre:'MessageEntityPre',text_url:'MessageEntityTextUrl'};
+ const kinds={bold:'MessageEntityBold',italic:'MessageEntityItalic',strike:'MessageEntityStrike',underline:'MessageEntityUnderline',code:'MessageEntityCode',pre:'MessageEntityPre',blockquote:'MessageEntityBlockquote',text_url:'MessageEntityTextUrl'};
  return entities.map(e=>{
   if(!e||!Object.hasOwn(kinds,e.type)||!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>text.length||typeof api?.[kinds[e.type]]!=='function')throw Error('invalid_format_entity');
   const value={offset:e.offset,length:e.length};

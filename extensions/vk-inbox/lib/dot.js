@@ -20,7 +20,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
         const length=walked.length-start;
         if(!length)return;
         const tag=String(node?.tagName||'').toUpperCase();
-        const type={STRONG:'bold',B:'bold',EM:'italic',I:'italic',S:'strike',DEL:'strike',U:'underline',CODE:'code',PRE:'pre',A:'text_url'}[tag];
+        const type={STRONG:'bold',B:'bold',EM:'italic',I:'italic',S:'strike',DEL:'strike',U:'underline',CODE:'code',PRE:'pre',BLOCKQUOTE:'blockquote',A:'text_url'}[tag];
         if(!type)return;
         if(type==='text_url'){
           try{const target=new URL(node.getAttribute('href'),location.href);if(!['http:','https:'].includes(target.protocol))return;entities.push({type,offset:start,length,url:target.href});}catch{}
@@ -100,7 +100,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
     const buttons=[...scope.querySelectorAll('button')].filter(e=>e.getClientRects().length && ['Отправить','Send'].includes(e.getAttribute('aria-label')));
     if(buttons.length!==1) return {ok:false,error:'ambiguous_send'};
     if(!Array.isArray(inputEntities)||inputEntities.length>200)return {ok:false,error:'invalid_dot_format'};
-    const tags={bold:'strong',italic:'em',strike:'s',underline:'u',code:'code',pre:'code',text_url:'a'};
+    const tags={bold:'strong',italic:'em',strike:'s',underline:'u',code:'code',pre:'code',blockquote:'blockquote',text_url:'a'};
     const entities=[];
     for(const e of inputEntities){
       if(!e||!Object.hasOwn(tags,e.type)||!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>text.length)return {ok:false,error:'invalid_dot_format'};
@@ -242,7 +242,7 @@ async function mediaAction(url,room,operation,args={}){
     const text=typeof args.text==='string'?args.text:'';
     if(existing.text!==undefined&&existing.text!==text)return fail('caption_changed');
     if(text){
-      const tags={bold:'strong',italic:'em',strike:'s',underline:'u',code:'code',pre:'code',text_url:'a'},entities=[];
+      const tags={bold:'strong',italic:'em',strike:'s',underline:'u',code:'code',pre:'code',blockquote:'blockquote',text_url:'a'},entities=[];
       for(const e of existing.entities){
         if(!e||!Object.hasOwn(tags,e.type)||!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>text.length)return fail('invalid_dot_format');
         if(e.type==='text_url'){let u;try{u=new URL(e.url)}catch{return fail('invalid_dot_format')};if(!['http:','https:'].includes(u.protocol))return fail('invalid_dot_format');entities.push({...e,url:u.href});}

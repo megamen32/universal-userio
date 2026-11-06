@@ -60,7 +60,7 @@ export function mirrorParts(message,labels=DOT_POLICY){
 export function mirrorPartEntities(message,parts){
  const source=String(message.text||''),entities=message.entities||[];
  if(!Array.isArray(entities))throw Error('invalid_format_entities');
- const types=new Set(['bold','italic','strike','underline','code','pre','text_url']);
+ const types=new Set(['bold','italic','strike','underline','code','pre','blockquote','text_url']);
  for(const e of entities){
   if(!types.has(e.type)||!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>source.length)throw Error('invalid_format_entity');
   if(e.type==='text_url'){let u;try{u=new URL(e.url)}catch{throw Error('invalid_format_url')};if(!['http:','https:'].includes(u.protocol))throw Error('invalid_format_url');}
