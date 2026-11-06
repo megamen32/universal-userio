@@ -135,6 +135,14 @@ test('an older receipt without saved formatting is held before editing',async()=
  x.rows([msg('baseline','user','old'),{...msg('legacy','assistant','сайт'),entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]}]);await settle(x);
  assert.equal(x.edits.length,0);assert.equal(x.relay.state.mirror.held.legacy.reason,'edit_original_format_unknown');
 });
+test('unknown format edit is journaled and never retried after restart',async()=>{
+ const x=fixture({editError:true});await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),msg('linked','assistant','сайт')]);await settle(x);
+ x.rows([msg('baseline','user','old'),{...msg('linked','assistant','сайт'),entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]}]);
+ assert.equal((await settle(x)).status,'edit_unknown');assert.equal(x.edits.length,1);
+ assert.equal(x.relay.state.mirror.published.linked.status,'edit_uncertain');
+ x.restart();assert.equal((await x.mirror.tick()).status,'edit_unknown');assert.equal(x.edits.length,1);
+});
 test('read errors persist sanitized status, back off and recover without cursor reset',async()=>{
  let time=1000,fail=true,calls=0,saves=0;
  const state={mirror:{baselineAt:1,cursor:'old',published:{},candidates:{},held:{}}};
