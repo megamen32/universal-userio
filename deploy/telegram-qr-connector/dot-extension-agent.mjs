@@ -65,6 +65,7 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
   // while the original browser operation may still be running.
   const result=await run(action,args);
   try{
+   if(result.ok)await wait(1000); // Let Dot clear the submitted composer first.
    const restored=await command('dot_draft_recover',{backup_id,operation:'restore',confirm:'restore_preserved_draft'});
    if(!restored.ok)return {...result,draft_restore:'requires_review',draft_backup_id:backup_id};
   }catch{return {...result,draft_restore:'outcome_unknown',draft_backup_id:backup_id};}
