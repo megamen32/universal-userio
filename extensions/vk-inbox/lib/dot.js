@@ -271,5 +271,19 @@ async function mediaAction(url,room,operation,args={}){
   }
   return fail('invalid_media_operation');
 }
-root.UserIODot={pageAction,mediaAction};
+async function inspectDraft(url,room,expectedHash){
+  if(location.href!==url)return {ok:false,error:'wrong_dot_route'};
+  if(!/^[a-f0-9]{64}$/.test(expectedHash||''))return {ok:false,error:'invalid_expected_hash'};
+  const rows=[...document.querySelectorAll('article.message-row[data-message-id]')].filter(e=>!e.closest?.('.reply-chain-panel[role="dialog"]'));
+  const prefix=room+'~'+room+'~CalpicoMessage~';
+  if(!rows.length||rows.some(e=>!e.dataset.messageId.startsWith(prefix)))return {ok:false,error:'wrong_or_unloaded_room'};
+  if(document.querySelector('.reply-chain-panel[role="dialog"]'))return {ok:false,error:'existing_reply_panel'};
+  const editors=[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
+  if(editors.length!==1)return {ok:false,error:'ambiguous_composer'};
+  const value=editors[0].innerText||editors[0].textContent||'';
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
+  const hash=Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join('');
+  return {ok:true,empty:!value.trim(),matches:hash===expectedHash};
+}
+root.UserIODot={pageAction,mediaAction,inspectDraft};
 })(self);

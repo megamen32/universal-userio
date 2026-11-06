@@ -519,6 +519,13 @@
         const [r] = await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:()=>({url:location.href,ids:[...document.querySelectorAll("article.message-row[data-message-id]")].filter(e=>!e.closest(".reply-chain-panel[role=dialog]")).map(e=>e.dataset.messageId),composers:[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length).length, last_user_structure:(()=>{const a=[...document.querySelectorAll('article.message-row.self[data-message-id]')];const e=a.at(-1);return e?[e,...e.querySelectorAll('*')].slice(0,80).map(n=>({tag:n.tagName,classes:typeof n.className==='string'?n.className:'',text_length:(n.textContent||'').length,inner_length:(n.innerText||'').length})):[]})()})});
         return {ok:true,tab_id:tabs[0].id,...r.result};
       }
+      case "dot_draft_inspect": {
+        if(!root.UserIODot?.inspectDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[a-f0-9]{64}$/.test(args.expected_hash||""))return {ok:false,error:"invalid_dot_request"};
+        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.inspectDraft,args:[args.url,args.room,args.expected_hash]});
+        return r?.result||{ok:false,error:"dot_result_unknown"};
+      }
       case "dot_action": {
         if (!root.UserIODot || !["snapshot","send"].includes(args.operation) || typeof args.room!=="string" || !args.room || typeof args.url!=="string" || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)) return {ok:false,error:"invalid_dot_request"};
         const tabs = (await chrome.tabs.query({})).filter(t=>t.url===args.url);

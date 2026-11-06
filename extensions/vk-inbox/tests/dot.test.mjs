@@ -4,14 +4,45 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {webcrypto,createHash} from 'node:crypto';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 function setup(tabs){
- let calls=[];const self={UserIODot:{pageAction:()=>{},mediaAction:()=>{}},UserIODotRead:{pageAction:()=>{}}};
+ let calls=[];const self={UserIODot:{pageAction:()=>{},mediaAction:()=>{},inspectDraft:()=>{}},UserIODotRead:{pageAction:()=>{}}};
  const chrome={tabs:{query:async()=>tabs},scripting:{executeScript:async x=>(calls.push(x),[{result:{ok:true,room:'r'}}])}};
  const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');
  vm.runInNewContext(src,{self,chrome,setTimeout,Promise});return {execute:self.Agent.testExecute,calls};
 }
 const url='https://chatgpt.com/dots/aaa~bbb';
+test('draft inspection command only addresses one exact Dot tab with a valid hash',async()=>{
+ const x=setup([{id:1,url}]);
+ assert.equal((await x.execute({action:'dot_draft_inspect',args:{url,room:'r',expected_hash:'bad'}})).error,'invalid_dot_request');
+ assert.equal(x.calls.length,0);
+ assert.equal((await x.execute({action:'dot_draft_inspect',args:{url,room:'r',expected_hash:'a'.repeat(64)}})).ok,true);
+ assert.equal(x.calls[0].target.tabId,1);assert.equal(x.calls[0].args[2],'a'.repeat(64));
+ const duplicate=setup([{id:1,url},{id:2,url}]);
+ assert.equal((await duplicate.execute({action:'dot_draft_inspect',args:{url,room:'r',expected_hash:'a'.repeat(64)}})).error,'dot_tab_not_unique');
+ assert.equal(duplicate.calls.length,0);
+});
+test('draft inspection matches only the exact room and does not return draft text',async()=>{
+ const room='fixture',text='Сохранённый черновик';
+ const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};
+ const editor={innerText:text,textContent:text,getClientRects:()=>[1],closest:()=>null};
+ const document={querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:[],querySelector:()=>null};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},TextEncoder,crypto:webcrypto});
+ const hash=createHash('sha256').update(text).digest('hex');
+ const result=await self.UserIODot.inspectDraft(url,room,hash);
+ assert.equal(result.ok,true);assert.equal(result.matches,true);assert.ok(!JSON.stringify(result).includes(text));
+ assert.equal((await self.UserIODot.inspectDraft(url,'wrong',hash)).error,'wrong_or_unloaded_room');
+ assert.equal((await self.UserIODot.inspectDraft(url,room,'bad')).error,'invalid_expected_hash');
+});
+test('draft inspection refuses ambiguous editor and existing reply panel',async()=>{
+ const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};
+ const editor={innerText:'text',getClientRects:()=>[1]};let panel=false;
+ const document={querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor,editor]:[],querySelector:()=>panel?{}:null};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},TextEncoder,crypto:webcrypto});
+ assert.equal((await self.UserIODot.inspectDraft(url,room,'a'.repeat(64))).error,'ambiguous_composer');
+ panel=true;assert.equal((await self.UserIODot.inspectDraft(url,room,'a'.repeat(64))).error,'existing_reply_panel');
+});
 test('dot actions require one exact tab and never navigate another tab',async()=>{
  for(const tabs of [[],[{id:1,url},{id:2,url}]]){const x=setup(tabs);const r=await x.execute({action:'dot_action',args:{url,room:'r',operation:'snapshot'}});assert.equal(r.error,'dot_tab_not_unique');assert.equal(x.calls.length,0)}
  const x=setup([{id:1,url}]);assert.equal((await x.execute({action:'dot_action',args:{url,room:'r',operation:'snapshot'}})).ok,true);assert.equal(x.calls[0].target.tabId,1);assert.equal(x.calls[0].args[2],null);
