@@ -149,8 +149,91 @@ def test_channels_list_tool_documents_mcp_result_envelope_for_search_consumers(t
     assert "top-level" in modular_description
     assert read_spec["inputSchema"]["properties"]["include_images"]["default"] is True
     assert "include_images=false" in read_spec["description"]
+    assert read_spec["annotations"]["readOnlyHint"] is True
     assert download_spec["inputSchema"]["properties"]["mode"]["enum"]==["base64","mcp_resource"]
     assert download_spec["inputSchema"]["properties"]["attachment_index"]["maximum"]==7
+
+def test_mcp_tool_annotations_mark_proven_reads_and_keep_catalog_stable(tmp_path) -> None:
+    store = SQLiteUserIOStore(tmp_path / "annotations.sqlite3")
+    surface = UserIOMcpSurface(store, UserIOService(store, Generator(), Outbox()))
+    owner = store.owner()
+    tools = surface.dispatch("tools/list", {}, principal=owner)["tools"]
+    by_name = {tool["name"]: tool for tool in tools}
+
+    from universal_userio.mcp_annotations import PROVEN_READ_TOOLS
+    from universal_userio.mcp_surface import TOOL_SPECS
+    from universal_userio.token_permissions import READ_ONLY_TOOLS
+    import copy
+    from universal_userio.contracts import UserPrincipal
+
+    # The manifest covers exactly the registered catalog, and every
+    # descriptor carries explicit annotations so a missing annotation can
+    # never make a proven read appear as a write to MCP clients.
+    assert {tool["name"] for tool in tools} == {spec.name for spec in TOOL_SPECS}
+    for tool in tools:
+        name, annotations = tool["name"], tool["annotations"]
+        read_only = name in PROVEN_READ_TOOLS
+        assert annotations["readOnlyHint"] is read_only
+        assert annotations["destructiveHint"] is (not read_only)
+        assert annotations["idempotentHint"] is read_only
+        assert annotations["openWorldHint"] is (not read_only)
+
+    for name in ("search", "fetch", "userio.channels.read", "userio.accounts.list",
+                 "userio.messenger.question.audit", "userio.profile_share.audit"):
+        assert by_name[name]["annotations"]["readOnlyHint"] is True
+
+    # Mutations and read-like handlers whose branches were not verified pure
+    # (provider import, ASR/STT, ImportContacts) keep conservative metadata.
+    for name in ("userio.messages.send", "userio.contacts.resolve",
+                 "userio.messenger.history", "userio.messenger.resolve",
+                 "userio.messenger.has_contacted", "userio.messenger.media",
+                 "userio.channels.download", "userio.workspace.claim",
+                 "userio.message.mark_seen"):
+        assert by_name[name]["annotations"]["readOnlyHint"] is False
+
+    for name in ("userio.conversation.delete_local", "userio.draft.delete"):
+        assert by_name[name]["annotations"]["destructiveHint"] is True
+        assert by_name[name]["annotations"]["readOnlyHint"] is False
+
+    # Descriptor metadata stays separate from the credential allowlist in
+    # both directions: a SELECT-only handler outside READ_ONLY_TOOLS is
+    # annotated read, and an allowlisted mixed handler is not.
+    assert "userio.messenger.question.audit" not in READ_ONLY_TOOLS
+    assert "userio.messenger.history" in READ_ONLY_TOOLS
+
+    # search/fetch keep their structured output for open-world clients.
+    assert by_name["search"]["outputSchema"] == {
+        "type": "object",
+        "properties": {"results": {"type": "array", "items": {"type": "object",
+            "properties": {"id": {"type": "string"}, "title": {"type": "string"},
+                           "url": {"type": "string"}},
+            "required": ["id", "title", "url"]}}},
+        "required": ["results"],
+    }
+    assert by_name["fetch"]["outputSchema"] == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "title": {"type": "string"},
+                       "text": {"type": "string"}, "url": {"type": "string"},
+                       "metadata": {"type": "object"}},
+        "required": ["id", "title", "text", "url"],
+    }
+
+    # Legacy and modern tools/list envelopes serve identical descriptors.
+    legacy = json_rpc_response(surface, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+    assert legacy["result"]["tools"] == tools
+    modern = json_rpc_response(surface, _modern_mcp_request(2, "tools/list"))
+    assert modern["result"]["resultType"] == "complete"
+    assert modern["result"]["tools"] == tools
+
+    # Owner -> read-only filtered -> owner: authorization filtering must not
+    # mutate shared descriptors, and visibility stays allowlist-scoped.
+    owner_before = copy.deepcopy(tools)
+    reader = UserPrincipal(owner.user_id, "reader", "reader", read_only=True)
+    filtered = surface.dispatch("tools/list", {}, principal=reader)["tools"]
+    assert filtered
+    assert {tool["name"] for tool in filtered} <= READ_ONLY_TOOLS
+    assert surface.dispatch("tools/list", {}, principal=owner)["tools"] == owner_before
+
 
 
 @pytest.mark.parametrize("query", ["Семерин", "Дмитрий"])

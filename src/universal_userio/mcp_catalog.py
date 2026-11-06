@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .mcp_annotations import tool_annotations
+
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
@@ -16,8 +18,7 @@ class ToolSpec:
 
     def as_dict(self) -> dict[str, Any]:
         result = {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
-        if self.name in {"search", "fetch", "userio.channels.search", "userio.workspace.poll"}:
-            result["annotations"] = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+        result["annotations"] = tool_annotations(self.name)
         if self.name == "search":
             result["outputSchema"] = {"type": "object", "properties": {"results": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"}}, "required": ["id", "title", "url"]}}}, "required": ["results"]}
         elif self.name == "fetch":
