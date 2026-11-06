@@ -2,6 +2,17 @@
 from test_messenger import case
 from test_semantic_status_lock import CheckedConnection
 from universal_userio.search_surface import search_tool_response
+from universal_userio.search import text_coverage
+
+
+def test_message_coverage_serializes_shared_sqlite(case):
+    store = case[0]
+    original = store._connection
+    store._connection = CheckedConnection(original, store._lock)
+    try:
+        assert text_coverage(store, user_id=store.owner().user_id)['messages'] == 1
+    finally:
+        store._connection = original
 
 
 def test_exact_phone_digits_search_serializes_text_coverage(case):
