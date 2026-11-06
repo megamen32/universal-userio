@@ -521,6 +521,13 @@
         const [r] = await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:()=>({url:location.href,ids:[...document.querySelectorAll("article.message-row[data-message-id]")].filter(e=>!e.closest(".reply-chain-panel[role=dialog]")).map(e=>e.dataset.messageId),composers:[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length).length, last_user_structure:(()=>{const a=[...document.querySelectorAll('article.message-row.self[data-message-id]')];const e=a.at(-1);return e?[e,...e.querySelectorAll('*')].slice(0,80).map(n=>({tag:n.tagName,classes:typeof n.className==='string'?n.className:'',text_length:(n.textContent||'').length,inner_length:(n.innerText||'').length})):[]})()})});
         return {ok:true,tab_id:tabs[0].id,...r.result};
       }
+      case "dot_composer_inspect": {
+        if(!root.UserIODot?.inspectComposer||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:'invalid_dot_request'};
+        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
+        const [result]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:'MAIN',func:root.UserIODot.inspectComposer,args:[args.url,args.room]});
+        return result?.result||{ok:false,error:'inspection_failed'};
+      }
       case "dot_draft_recover": {
         if(!root.UserIODot?.recoverDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.backup_id||"")||!['clear','restore'].includes(args.operation))return {ok:false,error:'invalid_dot_request'};
         if(args.confirm!==(args.operation==='clear'?'preserve_then_clear':'restore_preserved_draft'))return {ok:false,error:'confirmation_required'};

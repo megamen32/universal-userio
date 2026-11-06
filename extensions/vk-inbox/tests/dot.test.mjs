@@ -28,6 +28,25 @@ test('draft backup stores sensitive content locally and returns only verificatio
  assert.equal((await self.Agent.testExecute({action:'settings_set',args:{patch:{['dot_draft_backup:'+args.backup_id]:null}}})).error,'reserved_setting');
  assert.equal((await self.Agent.testExecute({action:'dot_draft_backup',args})).error,'backup_exists');
 });
+test('composer diagnostics only addresses the exact Dot tab',async()=>{
+ let calls=0;const self={UserIODot:{inspectComposer:()=>{}}};
+ const chrome={tabs:{query:async()=>[{id:7,url}]},scripting:{executeScript:async()=>{calls++;return [{result:{ok:true,editor_count:1}}]}}};
+ const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');vm.runInNewContext(src,{self,chrome,setTimeout,Promise,JSON});
+ assert.equal((await self.Agent.testExecute({action:'dot_composer_inspect',args:{url,room:'r'}})).ok,true);assert.equal(calls,1);
+ assert.equal((await self.Agent.testExecute({action:'dot_composer_inspect',args:{url:'https://evil.example',room:'r'}})).error,'invalid_dot_request');assert.equal(calls,1);
+});
+test('composer diagnostics refuses a different room and never returns draft content',()=>{
+ const room='fixture',secret='private draft';
+ const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};
+ const parent={tagName:'DIV',getAttribute:()=>null,querySelectorAll:s=>s==='img'?[{}]:[{}],parentElement:null};
+ const editor={tagName:'DIV',textContent:secret,getClientRects:()=>[1],getAttribute:()=>null,querySelectorAll:()=>[],parentElement:parent};
+ const document={querySelectorAll:s=>s.startsWith('article')?[row]:[editor]},self={};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url}});
+ const result=self.UserIODot.inspectComposer(url,room);
+ assert.equal(result.ok,true);assert.equal(result.ancestors[1].file_inputs,1);assert.equal(result.ancestors[1].images,1);
+ assert.ok(!JSON.stringify(result).includes(secret));
+ assert.equal(self.UserIODot.inspectComposer(url,'wrong').error,'wrong_or_unloaded_room');
+});
 test('draft recovery requires an explicit action and retains unknown outcomes',async()=>{
  const saved={},draft='private draft text';let mutate=0;
  const self={UserIODot:{captureDraft:()=>{},recoverDraft:()=>{}}};
