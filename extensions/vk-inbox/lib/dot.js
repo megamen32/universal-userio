@@ -285,5 +285,20 @@ async function inspectDraft(url,room,expectedHash){
   const hash=Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join('');
   return {ok:true,empty:!value.trim(),matches:hash===expectedHash};
 }
-root.UserIODot={pageAction,mediaAction,inspectDraft};
+async function captureDraft(url,room){
+  if(location.href!==url)return {ok:false,error:'wrong_dot_route'};
+  const rows=[...document.querySelectorAll('article.message-row[data-message-id]')].filter(e=>!e.closest?.('.reply-chain-panel[role="dialog"]'));
+  const prefix=room+'~'+room+'~CalpicoMessage~';
+  if(!rows.length||rows.some(e=>!e.dataset.messageId.startsWith(prefix)))return {ok:false,error:'wrong_or_unloaded_room'};
+  if(document.querySelector('.reply-chain-panel[role="dialog"]'))return {ok:false,error:'existing_reply_panel'};
+  const editors=[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
+  if(editors.length!==1)return {ok:false,error:'ambiguous_composer'};
+  const editor=editors[0],text=editor.innerText||editor.textContent||'',html=editor.innerHTML;
+  if(!text.trim())return {ok:false,error:'empty_draft'};
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
+  const hash=Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join('');
+  if(text!==(editor.innerText||editor.textContent||'')||html!==editor.innerHTML)return {ok:false,error:'draft_changed'};
+  return {ok:true,text,html,hash};
+}
+root.UserIODot={pageAction,mediaAction,inspectDraft,captureDraft};
 })(self);

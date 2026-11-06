@@ -461,9 +461,11 @@
       }
       case "settings_get": {
         const state = await chrome.storage.local.get(null);
+        for(const key of Object.keys(state))if(key.startsWith('dot_draft_backup:'))delete state[key];
         return { ok: true, settings: state };
       }
       case "settings_set": {
+        if(Object.keys(args.patch||{}).some(key=>key.startsWith('dot_draft_backup:')))return {ok:false,error:'reserved_setting'};
         await chrome.storage.local.set(args.patch || {});
         return { ok: true };
       }
@@ -518,6 +520,22 @@
           return {ok:false,error:"dot_tab_not_unique"};
         const [r] = await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:()=>({url:location.href,ids:[...document.querySelectorAll("article.message-row[data-message-id]")].filter(e=>!e.closest(".reply-chain-panel[role=dialog]")).map(e=>e.dataset.messageId),composers:[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length).length, last_user_structure:(()=>{const a=[...document.querySelectorAll('article.message-row.self[data-message-id]')];const e=a.at(-1);return e?[e,...e.querySelectorAll('*')].slice(0,80).map(n=>({tag:n.tagName,classes:typeof n.className==='string'?n.className:'',text_length:(n.textContent||'').length,inner_length:(n.innerText||'').length})):[]})()})});
         return {ok:true,tab_id:tabs[0].id,...r.result};
+      }
+      case "dot_draft_backup": {
+        if(!root.UserIODot?.captureDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.backup_id||""))return {ok:false,error:"invalid_dot_request"};
+        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
+        const key='dot_draft_backup:'+args.backup_id;
+        if((await chrome.storage.local.get(key))[key])return {ok:false,error:'backup_exists'};
+        const [result]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.captureDraft,args:[args.url,args.room]});
+        const draft=result?.result;
+        if(!draft?.ok)return {ok:false,error:draft?.error||'dot_result_unknown'};
+        if(typeof draft.text!=='string'||typeof draft.html!=='string'||!/^[a-f0-9]{64}$/.test(draft.hash||''))return {ok:false,error:'invalid_draft_snapshot'};
+        const value={version:1,url:args.url,room:args.room,text:draft.text,html:draft.html,hash:draft.hash,created:Date.now()};
+        await chrome.storage.local.set({[key]:value});
+        const saved=(await chrome.storage.local.get(key))[key];
+        if(!saved||saved.text!==value.text||saved.html!==value.html||saved.hash!==value.hash)return {ok:false,error:'backup_verify_failed'};
+        return {ok:true,backup_id:args.backup_id,hash:value.hash,length:value.text.length};
       }
       case "dot_draft_inspect": {
         if(!root.UserIODot?.inspectDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[a-f0-9]{64}$/.test(args.expected_hash||""))return {ok:false,error:"invalid_dot_request"};

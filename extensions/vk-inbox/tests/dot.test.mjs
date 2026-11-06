@@ -13,6 +13,21 @@ function setup(tabs){
  vm.runInNewContext(src,{self,chrome,setTimeout,Promise});return {execute:self.Agent.testExecute,calls};
 }
 const url='https://chatgpt.com/dots/aaa~bbb';
+test('draft backup stores sensitive content locally and returns only verification metadata',async()=>{
+ const draft='private draft text',saved={};
+ const self={UserIODot:{captureDraft:()=>{}}};
+ const chrome={tabs:{query:async()=>[{id:7,url}]},scripting:{executeScript:async()=>[{result:{ok:true,text:draft,html:'<p>'+draft+'</p>',hash:'a'.repeat(64)}}]},storage:{local:{get:async key=>key===null?{...saved}:({[key]:saved[key]}),set:async obj=>Object.assign(saved,obj)}}};
+ const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');
+ vm.runInNewContext(src,{self,chrome,setTimeout,Promise,JSON});
+ const args={url,room:'r',backup_id:'12345678-1234-1234-1234-123456789abc'};
+ const result=await self.Agent.testExecute({action:'dot_draft_backup',args});
+ assert.equal(result.ok,true);assert.ok(!JSON.stringify(result).includes(draft));
+ assert.equal(Object.values(saved)[0].text,draft);
+ const settings=await self.Agent.testExecute({action:'settings_get',args:{}});
+ assert.ok(!JSON.stringify(settings).includes(draft));
+ assert.equal((await self.Agent.testExecute({action:'settings_set',args:{patch:{['dot_draft_backup:'+args.backup_id]:null}}})).error,'reserved_setting');
+ assert.equal((await self.Agent.testExecute({action:'dot_draft_backup',args})).error,'backup_exists');
+});
 test('draft inspection command only addresses one exact Dot tab with a valid hash',async()=>{
  const x=setup([{id:1,url}]);
  assert.equal((await x.execute({action:'dot_draft_inspect',args:{url,room:'r',expected_hash:'bad'}})).error,'invalid_dot_request');
@@ -34,6 +49,17 @@ test('draft inspection matches only the exact room and does not return draft tex
  assert.equal(result.ok,true);assert.equal(result.matches,true);assert.ok(!JSON.stringify(result).includes(text));
  assert.equal((await self.UserIODot.inspectDraft(url,'wrong',hash)).error,'wrong_or_unloaded_room');
  assert.equal((await self.UserIODot.inspectDraft(url,room,'bad')).error,'invalid_expected_hash');
+});
+test('draft capture checks exact room and captures text and markup without mutation',async()=>{
+ const room='fixture',text='line one\nline two',html='<p>line one</p><p>line two</p>';
+ const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};
+ const editor={innerText:text,textContent:text,innerHTML:html,getClientRects:()=>[1]};
+ const document={querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:[],querySelector:()=>null};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},TextEncoder,crypto:webcrypto});
+ const result=await self.UserIODot.captureDraft(url,room);
+ assert.equal(result.text,text);assert.equal(result.html,html);assert.equal(result.hash,createHash('sha256').update(text).digest('hex'));
+ assert.equal((await self.UserIODot.captureDraft(url,'wrong')).error,'wrong_or_unloaded_room');
+ assert.equal(editor.innerHTML,html);
 });
 test('draft inspection refuses ambiguous editor and existing reply panel',async()=>{
  const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};
