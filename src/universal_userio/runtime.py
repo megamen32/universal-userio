@@ -231,6 +231,12 @@ def main() -> None:
     )
 
     class UserIOHTTPServer(ThreadingHTTPServer):
+        # The socketserver default listen backlog is 5. Under a burst of
+        # internal sync/MCP connections the acceptor cannot drain it fast
+        # enough, the kernel drops SYNs, and clients see connect timeouts
+        # (curl 28) even though the process is alive. Let bursts queue instead.
+        request_queue_size = 128
+
         def service_actions(self) -> None:
             maintenance.run_if_due()
             self.RequestHandlerClass.max_connections.expire()
