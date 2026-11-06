@@ -8,6 +8,7 @@ import {readGroupBinding} from "./dot-group-binding.mjs";
 import {createGroupBotSender,createGroupBotMediaSender} from "./dot-group-send.mjs";
 import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
 import {routeGroupDotEvent} from "./dot-group-receive.mjs";
+import {readGroupSettings,accessGroupSettings,groupTopicId,observeGroupMessage,resolveGroupTopicTitle} from "./dot-group-settings.mjs";
 import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
 import {claimNotAccepted,validateReplayReply} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
@@ -19,6 +20,7 @@ import {EnrollmentOwners,enrollmentPrincipal} from "./enrollment-owner.mjs";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, chmodSync, closeSync, createWriteStream, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { Api, TelegramClient } from "telegram";
+import { getInputChannel } from "telegram/Utils.js";
 import { CustomFile } from 'telegram/client/uploads.js';
 import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';
 import {telegramFormatMatches} from './dot-format.mjs';
@@ -956,6 +958,7 @@ function getDotRelay(accountId,binding) {
 // no second Telegram client or process is created.
 const groupBindingPath=stateDir+'/dot-group-binding.json';
 const groupTokenPath=stateDir+'/dot-group-agent-token.age';
+const groupSettingsPath=stateDir+'/dot-group-settings.json';
 let groupRelay=null,groupMirror=null,groupIdentity='',groupPending=null,groupPendingIdentity='';
 async function getGroupRelay(binding){
  const identity=JSON.stringify(binding);
@@ -989,21 +992,27 @@ async function initializeGroupRelay(binding,identity){
  const send=async(peer,text,replyTo,entities)=>{boundLive();return providerSend(peer,text,replyTo,entities);};
  const sendMedia=async(peer,media,caption,replyTo,origin,entities)=>{boundLive();if(typeof origin?.source_message_id!=='string'||!origin.source_message_id.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_group_media_source');return providerSendMedia(peer,media,caption,replyTo,entities);};
  const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia});
+ relay.groupOptions=()=>readGroupSettings(groupSettingsPath,binding);
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;
 }
-function relayGroupMessage(client,accountId,self,message,chatKey,isEdit){
+function relayGroupMessage(client,accountId,self,message,chatKey,isEdit,chatEntity){
  let binding;try{binding=readGroupBinding(groupBindingPath)}catch{return false}
  if(!binding||accountId!==binding.botAccountId)return false;
- if(chatKey!==binding.peerId||!self.bot||message.out||isEdit)return true;
+ if(chatKey!==binding.peerId||!self.bot||isEdit)return true;
  void (async()=>{
+  const relay=await getGroupRelay(binding);
+  const topicId=groupTopicId(message,chatEntity?.forum===true);
+  if(chatEntity&&observeGroupMessage(relay.state,{messageId:String(message.id),topicId}))relay.save();
+  if(message.out)return;
   const sender=await message.getSender();
   if(!sender||sender.className!=='User'||sender.bot===true||!sender.id)return;
   const text=String(message.message||'');
   const kind=groupMediaKind(message);
   if((!text.trim()&&kind==='text')||sensitiveText(text))return;
-  const relay=await getGroupRelay(binding);
-  const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text:groupDotText(sender,message),entities:groupDotEntities(sender,message),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+  const options=relay.groupOptions(),topicTitle=options.showTopic&&topicId?await resolveGroupTopicTitle({client,api:Api,peer:message.peerId,topicId,getInputChannel}):null;
+  const context={showTopic:options.showTopic,topicId,topicTitle};
+  const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),topicId,text:groupDotText(sender,message,context),entities:groupDotEntities(sender,message,context),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
   if(['image','document'].includes(kind)&&!dotMediaIngresses.has(accountId)){
    const identity=JSON.stringify(binding);
    dotMediaIngresses.set(accountId,new DotMediaIngress({stateDir,botAccountId:accountId,allowDocuments:true,
@@ -1121,7 +1130,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   }
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
-  const isDotBot = relayGroupMessage(client, accountId, self, message, chatKey, isEdit) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
+  const isDotBot = relayGroupMessage(client, accountId, self, message, chatKey, isEdit, chatEntity) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
   if (!isDotBot && !isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
@@ -1379,6 +1388,20 @@ var prefix = location.pathname.replace(/\\/$/, "");
 var seen = new Map();
 var accounts = new Map();
 var accountsRefreshAt = 0;
+async function loadGroupMirrorSettings(){
+  try{
+    var response=await fetch(prefix+'/dot-group/settings',{cache:'no-store'});if(!response.ok)return;
+    var current=await response.json(),panel=document.createElement('section');panel.className='userio-setup-panel';
+    panel.innerHTML='<h2>Зеркало Dot в группе</h2><p class="userio-note">Эти настройки относятся к подключённой группе и применяются к новым сообщениям.</p><form id="dot-group-settings"><p><label><input type="checkbox" name="showTopic"> Показывать название топика в Dot</label></p><p><label><input type="checkbox" name="chainPrevious"> Отвечать на последнее полученное сообщение этого топика, если явного ответа нет</label></p><button class="userio-setup-button" type="submit">Сохранить настройки зеркала</button><p class="userio-note" role="status" aria-live="polite"></p></form>';
+    document.getElementById('cards').before(panel);var form=panel.querySelector('form'),status=form.querySelector('[role=status]');
+    form.elements.showTopic.checked=current.showTopic;form.elements.chainPrevious.checked=current.chainPrevious;
+    form.addEventListener('submit',async function(event){event.preventDefault();var button=form.querySelector('button');button.disabled=true;status.textContent='Сохраняю…';
+      try{var r=await fetch(prefix+'/dot-group/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:current.revision,showTopic:form.elements.showTopic.checked,chainPrevious:form.elements.chainPrevious.checked})});var data=await r.json();if(!r.ok)throw Error(data.error||'Не удалось сохранить');current=data;status.textContent='Настройки сохранены.';}
+      catch(error){status.textContent=error.message||'Не удалось сохранить настройки.';}finally{button.disabled=false;}
+    });
+  }catch{}
+}
+loadGroupMirrorSettings();
 function esc(v){return String(v==null?"":v).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 function card(s){
   var a = function(p){ return prefix + p; };
@@ -1485,7 +1508,7 @@ http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const slot = url.searchParams.get("slot");
   let browserOwner=null;
-  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot-group/replay','/dot-group/reconcile-incoming','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
+  if(['/','/state','/new','/phone','/code','/password','/start','/remove','/import-session','/profiles/logout','/bot/enroll-from-botfather','/bot/enroll','/dot-group/settings','/dot-group/replay','/dot-group/reconcile-incoming','/dot/replay','/dot/resync-preview','/dot/resync'].includes(url.pathname)){
     try{
       browserOwner=await enrollmentPrincipal(userIoUrl,req.headers,(target,auth)=>new Promise((resolve,reject)=>{
         const check=http.get(target,{headers:auth},response=>{
@@ -1496,6 +1519,15 @@ http.createServer(async (req, res) => {
       if(slot&&!enrollmentOwners.allowed(slot,browserOwner.principal.user_id))throw Error('Not your enrollment');
       if(!['/','/state'].includes(url.pathname)&&!browserOwner.principal.can_manage)throw Error('Personal login required');
     }catch(error){res.writeHead(403,{'content-type':'application/json'});return res.end(JSON.stringify({error:'Войдите в свой UserIO для подключения аккаунта'}));}
+  }
+
+  if(url.pathname==='/dot-group/settings'&&['GET','POST'].includes(req.method)){
+    try{
+      const binding=readGroupBinding(groupBindingPath),input=req.method==='POST'?await readJsonBody(req,4096):undefined;
+      const result=accessGroupSettings({path:groupSettingsPath,binding,principal:browserOwner.principal,method:req.method,input});
+      res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify(result));
+    }catch(error){const reason=String(error?.message||'');const status=reason==='group_settings_forbidden'?403:reason==='group_settings_revision_changed'?409:400;
+      res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:status===403?'Доступ к настройкам отсутствует':status===409?'Настройки изменились, обновите страницу':'Не удалось сохранить настройки'}));}
   }
 
   if(url.pathname==='/dot-group/reconcile-incoming' && req.method==='POST'){

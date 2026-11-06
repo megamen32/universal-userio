@@ -8,7 +8,7 @@ export function groupMediaKind(message){
  if(!message?.media||['MessageMediaEmpty','MessageMediaWebPage'].includes(message.media.className))return 'text';
  return 'other_media';
 }
-export function groupDotText(sender,message){
+export function groupDotText(sender,message,options={}){
  const id=String(sender?.id||'');
  if(!/^[1-9][0-9]*$/.test(id))throw Error('invalid_group_sender');
  const name=[line(sender.firstName),line(sender.lastName)].filter(Boolean).join(' ')
@@ -17,10 +17,11 @@ export function groupDotText(sender,message){
  const origin=forwarded&&forwardOrigin(message);
  const originText=origin?line(forwardLine(origin)):(forwarded&&line(forwarded.postAuthor)?'Переслано от: '+line(forwarded.postAuthor):'');
  const prefix=forwarded?(originText?'['+originText+']\n':'[Переслано; источник недоступен]\n'):'';
- return name+':\n'+prefix+String(message?.message||'');
+ const topic=options.showTopic===true&&options.topicId?'[Топик: '+(line(options.topicTitle)||'название недоступно')+']\n':'';
+ return topic+name+':\n'+prefix+String(message?.message||'');
 }
-export function groupDotEntities(sender,message){
- const raw=String(message?.message||''),text=groupDotText(sender,message),prefix=text.length-raw.length;
+export function groupDotEntities(sender,message,options={}){
+ const raw=String(message?.message||''),text=groupDotText(sender,message,options),prefix=text.length-raw.length;
  const kinds={MessageEntityBold:'bold',MessageEntityItalic:'italic',MessageEntityStrike:'strike',MessageEntityUnderline:'underline',MessageEntityCode:'code',MessageEntityPre:'pre',MessageEntityTextUrl:'text_url'};
  const plain=new Set(['MessageEntityUrl','MessageEntityEmail','MessageEntityMention','MessageEntityHashtag','MessageEntityBotCommand','MessageEntityCashtag','MessageEntityPhone']);
  return (message.entities||[]).flatMap(e=>{

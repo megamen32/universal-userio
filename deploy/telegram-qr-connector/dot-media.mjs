@@ -57,7 +57,7 @@ export class DotMediaIngress{
   g.status='preparing';this.save();
   try{
    const rows=[...pending.events.values()].sort((a,b)=>Number(a.event.messageId)-Number(b.event.messageId));
-   if(new Set(rows.map(r=>r.event.senderId)).size!==1||new Set(rows.map(r=>r.event.peerId)).size!==1)throw Error('album_sender_ambiguous');
+   if(new Set(rows.map(r=>r.event.senderId)).size!==1||new Set(rows.map(r=>r.event.peerId)).size!==1||new Set(rows.map(r=>r.event.topicId??'direct')).size!==1)throw Error('album_sender_ambiguous');
    const replies=new Set(rows.map(r=>r.event.replyTo).filter(Boolean));
    if(replies.size>1)throw Error('album_reply_ambiguous');
    const media=[];let total=0;

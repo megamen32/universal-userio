@@ -29,3 +29,10 @@ test('saved and numeric Telegram forward sources use the existing origin contrac
  assert.match(groupDotText(sender,{message:'Текст',fwdFrom:{savedFromName:'Иван'}}),/Сохранено от: Иван/);
  assert.match(groupDotText(sender,{message:'Текст',fwdFrom:{fromId:{channelId:123}}}),/Переслано от: источник 123/);
 });
+test('topic context is controlled per group without changing link offsets',()=>{
+ const sender={firstName:'Оля',id:43},message={message:'сайт',entities:[{className:'MessageEntityTextUrl',offset:0,length:4,url:'https://example.org/'}]};
+ const options={showTopic:true,topicId:'7',topicTitle:'Проект А'};
+ const text=groupDotText(sender,message,options),entities=groupDotEntities(sender,message,options);
+ assert.equal(text,'[Топик: Проект А]\nОля:\nсайт');assert.equal(text.slice(entities[0].offset,entities[0].offset+entities[0].length),'сайт');
+ assert.equal(groupDotText(sender,message,{...options,showTopic:false}),'Оля:\nсайт');
+});

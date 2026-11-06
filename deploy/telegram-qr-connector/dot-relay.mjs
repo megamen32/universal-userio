@@ -77,6 +77,7 @@ export class DotRelay {
   const entities=(e.entities||[]).map(entity=>({...entity,offset:entity.offset+text.length-e.text.length}));
   return this.admit(id,text,'telegram',
    {provider_reply_to:providerReplyTo,reply_to_main:target,original_text_hash:textHash(e.text),media:e.media||[],source_message_ids:e.source_message_ids||[e.messageId],grouped_id:e.grouped_id||null,
+    ...(Object.hasOwn(e,'topicId')?{topic_id:e.topicId}:{}),
     ...(entities.length?{format_hash:textHash(JSON.stringify(entities))}:{}),
     ...(providerReplyTo&&!target?{reply_context_hash:textHash(e.replyContext||''),reply_mode:'quoted_context'}:target?{reply_mode:'native'}:{})},entities);
  }

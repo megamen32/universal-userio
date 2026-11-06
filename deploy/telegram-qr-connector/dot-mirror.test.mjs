@@ -20,7 +20,7 @@ function fixture(options={}){
   send:async(owner,text,replyTo=null,entities=[])=>{
    sends.push({...replyTo==null?{owner,text}:{owner,text,replyTo},...(entities.length?{entities}:{})});
    if(options.sendError)throw Error('unknown');
-   return options.numericReceipts?String(sends.length):'tg'+sends.length;
+   return options.numericReceipts?String((options.receiptBase||0)+sends.length):'tg'+sends.length;
   },
   sendMedia:async(owner,media,caption,replyTo,source,entities=[])=>{
    const optionsParams=dotTelegramMediaParams(media,caption,replyTo,FakeCustomFile);
@@ -56,6 +56,31 @@ test('media caption carries the original link with the speaker offset',async()=>
 async function settle(x){await x.mirror.tick();x.advance();return x.mirror.tick();}
 test('activation baseline skips all history, repeat does not send',async()=>{const x=fixture();assert.equal((await x.mirror.tick()).status,'baseline_initialized');await settle(x);assert.equal(x.sends.length,0)});
 test('both new authors labelled, restart and stable IDs prevent duplicates',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('u','user','hello'),msg('a','assistant','background result')]);await settle(x);assert.deepEqual(x.sends,[{owner:OWNER,text:'Test owner:\nhello'},{owner:OWNER,text:'dots:\nbackground result'}]);x.restart();await settle(x);assert.equal(x.sends.length,2)});
+test('optional automatic group reply uses the last message in the current topic',async()=>{
+ const x=fixture({numericReceipts:true});x.relay.group=true;x.relay.groupOptions=()=>({chainPrevious:true});
+ x.relay.state.groupContext={currentTopic:'4',currentMessageId:'20',lastByTopic:{'4':'20','5':'19'}};
+ await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('a','assistant','answer')]);await settle(x);
+ assert.equal(x.sends[0].replyTo,'20');
+});
+test('split group messages form a chain without overriding an explicit reply',async()=>{
+ const x=fixture({numericReceipts:true});x.relay.group=true;x.relay.groupOptions=()=>({chainPrevious:true});
+ x.relay.state.groupContext={currentTopic:'4',currentMessageId:'20',lastByTopic:{'4':'20'}};
+ await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('long','assistant','a'.repeat(7000))]);await settle(x);
+ assert.deepEqual(x.sends.map(s=>s.replyTo),['20','1','2']);
+});
+test('an explicit Dot reply overrides the automatic previous message',async()=>{
+ const x=fixture({numericReceipts:true});x.relay.group=true;x.relay.groupOptions=()=>({chainPrevious:true});
+ x.relay.state.groupContext={currentTopic:'4',currentMessageId:'20',lastByTopic:{'4':'20'}};
+ await x.mirror.tick();x.relay.state.mirror.published.parent={status:'accepted',receipts:['15'],hash:textHash('old')};
+ x.rows([msg('baseline','user','old'),{...msg('answer','assistant','ответ'),reply_to:'parent'}]);await settle(x);
+ assert.equal(x.sends[0].replyTo,'15');
+});
+test('automatic chain advances from confirmed bot receipts even without a provider update',async()=>{
+ const x=fixture({numericReceipts:true,receiptBase:20});x.relay.group=true;x.relay.groupOptions=()=>({chainPrevious:true});
+ x.relay.state.groupContext={currentTopic:'4',currentMessageId:'20',lastByTopic:{'4':'20'}};
+ await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('one','assistant','первое'),msg('two','assistant','второе')]);await settle(x);
+ assert.deepEqual(x.sends.map(s=>s.replyTo),['20','21']);assert.equal(x.relay.state.groupContext.lastByTopic['4'],'22');
+});
 test('Telegram-origin echo suppressed but assistant still mirrored',async()=>{const x=fixture();await x.mirror.tick();x.relay.state.incoming['telegram:999999:111111111:1']={source:'telegram',status:'accepted',echo:'echo'};x.rows([msg('baseline','user','old'),msg('echo','user','from TG'),msg('a','assistant','answer')]);await settle(x);assert.deepEqual(x.sends.map(s=>s.text),['dots:\nanswer'])});
 test('uncertain incoming origin pauses instead of echo duplication',async()=>{const x=fixture();await x.mirror.tick();x.relay.state.incoming['telegram:999999:111111111:1']={source:'telegram',status:'send_uncertain',text_hash:textHash('from TG')};x.rows([msg('baseline','user','old'),msg('echo','user','from TG')]);assert.equal((await settle(x)).status,'incoming_origin_uncertain');assert.equal(x.sends.length,0)});
 test('secret patterns and explicit credential labels held with no raw excerpts',async()=>{for(const text of ['123456789:'+ 'A'.repeat(35),'sk-'+ 'A'.repeat(30),'Authorization: Bearer abcdefghijklmnop','-----BEGIN RSA PRIVATE KEY-----','password: hunter2','токен: hidden','Пароль передан через SSS'])assert.equal(sensitiveText(text),true);const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('secret','assistant','password: hunter2'),msg('safe','assistant','ready')]);await settle(x);assert.deepEqual(x.sends.map(s=>s.text),['dots:\nready']);assert.equal(x.relay.state.mirror.held.secret.reason,'sensitive_content');assert.equal(JSON.stringify(x.relay.state).includes('hunter2'),false)});

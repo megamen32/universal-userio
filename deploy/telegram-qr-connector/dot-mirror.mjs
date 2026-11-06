@@ -3,6 +3,7 @@ import {OWNER,ROOM,textHash} from './dot-relay.mjs';
 import {MAX_IMAGES} from './dot-media.mjs';
 import {verifyDotTelegramMedia} from './dot-egress.mjs';
 import {telegramEntities} from './dot-format.mjs';
+import {chooseGroupReply,observeGroupMessage} from './dot-group-settings.mjs';
 import {openSync,writeFileSync,fsyncSync,closeSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 export function sensitiveText(text){
@@ -33,6 +34,14 @@ export function resolveMirrorReply(relay,replyTo){
   matches.add(id);
  }
  return matches.size===1?{status:'resolved',receipt:[...matches][0]}:{status:'unresolved',receipt:null};
+}
+function mirrorTopic(relay,message){
+ if(!relay.group)return {known:false};
+ if(!message.reply_to){const context=relay.state.groupContext;return context&&Object.hasOwn(context,'currentTopic')?{known:true,topicId:context.currentTopic}:{known:false};}
+ const topics=[];const published=relay.state.mirror?.published?.[message.reply_to];
+ if(published?.status==='accepted'&&Object.hasOwn(published,'topic_id'))topics.push(published.topic_id);
+ for(const r of Object.values(relay.state.incoming||{}))if(r.status==='accepted'&&r.echo===message.reply_to&&Object.hasOwn(r,'topic_id'))topics.push(r.topic_id);
+ const unique=[...new Set(topics)];return unique.length===1?{known:true,topicId:unique[0]}:{known:false};
 }
 export function mirrorSendOptions(text,replyTo=null,entities=[],api=null){
  const options={message:text,formattingEntities:telegramEntities(text,entities,api),linkPreview:false};
@@ -149,9 +158,17 @@ export class DotMirror{
     if(sensitiveText(m.text)||(!m.text.trim()&&!imageCount)){
      state.held[m.id]={reason:sensitiveText(m.text)?'sensitive_content':'no_visible_text',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
-    const reply=resolveMirrorReply(this.relay,m.reply_to);
+    let reply=resolveMirrorReply(this.relay,m.reply_to);
     if(reply.status==='unresolved'){
      state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
+    }
+    const topic=mirrorTopic(this.relay,m);let autoChain=false;
+    if(reply.status==='none'&&this.relay.group&&typeof this.relay.groupOptions==='function'){
+     const context=this.relay.state.groupContext,topicId=context?.currentTopic??null;
+     const previous=context?.lastByTopic?.[topicId??'direct'];
+     autoChain=this.relay.groupOptions().chainPrevious===true;
+     const receipt=chooseGroupReply({explicit:null,previous:previous?{messageId:previous,topicId}:null,topicId,enabled:autoChain});
+     if(receipt)reply={status:'resolved',receipt};
     }
     let parts;try{parts=m.text.trim()?mirrorParts(m,this.relay.labels):[];}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     let formatted;try{formatted=mirrorPartEntities(m,parts);}catch{state.held[m.id]={reason:'format_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
@@ -171,7 +188,7 @@ export class DotMirror{
      caption=inline?parts[0]:mirrorParts({...m,text:'[изображение]'},this.relay.labels)[0];
      if(inline){captionEntities=formatted[0];parts=[];}
     }
-    const pub={hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,
+    const pub={hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),
      receipts:[],media_receipts:[],media_count:imageCount,
      media_sha256:media?.map(f=>f.sha256)||[],partHashes:parts.map(textHash),status:'sending'};
     state.published[m.id]=pub;this.relay.save();
@@ -186,6 +203,7 @@ export class DotMirror{
       const receipts=await this.relay.sendMedia(this.relay.peerId||OWNER,media,caption,reply.receipt,{source_message_id:m.id},captionEntities);
       if(!Array.isArray(receipts)||!receipts.length||receipts.some(id=>!/^[1-9][0-9]*$/.test(String(id))))throw Error('media_provider_receipt_unknown');
       pub.media_receipts=receipts.map(String);pub.receipts.push(...pub.media_receipts);
+      if(topic.known)for(const receipt of pub.media_receipts)observeGroupMessage(this.relay.state,{messageId:receipt,topicId:topic.topicId});
       this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,kind:'media',part:0,receipts:pub.media_receipts};
       this.relay.save();
      }catch{state.blocked='delivery_unknown';this.relay.save();return {status:state.blocked};}
@@ -194,7 +212,8 @@ export class DotMirror{
      const key='mirror:'+m.id+':'+n;
      if(this.relay.state.outgoing[key]){state.blocked='delivery_requires_review';this.relay.save();return {status:state.blocked};}
      this.relay.state.outgoing[key]={status:'send_uncertain',source_id:m.id,part:n};this.relay.save();
-     try{const receipt=await this.relay.send(this.relay.peerId||OWNER,parts[n],reply.receipt,formatted[n]);pub.receipts.push(String(receipt));this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
+     const target=autoChain&&pub.receipts.length?pub.receipts.at(-1):reply.receipt;
+     try{const receipt=await this.relay.send(this.relay.peerId||OWNER,parts[n],target,formatted[n]);pub.receipts.push(String(receipt));if(topic.known)observeGroupMessage(this.relay.state,{messageId:String(receipt),topicId:topic.topicId});this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
      catch{state.blocked='delivery_unknown';this.relay.save();return {status:state.blocked};}
     }
     pub.status='accepted';state.cursor=m.id;delete state.candidates[m.id];changed=true;this.relay.save();
