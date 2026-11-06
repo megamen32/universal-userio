@@ -53,6 +53,6 @@ test('bounds reject 11 photos, oversize single image and oversized album before 
 test('provider receipt extraction accepts one photo or exact album IDs, never invents delivery',()=>{
  assert.deepEqual(dotTelegramMediaReceipts({id:81},1),['81']);
  assert.deepEqual(dotTelegramMediaReceipts([{id:81},{id:82}],2),['81','82']);
- for(const x of [null,[],[{}],[{id:'0'}],[{id:1},{id:1}],{id:'not-id'},[{id:1},{id:2},{id:3}]])
+ for(const x of [null,[],[{}],[{id:81}],[{id:'0'}],[{id:1},{id:1}],{id:'not-id'},[{id:1},{id:2},{id:3}]])
   assert.throws(()=>dotTelegramMediaReceipts(x,2));
 });

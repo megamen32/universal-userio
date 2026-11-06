@@ -45,7 +45,7 @@ export function dotTelegramMediaParams(media,caption,replyReceipt,CustomFile,ent
 export function dotTelegramMediaReceipts(sent,expectedCount){
  const messages=Array.isArray(sent)?sent:[sent];
  if(!Number.isSafeInteger(expectedCount)||expectedCount<1||expectedCount>MAX_IMAGES
-  ||messages.length<1||messages.length>expectedCount)throw Error('dot_media_receipt_unknown');
+  ||messages.length!==expectedCount)throw Error('dot_media_receipt_unknown');
  const ids=messages.map(m=>m?.id);
  if(ids.some(id=>!ID.test(String(id))||!Number.isSafeInteger(Number(id)))
   ||new Set(ids.map(String)).size!==ids.length)throw Error('dot_media_receipt_unknown');
