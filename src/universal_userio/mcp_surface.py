@@ -10,6 +10,7 @@ from typing import Any
 from .adapters import AdapterNotSupported, UnifiedChannels
 from .contracts import InboxMessage, UserPrincipal
 from .delivery_receipt import delivery_fields
+from .mcp_annotations import tool_annotations
 from .token_permissions import READ_ONLY_TOOLS, MEETING_RECORDING_TOOLS
 from .service import UserIOService
 from .store import SQLiteUserIOStore
@@ -30,8 +31,7 @@ class ToolSpec:
 
     def as_dict(self) -> dict[str, Any]:
         result = {"name": self.name, "description": self.description, "inputSchema": self.input_schema}
-        if self.name in {"search", "fetch", "userio.channels.search", "userio.workspace.poll"}:
-            result["annotations"] = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+        result["annotations"] = tool_annotations(self.name)
         if self.name == "search":
             result["outputSchema"] = {"type": "object", "properties": {"results": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "url": {"type": "string"}}, "required": ["id", "title", "url"]}}}, "required": ["results"]}
         elif self.name == "fetch":

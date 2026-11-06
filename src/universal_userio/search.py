@@ -336,11 +336,14 @@ def _fuzzy_message_rows(store: Any, where: list[str], args: list[object], tokens
 
 
 def text_coverage(store: Any, *, user_id: str) -> dict[str, Any]:
-    messages = store._connection.execute(
-        "SELECT COUNT(*) FROM messages WHERE user_id=? AND deleted_at IS NULL"
-        " AND length(trim(coalesce(body,'')))>0", (user_id,)).fetchone()[0]
-    conversations = store._connection.execute(
-        "SELECT COUNT(*) FROM conversations WHERE user_id=?", (user_id,)).fetchone()[0]
+    # All use of the shared connection must follow the same lock order as
+    # ingress; SQLite callbacks can otherwise deadlock against a writer.
+    with store._lock:
+        messages = store._connection.execute(
+            "SELECT COUNT(*) FROM messages WHERE user_id=? AND deleted_at IS NULL"
+            " AND length(trim(coalesce(body,'')))>0", (user_id,)).fetchone()[0]
+        conversations = store._connection.execute(
+            "SELECT COUNT(*) FROM conversations WHERE user_id=?", (user_id,)).fetchone()[0]
     return {"messages": int(messages), "conversations": int(conversations), "exact": True}
 
 
