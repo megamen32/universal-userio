@@ -17,8 +17,8 @@ function fixture(options={}){
    }
    return {ok:true,room:ROOM,cursor:rows.at(-1)?.id,messages:rows};
   },
-  send:async(owner,text,replyTo=null)=>{
-   sends.push(replyTo==null?{owner,text}:{owner,text,replyTo});
+  send:async(owner,text,replyTo=null,entities=[])=>{
+   sends.push({...replyTo==null?{owner,text}:{owner,text,replyTo},...(entities.length?{entities}:{})});
    if(options.sendError)throw Error('unknown');
    return options.numericReceipts?String(sends.length):'tg'+sends.length;
   },
@@ -62,6 +62,26 @@ test('mirror waits for inbound echo before inspecting new rows',async()=>{const 
 test('content must stabilize, transient partial is not sent',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('a','assistant','partial')]);await x.mirror.tick();x.advance();x.rows([msg('baseline','user','old'),msg('a','assistant','complete answer')]);await x.mirror.tick();assert.equal(x.sends.length,0);x.advance();await x.mirror.tick();assert.deepEqual(x.sends.map(s=>s.text),['dots:\ncomplete answer'])});
 
 test('mirror sends literal text with no Markdown parsing or link previews',()=>{assert.deepEqual(mirrorSendOptions('**literal** https://example.invalid'),{message:'**literal** https://example.invalid',formattingEntities:[],linkPreview:false})});
+test('mirror sends labelled links as entities offset after the speaker label',async()=>{
+ const x=fixture();await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),{...msg('linked','assistant','Откройте сайт'),entities:[{type:'text_url',offset:9,length:4,url:'https://example.org/path'}]}]);
+ await settle(x);
+ assert.deepEqual(x.sends[0].entities,[{type:'text_url',offset:15,length:4,url:'https://example.org/path'}]);
+});
+test('mirror holds a message when its displayed formatting cannot be mapped',async()=>{
+ const x=fixture();await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),{...msg('bad','assistant','Откройте сайт'),format_incomplete:true}]);
+ await settle(x);
+ assert.equal(x.sends.length,0);
+ assert.equal(x.relay.state.mirror.held.bad.reason,'format_requires_review');
+});
+test('format-only changes are detected without replaying a new message',async()=>{
+ const x=fixture();await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),msg('linked','assistant','сайт')]);await settle(x);
+ x.rows([msg('baseline','user','old'),{...msg('linked','assistant','сайт'),entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]}]);await settle(x);
+ assert.equal(x.sends.length,1);
+ assert.equal(x.relay.state.mirror.held.linked.reason,'format_edit_requires_review');
+});
 test('read errors persist sanitized status, back off and recover without cursor reset',async()=>{
  let time=1000,fail=true,calls=0,saves=0;
  const state={mirror:{baselineAt:1,cursor:'old',published:{},candidates:{},held:{}}};

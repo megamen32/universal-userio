@@ -50,6 +50,31 @@ test('group binding admits only verified human messages in the exact group',asyn
  assert.equal(relay.allowed(e),true);
  for(const change of [{peerId:'-1001'},{private:true},{senderIsBot:true},{senderIsBot:undefined},{senderId:''},{out:true}]) assert.equal(relay.allowed({...e,...change}),false);
 });
+test('group delivery retains formatting without persisting link targets in the journal',async()=>{
+ const x=setup();let observed;
+ const relay=new DotRelay({...x.config,statePath:x.path+'-group-format',room:ROOM,peerId:'-1004352022764',group:true,browserCall:async(action,args)=>{
+  if(action==='dot_send'){observed=args;return {ok:true}};
+  return args.after?{ok:true,room:ROOM,cursor:'new',messages:[{id:'echo',role:'user',text:'Оля:\nсайт',entities:[{type:'text_url',offset:5,length:4,url:'https://example.org/private'}]}]}:{ok:true,room:ROOM,cursor:'old'};
+ }});
+ const e={accountId:event.accountId,peerId:'-1004352022764',senderId:'43',senderIsBot:false,private:false,messageId:'55',text:'Оля:\nсайт',entities:[{type:'text_url',offset:5,length:4,url:'https://example.org/private'}]};
+ assert.equal((await relay.receive(e)).status,'accepted');assert.deepEqual(observed.entities,e.entities);
+ assert.equal(readFileSync(x.path+'-group-format','utf8').includes('https://example.org/private'),false);
+});
+test('a plain echo cannot confirm an originally formatted delivery',async()=>{
+ const x=setup();const relay=new DotRelay({...x.config,statePath:x.path+'-format-loss',room:ROOM,wait:async()=>{},browserCall:async(action,args)=>action==='dot_send'?{ok:true}:args.after?{ok:true,room:ROOM,cursor:'new',messages:[{id:'echo',role:'user',text:'сайт',entities:[]}]}:{ok:true,room:ROOM,cursor:'old'}});
+ const result=await relay.receive({...event,text:'сайт',entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]});
+ assert.equal(result.status,'echo_format_requires_review');
+});
+test('unsupported formatting is journalled once before any browser action',async()=>{
+ const x=setup();const e={...event,entities:[{type:'unsupported',provider_type:'MessageEntitySpoiler',offset:0,length:5}]};
+ const r=await x.relay.receive(e);assert.equal(r.status,'format_requires_review');assert.equal(x.counts().calls,0);
+ assert.equal((await new DotRelay(x.config).receive(e)).duplicate,true);assert.equal(x.counts().calls,0);
+});
+test('unsupported media is recorded against the original message without a send',async()=>{
+ const x=setup();const e={...event,text:'',media:[{kind:'document'}]};
+ const r=x.relay.holdIncoming(e,'media_requires_review');assert.equal(r.status,'media_requires_review');assert.equal(x.counts().calls,0);
+ assert.equal(new DotRelay(x.config).holdIncoming(e,'media_requires_review').duplicate,true);
+});
 test('verified native reply target permits a unique echo when the main list omits reply metadata',async()=>{
  let sent=0;const room=ROOM,target=room+'~'+room+'~CalpicoMessage~target';
  const path=join(mkdtempSync(join(tmpdir(),'dot-reply-')),'state.json');

@@ -525,8 +525,15 @@
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const text=args.operation==="snapshot"?null:args.text;
         if(args.operation==="send"&&(typeof text!=="string"||!text.trim()||text.length>16000))return {ok:false,error:"invalid_dot_text"};
-        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.pageAction,args:[args.url,args.room,text,args.after||null,args.reply_to||null]});
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.pageAction,args:[args.url,args.room,text,args.after||null,args.reply_to||null,args.entities||[]]});
         return r?.result || {ok:false,error:"dot_result_unknown"};
+      }
+      case "dot_media": {
+        if(!root.UserIODot?.mediaAction||!["start","chunk","finish","upload","inspect","send"].includes(args.operation)||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:"invalid_dot_request"};
+        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.mediaAction,args:[args.url,args.room,args.operation,args]});
+        return r?.result||{ok:false,error:"dot_result_unknown"};
       }
       case "gpt_identity": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };

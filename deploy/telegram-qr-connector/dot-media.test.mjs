@@ -28,6 +28,26 @@ test('owner-only album batches images with captions/reply and deduplicates known
  assert.equal(ingress.receive(event(2),photo).duplicate,true);assert.equal(delivered.length,1);
  fs.rmSync(dir,{recursive:true});
 });
+test('the existing media ingress accepts only the exact authorised group and human sender',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-group-media-')),delivered=[];
+ const peer='-1004352022764';
+ const ingress=new DotMediaIngress({stateDir:dir,botAccountId:BOT,allowEvent:e=>e.peerId===peer&&e.private===false&&e.senderIsBot===false&&/^\d+$/.test(e.senderId),download:async()=>jpeg(),deliver:async e=>(delivered.push(e),{status:'accepted'}),schedule:()=>{}});
+ const e={...event(81),peerId:peer,senderId:'43',senderIsBot:false,private:false,text:'Оля:\nФото'};
+ assert.equal(ingress.receive({...e,peerId:'-1009'},{photo:{}}).status,'ignored');
+ assert.equal(ingress.receive(e,{photo:{}}).status,'media_collecting');await ingress.flush('message:81');
+ assert.equal(delivered.length,1);assert.equal(delivered[0].text,'Оля:\nФото');assert.equal(delivered[0].media.length,1);
+ fs.rmSync(dir,{recursive:true});
+});
+test('album captions retain their separate formatted ranges when joined',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-album-format-'));let delivered;
+ const ingress=new DotMediaIngress({stateDir:dir,botAccountId:BOT,download:async()=>jpeg(),deliver:async e=>(delivered=e,{status:'accepted'}),schedule:()=>{}});
+ ingress.receive({...event(1),text:'первая',entities:[{type:'bold',offset:0,length:6}]},{photo:{},groupedId:'7'});
+ ingress.receive({...event(2),text:'сайт',entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]},{photo:{},groupedId:'7'});
+ await ingress.flush('album:7');
+ assert.equal(delivered.text,'первая\n\nсайт');
+ assert.deepEqual(delivered.entities,[{type:'bold',offset:0,length:6},{type:'text_url',offset:8,length:4,url:'https://example.org/'}]);
+ fs.rmSync(dir,{recursive:true});
+});
 test('uncertain album delivery is durable and never replayed after restart',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-media-unknown-'));
  let count=0;const options={stateDir:dir,botAccountId:BOT,download:async()=>jpeg(),deliver:async()=>{count++;return {status:'send_uncertain'};},schedule:()=>{}};

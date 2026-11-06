@@ -14,9 +14,9 @@ export function hasSupportedImage(message){
  return !!(message.photo||message.media?.photo)||/^image\/(?:jpeg|png|webp)$/.test(message.document?.mimeType||message.media?.document?.mimeType||'');
 }
 export class DotMediaIngress{
- constructor({stateDir,botAccountId,download,deliver,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
+ constructor({stateDir,botAccountId,download,deliver,allowEvent=e=>e.peerId===OWNER&&e.senderId===OWNER&&e.private===true,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
   if(!/^telegram:\d+$/.test(botAccountId))throw Error('invalid_bot');
-  Object.assign(this,{stateDir,botAccountId,download,deliver,schedule,now});
+  Object.assign(this,{stateDir,botAccountId,download,deliver,allowEvent,schedule,now});
   this.file=join(stateDir,'dot-media-'+botAccountId.split(':')[1]+'.json');
   this.state=fs.existsSync(this.file)?JSON.parse(fs.readFileSync(this.file,'utf8')):{groups:{}};
   this.pending=new Map();
@@ -25,7 +25,7 @@ export class DotMediaIngress{
  }
  save(){fs.mkdirSync(this.stateDir,{recursive:true,mode:0o700});fs.writeFileSync(this.file+'.tmp',JSON.stringify(this.state),{mode:0o600});fs.renameSync(this.file+'.tmp',this.file);}
  receive(event,message){
-  if(event.accountId!==this.botAccountId||event.peerId!==OWNER||event.senderId!==OWNER||!event.private||event.out||event.isEdit||!hasSupportedImage(message)||!/^[1-9][0-9]*$/.test(event.messageId))return {status:'ignored'};
+  if(event.accountId!==this.botAccountId||!this.allowEvent(event)||event.out||event.isEdit||!hasSupportedImage(message)||!/^[1-9][0-9]*$/.test(event.messageId))return {status:'ignored'};
   const album=message.groupedId?String(message.groupedId):null;
   if(album&&!/^[0-9-]{1,30}$/.test(album))return {status:'invalid_album'};
   const key=album?'album:'+album:'message:'+event.messageId;
@@ -78,9 +78,15 @@ export class DotMediaIngress{
    }
    g.media=media;g.status='prepared';this.save();
    const first=rows[0].event;
-   const text=rows.map(r=>r.event.text||'').filter(Boolean).join('\n\n');
+   let text='';const entities=[];
+   for(const {event} of rows){
+    if(!event.text)continue;
+    if(text)text+='\n\n';
+    const offset=text.length;text+=event.text;
+    for(const entity of event.entities||[])entities.push({...entity,offset:offset+entity.offset});
+   }
    if(text.length>16000)throw Error('album_caption_too_large');
-   const result=await this.deliver({...first,text,replyTo:[...replies][0]||null,media,source_message_ids:g.ids,grouped_id:g.album});
+   const result=await this.deliver({...first,text,entities,replyTo:[...replies][0]||null,media,source_message_ids:g.ids,grouped_id:g.album});
    g.status=result.status;g.echo=result.echo||null;this.save();
    if(result.status==='accepted')for(const file of media){try{fs.unlinkSync(file.path);}catch{}}
   }catch(error){g.status='media_requires_review';g.reason=/^[a-z0-9_]+$/.test(error?.message||'')?error.message:'media_preparation_failed';this.save();}

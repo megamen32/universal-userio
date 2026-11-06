@@ -6,6 +6,8 @@ import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from ".
 import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding} from "./dot-group-binding.mjs";
 import {createGroupBotSender} from "./dot-group-send.mjs";
+import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
+import {routeGroupDotEvent} from "./dot-group-receive.mjs";
 import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
 import {claimNotAccepted,validateReplayReply} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
@@ -978,7 +980,7 @@ async function initializeGroupRelay(binding,identity){
  const decryptedBot=spawnSync('age',['--decrypt','-i',keyPath,botPath],{encoding:'utf8',maxBuffer:16384});
  if(decryptedBot.status!==0)throw Error('group_bot_credential_unavailable');
  const providerSend=createGroupBotSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
- const send=async(peer,text,replyTo)=>{boundLive();return providerSend(peer,text,replyTo);};
+ const send=async(peer,text,replyTo,entities)=>{boundLive();return providerSend(peer,text,replyTo,entities);};
  const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send});
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;
@@ -991,10 +993,23 @@ function relayGroupMessage(client,accountId,self,message,chatKey,isEdit){
   const sender=await message.getSender();
   if(!sender||sender.className!=='User'||sender.bot===true||!sender.id)return;
   const text=String(message.message||'');
-  if(!text.trim()||sensitiveText(text)||message.media)return;
+  const kind=groupMediaKind(message);
+  if((!text.trim()&&kind==='text')||sensitiveText(text))return;
   const relay=await getGroupRelay(binding);
-  const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text,replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
-  await relay.prepareReceive(event,async()=> '[Контекст недоступен]');
+  const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text:groupDotText(sender,message),entities:groupDotEntities(sender,message),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+  if(kind==='image'&&!dotMediaIngresses.has(accountId)){
+   const identity=JSON.stringify(binding);
+   dotMediaIngresses.set(accountId,new DotMediaIngress({stateDir,botAccountId:accountId,
+    allowEvent:e=>e.peerId===binding.peerId&&e.private===false&&e.senderIsBot===false&&/^[1-9][0-9]*$/.test(e.senderId),
+    download:async source=>{
+     if(JSON.stringify(readGroupBinding(groupBindingPath))!==identity)throw Error('group_binding_changed');
+     return client.downloadMedia(source,{progressCallback:(received,total)=>{if(Number(received)>MAX_IMAGE_BYTES||Number(total)>MAX_IMAGE_BYTES)throw Error('image_size_refused');}});
+    },
+    deliver:prepared=>relay.prepareReceive(prepared,async()=> '[Контекст недоступен]'),
+   }));
+  }
+  const ingress=dotMediaIngresses.get(accountId)||{waitForPending:async()=>{}};
+  await routeGroupDotEvent({event,message,relay,ingress});
  })().catch(()=>console.error('group dot relay requires review'));
  return true;
 }
