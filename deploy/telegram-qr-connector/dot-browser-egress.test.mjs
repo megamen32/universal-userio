@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import fs from 'node:fs';
 import {webcrypto,createHash} from 'node:crypto';
 import {parseEvaluation} from './dot-browser-mcp.mjs';
-import {dotMediaPageAction,readDotMediaThroughBrowser} from './dot-browser-egress.mjs';
+import {dotMediaPageAction,readDotMediaThroughBrowser,readDotMediaUsing} from './dot-browser-egress.mjs';
 import {pageAction} from './dot-browser-page.mjs';
 
 const room='a'.repeat(32),url='https://chatgpt.com/dots/11111111-1111-4111-8111-111111111111~bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -12,6 +12,12 @@ const id=room+'~'+room+'~CalpicoMessage~photo1',remote='https://chatgpt.com/back
 const file=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.alloc(350*1024,23)]);
 const fingerprint=s=>createHash('sha256').update(s).digest('hex');
 const pack=x=>JSON.stringify({result:{content:[{type:'text',text:String.fromCharCode(96).repeat(3)+'json\n'+JSON.stringify(x)+'\n'+String.fromCharCode(96).repeat(3)}]}});
+test('bounded document read preserves its name and verifies bytes',async()=>{
+ const bytes=Buffer.from('%PDF-fixture'),sha256=createHash('sha256').update(bytes).digest('hex'),fp='a'.repeat(64),nonce='12345678-1234-1234-1234-123456789abc';
+ const evaluate=async(action,args)=>action==='start'?{ok:true,nonce,count:1,items:[{kind:'document',filename:'договор.pdf',mime:'application/pdf',size:bytes.length,sha256,fingerprint:fp}]}:action==='chunk'?{ok:true,nonce,index:0,offset:0,size:bytes.length,sha256,data:bytes.toString('base64')}:{ok:true};
+ const result=await readDotMediaUsing(evaluate,{source_id:id,expected_fingerprints:[fp]},room);
+ assert.equal(result[0].filename,'договор.pdf');assert.equal(result[0].kind,'document');assert.deepEqual(result[0].bytes,bytes);
+});
 test('extension and existing browser use the same fixed media reader',()=>{
  const self={};vm.runInNewContext(fs.readFileSync(new URL('../../extensions/vk-inbox/lib/dot-media-read.js',import.meta.url),'utf8'),{self});
  assert.equal(self.UserIODotRead.pageAction.toString(),dotMediaPageAction.toString());

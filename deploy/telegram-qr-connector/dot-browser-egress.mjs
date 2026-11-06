@@ -149,9 +149,13 @@ export async function readDotMediaUsing(evaluate,args,room){
    const bytes=Buffer.concat(chunks,item.size);
    if(createHash('sha256').update(bytes).digest('hex')!==item.sha256)
     throw Error('dot_media_digest_mismatch');
-   const kind=imageKind(bytes);
-   files.push({filename:'dot-'+(i+1)+'-'+item.sha256.slice(0,16)+'.'+kind.ext,
-    bytes,sha256:item.sha256,mime:kind.mime});
+   if(item.kind==='document'){
+    if(typeof item.filename!=='string'||!item.filename||item.filename.length>255||/[\/\\\u0000-\u001f]/.test(item.filename)||typeof item.mime!=='string'||!/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(item.mime))throw Error('dot_media_metadata_invalid');
+    files.push({kind:'document',filename:item.filename,bytes,sha256:item.sha256,mime:item.mime});
+   }else{
+    const kind=imageKind(bytes);
+    files.push({filename:'dot-'+(i+1)+'-'+item.sha256.slice(0,16)+'.'+kind.ext,bytes,sha256:item.sha256,mime:kind.mime});
+   }
    albumBytes+=bytes.length;
   }
  }finally{

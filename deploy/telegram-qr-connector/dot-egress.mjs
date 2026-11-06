@@ -13,17 +13,20 @@ export function verifyDotTelegramMedia(media){
   throw Error('invalid_dot_media_group');
  let total=0;
  media.forEach((entry,i)=>{
-  if(!entry||typeof entry.filename!=='string'||!NAME.test(entry.filename)
-   ||Number(entry.filename.match(NAME)[1])!==i+1||!DIGEST.test(entry.sha256)
+  if(!entry||typeof entry.filename!=='string'||!entry.filename||entry.filename.length>255||/[\/\\\u0000-\u001f]/.test(entry.filename)||!DIGEST.test(entry.sha256)
    ||!Buffer.isBuffer(entry.bytes))throw Error('dot_media_descriptor_invalid');
   const bytes=entry.bytes;
   total+=bytes.length;
   if(!bytes.length||bytes.length>MAX_IMAGE_BYTES||total>MAX_ALBUM_BYTES)
    throw Error('dot_media_size_refused');
   const digest=createHash('sha256').update(bytes).digest('hex');
-  const kind=imageKind(bytes);
-  if(digest!==entry.sha256||entry.filename!=='dot-'+(i+1)+'-'+digest.slice(0,16)+'.'+kind.ext
-    ||entry.mime!==kind.mime)throw Error('dot_media_identity_changed');
+  if(digest!==entry.sha256)throw Error('dot_media_identity_changed');
+  if(entry.kind==='document'){
+   if(typeof entry.mime!=='string'||!/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(entry.mime))throw Error('dot_media_identity_changed');
+  }else{
+   const kind=imageKind(bytes),match=entry.filename.match(NAME);
+   if(!match||Number(match[1])!==i+1||entry.filename!=='dot-'+(i+1)+'-'+digest.slice(0,16)+'.'+kind.ext||entry.mime!==kind.mime)throw Error('dot_media_identity_changed');
+  }
  });
  return media.length;
 }
@@ -36,7 +39,7 @@ export function dotTelegramMediaParams(media,caption,replyReceipt,CustomFile,ent
   throw Error('invalid_dot_media_reply_receipt');
  const files=media.map(entry=>new CustomFile(entry.filename,entry.bytes.length,'',entry.bytes));
  return {file:files.length===1?files[0]:files,caption,formattingEntities:telegramEntities(caption,entities,api),
-  forceDocument:false,...(replyReceipt==null?{}:{replyTo:Number(replyReceipt)})};
+  forceDocument:media.some(m=>m.kind==='document'),...(replyReceipt==null?{}:{replyTo:Number(replyReceipt)})};
 }
 
 export function dotTelegramMediaReceipts(sent,expectedCount){

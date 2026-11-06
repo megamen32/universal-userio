@@ -21,3 +21,9 @@ test('image caption keeps clickable link and verifies Telegram returned it',asyn
  const send=createGroupBotMediaSender({token,peerId,botId,fetcher:async(_url,opts)=>{count++;const entities=JSON.parse(opts.body.get('caption_entities'));assert.deepEqual(entities,[{type:'text_link',offset:0,length:4,url:'https://example.org/'}]);return {ok:true,json:async()=>({ok:true,result:{message_id:22,chat:{id:Number(peerId)},from:{id:Number(botId)},caption_entities:entities}})}}});
  assert.deepEqual(await send(peerId,media,'Сайт',null,[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]),['22']);assert.equal(count,1);
 });
+test('a Dot document reaches the group with its original name and provider receipt',async()=>{
+ const bytes=Buffer.from('%PDF-fixture'),sha256=createHash('sha256').update(bytes).digest('hex');
+ const media=[{kind:'document',filename:'договор.pdf',bytes,sha256,mime:'application/pdf'}];let count=0;
+ const send=createGroupBotMediaSender({token,peerId,botId,fetcher:async(url,opts)=>{count++;assert.match(url,/\/sendDocument$/);assert.equal(opts.body.get('document').name,'договор.pdf');return {ok:true,json:async()=>({ok:true,result:{message_id:23,chat:{id:Number(peerId)},from:{id:Number(botId)}}})}}});
+ assert.deepEqual(await send(peerId,media,'Документ'),['23']);assert.equal(count,1);
+});

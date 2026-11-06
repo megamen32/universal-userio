@@ -33,11 +33,11 @@ export function createGroupBotMediaSender({token,peerId,botId,fetcher=fetch}){
   verifyDotTelegramMedia(media);const formatted=formatEntities(caption,entities);
   const form=new FormData();form.set('chat_id',peerId);
   if(replyTo!=null)form.set('reply_parameters',JSON.stringify({message_id:Number(replyTo)}));
-  let method;
-  if(media.length===1){method='sendPhoto';form.set('photo',new Blob([media[0].bytes],{type:media[0].mime}),media[0].filename);form.set('caption',caption);if(formatted.length)form.set('caption_entities',JSON.stringify(formatted));}
+  let method;const documents=media.some(m=>m.kind==='document');
+  if(media.length===1){method=documents?'sendDocument':'sendPhoto';form.set(documents?'document':'photo',new Blob([media[0].bytes],{type:media[0].mime}),media[0].filename);form.set('caption',caption);if(formatted.length)form.set('caption_entities',JSON.stringify(formatted));}
   else{
    method='sendMediaGroup';
-   form.set('media',JSON.stringify(media.map((file,i)=>({type:'photo',media:'attach://file'+i,...(i===0?{caption,...(formatted.length?{caption_entities:formatted}:{})}:{})}))));
+   form.set('media',JSON.stringify(media.map((file,i)=>({type:documents?'document':'photo',media:'attach://file'+i,...(i===0?{caption,...(formatted.length?{caption_entities:formatted}:{})}:{})}))));
    media.forEach((file,i)=>form.set('file'+i,new Blob([file.bytes],{type:file.mime}),file.filename));
   }
   let response;try{response=await fetcher('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',body:form,signal:AbortSignal.timeout(60000)});}catch{throw Error('group_media_unknown');}
