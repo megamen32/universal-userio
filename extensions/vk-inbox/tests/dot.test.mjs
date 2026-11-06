@@ -156,3 +156,18 @@ test('document upload readiness uses its file name rather than an image preview'
  await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});await self.UserIODot.mediaAction(url,room,'upload',{transfer_id});
  assert.equal((await self.UserIODot.mediaAction(url,room,'inspect',{transfer_id})).ready,true);
 });
+test('a backgrounded Dot composer verifies exact text via textContent before sending',async()=>{
+ const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null,classList:{contains:()=>true},querySelector:s=>s==='.message-text'?{innerText:'old'}:null,querySelectorAll:()=>[]};let clicks=0;
+ const editor={innerText:'',textContent:'',isConnected:true,getClientRects:()=>[1],focus:()=>{},closest:()=>null};
+ const button={getClientRects:()=>[1],getAttribute:()=> 'Send',disabled:false,click:()=>clicks++};
+ const document={querySelector:()=>null,querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:s==='button'?[button]:[],execCommand:(_kind,_ui,value)=>(editor.textContent=value,true)};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:globalThis.crypto,setTimeout:fn=>fn()});
+ assert.equal((await self.UserIODot.pageAction(url,room,'точный текст',null)).ok,true);assert.equal(clicks,1);
+});
+test('a backgrounded existing draft is never overwritten',async()=>{
+ const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null,classList:{contains:()=>true},querySelector:s=>s==='.message-text'?{innerText:'old'}:null,querySelectorAll:()=>[]};let writes=0;
+ const editor={innerText:'',textContent:'черновик',getClientRects:()=>[1]};
+ const document={querySelector:()=>null,querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:[],execCommand:()=>{writes++;return true}};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:globalThis.crypto});
+ assert.equal((await self.UserIODot.pageAction(url,room,'новый текст',null)).error,'existing_draft');assert.equal(writes,0);
+});

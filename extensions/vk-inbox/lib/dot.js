@@ -75,7 +75,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       return {ok:true,room,messages:messages.slice(index+1),cursor:messages.at(-1)?.id};
     }
     if(editors.length!==1) return {ok:false,error:'ambiguous_composer'};
-    if(editors[0].innerText.trim()) return {ok:false,error:'existing_draft'};
+    if((editors[0].innerText||editors[0].textContent||'').trim()) return {ok:false,error:'existing_draft'};
     const originalComposer=editors[0].closest?.('[data-role=composer]');
     if(originalComposer?.querySelectorAll('img')?.length||originalComposer?.querySelector('input[type=file]')?.files?.length)return {ok:false,error:'existing_attachments'};
     if(document.querySelector?.('.reply-chain-panel[role="dialog"]')) return {ok:false,error:'existing_reply_panel'};
@@ -94,7 +94,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       if(targetRows.length!==1||targetRows[0].dataset.messageId!==replyTo)return {ok:false,error:'reply_chain_target_ambiguous'};
       scope=ownedPanel;
       editors=[...scope.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
-      if(editors.length!==1||editors[0].innerText.trim())return {ok:false,error:'reply_composer_unverified'};
+      if(editors.length!==1||(editors[0].innerText||editors[0].textContent||'').trim())return {ok:false,error:'reply_composer_unverified'};
     }
     const editor=editors[0];
     const buttons=[...scope.querySelectorAll('button')].filter(e=>e.getClientRects().length && ['Отправить','Send'].includes(e.getAttribute('aria-label')));
@@ -131,7 +131,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       if(location.href!==url)return {ok:false,error:'navigation_requires_review'};
       const currentEditors=[...scope.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
       if(editor.isConnected===false || currentEditors.length!==1 || currentEditors[0]!==editor)return {ok:false,error:'draft_requires_review',draft_issue:'composer_changed'};
-      if(editor.innerText.trim()!==text.trim())return {ok:false,error:'draft_requires_review',draft_issue:'text_changed'};
+      if((editor.innerText||editor.textContent||'').trim()!==text.trim())return {ok:false,error:'draft_requires_review',draft_issue:'text_changed'};
       if(entities.some(e=>e.type==='text_url'&&![...(editor.querySelectorAll?.('a')||[])].some(a=>{try{return new URL(a.getAttribute('href'),location.href).href===e.url}catch{return false}})))return {ok:false,error:'draft_requires_review',draft_issue:'link_missing'};
       ready=[...scope.querySelectorAll('button')].filter(e=>e.getClientRects().length && ['Отправить','Send'].includes(e.getAttribute('aria-label')));
       if(ready.length===1 && !ready[0].disabled)break;
@@ -146,7 +146,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
     }
     ready[0].click();
     await new Promise(resolve=>setTimeout(resolve,100));
-    if(ownedPanel&&!editor.innerText.trim()){
+    if(ownedPanel&&!(editor.innerText||editor.textContent||'').trim()){
       const close=[...ownedPanel.querySelectorAll('button')].find(b=>['Закрыть ветку ответов','Close reply thread','Close replies'].includes(b.getAttribute('aria-label')));
       close?.click();
     }
@@ -205,7 +205,7 @@ async function mediaAction(url,room,operation,args={}){
       scope=panels[0];
     }
     const editors=[...scope.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
-    if(editors.length!==1||editors[0].innerText.trim())return fail('existing_or_ambiguous_draft');
+    if(editors.length!==1||(editors[0].innerText||editors[0].textContent||'').trim())return fail('existing_or_ambiguous_draft');
     const composer=editors[0].closest?.('[data-role=composer]');
     if(!composer||composer.querySelectorAll('img').length)return fail('existing_attachments');
     const inputs=[...composer.querySelectorAll('input[type="file"]')];
@@ -238,7 +238,7 @@ async function mediaAction(url,room,operation,args={}){
     const ready=images.length>=expectedImages&&seen&&!busy&&buttons.length===1&&!buttons[0].disabled;
     if(operation==='inspect')return {ok:true,ready};
     if(!ready)return fail('upload_not_ready');
-    if(editor.innerText.trim())return fail('existing_draft');
+    if((editor.innerText||editor.textContent||'').trim())return fail('existing_draft');
     const text=typeof args.text==='string'?args.text:'';
     if(existing.text!==undefined&&existing.text!==text)return fail('caption_changed');
     if(text){
@@ -262,7 +262,7 @@ async function mediaAction(url,room,operation,args={}){
         }
       }
       editor.focus();if(!document.execCommand(command,false,value))return fail('insert_failed');await new Promise(resolve=>setTimeout(resolve,100));
-      if(editor.innerText.trim()!==text.trim())return fail('caption_unverified');
+      if((editor.innerText||editor.textContent||'').trim()!==text.trim())return fail('caption_unverified');
       if(entities.some(e=>e.type==='text_url'&&![...(editor.querySelectorAll?.('a')||[])].some(a=>{try{return new URL(a.getAttribute('href'),location.href).href===e.url}catch{return false}})))return fail('caption_link_missing');
     }
     if(location.href!==url||buttons[0].disabled)return fail('send_not_ready');
