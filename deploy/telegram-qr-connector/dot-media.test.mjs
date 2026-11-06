@@ -6,6 +6,14 @@ import {fileChooserUid,validateMediaFiles,mediaPageAction} from './dot-browser-m
 const OWNER='111111111',BOT='telegram:333333333';
 const event=id=>({accountId:BOT,peerId:OWNER,senderId:OWNER,private:true,out:false,isEdit:false,messageId:String(id),text:''});
 const jpeg=()=>Buffer.from([255,216,255,224,1,2,3,4]);
+test('an image sent as a document preserves its original filename',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-document-image-')),delivered=[];
+ const ingress=new DotMediaIngress({stateDir:dir,botAccountId:BOT,allowDocuments:true,download:async()=>Buffer.from([137,80,78,71,13,10,26,10]),deliver:async e=>(delivered.push(e),{status:'accepted'}),schedule:()=>{}});
+ const message={media:{className:'MessageMediaDocument',document:{mimeType:'image/png',attributes:[{fileName:'original.png'}]}}};
+ ingress.receive(event(33),message);await ingress.flush('message:33');
+ assert.equal(delivered.length,1);assert.equal(delivered[0].media[0].filename,'original.png');assert.equal(delivered[0].media[0].mime,'image/png');
+ fs.rmSync(dir,{recursive:true});
+});
 test('only bounded JPEG PNG WEBP images accepted, never arbitrary files',()=>{
  assert.equal(imageKind(jpeg()).mime,'image/jpeg');
  assert.equal(imageKind(Buffer.from([137,80,78,71,13,10,26,10])).ext,'png');

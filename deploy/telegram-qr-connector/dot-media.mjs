@@ -63,7 +63,8 @@ export class DotMediaIngress{
    const media=[];let total=0;
    for(const {event,message} of rows){
     const bytes=Buffer.from(await this.download(message));
-    const image=hasSupportedImage(message),document=message.document||message.media?.document;
+    const document=message.document||message.media?.document;
+    const image=hasSupportedImage(message)&&!(this.allowDocuments&&document);
     let kind,filename;
     if(image)kind=imageKind(bytes);
     else{

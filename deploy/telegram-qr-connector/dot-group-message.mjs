@@ -3,8 +3,8 @@ import {forwardOrigin,forwardLine} from './forward-origin.mjs';
 // Preserve provider-supplied identity without treating it as trusted markup.
 const line=value=>String(value||'').replace(/[\r\n\t\u0000-\u001f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,200);
 export function groupMediaKind(message){
- if(hasSupportedImage(message))return 'image';
  if(hasSupportedDocument(message))return 'document';
+ if(hasSupportedImage(message))return 'image';
  if(!message?.media||['MessageMediaEmpty','MessageMediaWebPage'].includes(message.media.className))return 'text';
  return 'other_media';
 }

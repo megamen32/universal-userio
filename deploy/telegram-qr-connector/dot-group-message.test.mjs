@@ -19,6 +19,7 @@ test('a link preview is ordinary text, while pictures and other files are distin
  assert.equal(groupMediaKind({message:'ссылка',media:{className:'MessageMediaWebPage'}}),'text');
  assert.equal(groupMediaKind({message:'',media:{className:'MessageMediaPhoto',photo:{}}}),'image');
  assert.equal(groupMediaKind({message:'',media:{className:'MessageMediaDocument',document:{mimeType:'application/pdf'}}}),'document');
+ assert.equal(groupMediaKind({message:'',media:{className:'MessageMediaDocument',document:{mimeType:'image/png',attributes:[{fileName:'original.png'}]}}}),'document');
 });
 test('forward provenance is visible and unavailable names are not invented',()=>{
  assert.equal(groupDotText({firstName:'Оля',id:43},{message:'Текст',fwdFrom:{fromName:'Иван'}}),'Оля:\n[Переслано от: Иван]\nТекст');
