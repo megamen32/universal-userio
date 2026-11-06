@@ -1273,6 +1273,13 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             raise AdapterNotSupported(
                 f"Telegram attachment {attachment_index} for message {original_file_ref!r} is not available locally"
             )
+        bridge_context = None
+        if '|' not in file_ref:
+            chat = self._store.conversation(str(message.get('conversation_id') or ''), user_id=self._user_id) or {}
+            account_ref = str(chat.get('account_ref') or '')
+            peer_id = str(chat.get('peer_id') or '')
+            if re.fullmatch(r'telegram:[0-9]+', account_ref) and file_ref.rsplit(':', 1)[0] == peer_id:
+                bridge_context = {'account_id': account_ref}
         return _download_via_bridge(
             channel="telegram",
             message=message,
@@ -1284,6 +1291,7 @@ class TelegramChannelAdapter(StoredChannelAdapter):
             message_field="message_id",
             runner=self._runner,
             max_bytes=max_bytes,
+            bridge_context=bridge_context,
         )
 
     def download_for_ai(self, *, file_ref: str, max_bytes: int,
