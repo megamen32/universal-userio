@@ -535,6 +535,13 @@
         const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.mediaAction,args:[args.url,args.room,args.operation,args]});
         return r?.result||{ok:false,error:"dot_result_unknown"};
       }
+      case "dot_media_read": {
+        if(!root.UserIODotRead?.pageAction||!["start","chunk","finish"].includes(args.operation)||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:"invalid_dot_request"};
+        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODotRead.pageAction,args:[args.url,args.room,args.operation,args]});
+        return r?.result||{ok:false,error:"dot_result_unknown"};
+      }
       case "gpt_identity": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
         return root.ChatGPT.identity();

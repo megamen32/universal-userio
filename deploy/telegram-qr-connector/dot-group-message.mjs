@@ -1,8 +1,10 @@
-import {hasSupportedImage} from './dot-media.mjs';
+import {hasSupportedImage,hasSupportedDocument} from './dot-media.mjs';
+import {forwardOrigin,forwardLine} from './forward-origin.mjs';
 // Preserve provider-supplied identity without treating it as trusted markup.
 const line=value=>String(value||'').replace(/[\r\n\t\u0000-\u001f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,200);
 export function groupMediaKind(message){
  if(hasSupportedImage(message))return 'image';
+ if(hasSupportedDocument(message))return 'document';
  if(!message?.media||['MessageMediaEmpty','MessageMediaWebPage'].includes(message.media.className))return 'text';
  return 'other_media';
 }
@@ -12,8 +14,9 @@ export function groupDotText(sender,message){
  const name=[line(sender.firstName),line(sender.lastName)].filter(Boolean).join(' ')
   ||(line(sender.username)?'@'+line(sender.username):'Участник Telegram '+id);
  const forwarded=message?.fwdFrom;
- const origin=forwarded&&(line(forwarded.fromName)||line(forwarded.postAuthor));
- const prefix=forwarded?(origin?'[Переслано от '+origin+']\n':'[Переслано; источник недоступен]\n'):'';
+ const origin=forwarded&&forwardOrigin(message);
+ const originText=origin?line(forwardLine(origin)):(forwarded&&line(forwarded.postAuthor)?'Переслано от: '+line(forwarded.postAuthor):'');
+ const prefix=forwarded?(originText?'['+originText+']\n':'[Переслано; источник недоступен]\n'):'';
  return name+':\n'+prefix+String(message?.message||'');
 }
 export function groupDotEntities(sender,message){

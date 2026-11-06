@@ -5,7 +5,7 @@ import { ROOM as DOT_BOARD_ROOM } from "./dot-relay.mjs";
 import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from "./dot-mirror.mjs";
 import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding} from "./dot-group-binding.mjs";
-import {createGroupBotSender} from "./dot-group-send.mjs";
+import {createGroupBotSender,createGroupBotMediaSender} from "./dot-group-send.mjs";
 import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
 import {routeGroupDotEvent} from "./dot-group-receive.mjs";
 import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
@@ -21,6 +21,7 @@ import { appendFileSync, chmodSync, closeSync, createWriteStream, existsSync, fs
 import { Api, TelegramClient } from "telegram";
 import { CustomFile } from 'telegram/client/uploads.js';
 import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';
+import {telegramFormatMatches} from './dot-format.mjs';
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
 // GramJS 2.26 events/index.js exports only Raw/NewMessage(NewEvent); the
@@ -910,23 +911,27 @@ function getDotRelay(accountId,binding) {
       statePath: `${stateDir}/dot-relay-${accountId.split(":")[1]}.json`,
       botAccountId:accountId,agentId:"existing-mac-mini-mcp",tabId:binding.pageId,
       browserCall:dotBrowserCall,
-      send:async(owner,text,replyReceipt=null)=>{
+      send:async(owner,text,replyReceipt=null,entities=[])=>{
         if(owner!==DOT_OWNER)throw new Error("wrong_dot_owner");
         const live=boundLive();
-        const sent=await live.client.sendMessage(BigInt(owner),mirrorSendOptions(text,replyReceipt));
+        const options=mirrorSendOptions(text,replyReceipt,entities,Api);
+        const sent=await live.client.sendMessage(BigInt(owner),options);
         if(!sent?.id)throw new Error("dot_bot_send_unknown");
+        if(!telegramFormatMatches(options.formattingEntities,sent.entities))throw Error('dot_bot_format_unknown');
         return sent.id;
       },
-      sendMedia:async(owner,media,caption,replyReceipt=null,origin=null)=>{
+      sendMedia:async(owner,media,caption,replyReceipt=null,origin=null,entities=[])=>{
         if(owner!==DOT_OWNER||typeof origin?.source_message_id!=='string'
           ||!origin.source_message_id.startsWith(DOT_BOARD_ROOM+'~'+DOT_BOARD_ROOM+'~CalpicoMessage~'))
           throw Error('wrong_dot_media_owner_or_source');
         const live=boundLive();
-        const params=dotTelegramMediaParams(media,caption,replyReceipt,CustomFile);
+        const params=dotTelegramMediaParams(media,caption,replyReceipt,CustomFile,entities,Api);
         // The one existing account-scoped GramJS client performs the operation.
         // The durable mirror journal already claimed this exact source before
         // invocation. Shared backend claim/fence integration is a separate owner.
         const sent=await live.client.sendFile(BigInt(owner),params);
+        const first=Array.isArray(sent)?sent[0]:sent;
+        if(!telegramFormatMatches(params.formattingEntities,first?.entities))throw Error('dot_bot_media_format_unknown');
         return dotTelegramMediaReceipts(sent,media.length);
       },
       edit:async(owner,receipt,text,expectedHash)=>{
@@ -980,8 +985,10 @@ async function initializeGroupRelay(binding,identity){
  const decryptedBot=spawnSync('age',['--decrypt','-i',keyPath,botPath],{encoding:'utf8',maxBuffer:16384});
  if(decryptedBot.status!==0)throw Error('group_bot_credential_unavailable');
  const providerSend=createGroupBotSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
+ const providerSendMedia=createGroupBotMediaSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
  const send=async(peer,text,replyTo,entities)=>{boundLive();return providerSend(peer,text,replyTo,entities);};
- const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send});
+ const sendMedia=async(peer,media,caption,replyTo,origin,entities)=>{boundLive();if(typeof origin?.source_message_id!=='string'||!origin.source_message_id.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_group_media_source');return providerSendMedia(peer,media,caption,replyTo,entities);};
+ const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia});
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;
 }
@@ -997,9 +1004,9 @@ function relayGroupMessage(client,accountId,self,message,chatKey,isEdit){
   if((!text.trim()&&kind==='text')||sensitiveText(text))return;
   const relay=await getGroupRelay(binding);
   const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),text:groupDotText(sender,message),entities:groupDotEntities(sender,message),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
-  if(kind==='image'&&!dotMediaIngresses.has(accountId)){
+  if(['image','document'].includes(kind)&&!dotMediaIngresses.has(accountId)){
    const identity=JSON.stringify(binding);
-   dotMediaIngresses.set(accountId,new DotMediaIngress({stateDir,botAccountId:accountId,
+   dotMediaIngresses.set(accountId,new DotMediaIngress({stateDir,botAccountId:accountId,allowDocuments:true,
     allowEvent:e=>e.peerId===binding.peerId&&e.private===false&&e.senderIsBot===false&&/^[1-9][0-9]*$/.test(e.senderId),
     download:async source=>{
      if(JSON.stringify(readGroupBinding(groupBindingPath))!==identity)throw Error('group_binding_changed');

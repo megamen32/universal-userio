@@ -13,10 +13,13 @@ export function imageKind(bytes){
 export function hasSupportedImage(message){
  return !!(message.photo||message.media?.photo)||/^image\/(?:jpeg|png|webp)$/.test(message.document?.mimeType||message.media?.document?.mimeType||'');
 }
+export function hasSupportedDocument(message){
+ return !!(message?.document||message?.media?.document);
+}
 export class DotMediaIngress{
- constructor({stateDir,botAccountId,download,deliver,allowEvent=e=>e.peerId===OWNER&&e.senderId===OWNER&&e.private===true,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
+ constructor({stateDir,botAccountId,download,deliver,allowDocuments=false,allowEvent=e=>e.peerId===OWNER&&e.senderId===OWNER&&e.private===true,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
   if(!/^telegram:\d+$/.test(botAccountId))throw Error('invalid_bot');
-  Object.assign(this,{stateDir,botAccountId,download,deliver,allowEvent,schedule,now});
+  Object.assign(this,{stateDir,botAccountId,download,deliver,allowDocuments,allowEvent,schedule,now});
   this.file=join(stateDir,'dot-media-'+botAccountId.split(':')[1]+'.json');
   this.state=fs.existsSync(this.file)?JSON.parse(fs.readFileSync(this.file,'utf8')):{groups:{}};
   this.pending=new Map();
@@ -25,7 +28,7 @@ export class DotMediaIngress{
  }
  save(){fs.mkdirSync(this.stateDir,{recursive:true,mode:0o700});fs.writeFileSync(this.file+'.tmp',JSON.stringify(this.state),{mode:0o600});fs.renameSync(this.file+'.tmp',this.file);}
  receive(event,message){
-  if(event.accountId!==this.botAccountId||!this.allowEvent(event)||event.out||event.isEdit||!hasSupportedImage(message)||!/^[1-9][0-9]*$/.test(event.messageId))return {status:'ignored'};
+  if(event.accountId!==this.botAccountId||!this.allowEvent(event)||event.out||event.isEdit||!(hasSupportedImage(message)||(this.allowDocuments&&hasSupportedDocument(message)))||!/^[1-9][0-9]*$/.test(event.messageId))return {status:'ignored'};
   const album=message.groupedId?String(message.groupedId):null;
   if(album&&!/^[0-9-]{1,30}$/.test(album))return {status:'invalid_album'};
   const key=album?'album:'+album:'message:'+event.messageId;
@@ -54,18 +57,31 @@ export class DotMediaIngress{
   g.status='preparing';this.save();
   try{
    const rows=[...pending.events.values()].sort((a,b)=>Number(a.event.messageId)-Number(b.event.messageId));
+   if(new Set(rows.map(r=>r.event.senderId)).size!==1||new Set(rows.map(r=>r.event.peerId)).size!==1)throw Error('album_sender_ambiguous');
    const replies=new Set(rows.map(r=>r.event.replyTo).filter(Boolean));
    if(replies.size>1)throw Error('album_reply_ambiguous');
    const media=[];let total=0;
    for(const {event,message} of rows){
     const bytes=Buffer.from(await this.download(message));
-    const kind=imageKind(bytes);total+=bytes.length;if(total>MAX_ALBUM_BYTES)throw Error('album_size_refused');
+    const image=hasSupportedImage(message),document=message.document||message.media?.document;
+    let kind,filename;
+    if(image)kind=imageKind(bytes);
+    else{
+     if(!this.allowDocuments||!document)throw Error('media_type_refused');
+     const mime=String(document.mimeType||'application/octet-stream');
+     if(!/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(mime))throw Error('media_type_refused');
+     const candidate=(document.attributes||[]).find(a=>typeof a?.fileName==='string')?.fileName||('telegram-'+event.messageId+'.bin');
+     if(!candidate||candidate.length>255||/[\/\\\u0000-\u001f]/.test(candidate)||candidate==='.'||candidate==='..')throw Error('invalid_media_filename');
+     filename=candidate;kind={ext:'bin',mime};
+    }
+    total+=bytes.length;if(total>MAX_ALBUM_BYTES)throw Error('album_size_refused');
     const sha256=createHash('sha256').update(bytes).digest('hex');
-    const filename='tg-'+event.messageId+'-'+sha256.slice(0,16)+'.'+kind.ext;
+    const stagedName='tg-'+event.messageId+'-'+sha256.slice(0,16)+'.'+kind.ext;
+    filename||=stagedName;
     const directory=join(this.stateDir,'dot-media-files');fs.mkdirSync(directory,{recursive:true,mode:0o700});
-    const path=join(directory,filename);
+    const path=join(directory,stagedName);
     const stagedBytes=fs.readdirSync(directory).reduce((total,name)=>{
-      if(!/^tg-[0-9]+-[a-f0-9]{16}\.(jpg|png|webp)$/.test(name))return total;
+      if(!/^tg-[0-9]+-[a-f0-9]{16}\.(jpg|png|webp|bin)$/.test(name))return total;
       const stat=fs.lstatSync(join(directory,name));return total+(stat.isFile()?stat.size:0);
     },0);
     if(stagedBytes+bytes.length>256*1024*1024)throw Error('media_staging_quota');

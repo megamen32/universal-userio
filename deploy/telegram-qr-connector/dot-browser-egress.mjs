@@ -106,16 +106,20 @@ export async function dotMediaPageAction(url,room,action,args={}){
 // Pull only the bounded, already-visible image bytes through the original
 // typed evaluate_script adapter. Never pass provider URLs or auth to Node.
 export async function readDotMediaThroughBrowser(call,page,args,parse,url,room){
- const prefix=room+'~'+room+'~CalpicoMessage~';
- if(!Number.isSafeInteger(page)||page<=0||typeof args.source_id!=='string'
-  ||!args.source_id.startsWith(prefix)||!ID.test(args.source_id)
-  ||!Array.isArray(args.expected_fingerprints)||args.expected_fingerprints.length<1
-  ||args.expected_fingerprints.length>MAX_IMAGES||args.expected_fingerprints.some(h=>!HEX.test(h)))
-  throw Error('invalid_dot_media_read');
+ if(!Number.isSafeInteger(page)||page<=0)throw Error('invalid_dot_media_read');
  const evaluate=async(action,extra={})=>parse(await call('evaluate_script',{
   pageId:page,function:'() => ('+dotMediaPageAction.toString()+')(...'
    +JSON.stringify([url,room,action,{...extra,source_id:args.source_id}])+')'
  }));
+ return readDotMediaUsing(evaluate,args,room);
+}
+export async function readDotMediaUsing(evaluate,args,room){
+ const prefix=room+'~'+room+'~CalpicoMessage~';
+ if(typeof args.source_id!=='string'
+  ||!args.source_id.startsWith(prefix)||!ID.test(args.source_id)
+  ||!Array.isArray(args.expected_fingerprints)||args.expected_fingerprints.length<1
+  ||args.expected_fingerprints.length>MAX_IMAGES||args.expected_fingerprints.some(h=>!HEX.test(h)))
+  throw Error('invalid_dot_media_read');
  let nonce,files,cleanupOk=true;
  try{
   const start=await evaluate('start',{expected_fingerprints:args.expected_fingerprints});

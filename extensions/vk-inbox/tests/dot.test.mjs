@@ -6,7 +6,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 function setup(tabs){
- let calls=[];const self={UserIODot:{pageAction:()=>{},mediaAction:()=>{}}};
+ let calls=[];const self={UserIODot:{pageAction:()=>{},mediaAction:()=>{}},UserIODotRead:{pageAction:()=>{}}};
  const chrome={tabs:{query:async()=>tabs},scripting:{executeScript:async x=>(calls.push(x),[{result:{ok:true,room:'r'}}])}};
  const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');
  vm.runInNewContext(src,{self,chrome,setTimeout,Promise});return {execute:self.Agent.testExecute,calls};
@@ -27,6 +27,10 @@ test('dot action forwards formatting to the selected tab',async()=>{
 });
 test('media commands require the exact Dot tab and use the fixed media function',async()=>{
  const x=setup([{id:1,url}]);const r=await x.execute({action:'dot_media',args:{url,room:'r',operation:'start',transfer_id:'12345678-1234-1234-1234-123456789abc',files:[]}});
+ assert.equal(r.ok,true);assert.equal(x.calls[0].target.tabId,1);assert.equal(x.calls[0].args[2],'start');
+});
+test('media read commands use the same exact tab and fixed reader',async()=>{
+ const x=setup([{id:1,url}]);const r=await x.execute({action:'dot_media_read',args:{url,room:'r',operation:'start',source_id:'r~r~CalpicoMessage~1'}});
  assert.equal(r.ok,true);assert.equal(x.calls[0].target.tabId,1);assert.equal(x.calls[0].args[2],'start');
 });
 test('backgrounded Dot tab retains message text for durable echo matching',async()=>{
@@ -108,4 +112,47 @@ test('media send only clicks when the exact upload is ready and never clicks twi
  await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});await self.UserIODot.mediaAction(url,room,'upload',{transfer_id});
  assert.equal((await self.UserIODot.mediaAction(url,room,'send',{transfer_id,text:'Фото'})).ok,true);
  assert.equal((await self.UserIODot.mediaAction(url,room,'send',{transfer_id,text:'Фото'})).error,'media_send_already_started');assert.equal(clicks,1);
+});
+test('media reply uploads and submits in the verified reply panel',async()=>{
+ const room='fixture',target=room+'~'+room+'~CalpicoMessage~target';let opened=false,clicks=0;
+ const row={dataset:{messageId:target},closest:()=>null,querySelector:s=>s==='[data-action="reply"]'?{click:()=>opened=true}:null};
+ const input={files:[],dispatchEvent:()=>{}},preview={getClientRects:()=>[1]};
+ const composer={outerHTML:'test.png',innerText:'',querySelectorAll:s=>s==='input[type="file"]'?[input]:s==='img'?(input.files.length?[preview]:[]):[],querySelector:()=>null};
+ const editor={innerText:'',getClientRects:()=>[1],closest:()=>composer,focus:()=>{}};
+ const button={getClientRects:()=>[1],getAttribute:()=> 'Send',disabled:false,click:()=>clicks++};
+ const panel={getClientRects:()=>[1],querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:s==='button'?[button]:[]};
+ const document={querySelector:s=>s==='.reply-chain-panel[role="dialog"]'&&opened?panel:null,querySelectorAll:s=>s.startsWith('article')?[row]:s==='.reply-chain-panel[role="dialog"]'?(opened?[panel]:[]):[],execCommand:(_a,_b,v)=>(editor.innerText=v,true)};
+ class Transfer{constructor(){this.files=[];this.items={add:f=>this.files.push(f)}}};class FakeFile{constructor(_parts,name){this.name=name}}
+ const self={};const context={self,document,location:{href:url},URL,TextEncoder,Uint8Array,crypto:globalThis.crypto,atob,Date,DataTransfer:Transfer,File:FakeFile,Event:class{},setTimeout:fn=>fn()};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),context);
+ const bytes=new Uint8Array([1,2,3,4]),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join(''),transfer_id='12345678-1234-1234-1234-123456789abc';
+ await self.UserIODot.mediaAction(url,room,'start',{transfer_id,reply_to:target,files:[{filename:'test.png',mime:'image/png',size:4,sha256:hash}]});
+ await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});
+ assert.equal((await self.UserIODot.mediaAction(url,room,'upload',{transfer_id})).ok,true);
+ const result=await self.UserIODot.mediaAction(url,room,'send',{transfer_id,text:'Фото'});assert.equal(result.ok,true);assert.equal(result.verified_reply_to,target);assert.equal(clicks,1);
+});
+test('media caption keeps its clickable link in the Dot composer',async()=>{
+ const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null},input={files:[],dispatchEvent:()=>{}};let html='';
+ const composer={outerHTML:'test.png',innerText:'',querySelectorAll:s=>s==='input[type="file"]'?[input]:s==='img'?(input.files.length?[{getClientRects:()=>[1]}]:[]):[],querySelector:()=>null};
+ const editor={innerText:'',getClientRects:()=>[1],closest:()=>composer,focus:()=>{},querySelectorAll:s=>s==='a'?[{getAttribute:()=> 'https://example.org/'}]:[]};
+ const button={getClientRects:()=>[1],getAttribute:()=> 'Send',disabled:false,click:()=>{}};
+ const document={querySelector:()=>null,querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:s==='button'?[button]:[],execCommand:(kind,_ui,value)=>{html=value;editor.innerText='сайт';return kind==='insertHTML'}};
+ class Transfer{constructor(){this.files=[];this.items={add:f=>this.files.push(f)}}};class FakeFile{constructor(_parts,name){this.name=name}}
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,Uint8Array,crypto:globalThis.crypto,atob,Date,DataTransfer:Transfer,File:FakeFile,Event:class{},setTimeout:fn=>fn()});
+ const bytes=new Uint8Array([1,2,3,4]),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join(''),transfer_id='12345678-1234-1234-1234-123456789abc';
+ await self.UserIODot.mediaAction(url,room,'start',{transfer_id,text:'сайт',entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}],files:[{filename:'test.png',mime:'image/png',size:4,sha256:hash}]});
+ await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});await self.UserIODot.mediaAction(url,room,'upload',{transfer_id});
+ const result=await self.UserIODot.mediaAction(url,room,'send',{transfer_id,text:'сайт'});assert.equal(result.ok,true);assert.match(html,/<a href="https:\/\/example\.org\/">сайт<\/a>/);
+});
+test('document upload readiness uses its file name rather than an image preview',async()=>{
+ const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null},input={files:[],dispatchEvent:()=>{}};
+ const composer={outerHTML:'договор.pdf',innerText:'',querySelectorAll:s=>s==='input[type="file"]'?[input]:[],querySelector:()=>null};
+ const editor={innerText:'',getClientRects:()=>[1],closest:()=>composer};const button={getClientRects:()=>[1],getAttribute:()=> 'Send',disabled:false};
+ const document={querySelector:()=>null,querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:s==='button'?[button]:[]};
+ class Transfer{constructor(){this.files=[];this.items={add:f=>this.files.push(f)}}};class FakeFile{constructor(_parts,name){this.name=name}}
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,Uint8Array,crypto:globalThis.crypto,atob,Date,DataTransfer:Transfer,File:FakeFile,Event:class{}});
+ const bytes=new Uint8Array([1,2,3,4]),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join(''),transfer_id='12345678-1234-1234-1234-123456789abc';
+ await self.UserIODot.mediaAction(url,room,'start',{transfer_id,files:[{filename:'договор.pdf',mime:'application/pdf',size:4,sha256:hash}]});
+ await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});await self.UserIODot.mediaAction(url,room,'upload',{transfer_id});
+ assert.equal((await self.UserIODot.mediaAction(url,room,'inspect',{transfer_id})).ready,true);
 });

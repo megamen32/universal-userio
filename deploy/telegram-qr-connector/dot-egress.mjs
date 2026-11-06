@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
 import {MAX_IMAGES,MAX_IMAGE_BYTES,MAX_ALBUM_BYTES,imageKind} from './dot-media.mjs';
+import {telegramEntities} from './dot-format.mjs';
 
 const NAME=/^dot-([1-9][0-9]*)-([a-f0-9]{16})\.(jpg|png|webp)$/;
 const DIGEST=/^[a-f0-9]{64}$/;
@@ -26,7 +27,7 @@ export function verifyDotTelegramMedia(media){
  });
  return media.length;
 }
-export function dotTelegramMediaParams(media,caption,replyReceipt,CustomFile){
+export function dotTelegramMediaParams(media,caption,replyReceipt,CustomFile,entities=[],api=null){
  verifyDotTelegramMedia(media);
  if(typeof CustomFile!=='function')throw Error('invalid_dot_media_file_adapter');
  if(typeof caption!=='string'||caption.length>900||!caption.trim())
@@ -34,7 +35,7 @@ export function dotTelegramMediaParams(media,caption,replyReceipt,CustomFile){
  if(replyReceipt!=null&&(!ID.test(String(replyReceipt))||!Number.isSafeInteger(Number(replyReceipt))))
   throw Error('invalid_dot_media_reply_receipt');
  const files=media.map(entry=>new CustomFile(entry.filename,entry.bytes.length,'',entry.bytes));
- return {file:files.length===1?files[0]:files,caption,formattingEntities:[],
+ return {file:files.length===1?files[0]:files,caption,formattingEntities:telegramEntities(caption,entities,api),
   forceDocument:false,...(replyReceipt==null?{}:{replyTo:Number(replyReceipt)})};
 }
 

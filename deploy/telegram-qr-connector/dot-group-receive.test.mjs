@@ -6,6 +6,7 @@ test('group images use the existing ingress; previews remain text and other file
  const event={messageId:'1',text:'Оля:\nтекст'};
  assert.equal((await routeGroupDotEvent({event,message:{media:{className:'MessageMediaWebPage'}},relay,ingress})).status,'accepted');
  assert.equal((await routeGroupDotEvent({event:{...event,messageId:'2'},message:{media:{className:'MessageMediaPhoto',photo:{}}},relay,ingress})).status,'media_collecting');
+ assert.equal((await routeGroupDotEvent({event:{...event,messageId:'4'},message:{media:{className:'MessageMediaDocument',document:{mimeType:'application/pdf'}}},relay,ingress})).status,'media_collecting');
  assert.equal((await routeGroupDotEvent({event:{...event,messageId:'3'},message:{media:{className:'MessageMediaDocument'}},relay,ingress})).status,'media_requires_review');
- assert.deepEqual(events,[['text','1'],['image','2'],['media_requires_review','3']]);
+ assert.deepEqual(events,[['text','1'],['image','2'],['image','4'],['media_requires_review','3']]);
 });

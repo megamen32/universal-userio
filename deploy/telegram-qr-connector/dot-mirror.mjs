@@ -2,6 +2,7 @@ import {DOT_POLICY} from './dot-policy.mjs';
 import {OWNER,ROOM,textHash} from './dot-relay.mjs';
 import {MAX_IMAGES} from './dot-media.mjs';
 import {verifyDotTelegramMedia} from './dot-egress.mjs';
+import {telegramEntities} from './dot-format.mjs';
 import {openSync,writeFileSync,fsyncSync,closeSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 export function sensitiveText(text){
@@ -33,8 +34,8 @@ export function resolveMirrorReply(relay,replyTo){
  }
  return matches.size===1?{status:'resolved',receipt:[...matches][0]}:{status:'unresolved',receipt:null};
 }
-export function mirrorSendOptions(text,replyTo=null){
- const options={message:text,formattingEntities:[],linkPreview:false};
+export function mirrorSendOptions(text,replyTo=null,entities=[],api=null){
+ const options={message:text,formattingEntities:telegramEntities(text,entities,api),linkPreview:false};
  if(replyTo!=null){
   if(!nativeTelegramMessageId(String(replyTo)))throw Error('invalid_mirror_reply_receipt');
   options.replyTo=Number(replyTo);
@@ -154,7 +155,7 @@ export class DotMirror{
     }
     let parts;try{parts=m.text.trim()?mirrorParts(m,this.relay.labels):[];}catch{state.held[m.id]={reason:'oversize_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     let formatted;try{formatted=mirrorPartEntities(m,parts);}catch{state.held[m.id]={reason:'format_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
-    let media=null,caption=null;
+    let media=null,caption=null,captionEntities=[];
     if(imageCount){
      if(typeof this.relay.sendMedia!=='function'){state.status='media_transport_requires_review';this.relay.save();return {status:state.status};}
      // Download, validate and stage ALL images before any irreversible send.
@@ -168,7 +169,7 @@ export class DotMirror{
      }
      const inline=parts.length===1&&parts[0].length<=900;
      caption=inline?parts[0]:mirrorParts({...m,text:'[изображение]'},this.relay.labels)[0];
-     if(inline)parts=[];
+     if(inline){captionEntities=formatted[0];parts=[];}
     }
     const pub={hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,
      receipts:[],media_receipts:[],media_count:imageCount,
@@ -182,7 +183,7 @@ export class DotMirror{
      try{
       // No competing claim: propagate the immutable original source identity.
       // Native claim fence integration belongs to the existing UserIO owner.
-      const receipts=await this.relay.sendMedia(this.relay.peerId||OWNER,media,caption,reply.receipt,{source_message_id:m.id});
+      const receipts=await this.relay.sendMedia(this.relay.peerId||OWNER,media,caption,reply.receipt,{source_message_id:m.id},captionEntities);
       if(!Array.isArray(receipts)||!receipts.length||receipts.some(id=>!/^[1-9][0-9]*$/.test(String(id))))throw Error('media_provider_receipt_unknown');
       pub.media_receipts=receipts.map(String);pub.receipts.push(...pub.media_receipts);
       this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,kind:'media',part:0,receipts:pub.media_receipts};

@@ -1,6 +1,6 @@
 import './dot-test-policy.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
-import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {createHash} from 'node:crypto';
 import {DotMediaIngress,imageKind,MAX_IMAGE_BYTES} from './dot-media.mjs';
 import {fileChooserUid,validateMediaFiles,mediaPageAction} from './dot-browser-media.mjs';
 const OWNER='111111111',BOT='telegram:333333333';
@@ -47,6 +47,29 @@ test('album captions retain their separate formatted ranges when joined',async()
  assert.equal(delivered.text,'первая\n\nсайт');
  assert.deepEqual(delivered.entities,[{type:'bold',offset:0,length:6},{type:'text_url',offset:8,length:4,url:'https://example.org/'}]);
  fs.rmSync(dir,{recursive:true});
+});
+test('authorised group documents preserve their file name and bytes',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-group-doc-')),peer='-1004352022764';let delivered;
+ const ingress=new DotMediaIngress({stateDir:dir,botAccountId:BOT,allowDocuments:true,allowEvent:e=>e.peerId===peer&&e.private===false&&e.senderIsBot===false,download:async()=>Buffer.from('%PDF-fixture'),deliver:async e=>(delivered=e,{status:'accepted'}),schedule:()=>{}});
+ const e={...event(82),peerId:peer,senderId:'43',senderIsBot:false,private:false,text:'Оля:\nДокумент'};
+ const message={media:{className:'MessageMediaDocument',document:{mimeType:'application/pdf',attributes:[{fileName:'договор.pdf'}]}}};
+ assert.equal(ingress.receive(e,message).status,'media_collecting');await ingress.flush('message:82');
+ assert.equal(delivered.media[0].filename,'договор.pdf');assert.equal(delivered.media[0].mime,'application/pdf');assert.match(delivered.media[0].path,/\.bin$/);
+ fs.rmSync(dir,{recursive:true});
+});
+test('document staging validates a protected digest while retaining the original file name',()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-doc-validation-')),bytes=Buffer.from('%PDF-fixture'),sha256=createHash('sha256').update(bytes).digest('hex'),file=path.join(dir,'tg-82-'+sha256.slice(0,16)+'.bin');
+ fs.writeFileSync(file,bytes,{mode:0o600});
+ const result=validateMediaFiles([{path:file,filename:'договор.pdf',mime:'application/pdf',size:bytes.length,sha256}],{root:dir+'/'});
+ assert.equal(result[0].filename,'договор.pdf');assert.deepEqual(Buffer.from(result[0].data,'base64'),bytes);
+ fs.rmSync(dir,{recursive:true});
+});
+test('group album never combines messages from different senders',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-album-sender-')),peer='-1004352022764';let sent=0;
+ const ingress=new DotMediaIngress({stateDir:dir,botAccountId:BOT,allowEvent:e=>e.peerId===peer&&e.private===false&&e.senderIsBot===false,download:async()=>jpeg(),deliver:async()=>{sent++;return {status:'accepted'}},schedule:()=>{}});
+ const e={...event(81),peerId:peer,senderId:'43',senderIsBot:false,private:false,text:'Фото'};
+ ingress.receive(e,{photo:{},groupedId:'7'});ingress.receive({...e,messageId:'82',senderId:'44'},{photo:{},groupedId:'7'});await ingress.flush('album:7');
+ assert.equal(sent,0);assert.equal(ingress.state.groups['album:7'].reason,'album_sender_ambiguous');fs.rmSync(dir,{recursive:true});
 });
 test('uncertain album delivery is durable and never replayed after restart',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-media-unknown-'));

@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {validateMediaFiles} from './dot-browser-media.mjs';
+import {readDotMediaUsing} from './dot-browser-egress.mjs';
 // Scoped caller for the existing UserIO extension command channel. Delivery
 // requests are admitted once: timeout means UNKNOWN and is never retried.
 export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID}){
@@ -23,15 +24,15 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
   throw Error('extension_result_unknown');
  };
  return async(action,args)=>{
-  if(!['dot_snapshot','dot_send'].includes(action))throw Error('unsupported_extension_dot_action');
+  if(!['dot_snapshot','dot_send','dot_media_read'].includes(action))throw Error('unsupported_extension_dot_action');
+  if(action==='dot_media_read')return readDotMediaUsing((operation,extra)=>command('dot_media_read',{operation,source_id:args.source_id,...extra}),args,room);
   if(action==='dot_send'&&args.media?.length){
-   if(args.reply_to||args.entities?.length)return {ok:false,error:'media_context_requires_review'};
    const files=loadMedia(args.media),id=transferId();
    const meta=args.media.map(m=>({filename:m.filename,mime:m.mime,size:m.size,sha256:m.sha256}));
    const call=async(operation,extra={})=>command('dot_media',{operation,transfer_id:id,...extra});
    let started=false;
    try{
-    let result=await call('start',{files:meta});if(!result.ok)return result;started=true;
+    let result=await call('start',{files:meta,text:args.text||'',reply_to:args.reply_to||null,entities:args.entities||[]});if(!result.ok)return result;started=true;
     for(let index=0;index<files.length;index++){
      const bytes=Buffer.from(files[index].data,'base64');
      for(let offset=0;offset<bytes.length;offset+=128*1024){

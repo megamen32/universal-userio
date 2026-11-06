@@ -4,15 +4,20 @@ import {spawn} from 'node:child_process';
 import {randomUUID,createHash} from 'node:crypto';
 import {MAX_IMAGES,MAX_IMAGE_BYTES,MAX_ALBUM_BYTES,imageKind} from './dot-media.mjs';
 const ROOT='/var/lib/universal-userio/telegram-qr/dot-media-files/';
-export function validateMediaFiles(media){
+export function validateMediaFiles(media,{root=ROOT}={}){
  if(!Array.isArray(media)||media.length<1||media.length>MAX_IMAGES)throw Error('invalid_media_count');
  let total=0;
  return media.map(m=>{
-  if(typeof m.path!=='string'||!m.path.startsWith(ROOT)||!/^tg-[0-9]+-[a-f0-9]{16}\.(jpg|png|webp)$/.test(m.filename)||m.path!==ROOT+m.filename||!/^[a-f0-9]{64}$/.test(m.sha256))throw Error('invalid_media_path');
+  if(typeof root!=='string'||!root.endsWith('/')||typeof m.path!=='string'||!m.path.startsWith(root)||typeof m.filename!=='string'||!m.filename||m.filename.length>255||/[\/\\\u0000-\u001f]/.test(m.filename)||!/^[a-f0-9]{64}$/.test(m.sha256))throw Error('invalid_media_path');
+  const staged=m.path.slice(root.length),match=staged.match(/^tg-[0-9]+-([a-f0-9]{16})\.(jpg|png|webp|bin)$/);
+  if(!match||match[1]!==m.sha256.slice(0,16))throw Error('invalid_media_path');
   const stat=fs.lstatSync(m.path);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==process.getuid()||(stat.mode&0o777)!==0o600||stat.size>MAX_IMAGE_BYTES)throw Error('unsafe_media_file');
   const data=fs.readFileSync(m.path);total+=data.length;if(total>MAX_ALBUM_BYTES)throw Error('album_size_refused');
-  if(createHash('sha256').update(data).digest('hex')!==m.sha256||imageKind(data).mime!==m.mime)throw Error('media_identity_changed');
+  if(createHash('sha256').update(data).digest('hex')!==m.sha256||(m.size!==undefined&&m.size!==data.length))throw Error('media_identity_changed');
+  if(match[2]==='bin'){
+   if(typeof m.mime!=='string'||!/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/.test(m.mime))throw Error('media_identity_changed');
+  }else if(imageKind(data).mime!==m.mime||staged!==m.filename)throw Error('media_identity_changed');
   return {filename:m.filename,data:data.toString('base64')};
  });
 }

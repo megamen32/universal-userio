@@ -5,7 +5,7 @@
 // lib/*.js attach themselves to `self.UserIODB` / `self.UserIO` /
 // `self.Collect` / `self.Agent`; importScripts loads them in order.
 
-importScripts("lib/config.js", "lib/update.js", "lib/db.js", "lib/oauth.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/dot.js", "lib/agent.js");
+importScripts("lib/config.js", "lib/update.js", "lib/db.js", "lib/oauth.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/dot.js", "lib/dot-media-read.js", "lib/agent.js");
 
 const DB = self.UserIODB;
 const USERIO = self.UserIO;

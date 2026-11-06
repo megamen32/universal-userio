@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import fs from 'node:fs';
 import {webcrypto,createHash} from 'node:crypto';
 import {parseEvaluation} from './dot-browser-mcp.mjs';
 import {dotMediaPageAction,readDotMediaThroughBrowser} from './dot-browser-egress.mjs';
@@ -11,6 +12,10 @@ const id=room+'~'+room+'~CalpicoMessage~photo1',remote='https://chatgpt.com/back
 const file=Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),Buffer.alloc(350*1024,23)]);
 const fingerprint=s=>createHash('sha256').update(s).digest('hex');
 const pack=x=>JSON.stringify({result:{content:[{type:'text',text:String.fromCharCode(96).repeat(3)+'json\n'+JSON.stringify(x)+'\n'+String.fromCharCode(96).repeat(3)}]}});
+test('extension and existing browser use the same fixed media reader',()=>{
+ const self={};vm.runInNewContext(fs.readFileSync(new URL('../../extensions/vk-inbox/lib/dot-media-read.js',import.meta.url),'utf8'),{self});
+ assert.equal(self.UserIODotRead.pageAction.toString(),dotMediaPageAction.toString());
+});
 function fixture(options={}){
  const image={currentSrc:options.src??remote,alt:'synthetic.png'};
  const row={dataset:{messageId:id},closest:()=>null,classList:{contains:()=>false},

@@ -22,9 +22,9 @@ function fixture(options={}){
    if(options.sendError)throw Error('unknown');
    return options.numericReceipts?String(sends.length):'tg'+sends.length;
   },
-  sendMedia:async(owner,media,caption,replyTo,source)=>{
+  sendMedia:async(owner,media,caption,replyTo,source,entities=[])=>{
    const optionsParams=dotTelegramMediaParams(media,caption,replyTo,FakeCustomFile);
-   mediaSends.push({owner,caption,replyTo,source,count:media.length,files:optionsParams.file,journalStatusAtCall:relay.state.outgoing['mirror:'+source.source_message_id+':media:0']?.status});
+   mediaSends.push({owner,caption,replyTo,source,count:media.length,files:optionsParams.file,journalStatusAtCall:relay.state.outgoing['mirror:'+source.source_message_id+':media:0']?.status,...(entities.length?{entities}:{})});
    if(options.mediaSendError)throw Error('provider_unknown');
    return dotTelegramMediaReceipts(media.map((_,i)=>({id:100+mediaSends.length*10+i})),media.length);
   },
@@ -46,6 +46,13 @@ const withImages=(id,role,text,count=1)=>({...msg(id,role,text),
  attachment_count:count,attachment_names:Array.from({length:count},(_,i)=>'photo'+i+'.png'),
  attachment_fingerprints:Array.from({length:count},(_,i)=>createHash('sha256').update('source_'+i+'_'+id).digest('hex'))});
 
+test('media caption carries the original link with the speaker offset',async()=>{
+ const x=fixture({media:[imageEntry(1)]});await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),{...withImages('photo','assistant','сайт'),entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]}]);
+ await settle(x);
+ assert.deepEqual(x.mediaSends[0].entities,[{type:'text_url',offset:6,length:4,url:'https://example.org/'}]);
+});
+
 async function settle(x){await x.mirror.tick();x.advance();return x.mirror.tick();}
 test('activation baseline skips all history, repeat does not send',async()=>{const x=fixture();assert.equal((await x.mirror.tick()).status,'baseline_initialized');await settle(x);assert.equal(x.sends.length,0)});
 test('both new authors labelled, restart and stable IDs prevent duplicates',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('u','user','hello'),msg('a','assistant','background result')]);await settle(x);assert.deepEqual(x.sends,[{owner:OWNER,text:'Test owner:\nhello'},{owner:OWNER,text:'dots:\nbackground result'}]);x.restart();await settle(x);assert.equal(x.sends.length,2)});
@@ -62,6 +69,17 @@ test('mirror waits for inbound echo before inspecting new rows',async()=>{const 
 test('content must stabilize, transient partial is not sent',async()=>{const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('a','assistant','partial')]);await x.mirror.tick();x.advance();x.rows([msg('baseline','user','old'),msg('a','assistant','complete answer')]);await x.mirror.tick();assert.equal(x.sends.length,0);x.advance();await x.mirror.tick();assert.deepEqual(x.sends.map(s=>s.text),['dots:\ncomplete answer'])});
 
 test('mirror sends literal text with no Markdown parsing or link previews',()=>{assert.deepEqual(mirrorSendOptions('**literal** https://example.invalid'),{message:'**literal** https://example.invalid',formattingEntities:[],linkPreview:false})});
+test('private mirror encodes a text link for the existing Telegram client',()=>{
+ class Link{constructor(v){Object.assign(this,v);this.className='MessageEntityTextUrl'}}
+ const result=mirrorSendOptions('сайт',null,[{type:'text_url',offset:0,length:4,url:'https://example.org/'}],{MessageEntityTextUrl:Link});
+ assert.equal(result.formattingEntities[0].className,'MessageEntityTextUrl');assert.equal(result.formattingEntities[0].url,'https://example.org/');
+});
+test('private image caption carries a Telegram link entity',()=>{
+ class Link{constructor(v){Object.assign(this,v);this.className='MessageEntityTextUrl'}}
+ class File{constructor(name,size,path,buffer){Object.assign(this,{name,size,path,buffer})}}
+ const params=dotTelegramMediaParams([imageEntry(1)],'сайт',null,File,[{type:'text_url',offset:0,length:4,url:'https://example.org/'}],{MessageEntityTextUrl:Link});
+ assert.equal(params.formattingEntities[0].url,'https://example.org/');
+});
 test('mirror sends labelled links as entities offset after the speaker label',async()=>{
  const x=fixture();await x.mirror.tick();
  x.rows([msg('baseline','user','old'),{...msg('linked','assistant','Откройте сайт'),entities:[{type:'text_url',offset:9,length:4,url:'https://example.org/path'}]}]);
