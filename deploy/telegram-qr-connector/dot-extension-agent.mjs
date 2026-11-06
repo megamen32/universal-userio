@@ -57,7 +57,7 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
   if(action!=='dot_send'||!preserveDraft)return run(action,args);
   if(!args.media?.length&&(typeof args.text!=='string'||!args.text.trim()))throw Error('invalid_message');
   const backup_id=transferId();
-  const backup=await command('dot_draft_backup',{backup_id});
+  const backup=await command('dot_draft_backup',{backup_id,purpose:'automatic'});
   if(!backup.ok){if(backup.error==='empty_draft')return run(action,args);return backup;}
   const cleared=await command('dot_draft_recover',{backup_id,operation:'clear',confirm:'preserve_then_clear'});
   if(!cleared.ok)return cleared;

@@ -42,6 +42,15 @@ test('draft recovery requires an explicit action and retains unknown outcomes',a
  assert.equal((await self.Agent.testExecute({action:'dot_draft_recover',args:{...args,operation:'clear',confirm:'preserve_then_clear'}})).error,'recovery_requires_review');
  assert.equal(mutate,1);
 });
+test('an unresolved automatic backup blocks later sends without exposing its text',async()=>{
+ const id='12345678-1234-1234-1234-123456789abc';
+ const saved={'dot_draft_backup:prior':{purpose:'automatic',url,room:'r',phase:'cleared',text:'private'}};
+ let calls=0;const self={UserIODot:{captureDraft:()=>{}}};
+ const chrome={tabs:{query:async()=>[{id:7,url}]},scripting:{executeScript:async()=>{calls++;return []}},storage:{local:{get:async key=>key===null?{...saved}:({[key]:saved[key]}),set:async obj=>Object.assign(saved,obj)}}};
+ const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');vm.runInNewContext(src,{self,chrome,setTimeout,Promise,JSON});
+ const result=await self.Agent.testExecute({action:'dot_draft_backup',args:{url,room:'r',backup_id:id,purpose:'automatic'}});
+ assert.equal(result.error,'unresolved_draft_backup');assert.equal(calls,0);assert.ok(!JSON.stringify(result).includes('private'));
+});
 test('draft inspection command only addresses one exact Dot tab with a valid hash',async()=>{
  const x=setup([{id:1,url}]);
  assert.equal((await x.execute({action:'dot_draft_inspect',args:{url,room:'r',expected_hash:'bad'}})).error,'invalid_dot_request');

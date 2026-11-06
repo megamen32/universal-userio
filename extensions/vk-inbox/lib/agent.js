@@ -540,12 +540,16 @@
         const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const key='dot_draft_backup:'+args.backup_id;
+        if(args.purpose==='automatic'){
+          const all=await chrome.storage.local.get(null);
+          if(Object.entries(all).some(([k,v])=>k.startsWith('dot_draft_backup:')&&v?.purpose==='automatic'&&v.url===args.url&&v.room===args.room&&v.phase!=='restored'))return {ok:false,error:'unresolved_draft_backup'};
+        }
         if((await chrome.storage.local.get(key))[key])return {ok:false,error:'backup_exists'};
         const [result]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.captureDraft,args:[args.url,args.room]});
         const draft=result?.result;
         if(!draft?.ok)return {ok:false,error:draft?.error||'dot_result_unknown'};
         if(typeof draft.text!=='string'||typeof draft.html!=='string'||!/^[a-f0-9]{64}$/.test(draft.hash||''))return {ok:false,error:'invalid_draft_snapshot'};
-        const value={version:1,url:args.url,room:args.room,text:draft.text,html:draft.html,hash:draft.hash,created:Date.now()};
+        const value={version:1,url:args.url,room:args.room,text:draft.text,html:draft.html,hash:draft.hash,created:Date.now(),...(args.purpose==='automatic'?{purpose:'automatic'}:{})};
         await chrome.storage.local.set({[key]:value});
         const saved=(await chrome.storage.local.get(key))[key];
         if(!saved||saved.text!==value.text||saved.html!==value.html||saved.hash!==value.hash)return {ok:false,error:'backup_verify_failed'};
