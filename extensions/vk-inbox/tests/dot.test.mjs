@@ -28,6 +28,20 @@ test('draft backup stores sensitive content locally and returns only verificatio
  assert.equal((await self.Agent.testExecute({action:'settings_set',args:{patch:{['dot_draft_backup:'+args.backup_id]:null}}})).error,'reserved_setting');
  assert.equal((await self.Agent.testExecute({action:'dot_draft_backup',args})).error,'backup_exists');
 });
+test('draft recovery requires an explicit action and retains unknown outcomes',async()=>{
+ const saved={},draft='private draft text';let mutate=0;
+ const self={UserIODot:{captureDraft:()=>{},recoverDraft:()=>{}}};
+ const chrome={tabs:{query:async()=>[{id:7,url}]},scripting:{executeScript:async ({func})=>[{result:func===self.UserIODot.captureDraft?{ok:true,text:draft,html:'<p>text</p>',hash:'a'.repeat(64)}:(mutate++,{ok:true})}]},storage:{local:{get:async key=>({[key]:saved[key]}),set:async obj=>Object.assign(saved,obj)}}};
+ const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');vm.runInNewContext(src,{self,chrome,setTimeout,Promise,JSON});
+ const args={url,room:'r',backup_id:'12345678-1234-1234-1234-123456789abc'};
+ await self.Agent.testExecute({action:'dot_draft_backup',args});
+ assert.equal((await self.Agent.testExecute({action:'dot_draft_recover',args:{...args,operation:'clear'}})).error,'confirmation_required');
+ assert.equal(mutate,0);
+ assert.equal((await self.Agent.testExecute({action:'dot_draft_recover',args:{...args,operation:'clear',confirm:'preserve_then_clear'}})).ok,true);
+ assert.equal(mutate,1);
+ assert.equal((await self.Agent.testExecute({action:'dot_draft_recover',args:{...args,operation:'clear',confirm:'preserve_then_clear'}})).error,'recovery_requires_review');
+ assert.equal(mutate,1);
+});
 test('draft inspection command only addresses one exact Dot tab with a valid hash',async()=>{
  const x=setup([{id:1,url}]);
  assert.equal((await x.execute({action:'dot_draft_inspect',args:{url,room:'r',expected_hash:'bad'}})).error,'invalid_dot_request');
@@ -60,6 +74,19 @@ test('draft capture checks exact room and captures text and markup without mutat
  assert.equal(result.text,text);assert.equal(result.html,html);assert.equal(result.hash,createHash('sha256').update(text).digest('hex'));
  assert.equal((await self.UserIODot.captureDraft(url,'wrong')).error,'wrong_or_unloaded_room');
  assert.equal(editor.innerHTML,html);
+});
+test('draft recovery refuses changes and restores only into an empty composer',async()=>{
+ const room='fixture',text='saved text',html='<p>saved text</p>';
+ const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};
+ const editor={innerText:text,textContent:text,innerHTML:html,getClientRects:()=>[1],focus:()=>{}};let calls=0;
+ const document={querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:[],querySelector:()=>null,createRange:()=>({selectNodeContents:()=>{}}),execCommand:(cmd)=>{calls++;if(cmd==='delete'){editor.innerText=editor.textContent=editor.innerHTML='';}else{editor.innerText=editor.textContent=text;editor.innerHTML=html;}return true;}};
+ const window={getSelection:()=>({removeAllRanges:()=>{},addRange:()=>{}})};const self={};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,window,location:{href:url},TextEncoder,crypto:webcrypto});
+ assert.equal((await self.UserIODot.recoverDraft(url,room,'clear','different',html)).error,'draft_changed');assert.equal(calls,0);
+ assert.equal((await self.UserIODot.recoverDraft(url,room,'restore',text,html)).error,'existing_draft');assert.equal(calls,0);
+ assert.equal((await self.UserIODot.recoverDraft(url,room,'clear',text,html)).ok,true);
+ assert.equal((await self.UserIODot.recoverDraft(url,room,'restore',text,html)).ok,true);
+ assert.equal(editor.innerText,text);
 });
 test('draft inspection refuses ambiguous editor and existing reply panel',async()=>{
  const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null};

@@ -300,5 +300,28 @@ async function captureDraft(url,room){
   if(text!==(editor.innerText||editor.textContent||'')||html!==editor.innerHTML)return {ok:false,error:'draft_changed'};
   return {ok:true,text,html,hash};
 }
-root.UserIODot={pageAction,mediaAction,inspectDraft,captureDraft};
+async function recoverDraft(url,room,operation,text,html){
+  if(location.href!==url)return {ok:false,error:'wrong_dot_route'};
+  const rows=[...document.querySelectorAll('article.message-row[data-message-id]')].filter(e=>!e.closest?.('.reply-chain-panel[role="dialog"]'));
+  const prefix=room+'~'+room+'~CalpicoMessage~';
+  if(!rows.length||rows.some(e=>!e.dataset.messageId.startsWith(prefix)))return {ok:false,error:'wrong_or_unloaded_room'};
+  if(document.querySelector('.reply-chain-panel[role="dialog"]'))return {ok:false,error:'existing_reply_panel'};
+  const editors=[...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
+  if(editors.length!==1)return {ok:false,error:'ambiguous_composer'};
+  const editor=editors[0],current=editor.innerText||editor.textContent||'';
+  if(operation==='clear'){
+    if(current!==text||editor.innerHTML!==html)return {ok:false,error:'draft_changed'};
+    editor.focus();const range=document.createRange();range.selectNodeContents(editor);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+    if((editor.innerText||editor.textContent||'')!==text||editor.innerHTML!==html)return {ok:false,error:'draft_changed'};
+    if(!document.execCommand('delete',false,null))return {ok:false,error:'clear_unknown'};
+    return !(editor.innerText||editor.textContent||'').trim()?{ok:true}:{ok:false,error:'clear_unverified'};
+  }
+  if(operation==='restore'){
+    if(current.trim())return {ok:false,error:'existing_draft'};
+    editor.focus();if(!document.execCommand('insertHTML',false,html))return {ok:false,error:'restore_unknown'};
+    return (editor.innerText||editor.textContent||'')===text?{ok:true}:{ok:false,error:'restore_unverified'};
+  }
+  return {ok:false,error:'invalid_operation'};
+}
+root.UserIODot={pageAction,mediaAction,inspectDraft,captureDraft,recoverDraft};
 })(self);
