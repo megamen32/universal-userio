@@ -30,6 +30,7 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 import { bodyWithOrigin, forwardOrigin } from "./forward-origin.mjs";
 import { duplicateReceipt, replyAttemptFields } from "./send-receipt.mjs";
 import { telegramConversationKind, telegramGroupRoutingAttachment } from "./group-routing.mjs";
+import { resolveMediaPeer } from './media-peer.mjs';
 import { withTelegramAuthorClassification } from "./author-classification.mjs";
 import { buildAgentDeliverEvent, isNumericTelegramPeerAllowed } from "./agent-deliver.mjs";
 import { publicIngressState } from "./ingress-state.mjs";
@@ -1311,14 +1312,18 @@ async function downloadTelegramMedia(payload) {
   for (const [slot, item] of candidates) {
     if (!item.client) continue;
     const peers = item.labelPeers;
-    const peer = (locator.chatKey && peers.idPeers.get(locator.chatKey))
-      || (locator.chatId && peers.idPeers.get(locator.chatId))
-      || (locator.chat && peers.labelPeers.get(locator.chat))
-      || null;
+    const peer = locator.accountId && locator.chatKey
+      ? await resolveMediaPeer(item,locator)
+      : (locator.chatKey && peers.idPeers.get(locator.chatKey))
+        || (locator.chatId && peers.idPeers.get(locator.chatId))
+        || (locator.chat && peers.labelPeers.get(locator.chat)) || null;
     if (!peer) continue;
     const messages = await item.client.getMessages(peer, { ids: [locator.messageId] });
     const message = messages && messages[0];
     if (!message) continue;
+    if (locator.accountId && locator.chatKey && (String(message.id)!==String(locator.messageId)
+      || String(await item.client.getPeerId(message.peerId,true))!==locator.chatKey))
+      throw new Error('Telegram media message source mismatch');
     if (!message.media) throw new Error(`message ${locator.messageId} has no media`);
     assertDeclaredMediaWithinLimit(message, maxBytes);
     const bytes = await item.client.downloadMedia(message);
