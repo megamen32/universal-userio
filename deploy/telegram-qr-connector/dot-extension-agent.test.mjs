@@ -1,6 +1,24 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 import {createExtensionCaller} from './dot-extension-agent.mjs';
-const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000};
+const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000,preserveDraft:false};
+test('preserves an existing draft around exactly one send',async()=>{
+ const posts=[];let last;
+ const caller=createExtensionCaller({...init,preserveDraft:true,transferId:()=> '12345678-1234-1234-1234-123456789abc',fetcher:async(_url,opts)=>({ok:true,json:async()=>{
+  if(opts.method==='POST'){last=JSON.parse(opts.body);posts.push(last);return {queued:true,id:'browser:'+posts.length};}
+  return {results:[{id:'browser:'+posts.length,action:last.action,received_at:101,result:{ok:true,status:'submitted_unconfirmed'}}]};
+ }})});
+ assert.equal((await caller('dot_send',{text:'hello'})).ok,true);
+ assert.deepEqual(posts.map(p=>[p.action,p.args.operation||'']),[['dot_draft_backup',''],['dot_draft_recover','clear'],['dot_action','send'],['dot_draft_recover','restore']]);
+});
+test('does not restore or replay after an unknown send outcome',async()=>{
+ const posts=[];let last;
+ const caller=createExtensionCaller({...init,preserveDraft:true,transferId:()=> '12345678-1234-1234-1234-123456789abc',fetcher:async(_url,opts)=>({ok:true,json:async()=>{
+  if(opts.method==='POST'){last=JSON.parse(opts.body);posts.push(last);return {queued:true,id:'browser:'+posts.length};}
+  return {results:last.action==='dot_action'?[]:[{id:'browser:'+posts.length,action:last.action,received_at:101,result:{ok:true}}]};
+ }})});
+ await assert.rejects(caller('dot_send',{text:'hello'}),/extension_result_unknown/);
+ assert.deepEqual(posts.map(p=>p.action),['dot_draft_backup','dot_draft_recover','dot_action']);
+});
 test('extension caller matches command receipt and refuses stale result',async()=>{
  let posts=0;let reads=0;
  const call=createExtensionCaller({...init,fetcher:async(url,opts)=>({ok:true,json:async()=>opts.method==='POST'?(posts++,{queued:true,id:'browser:1'}):(reads++,{results:[{id:'browser:1',action:'dot_action',received_at:reads===1?99:101,result:{ok:true,room:'room'}}]})})});

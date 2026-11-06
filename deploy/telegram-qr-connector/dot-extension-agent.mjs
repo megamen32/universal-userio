@@ -3,7 +3,7 @@ import {validateMediaFiles} from './dot-browser-media.mjs';
 import {readDotMediaUsing} from './dot-browser-egress.mjs';
 // Scoped caller for the existing UserIO extension command channel. Delivery
 // requests are admitted once: timeout means UNKNOWN and is never retried.
-export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID}){
+export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true}){
  if(!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(url)||!room||!agentId||!token)throw Error('invalid_extension_binding');
  const request=async(path,body)=>{
   const r=await fetcher(new URL(path,base),{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
@@ -23,7 +23,7 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
   }
   throw Error('extension_result_unknown');
  };
- return async(action,args)=>{
+ const run=async(action,args)=>{
   if(!['dot_snapshot','dot_send','dot_media_read'].includes(action))throw Error('unsupported_extension_dot_action');
   if(action==='dot_media_read')return readDotMediaUsing((operation,extra)=>command('dot_media_read',{operation,source_id:args.source_id,...extra}),args,room);
   if(action==='dot_send'&&args.media?.length){
@@ -52,5 +52,22 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
   }
   if(action==='dot_send'&&(typeof args.text!=='string'||!args.text.trim()))throw Error('invalid_message');
   return command('dot_action',{operation:action==='dot_snapshot'?'snapshot':'send',after:args.after||null,reply_to:args.reply_to||null,...(action==='dot_send'?{text:args.text,...(args.entities?.length?{entities:args.entities}:{})}:{})});
+ };
+ return async(action,args)=>{
+  if(action!=='dot_send'||!preserveDraft)return run(action,args);
+  if(!args.media?.length&&(typeof args.text!=='string'||!args.text.trim()))throw Error('invalid_message');
+  const backup_id=transferId();
+  const backup=await command('dot_draft_backup',{backup_id});
+  if(!backup.ok){if(backup.error==='empty_draft')return run(action,args);return backup;}
+  const cleared=await command('dot_draft_recover',{backup_id,operation:'clear',confirm:'preserve_then_clear'});
+  if(!cleared.ok)return cleared;
+  // If the send times out, its result is UNKNOWN. Do not touch the composer
+  // while the original browser operation may still be running.
+  const result=await run(action,args);
+  try{
+   const restored=await command('dot_draft_recover',{backup_id,operation:'restore',confirm:'restore_preserved_draft'});
+   if(!restored.ok)return {...result,draft_restore:'requires_review',draft_backup_id:backup_id};
+  }catch{return {...result,draft_restore:'outcome_unknown',draft_backup_id:backup_id};}
+  return {...result,draft_restore:'restored'};
  };
 }
