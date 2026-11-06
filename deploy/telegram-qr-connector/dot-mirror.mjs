@@ -190,7 +190,7 @@ export class DotMirror{
     }
     const pub={hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),
      receipts:[],media_receipts:[],media_count:imageCount,
-     media_sha256:media?.map(f=>f.sha256)||[],partHashes:parts.map(textHash),status:'sending'};
+     media_sha256:media?.map(f=>f.sha256)||[],partHashes:parts.map(textHash),partFormats:formatted,status:'sending'};
     state.published[m.id]=pub;this.relay.save();
     if(imageCount){
      const key='mirror:'+m.id+':media:0';
@@ -220,17 +220,19 @@ export class DotMirror{
    }
    for(const m of edits){
     const pub=state.published[m.id],c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)continue;
-    if(m.format_incomplete||(pub.format_hash&&pub.format_hash!==c.format_hash)){state.held[m.id]={reason:'format_edit_requires_review',hash:c.hash};this.relay.save();continue;}
+    if(m.format_incomplete){state.held[m.id]={reason:'format_edit_requires_review',hash:c.hash};this.relay.save();continue;}
     if(pub.media_count||(m.attachment_count??m.attachment_names?.length??0)>0){state.held[m.id]={reason:'media_edit_requires_review',hash:c.hash};this.relay.save();continue;}
     if((m.reply_to||null)!==(pub.reply_to||null)){state.held[m.id]={reason:'reply_target_edited_requires_review',hash:c.hash};continue;}
     if(sensitiveText(m.text)||!m.text.trim()){state.held[m.id]={reason:'sensitive_or_empty_update',hash:c.hash};continue;}
     let parts;try{parts=mirrorParts(m,this.relay.labels);}catch{state.held[m.id]={reason:'oversize_update',hash:c.hash};continue;}
+    let formatted;try{formatted=mirrorPartEntities(m,parts);}catch{state.held[m.id]={reason:'format_edit_requires_review',hash:c.hash};this.relay.save();continue;}
     if(parts.length!==pub.receipts.length){state.held[m.id]={reason:'edit_part_count_changed',hash:c.hash};continue;}
+    if(!Array.isArray(pub.partFormats)||pub.partFormats.length!==parts.length){state.held[m.id]={reason:'edit_original_format_unknown',hash:c.hash};this.relay.save();continue;}
     if(typeof this.relay.edit!=='function'){state.blocked='edit_unavailable';this.relay.save();return {status:state.blocked};}
     pub.status='edit_uncertain';this.relay.save();
-    try{for(let n=0;n<parts.length;n++)await this.relay.edit(this.relay.peerId||OWNER,pub.receipts[n],parts[n],pub.partHashes?.[n]);}
+    try{for(let n=0;n<parts.length;n++)await this.relay.edit(this.relay.peerId||OWNER,pub.receipts[n],parts[n],pub.partHashes?.[n],formatted[n],pub.partFormats[n]);}
     catch{state.blocked='edit_unknown';this.relay.save();return {status:state.blocked};}
-    pub.hash=c.hash;pub.partHashes=parts.map(textHash);pub.status='accepted';delete state.candidates[m.id];changed=true;this.relay.save();
+    pub.hash=c.hash;pub.format_hash=c.format_hash;pub.partHashes=parts.map(textHash);pub.partFormats=formatted;pub.status='accepted';delete state.held[m.id];delete state.candidates[m.id];changed=true;this.relay.save();
    }
    state.status=changed?'updated':newRows.length||edits.length?'stabilizing':'idle';state.lastObservedAt=this.now();this.relay.save();return {status:state.status,cursor:state.cursor};
   }finally{this.running=false;}

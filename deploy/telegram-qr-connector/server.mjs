@@ -24,6 +24,7 @@ import { getInputChannel } from "telegram/Utils.js";
 import { CustomFile } from 'telegram/client/uploads.js';
 import {dotTelegramMediaParams,dotTelegramMediaReceipts} from './dot-egress.mjs';
 import {telegramFormatMatches} from './dot-format.mjs';
+import {editDotText} from './dot-edit.mjs';
 import { StringSession } from "telegram/sessions/index.js";
 import { NewMessage, Raw } from "telegram/events/index.js";
 // GramJS 2.26 events/index.js exports only Raw/NewMessage(NewEvent); the
@@ -937,15 +938,10 @@ function getDotRelay(accountId,binding) {
         if(!telegramFormatMatches(params.formattingEntities,first?.entities))throw Error('dot_bot_media_format_unknown');
         return dotTelegramMediaReceipts(sent,media.length);
       },
-      edit:async(owner,receipt,text,expectedHash)=>{
+      edit:async(owner,receipt,text,expectedHash,entities,previousEntities)=>{
         if(owner!==DOT_OWNER||!expectedHash)throw new Error("wrong_dot_edit");
         const live=boundLive(),peer=await live.client.getInputEntity(BigInt(owner));
-        const messageId=Number(receipt);
-        const before=(await live.client.getMessages(peer,{ids:[messageId]}))?.[0];
-        if(!before||before.out!==true||textHash(String(before.message||""))!==expectedHash)
-          throw new Error("dot_edit_source_changed");
-        return editOwnedTelegramText({client:live.client,api:Api,peer,messageId,
-          expectedText:String(before.message||""),text});
+        return editDotText({client:live.client,api:Api,peer,messageId:Number(receipt),expectedHash,text,entities,previousEntities});
       },
     });
     dotRelays.set(accountId,relay);
@@ -992,7 +988,8 @@ async function initializeGroupRelay(binding,identity){
  const providerSendMedia=createGroupBotMediaSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
  const send=async(peer,text,replyTo,entities)=>{boundLive();return providerSend(peer,text,replyTo,entities);};
  const sendMedia=async(peer,media,caption,replyTo,origin,entities)=>{boundLive();if(typeof origin?.source_message_id!=='string'||!origin.source_message_id.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_group_media_source');return providerSendMedia(peer,media,caption,replyTo,entities);};
- const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia});
+ const edit=async(peer,receipt,text,expectedHash,entities,previousEntities)=>{if(peer!==binding.peerId)throw Error('wrong_group_edit_peer');const live=boundLive();const target=await live.client.getInputEntity(peer);return editDotText({client:live.client,api:Api,peer:target,messageId:Number(receipt),expectedHash,text,entities,previousEntities});};
+ const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia,edit});
  relay.groupOptions=()=>readGroupSettings(groupSettingsPath,binding);
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;

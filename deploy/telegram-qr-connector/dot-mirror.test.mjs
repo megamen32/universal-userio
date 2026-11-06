@@ -28,8 +28,8 @@ function fixture(options={}){
    if(options.mediaSendError)throw Error('provider_unknown');
    return dotTelegramMediaReceipts(media.map((_,i)=>({id:100+mediaSends.length*10+i})),media.length);
   },
-  edit:async(owner,receipt,text)=>{
-   edits.push({owner,receipt,text});if(options.editError)throw Error('unknown');
+  edit:async(owner,receipt,text,expectedHash,entities,previousEntities)=>{
+   edits.push({owner,receipt,text,...(entities?.length?{entities,previousEntities}:{})});if(options.editError)throw Error('unknown');
   },wait:async()=>{}
  };
  let relay=new DotRelay(config),mirror=new DotMirror(relay,{now:()=>time,stableMs:10});
@@ -118,12 +118,22 @@ test('mirror holds a message when its displayed formatting cannot be mapped',asy
  assert.equal(x.sends.length,0);
  assert.equal(x.relay.state.mirror.held.bad.reason,'format_requires_review');
 });
-test('format-only changes are detected without replaying a new message',async()=>{
+test('format-only changes update the original message without replaying it',async()=>{
  const x=fixture();await x.mirror.tick();
  x.rows([msg('baseline','user','old'),msg('linked','assistant','сайт')]);await settle(x);
  x.rows([msg('baseline','user','old'),{...msg('linked','assistant','сайт'),entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]}]);await settle(x);
  assert.equal(x.sends.length,1);
- assert.equal(x.relay.state.mirror.held.linked.reason,'format_edit_requires_review');
+ assert.equal(x.edits.length,1);assert.equal(x.edits[0].receipt,'tg1');
+ assert.deepEqual(x.edits[0].previousEntities,[]);
+ assert.deepEqual(x.edits[0].entities,[{type:'text_url',offset:6,length:4,url:'https://example.org/'}]);
+ assert.equal(x.relay.state.mirror.published.linked.status,'accepted');
+ await settle(x);assert.equal(x.edits.length,1);
+});
+test('an older receipt without saved formatting is held before editing',async()=>{
+ const x=fixture();await x.mirror.tick();x.rows([msg('baseline','user','old'),msg('legacy','assistant','сайт')]);await settle(x);
+ delete x.relay.state.mirror.published.legacy.partFormats;
+ x.rows([msg('baseline','user','old'),{...msg('legacy','assistant','сайт'),entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]}]);await settle(x);
+ assert.equal(x.edits.length,0);assert.equal(x.relay.state.mirror.held.legacy.reason,'edit_original_format_unknown');
 });
 test('read errors persist sanitized status, back off and recover without cursor reset',async()=>{
  let time=1000,fail=true,calls=0,saves=0;
