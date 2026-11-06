@@ -185,7 +185,10 @@ export class DotMirror{
       this.relay.save();return {status:state.status};
      }
      const inline=parts.length===1&&parts[0].length<=900;
-     caption=inline?parts[0]:mirrorParts({...m,text:'[изображение]'},this.relay.labels)[0];
+     const allDocuments=media.every(file=>file.kind==='document');
+     const hasDocuments=media.some(file=>file.kind==='document');
+     const attachmentLabel=allDocuments?(media.length===1?'[файл]':'[файлы]'):hasDocuments?'[вложения]':'[изображение]';
+     caption=inline?parts[0]:mirrorParts({...m,text:attachmentLabel},this.relay.labels)[0];
      if(inline){captionEntities=formatted[0];parts=[];}
     }
     const pub={hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),

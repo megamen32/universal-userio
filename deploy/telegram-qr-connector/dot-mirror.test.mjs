@@ -259,6 +259,13 @@ test('photo-only dot message reaches one synthetic Telegram media operation, no 
  assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'].status,'accepted');
  x.restart();await settle(x);assert.equal(x.mediaSends.length,1);
 });
+test('a Dot document without text is labelled as a file and keeps its name',async()=>{
+ const bytes=Buffer.from('%PDF-fixture'),sha256=createHash('sha256').update(bytes).digest('hex');
+ const x=fixture({media:[{kind:'document',filename:'договор.pdf',bytes,sha256,mime:'application/pdf'}]});
+ await x.mirror.tick();x.rows([msg('baseline','user','old'),withImages('document','assistant','')]);await settle(x);
+ assert.equal(x.mediaSends.length,1);assert.match(x.mediaSends[0].caption,/\[файл\]/);
+ assert.equal(x.mediaSends[0].files.name,'договор.pdf');
+});
 test('dot image album and caption preserve original Telegram reply correlation',async()=>{
  const id=ROOM+'~'+ROOM+'~CalpicoMessage~replyWithImages';
  const x=fixture({media:[imageEntry(1),imageEntry(2)],numericReceipts:true});
