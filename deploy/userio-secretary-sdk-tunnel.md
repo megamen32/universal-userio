@@ -71,12 +71,13 @@ app replacement/token rotation, not an inferred JWT deadline.
 
 ## Primary88 Matrix private control export
 
-The same existing SDK SSH transport may export the primary88 gateway Unix
+The same supervisor may export the primary88 gateway Unix
 control socket to server100. Only on `roomhacker-server-88`, set the existing
 unit's environment `USERIO_PRIMARY_CONTROL_REVERSE_SOCKET=/run/agentcall/primary88/control.sock`.
-The published helper adds exactly one SSH `-R` to its existing process while
-preserving the SDK `-L` and protected references; no second caller, daemon or
-public port is created. Other hosts reject this setting.
+The supervisor maintains an independent SSH `-R` process for control and an
+optional SSH `-L` process for SDK access. If the fixed app is absent, control
+continues while discovery retries; SDK credentials are never replaced with an
+unverified app. Other hosts reject the reverse setting.
 
 The runtime owner must first confirm the actual88 primary control socket and
 an idle resource join. On100 provision only `/run/agentcall/primary88` for the

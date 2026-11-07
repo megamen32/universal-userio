@@ -103,16 +103,28 @@ def voice_idle():
     return result.returncode == 0 and len(counts) == 2 and dict(counts) == {'channels': 0, 'calls': 0}
 
 
-def start_forward(address):
+def start_forward(address, *, include_reverse=True):
     reverse=os.environ.get('USERIO_PRIMARY_CONTROL_REVERSE_SOCKET','')
     if reverse and (socket.gethostname()!='roomhacker-server-88'
                     or reverse!='/run/agentcall/primary88/control.sock'):
         raise ValueError('primary88 private reverse control route required')
-    extra=['-R',reverse+':/run/agentcall/control.sock'] if reverse else []
+    extra=['-R',reverse+':/run/agentcall/control.sock'] if reverse and include_reverse else []
     return subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
                '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=10',
                '-o', 'ServerAliveCountMax=3', '-N', '-L',
                f'127.0.0.1:{LOCAL_PORT}:{address}:8080', *extra, SSH_HOST])
+
+
+def start_control_reverse():
+    reverse = os.environ.get('USERIO_PRIMARY_CONTROL_REVERSE_SOCKET', '')
+    if not reverse:
+        return None
+    if socket.gethostname() != 'roomhacker-server-88' or reverse != '/run/agentcall/primary88/control.sock':
+        raise ValueError('primary88 private reverse control route required')
+    return subprocess.Popen(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
+        '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=10',
+        '-o', 'ServerAliveCountMax=3', '-N', '-R',
+        reverse + ':/run/agentcall/control.sock', SSH_HOST])
 
 
 def stop_forward(child):
@@ -126,6 +138,48 @@ def stop_forward(child):
 
 
 def supervise():
+    control = start_control_reverse()
+    if control is None:
+        return supervise_sdk()
+    child = None
+    snapshot = None
+    transport_address = None
+    unavailable = False
+    try:
+        while True:
+            try:
+                return control.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            try:
+                latest = resolve_snapshot()
+                address, _, _ = validate(latest)
+                if child is not None and child.poll() is not None:
+                    child = None
+                if child is None:
+                    transport_address = address
+                    child = start_forward(address, include_reverse=False)
+                elif address != transport_address and voice_idle():
+                    stop_forward(child)
+                    transport_address = address
+                    child = start_forward(address, include_reverse=False)
+                if latest != snapshot or address != transport_address:
+                    publish_snapshot(latest, transport_address)
+                    snapshot = latest
+                if unavailable:
+                    print('fixed native app resolution recovered', flush=True)
+                    unavailable = False
+            except Exception as error:
+                if not unavailable:
+                    print(json.dumps({'resolved': False, 'errorClass': type(error).__name__}), flush=True)
+                    unavailable = True
+    finally:
+        if child is not None:
+            stop_forward(child)
+        stop_forward(control)
+
+
+def supervise_sdk():
     snapshot = resolve_snapshot()
     transport_address, _, _ = validate(snapshot)
     publish_snapshot(snapshot, transport_address)

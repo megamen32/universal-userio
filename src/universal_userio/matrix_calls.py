@@ -218,7 +218,12 @@ class MatrixCalls:
     async def _call(self, record, secret, identity, stop, voice_ai=None):
         # The existing voice service launches the fixed worker in its own
         # finite budget and effective environment. No voice settings live here.
-        reader, writer = await asyncio.open_unix_connection(record.get('control_route',{}).get('socket_path','/run/agentcall/control.sock'), limit=65536)
+        try:
+            reader, writer = await asyncio.open_unix_connection(record.get('control_route',{}).get('socket_path','/run/agentcall/control.sock'), limit=65536)
+        except ConnectionRefusedError:
+            # No control connection exists and no request bytes have been sent.
+            record.update(admission='not_admitted', admission_reason='control_connect_refused')
+            raise
         request = {'action':'matrix_transport','call':record,'account':secret,'identity':identity,
                    'rtc_auth_url':os.environ['USERIO_MATRIX_RTC_AUTH_URL']}
         if voice_ai is not None:

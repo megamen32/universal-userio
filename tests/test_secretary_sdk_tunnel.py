@@ -121,3 +121,22 @@ def test_standby_cannot_export_primary_control(monkeypatch):
     calls=[];monkeypatch.setattr(tunnel.subprocess,'Popen',lambda command:calls.append(command))
     with pytest.raises(ValueError):tunnel.start_forward('192.168.128.7')
     assert not calls
+
+
+def test_control_reverse_starts_even_if_sdk_discovery_fails(monkeypatch):
+    monkeypatch.setenv('USERIO_PRIMARY_CONTROL_REVERSE_SOCKET', '/run/agentcall/primary88/control.sock')
+    monkeypatch.setattr(tunnel.socket, 'gethostname', lambda: 'roomhacker-server-88')
+    starts = []
+    class Child:
+        count = 0
+        def wait(self, timeout):
+            self.count += 1
+            if self.count == 1:
+                raise tunnel.subprocess.TimeoutExpired('fixture SSH', timeout)
+            return 0
+        def poll(self): return 0
+    monkeypatch.setattr(tunnel.subprocess, 'Popen', lambda command: starts.append(command) or Child())
+    monkeypatch.setattr(tunnel, 'resolve_snapshot', lambda: (_ for _ in ()).throw(RuntimeError('missing app')))
+    assert tunnel.supervise() == 0
+    assert len(starts) == 1
+    assert '-R' in starts[0] and '-L' not in starts[0]
