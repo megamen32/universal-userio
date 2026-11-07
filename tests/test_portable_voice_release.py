@@ -126,7 +126,7 @@ def test_stopped_component_is_replaced_without_repeating_stop(monkeypatch):
     assert not any('/stop?' in path for _,path in calls)
 
 
-def test_only_owned_stopped_older_rollback_retires_after_health(monkeypatch):
+def test_older_rollback_is_preserved_after_health(monkeypatch):
     module=load();calls=[];reads=0
     def api(method,path,body=None,**kwargs):
         nonlocal reads
@@ -140,8 +140,10 @@ def test_only_owned_stopped_older_rollback_retires_after_health(monkeypatch):
             return {'Id':'candidate','State':{'Running':True,'Health':{'Status':'healthy'}}}
         return {}
     monkeypatch.setattr(module,'api',api)
-    assert module.install(IMAGE,'standby','userio-voice-check','/etc/config','/var/lib/data',19095)['status']=='installed'
-    assert calls[-1]==('DELETE','/containers/userio-voice-check-previous-older0123456')
+    result=module.install(IMAGE,'standby','userio-voice-check','/etc/config','/var/lib/data',19095)
+    assert result['status']=='installed'
+    assert result['preserved_rollback']=='userio-voice-check-previous-older0123456'
+    assert not any(method=='DELETE' for method,_ in calls)
 
 
 def test_primary_exports_existing_typed_gateway_ipc_but_standby_does_not():
@@ -262,3 +264,22 @@ def test_primary_mounts_the_mcp_servers_of_the_incident_brain(monkeypatch,tmp_pa
     assert f'{home}:{home}:ro' in primary['HostConfig']['Binds']
     assert f'{mesh}:{mesh}:rw' in primary['HostConfig']['Binds']
     assert f'{env_file}:{env_file}:ro' in primary['HostConfig']['Binds']
+
+
+def test_portable_gateway_supervises_and_stops_transcription_worker(monkeypatch,tmp_path):
+    module=load(); processes=[]
+    class Process:
+        def __init__(self, args): self.args=args; self.pid=123; self.returncode=None; processes.append(self)
+        def poll(self): return self.returncode
+        def wait(self, timeout=None):
+            if self.args[-1]=='transcriptions' and self.returncode is None:
+                raise module.subprocess.TimeoutExpired(self.args, timeout)
+            return self.returncode if self.returncode is not None else 0
+        def terminate(self): self.returncode=-15
+    monkeypatch.setattr(module.subprocess,'Popen',lambda args: Process(args))
+    monkeypatch.setattr(module.signal,'signal',lambda *_:None)
+    monkeypatch.setattr(module,'TRANSCRIPTION_PID',tmp_path/'worker.pid')
+    assert module.supervise_gateway(['gateway']) == 0
+    assert processes[0].args[-1] == 'transcriptions'
+    assert processes[1].args == ['gateway']
+    assert processes[0].returncode == -15

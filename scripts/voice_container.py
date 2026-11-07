@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -18,9 +19,9 @@ import tarfile
 import time
 from urllib.parse import quote
 
-ADAPTER_REVISION = '5de41fd714910fc04f742c4a91dd5ce69401635c'
+ADAPTER_REVISION = 'fd16a908c123b00337385e64b261cd52fcceaa39'
 ADAPTER_PATH = 'integrations/agentcall/agentcall_secretary_voice.py'
-ADAPTER_SHA = '486a64879998962f43c090a9a199823e4f9779ba5db20c27b1461d062f820522'
+ADAPTER_SHA = '8e994540d7461911e0b9d1b453edeb86ecabe2b1d0bf746525a05dc382b0aa66'
 IMAGE = re.compile(r'ghcr\.io/megamen32/universal-userio-voice@sha256:[a-f0-9]{64}\Z')
 LABEL = 'com.userio.portable-voice'
 STOP_TIMEOUT = 20
@@ -36,6 +37,7 @@ NOTICEPLACE_HOME = '/opt/noticeplace'
 NOTICEPLACE_MESH = '/run/noticeplace-mesh'
 NOTICEPLACE_MCP_ENV = '/etc/noticeplace-voice-mcp.env'
 DOCKER_TIMEOUT = 40
+TRANSCRIPTION_PID = Path('/tmp/userio-voice-transcription.pid')
 
 
 def build_context(root, revision, archive, destination):
@@ -182,8 +184,8 @@ def install(image,role,name,config,data,port, *, timeout=75):
                          'revision':info['Config']['Labels'].get('org.opencontainers.image.revision'),
                          'calls_tested':False}
                 if archived:
-                    try:api('DELETE','/containers/'+archive)
-                    except Exception:receipt['cleanup_pending']=archive
+                    # Keep the older rollback: its owner may still need it.
+                    receipt['preserved_rollback']=archive
                 return receipt
             if not current['State'].get('Running'):break
             time.sleep(.5)
@@ -220,6 +222,13 @@ def incoming_socket_ready(path,settings):
 
 def health():
     if verify_payload():return 1
+    try:
+        pid = int(TRANSCRIPTION_PID.read_text())
+        os.kill(pid, 0)
+        if b'universal_userio.container_platform\x00transcriptions' not in Path(f'/proc/{pid}/cmdline').read_bytes():
+            return 1
+    except (OSError, ValueError):
+        return 1
     for name in ('control.sock','gatewayd.sock','incoming.sock'):
         if not (Path('/run/agentcall')/name).is_socket():return 1
     settings=json.loads(Path('/etc/userio-voice/environment.json').read_text())
@@ -232,6 +241,46 @@ def runtime_environment(settings):
     result.update(AGENTCALL_FAST_AGENT_PYTHON="/usr/local/bin/python",
                   AGENTCALL_FAST_AGENT_BIN="/usr/local/bin/fast-agent")
     return result
+
+
+def supervise_gateway(argv):
+    """Keep the existing durable transcription worker beside the gateway."""
+    stopping = False
+    gateway = worker = None
+    def stop(_signum, _frame):
+        nonlocal stopping
+        stopping = True
+        if gateway is not None and gateway.poll() is None:
+            gateway.terminate()
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    def start_worker():
+        child = subprocess.Popen([sys.executable, '-m', 'universal_userio.container_platform', 'transcriptions'])
+        temporary = TRANSCRIPTION_PID.with_suffix('.tmp')
+        temporary.write_text(str(child.pid))
+        temporary.replace(TRANSCRIPTION_PID)
+        return child
+    try:
+        worker = start_worker()
+        gateway = subprocess.Popen(argv)
+        while not stopping:
+            try:
+                return gateway.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                if worker.poll() is not None:
+                    time.sleep(1)
+                    worker = start_worker()
+        return gateway.wait(timeout=15)
+    finally:
+        TRANSCRIPTION_PID.unlink(missing_ok=True)
+        for child in (gateway, worker):
+            if child is not None and child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait(timeout=5)
 
 
 def serve():
@@ -250,7 +299,7 @@ def serve():
     if role=='standby':os.environ['AGENTCALL_LLM_PROVIDER']='openai-compatible'
     elif settings.get('AGENTCALL_LLM_PROVIDER')!='openai-compatible' or any(not settings.get(key) for key in ('AGENTCALL_STT_URL','AGENTCALL_TTS_URL')):
         raise ValueError('primary requires explicit external STT/TTS and openai-compatible SDK configuration')
-    os.execv(sys.executable,[sys.executable,'/usr/local/lib/agentcall/agentcall_realtime_bridge.py',
+    return supervise_gateway([sys.executable,'/usr/local/lib/agentcall/agentcall_realtime_bridge.py',
              '--host','127.0.0.1','--port',port,'--event-socket','/run/agentcall/gatewayd.sock',
              '--control-socket','/run/agentcall/control.sock'])
 
@@ -258,5 +307,5 @@ def serve():
 if __name__=='__main__':
     if sys.argv[1:] == ['payload']:sys.exit(verify_payload())
     if sys.argv[1:] == ['health']:sys.exit(health())
-    if sys.argv[1:] == ['serve']:serve()
+    if sys.argv[1:] == ['serve']:sys.exit(serve())
     else:raise SystemExit('use existing container_release.py install-voice')
