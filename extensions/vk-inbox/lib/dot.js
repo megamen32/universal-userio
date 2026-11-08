@@ -53,7 +53,8 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       // elements. Read their full DOM text (CSS truncation is only visual).
       const cards=[...(e.querySelectorAll?.('.attachment-list [class~="group/resource-card"]')||[])].filter(card=>!card.querySelector?.('img.attachment-image'));
       const documents=cards.map(card=>String(card.innerText||card.textContent||'').trim());
-      if(documents.some(name=>!name||name.length>255||/[\/\\\u0000-\u001f]/.test(name)))return {ok:false,error:'media_identity_requires_review'};
+      const validName=name=>!!name&&name.length<=255&&!/[\/\\\u0000-\u001f]/.test(name);
+      const attachmentIncomplete=documents.some(name=>!validName(name));
       if(images.length+documents.length>10)return {ok:false,error:'too_many_visible_attachments'};
       const attachment_fingerprints=[];
       for(const img of images){
@@ -75,8 +76,8 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       }
       messages.push({id:e.dataset.messageId,role:e.classList.contains('self')?'user':'assistant',
         text,entities:formatIncomplete?[]:mapped,format_incomplete:formatIncomplete,
-        attachment_names:[...images.map(i=>i.alt).filter(Boolean),...documents],
-        attachment_count:images.length+documents.length,attachment_fingerprints,
+        attachment_names:[...images.map(i=>i.alt).filter(Boolean),...documents.filter(validName)],
+        attachment_count:images.length+documents.length,attachment_fingerprints,attachment_incomplete:attachmentIncomplete,
         reply_to:e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||null});
     }
     let editors = [...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e => e.getClientRects().length);

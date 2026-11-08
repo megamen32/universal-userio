@@ -336,3 +336,14 @@ test('an image inside a resource card is counted only once',async()=>{
  assert.equal(result.ok,true);assert.equal(result.messages[0].attachment_count,1);
  assert.deepEqual(Array.from(result.messages[0].attachment_names),['photo.png']);
 });
+test('an unreadable resource card does not make the whole room unreadable',async()=>{
+ const room='fixture',id=room+'~'+room+'~CalpicoMessage~bad-card';
+ const card={innerText:'bad/name\nmetadata',textContent:'bad/name\nmetadata'};
+ const row={dataset:{messageId:id},closest:()=>null,classList:{contains:()=>false},querySelector:()=>null,
+  querySelectorAll:s=>s==='img.attachment-image'?[]:s==='.attachment-list [class~="group/resource-card"]'?[card]:[]};
+ const self={};const document={querySelectorAll:s=>s.startsWith('article')?[row]:[],querySelector:()=>null};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:webcrypto});
+ const result=await self.UserIODot.pageAction(url,room,null,null);
+ assert.equal(result.ok,true);assert.equal(result.messages[0].attachment_incomplete,true);
+ assert.equal(result.messages[0].attachment_count,1);assert.equal(result.messages[0].attachment_names.length,0);
+});
