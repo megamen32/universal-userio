@@ -272,6 +272,19 @@ test('media caption keeps its clickable link in the Dot composer',async()=>{
  await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});await self.UserIODot.mediaAction(url,room,'upload',{transfer_id});
  const result=await self.UserIODot.mediaAction(url,room,'send',{transfer_id,text:'сайт'});assert.equal(result.ok,true);assert.match(html,/<a href="https:\/\/example\.org\/">сайт<\/a>/);
 });
+test('document caption keeps a single newline when the editor renders paragraphs differently',async()=>{
+ const room='fixture',text='Никита Розанов:\nВот план на завтра.',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null},input={files:[],dispatchEvent:()=>{}};let clicks=0;
+ const composer={outerHTML:'plan.docx',innerText:'',querySelectorAll:s=>s==='input[type="file"]'?[input]:[],querySelector:()=>null};
+ const editor={innerText:'',getClientRects:()=>[1],closest:()=>composer,focus:()=>{},querySelectorAll:()=>[]};
+ const button={getClientRects:()=>[1],getAttribute:()=> 'Send',disabled:false,click:()=>clicks++};
+ const document={querySelector:()=>null,querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:s==='button'?[button]:[],execCommand:(kind,_ui,value)=>{editor.innerText=kind==='insertText'?value.replace(/\n/g,'\n\n'):value.replace(/<br>/g,'\n');return true}};
+ class Transfer{constructor(){this.files=[];this.items={add:f=>this.files.push(f)}}};class FakeFile{constructor(_parts,name){this.name=name}}
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,Uint8Array,crypto:globalThis.crypto,atob,Date,DataTransfer:Transfer,File:FakeFile,Event:class{},setTimeout:fn=>fn()});
+ const bytes=new Uint8Array([1,2,3,4]),hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).map(b=>b.toString(16).padStart(2,'0')).join(''),transfer_id='12345678-1234-1234-1234-123456789abc';
+ await self.UserIODot.mediaAction(url,room,'start',{transfer_id,text,files:[{filename:'plan.docx',mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',size:4,sha256:hash}]});
+ await self.UserIODot.mediaAction(url,room,'chunk',{transfer_id,index:0,offset:0,data:'AQIDBA=='});await self.UserIODot.mediaAction(url,room,'upload',{transfer_id});
+ const result=await self.UserIODot.mediaAction(url,room,'send',{transfer_id,text});assert.equal(result.ok,true);assert.equal(clicks,1);
+});
 test('document upload readiness uses its file name rather than an image preview',async()=>{
  const room='fixture',row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null},input={files:[],dispatchEvent:()=>{}};
  const composer={outerHTML:'договор.pdf',innerText:'',querySelectorAll:s=>s==='input[type="file"]'?[input]:[],querySelector:()=>null};

@@ -249,7 +249,7 @@ async function mediaAction(url,room,operation,args={}){
         else entities.push(e);
       }
       let value=text,command='insertText';
-      if(entities.length){
+      if(entities.length||text.includes('\n')){
         const esc=v=>String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
         const points=[...new Set([0,text.length,...entities.flatMap(e=>[e.offset,e.offset+e.length])])].sort((a,b)=>a-b);
         value='';command='insertHTML';
