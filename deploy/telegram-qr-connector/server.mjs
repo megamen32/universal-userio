@@ -9,7 +9,8 @@ import {createGroupBotSender,createGroupBotMediaSender} from "./dot-group-send.m
 import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
 import {routeGroupDotEvent} from "./dot-group-receive.mjs";
 import {readGroupSettings,accessGroupSettings,groupTopicId,observeGroupMessage,resolveGroupTopicTitle} from "./dot-group-settings.mjs";
-import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
+import {verifiedIncomingEcho,verifiedCaptionRecoveryAudit} from "./dot-incoming-reconcile.mjs";
+import {validateMediaFiles} from "./dot-browser-media.mjs";
 import {claimNotAccepted,validateReplayReply} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import {createPrivateDotCaller} from './dot-private-extension.mjs';
@@ -1616,10 +1617,44 @@ http.createServer(async (req, res) => {
       if(record?.status==='accepted'&&record.text_hash===input.expected_hash){res.writeHead(200,{'content-type':'application/json'});return res.end(JSON.stringify({status:'accepted',duplicate:true}));}
       const before=JSON.stringify(relay.state),snap=await relay.browserCall('dot_snapshot',{tab_id:binding.pageId,after:record?.cursor});
       if(before!==JSON.stringify(relay.state))throw Error('incoming_reconcile_changed');
-      const echo=verifiedIncomingEcho(record,snap,binding.room,input.expected_hash);
+      const captionRecovery=record?.status==='requires_review'&&record?.reason==='caption_unverified';
+      const echo=verifiedIncomingEcho(record,snap,binding.room,input.expected_hash,{captionRecovery});
+      let mediaState=null,mediaPath=null,mediaBefore=null,ingress=null,mediaGroup=null;
+      if(captionRecovery){
+        if(!/^[a-f0-9]{32}$/.test(input.recovery_id||''))throw Error('incoming_reconcile_invalid');
+        const readProof=suffix=>{
+          const path=stateDir+'/dot-media-recovery-'+input.recovery_id+suffix,stat=lstatSync(path);
+          if(!stat.isFile()||(stat.mode&0o777)!==0o600||stat.uid!==process.getuid()||stat.size>20*1024*1024)throw Error('incoming_reconcile_invalid');
+          return JSON.parse(readFileSync(path,'utf8'));
+        };
+        const proof=readProof('.json'),intent=readProof('.intent'),result=readProof('.result'),visible=readProof('.verified');
+        verifiedCaptionRecoveryAudit({proof,intent,result,record,id,requestId:input.recovery_id,echo,hash:input.expected_hash,messageId:input.message_id});
+        if(visible.status!=='visible_in_dot'||visible.file_label_count!==1||visible.draft_remove_button_count!==0||visible.caption_label_count!==1)throw Error('incoming_reconcile_invalid');
+        validateMediaFiles(record.media);
+        mediaPath=groupJournalPath(stateDir,binding).replace('/dot-relay-','/dot-media-');
+        const stat=lstatSync(mediaPath);if(!stat.isFile()||(stat.mode&0o777)!==0o600||stat.uid!==process.getuid())throw Error('incoming_reconcile_invalid');
+        ingress=dotMediaIngresses.get(binding.botAccountId)||null;
+        const groupKey='message:'+input.message_id;
+        if(ingress&&(ingress.file!==mediaPath||ingress.pending.has(groupKey)))throw Error('incoming_reconcile_busy');
+        mediaBefore=readFileSync(mediaPath,'utf8');mediaState=ingress?ingress.state:JSON.parse(mediaBefore);
+        if(ingress&&JSON.stringify(mediaState)!==JSON.stringify(JSON.parse(mediaBefore)))throw Error('incoming_reconcile_changed');
+        mediaGroup=mediaState.groups?.[groupKey];
+        if(!mediaGroup||JSON.stringify(mediaGroup.media)!==JSON.stringify(record.media)||!((mediaGroup.status==='requires_review'&&!mediaGroup.echo)||(mediaGroup.status==='accepted'&&mediaGroup.echo===echo)))throw Error('incoming_reconcile_changed');
+      }
       const backup=stateDir+'/dot-group-reconcile-'+input.request_id+'.json';
-      const fd=openSync(backup,'wx',0o600);try{writeFileSync(fd,before);fsyncSync(fd)}finally{closeSync(fd)}
+      const fd=openSync(backup,'wx',0o600);try{writeFileSync(fd,captionRecovery?JSON.stringify({relay:JSON.parse(before),media:JSON.parse(mediaBefore),recovery_id:input.recovery_id}):before);fsyncSync(fd)}finally{closeSync(fd)}
       const dir=openSync(stateDir,'r');try{fsyncSync(dir)}finally{closeSync(dir)}
+      if(captionRecovery&&mediaGroup.status!=='accepted'){
+        if(readFileSync(mediaPath,'utf8')!==mediaBefore)throw Error('incoming_reconcile_changed');
+        mediaGroup.status='accepted';mediaGroup.echo=echo;mediaGroup.reconciled={request_id:input.request_id,recovery_id:input.recovery_id,at:Date.now(),backup};
+        if(ingress)ingress.save();
+        else{
+          const temp=mediaPath+'.reconcile-'+input.request_id+'.tmp',fd=openSync(temp,'wx',0o600);
+          try{writeFileSync(fd,JSON.stringify(mediaState));fsyncSync(fd)}finally{closeSync(fd)}
+          renameSync(temp,mediaPath);
+          const dir=openSync(stateDir,'r');try{fsyncSync(dir)}finally{closeSync(dir)}
+        }
+      }
       record.echo=echo;record.status='accepted';record.reconciled={request_id:input.request_id,at:Date.now(),backup};relay.save();
       res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({status:'accepted',duplicate:false}));
     }catch{res.writeHead(409,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'incoming_reconcile_refused'}));}

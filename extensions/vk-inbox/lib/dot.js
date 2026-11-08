@@ -49,7 +49,12 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
         });
       }
       const images=[...(e.querySelectorAll?.('img.attachment-image')||[])];
-      if(images.length>10)return {ok:false,error:'too_many_visible_attachments'};
+      // Dot renders non-image uploads as resource cards, not attachment-image
+      // elements. Read their full DOM text (CSS truncation is only visual).
+      const cards=[...(e.querySelectorAll?.('.attachment-list [class~="group/resource-card"]')||[])].filter(card=>!card.querySelector?.('img.attachment-image'));
+      const documents=cards.map(card=>String(card.innerText||card.textContent||'').trim());
+      if(documents.some(name=>!name||name.length>255||/[\/\\\u0000-\u001f]/.test(name)))return {ok:false,error:'media_identity_requires_review'};
+      if(images.length+documents.length>10)return {ok:false,error:'too_many_visible_attachments'};
       const attachment_fingerprints=[];
       for(const img of images){
         const src=img.currentSrc||img.src||img.getAttribute?.('src')||'';
@@ -62,10 +67,16 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
         }catch{return {ok:false,error:'media_fingerprint_requires_review'};}
         attachment_fingerprints.push(Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join(''));
       }
+      for(const [index,name] of documents.entries()){
+        // This identifies the displayed card for change detection; actual
+        // bytes must still be verified before forwarding or claiming delivery.
+        const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('document\0'+e.dataset.messageId+'\0'+index+'\0'+name));
+        attachment_fingerprints.push(Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join(''));
+      }
       messages.push({id:e.dataset.messageId,role:e.classList.contains('self')?'user':'assistant',
         text,entities:formatIncomplete?[]:mapped,format_incomplete:formatIncomplete,
-        attachment_names:images.map(i=>i.alt).filter(Boolean),
-        attachment_count:images.length,attachment_fingerprints,
+        attachment_names:[...images.map(i=>i.alt).filter(Boolean),...documents],
+        attachment_count:images.length+documents.length,attachment_fingerprints,
         reply_to:e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||null});
     }
     let editors = [...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e => e.getClientRects().length);
