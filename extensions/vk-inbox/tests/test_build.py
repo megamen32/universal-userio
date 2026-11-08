@@ -46,5 +46,36 @@ def test_release_archives_match_extension_source():
             shipped = json.loads(package.read('manifest.json'))
             assert shipped['version'] == manifest['version'], 'shipped extension version is stale'
             for name in ('background.js', 'popup.js', 'popup.html', 'options.js', 'options.html',
-                         'lib/oauth.js', 'lib/update.js', 'lib/chatgpt.js'):
+                         'lib/oauth.js', 'lib/update.js', 'lib/chatgpt.js', 'lib/userio.js'):
                 assert package.read(name) == (ROOT / name).read_bytes(), f'stale release asset: {name}'
+
+
+def test_public_build_does_not_assign_the_same_browser_id_to_every_profile():
+    import json
+    import re
+    with tempfile.TemporaryDirectory(prefix='userio-identity-build-') as temp:
+        env = os.environ.copy()
+        env.update(USERIO_STATIC_DIR=temp, USERIO_AGENT_ID='same-for-all')
+        env.pop('USERIO_API_TOKEN', None)
+        subprocess.run([str(ROOT / 'scripts/build.sh')], cwd=ROOT, env=env, check=True)
+        with zipfile.ZipFile(Path(temp) / 'vk-userio-extension.zip') as package:
+            config = package.read('lib/config.js').decode()
+            data = json.loads(re.search(r'USERIO_CONFIG\s*=\s*(\{[^;]+\})', config).group(1))
+            assert not data.get('agentId')
+
+
+def test_sanitizer_removes_a_baked_browser_identity():
+    import json
+    import re
+    with tempfile.TemporaryDirectory(prefix='userio-identity-sanitize-') as temp:
+        archive = Path(temp) / 'extension.zip'
+        with zipfile.ZipFile(archive, 'w') as package:
+            package.writestr('lib/config.js', 'root.USERIO_CONFIG = {"endpoint":"https://example.org","token":"secret","agentId":"shared"};')
+            package.writestr('options.js', '')
+        sanitizer = ROOT.parents[1] / 'scripts' / 'sanitize_vk_extension.py'
+        subprocess.run(['python3', str(sanitizer), str(archive)], check=True)
+        with zipfile.ZipFile(archive) as package:
+            config = package.read('lib/config.js').decode()
+            data = json.loads(re.search(r'USERIO_CONFIG\s*=\s*(\{[^;]+\})', config).group(1))
+            assert not data.get('agentId')
+            assert not data.get('token')

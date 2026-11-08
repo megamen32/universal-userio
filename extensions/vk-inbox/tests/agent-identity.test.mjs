@@ -26,3 +26,8 @@ test('fresh profiles create distinct persistent automatic agent identities', asy
 test('existing explicit binding remains stable', async () => {
   assert.equal((await profile({ agentId: 'vk-browser-intel' }).settings()).agentId, 'vk-browser-intel');
 });
+test('an existing legacy installation keeps its bound agent identity on upgrade', async () => {
+  const existing = profile({ agentState: { lastOkAt: 100, ts: 101 } });
+  assert.equal((await existing.settings()).agentId, 'vk-browser');
+  assert.equal(existing.data.agentId, 'vk-browser');
+});

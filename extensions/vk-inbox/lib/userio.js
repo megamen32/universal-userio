@@ -19,9 +19,14 @@
   let settingsPromise;
   lib.settings = async () => {
     if (!settingsPromise) settingsPromise = (async () => {
-      const s = await chrome.storage.local.get(DEFAULTS);
+      const s = await chrome.storage.local.get({ ...DEFAULTS, agentState: null });
       if (!s.agentId) {
-        s.agentId = `browser-${crypto.randomUUID()}`;
+        // An older installation has already polled under its baked identity.
+        // Keep that route until its existing bindings can be migrated; a
+        // fresh profile has no previous poll state and gets its own ID.
+        s.agentId = s.agentState && typeof s.agentState === 'object'
+          ? (CFG.agentId || 'vk-browser')
+          : `browser-${crypto.randomUUID()}`;
         await chrome.storage.local.set({ agentId: s.agentId });
       }
       return s.agentId;

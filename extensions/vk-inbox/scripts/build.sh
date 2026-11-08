@@ -8,7 +8,7 @@
 # Public package defaults (baked into lib/config.js) so a fresh install
 # knows the global UserIO host without including deployment credentials:
 #   USERIO_PUBLIC_ENDPOINT   defaults to https://msg.bezrabotnyi.com
-#   USERIO_AGENT_ID          agent name for the /v1/agent channel
+# Browser agent identities are generated and saved per profile at runtime.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,10 +37,10 @@ cp -r lib content "${PKG}/"
 
 # Bake public configuration into the package only. The shared ZIP must never
 # contain a deployment token; users connect their account through OAuth after installation.
-python3 - "${PKG}/lib/config.js" "${USERIO_PUBLIC_ENDPOINT:-https://msg.bezrabotnyi.com}" "${USERIO_AGENT_ID:-vk-browser}" <<'PY'
+python3 - "${PKG}/lib/config.js" "${USERIO_PUBLIC_ENDPOINT:-https://msg.bezrabotnyi.com}" <<'PY'
 import json, sys
-path, endpoint, agent_id = sys.argv[1:4]
-cfg = {"endpoint": endpoint, "token": "", "agentId": agent_id}
+path, endpoint = sys.argv[1:3]
+cfg = {"endpoint": endpoint, "token": "", "agentId": ""}
 body = (
     "// Build-time configuration baked by scripts/build.sh; storage overrides.\n"
     "(function (root) {\n"
