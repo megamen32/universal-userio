@@ -80,8 +80,14 @@ def submit_transcription(value):
         owner=path.parent.stat()
         if os.geteuid()==0:os.chown(claim,owner.st_uid,owner.st_gid)
     try:
-        subprocess.run(['systemctl','start','--no-block',job['unit']],check=True,
-                       stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=5)
+        if os.environ.get('USERIO_VOICE_ROLE') in {'calls-primary', 'standby'}:
+            # Portable voice owns the same durable queue as the container
+            # worker; it has no host systemd inside its image.
+            from universal_userio.container_platform import submit
+            submit(['start', '--no-block', job['unit']])
+        else:
+            subprocess.run(['systemctl','start','--no-block',job['unit']],check=True,
+                           stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=5)
     except Exception as error:
         job.update(status='SUBMIT_FAILED',error=type(error).__name__)
         write_json(claim,job)

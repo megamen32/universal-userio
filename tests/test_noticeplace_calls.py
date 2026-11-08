@@ -336,3 +336,29 @@ def test_optional_control_config_symlink_never_falls_back_to_local_voice(tmp_pat
     monkeypatch.setattr(matrix_calls,'CONTROL_CONFIG',link)
     with pytest.raises(PermissionError):matrix_calls.control_route(required=False)
     with pytest.raises(PermissionError):matrix_calls.control_route(required=True)
+
+
+def test_matrix_connection_refused_before_control_write_is_proven_not_admitted(tmp_path, monkeypatch, setup):
+    call_id = str(uuid.uuid4())
+    record = {'call_id': call_id, 'user_id': 'qa', 'status': 'accepted', 'answered': False}
+    calls = matrix_calls.MatrixCalls(Mock(), tmp_path / 'receipts')
+    (calls.root / call_id).mkdir(parents=True)
+    monkeypatch.setattr(calls, '_emit', Mock())
+    async def refused(*args, **kwargs):
+        raise ConnectionRefusedError()
+    monkeypatch.setattr(matrix_calls.asyncio, 'open_unix_connection', refused)
+    calls._run(record, {}, {}, threading.Event())
+    receipt = calls.get(call_id, 'qa')
+    assert receipt['admission'] == 'not_admitted'
+    assert receipt['admission_reason'] == 'control_connect_refused'
+    ledger = setup([('failed', False, False, {'admission': 'not_admitted', 'admission_reason': 'control_connect_refused'})])
+    result = noticeplace_calls.noticeplace_call(Mock(), 'owner', PAYLOAD)
+    assert result['safe_to_fallback'] and result['answered'] is False and not result.get('uncertain')
+    noticeplace_calls.noticeplace_call(Mock(), 'owner', PAYLOAD)
+    assert len(ledger.starts) == 1
+
+
+def test_failed_with_voice_identity_never_allows_fallback(setup):
+    setup([('failed', False, False, {'admission': 'not_admitted', 'admission_reason': 'control_connect_refused', 'voice_call_id': str(uuid.uuid4())})])
+    result = noticeplace_calls.noticeplace_call(Mock(), 'owner', PAYLOAD)
+    assert result['uncertain'] and not result['safe_to_fallback']

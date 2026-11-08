@@ -128,6 +128,16 @@ COPY deploy/containers/external/agentcall_secretary_voice.py /usr/local/lib/agen
 COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
 RUN python /opt/universal-userio/scripts/voice_container.py payload
 
+# Reuse the currently installed portable runtime and its verified SDK adapter.
+# Only the durable transcription submission and its supervisor change.
+FROM ghcr.io/megamen32/universal-userio-voice@sha256:a008585bdb32e626db5779ed8e820f0e59424057c1be96733ebdba3145f28e93 AS portable-voice-transcription
+ARG USERIO_REVISION
+LABEL org.opencontainers.image.revision=$USERIO_REVISION
+COPY scripts/voice_container.py /opt/universal-userio/scripts/voice_container.py
+COPY src/universal_userio/voice/agentcall_recording_transcribe.py /opt/universal-userio/src/universal_userio/voice/agentcall_recording_transcribe.py
+COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
+RUN python /opt/universal-userio/scripts/voice_container.py payload
+
 # Incoming host Answer/AudioSocket contract fix; reuse verified dependencies and SDK adapter.
 FROM ghcr.io/megamen32/universal-userio-voice@sha256:cdea3f878124267aed2fce266a48f6a09fbbf366794fbcdb4d8219dbd16e9317 AS portable-voice-socket
 ARG USERIO_REVISION

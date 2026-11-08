@@ -138,6 +138,12 @@ def noticeplace_call(service, user_id, payload, *, channel='matrix', machine_aut
                           request_id=request_id,actor=call['target'])
         if call.get('answered') is True:
             return dict(result, ok=True, answered=True)
+        if (channel == 'matrix' and call['status'] == 'failed' and call['call_id'] not in calls.active
+                and call.get('admission') == 'not_admitted'
+                and call.get('admission_reason') == 'control_connect_refused'
+                and not call.get('voice_call_id')):
+            return dict(result, ok=False, answered=False, ended=True, safe_to_fallback=True,
+                        error='control_connect_refused', admission='not_admitted')
         if ended and call['status'] == 'unanswered' and call.get('relay_reconciliation') not in {'pending', 'unavailable'}:
             return dict(result, ok=True, answered=False, safe_to_fallback=True)
         if call['status'] == 'unknown' or call['call_id'] not in calls.active or time.monotonic() >= deadline:
