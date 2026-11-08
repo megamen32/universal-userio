@@ -137,6 +137,11 @@ export class DotRelay {
    if(r.source!=='telegram'&&!id.startsWith('telegram:'))continue;
    if(r.echo===message.id)return 'telegram';
    if(message.role==='user'&&!r.echo&&r.text_hash===textHash(message.text)&&!['not_accepted','ignored'].includes(r.status))return 'uncertain';
+   // Older editors expanded each inserted newline into a paragraph break.
+   // Until that failed media attempt is reconciled, an otherwise identical
+   // visible draft must not be sent back to its own Telegram source.
+   if(message.role==='user'&&!r.echo&&r.status==='requires_review'&&r.reason==='caption_unverified'&&r.media?.length&&
+      typeof message.text==='string'&&r.text_hash===textHash(message.text.replace(/\n\n/g,'\n')))return 'uncertain';
   }
   return null;
  }
