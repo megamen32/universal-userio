@@ -50,7 +50,7 @@ def test_release_archives_match_extension_source():
                 assert package.read(name) == (ROOT / name).read_bytes(), f'stale release asset: {name}'
 
 
-def test_public_build_does_not_assign_the_same_browser_id_to_every_profile():
+def test_build_retains_the_configured_legacy_identity_for_migration():
     import json
     import re
     with tempfile.TemporaryDirectory(prefix='userio-identity-build-') as temp:
@@ -61,10 +61,10 @@ def test_public_build_does_not_assign_the_same_browser_id_to_every_profile():
         with zipfile.ZipFile(Path(temp) / 'vk-userio-extension.zip') as package:
             config = package.read('lib/config.js').decode()
             data = json.loads(re.search(r'USERIO_CONFIG\s*=\s*(\{[^;]+\})', config).group(1))
-            assert not data.get('agentId')
+            assert data.get('agentId') == 'same-for-all'
 
 
-def test_sanitizer_removes_a_baked_browser_identity():
+def test_sanitizer_retains_the_public_legacy_fallback_without_credentials():
     import json
     import re
     with tempfile.TemporaryDirectory(prefix='userio-identity-sanitize-') as temp:
@@ -77,5 +77,5 @@ def test_sanitizer_removes_a_baked_browser_identity():
         with zipfile.ZipFile(archive) as package:
             config = package.read('lib/config.js').decode()
             data = json.loads(re.search(r'USERIO_CONFIG\s*=\s*(\{[^;]+\})', config).group(1))
-            assert not data.get('agentId')
+            assert data.get('agentId') == 'vk-browser'
             assert not data.get('token')
