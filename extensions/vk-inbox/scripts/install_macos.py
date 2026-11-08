@@ -50,7 +50,7 @@ def installed_path(profile):
 def reload_extension():
  # Chrome owns loading/consent. Apple Events refusal is reported, never bypassed.
  url='chrome-extension://'+EXTENSION_ID+'/options.html'
- script='tell application "Google Chrome"\nset t to make new tab at end of tabs of front window with properties {URL:'+json.dumps(url)+'}\ndelay 1\nset resultText to execute t javascript "chrome.runtime.reload(); \'reload_requested\'"\nreturn resultText\nend tell'
+ script='tell application "Google Chrome"\nif (count of windows) = 0 then make new window\nset t to make new tab at end of tabs of front window with properties {URL:'+json.dumps(url)+'}\ndelay 2\nif URL of t is not '+json.dumps(url)+' then error "wrong extension page"\nset resultText to execute t javascript "setTimeout(() => chrome.runtime.reload(), 250); \'reload_requested\'"\nreturn resultText\nend tell'
  p=subprocess.run(['osascript','-e',script],capture_output=True,text=True,timeout=15)
  return p.returncode==0 and 'reload_requested' in p.stdout
 
