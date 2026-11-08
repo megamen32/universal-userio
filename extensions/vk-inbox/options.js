@@ -64,8 +64,9 @@
       return;
     }
     const accounts = result.accounts;
-    $("chatgptStatus").textContent = accounts.length ? "Подключено к UserIO" : "Пока не подключён";
-    $("chatgptSelect").hidden = accounts.length > 0;
+    $("chatgptStatus").textContent = accounts.length ? "Уже подключены к UserIO" : "Пока не подключён";
+    // The server list includes other browsers; it says nothing about this profile.
+    $("chatgptSelect").hidden = false;
     for (const account of accounts) {
       const row = document.createElement("div"); row.className = "account";
       const name = document.createElement("span"); name.textContent = account.email || account.name || account.slug;
