@@ -312,3 +312,38 @@ test('a backgrounded existing draft is never overwritten',async()=>{
  const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:globalThis.crypto});
  assert.equal((await self.UserIODot.pageAction(url,room,'новый текст',null)).error,'existing_draft');assert.equal(writes,0);
 });
+test('snapshot reports a document resource card as an attachment of its message',async()=>{
+ const room='fixture',id=room+'~'+room+'~CalpicoMessage~document';
+ const card={innerText:'План.docx',textContent:'План.docx'};
+ const row={dataset:{messageId:id},closest:()=>null,classList:{contains:()=>true},querySelector:()=>null,
+  querySelectorAll:s=>s==='img.attachment-image'?[]:s==='.attachment-list [class~="group/resource-card"]'?[card]:[]};
+ const self={};const document={querySelectorAll:s=>s.startsWith('article')?[row]:[],querySelector:()=>null};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:webcrypto});
+ const result=await self.UserIODot.pageAction(url,room,null,null);
+ assert.equal(result.ok,true);assert.equal(result.messages[0].attachment_count,1);
+ assert.deepEqual(Array.from(result.messages[0].attachment_names),['План.docx']);
+ assert.match(result.messages[0].attachment_fingerprints[0],/^[a-f0-9]{64}$/);
+});
+test('an image inside a resource card is counted only once',async()=>{
+ const room='fixture',id=room+'~'+room+'~CalpicoMessage~image';
+ const image={alt:'photo.png',src:'https://chatgpt.com/files/photo.png'};
+ const card={querySelector:s=>s==='img.attachment-image'?image:null,innerText:'photo.png'};
+ const row={dataset:{messageId:id},closest:()=>null,classList:{contains:()=>true},querySelector:()=>null,
+  querySelectorAll:s=>s==='img.attachment-image'?[image]:s==='.attachment-list [class~="group/resource-card"]'?[card]:[]};
+ const self={};const document={querySelectorAll:s=>s.startsWith('article')?[row]:[],querySelector:()=>null};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:webcrypto});
+ const result=await self.UserIODot.pageAction(url,room,null,null);
+ assert.equal(result.ok,true);assert.equal(result.messages[0].attachment_count,1);
+ assert.deepEqual(Array.from(result.messages[0].attachment_names),['photo.png']);
+});
+test('an unreadable resource card does not make the whole room unreadable',async()=>{
+ const room='fixture',id=room+'~'+room+'~CalpicoMessage~bad-card';
+ const card={innerText:'bad/name\nmetadata',textContent:'bad/name\nmetadata'};
+ const row={dataset:{messageId:id},closest:()=>null,classList:{contains:()=>false},querySelector:()=>null,
+  querySelectorAll:s=>s==='img.attachment-image'?[]:s==='.attachment-list [class~="group/resource-card"]'?[card]:[]};
+ const self={};const document={querySelectorAll:s=>s.startsWith('article')?[row]:[],querySelector:()=>null};
+ vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:webcrypto});
+ const result=await self.UserIODot.pageAction(url,room,null,null);
+ assert.equal(result.ok,true);assert.equal(result.messages[0].attachment_incomplete,true);
+ assert.equal(result.messages[0].attachment_count,1);assert.equal(result.messages[0].attachment_names.length,0);
+});

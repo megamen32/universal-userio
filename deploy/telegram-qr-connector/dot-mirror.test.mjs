@@ -394,3 +394,10 @@ test('resync rejects concurrent admission while reading the room',async()=>{
  const r=await x.mirror.resync({requestId:'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',expectedCursor:'baseline',targetCursor:'head'});
  assert.equal(r.status,'resync_refused');assert.equal(x.relay.state.mirror.cursor,'baseline');assert.equal(x.relay.state.incoming.concurrent.status,'queued');
 });
+test('an unreadable resource card is held without blocking later messages',async()=>{
+ const x=fixture();await x.mirror.tick();
+ x.rows([msg('baseline','user','old'),{...withImages('unknown-file','assistant','file'),attachment_incomplete:true},msg('later','assistant','ready')]);
+ await settle(x);
+ assert.equal(x.relay.state.mirror.held['unknown-file'].reason,'media_identity_requires_review');
+ assert.deepEqual(x.sends.map(s=>s.text),['dots:\nready']);assert.equal(x.mediaSends.length,0);
+});

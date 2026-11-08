@@ -81,3 +81,9 @@ test('verified native reply target permits a unique echo when the main list omit
  const r=new DotRelay({statePath:path,botAccountId:event.accountId,agentId:'browser',tabId:7,wait:async()=>{},send:async()=>{},browserCall:async(action,args)=>{if(action==='dot_send'){sent++;return {ok:true,verified_reply_to:target}};return args.after?{ok:true,room,cursor:'new',messages:[{id:'echo',role:'user',text:'hello',reply_to:null}]}:{ok:true,room,cursor:'old'}}});
  r.state.mirror={published:{[target]:{status:'accepted',receipts:['55']}}};const result=await r.receive({...event,replyTo:'55'});assert.equal(result.status,'accepted');assert.equal(sent,1);
 });
+test('a failed media caption with browser-inserted paragraph spacing stays held, never forwarded as a new Dot message',()=>{
+ const x=setup();
+ x.relay.state.incoming[event.accountId+':'+OWNER+':213']={status:'requires_review',source:'telegram',reason:'caption_unverified',text_hash:'ec378e66e1ac03d65f465564e89641a7c0c12c20fbe5843746ad38ddcc6f64c6',media:[{filename:'plan.docx'}]};
+ assert.equal(x.relay.mirrorOrigin({id:'candidate',role:'user',text:'Никита Розанов:\n\nВот план на завтра.'}),'uncertain');
+ assert.equal(x.relay.mirrorOrigin({id:'other',role:'user',text:'Никита Розанов:\n\nИное сообщение.'}),null);
+});

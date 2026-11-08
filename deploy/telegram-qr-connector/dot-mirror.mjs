@@ -153,6 +153,7 @@ export class DotMirror{
     if(origin==='uncertain'){state.status='incoming_origin_uncertain';this.relay.save();return {status:state.status};}
     if(origin==='telegram'){state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     const c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)break;
+    if(m.attachment_incomplete){state.held[m.id]={reason:'media_identity_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     if(m.format_incomplete){state.held[m.id]={reason:'format_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     const imageCount=m.attachment_count??m.attachment_names?.length??0;
     if(sensitiveText(m.text)||(!m.text.trim()&&!imageCount)){
