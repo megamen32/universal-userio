@@ -9,7 +9,7 @@ export function validateMediaFiles(media,{root=ROOT}={}){
  let total=0;
  return media.map(m=>{
   if(typeof root!=='string'||!root.endsWith('/')||typeof m.path!=='string'||!m.path.startsWith(root)||typeof m.filename!=='string'||!m.filename||m.filename.length>255||/[\/\\\u0000-\u001f]/.test(m.filename)||!/^[a-f0-9]{64}$/.test(m.sha256))throw Error('invalid_media_path');
-  const staged=m.path.slice(root.length),match=staged.match(/^tg-[0-9]+-([a-f0-9]{16})\.(jpg|png|webp|bin)$/);
+  const staged=m.path.slice(root.length),match=staged.match(/^tg-[0-9]+-([a-f0-9]{16})(?:-[a-f0-9]{16})?\.(jpg|png|webp|bin)$/);
   if(!match||match[1]!==m.sha256.slice(0,16))throw Error('invalid_media_path');
   const stat=fs.lstatSync(m.path);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==process.getuid()||(stat.mode&0o777)!==0o600||stat.size>MAX_IMAGE_BYTES)throw Error('unsafe_media_file');

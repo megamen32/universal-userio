@@ -1021,7 +1021,7 @@ function relayGroupMessage(client,accountId,self,message,chatKey,isEdit,chatEnti
   const event={accountId,peerId:chatKey,senderId:String(sender.id),senderIsBot:false,private:false,out:false,isEdit:false,messageId:String(message.id),topicId,text:groupDotText(sender,message,context),entities:groupDotEntities(sender,message,context),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
   if(['image','document'].includes(kind)&&!dotMediaIngresses.has(accountId)){
    const identity=JSON.stringify(binding);
-   dotMediaIngresses.set(accountId,new DotMediaIngress({stateDir,botAccountId:accountId,allowDocuments:true,
+   dotMediaIngresses.set(accountId,new DotMediaIngress({stateDir,botAccountId:accountId,journalId:binding.journalId??null,allowDocuments:true,
     allowEvent:e=>e.peerId===binding.peerId&&e.private===false&&e.senderIsBot===false&&/^[1-9][0-9]*$/.test(e.senderId),
     download:async source=>{
      if(JSON.stringify(readGroupBinding(groupBindingPath))!==identity)throw Error('group_binding_changed');

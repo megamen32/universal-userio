@@ -17,10 +17,12 @@ export function hasSupportedDocument(message){
  return !!(message?.document||message?.media?.document);
 }
 export class DotMediaIngress{
- constructor({stateDir,botAccountId,download,deliver,allowDocuments=false,allowEvent=e=>e.peerId===OWNER&&e.senderId===OWNER&&e.private===true,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
+ constructor({stateDir,botAccountId,download,deliver,journalId=null,allowDocuments=false,allowEvent=e=>e.peerId===OWNER&&e.senderId===OWNER&&e.private===true,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
   if(!/^telegram:\d+$/.test(botAccountId))throw Error('invalid_bot');
+  if(journalId!==null&&!/^group-[1-9][0-9]{0,19}$/.test(journalId))throw Error('invalid_media_journal');
+  this.routeSuffix=journalId?'-'+createHash('sha256').update(botAccountId+':'+journalId).digest('hex').slice(0,16):'';
   Object.assign(this,{stateDir,botAccountId,download,deliver,allowDocuments,allowEvent,schedule,now});
-  this.file=join(stateDir,'dot-media-'+botAccountId.split(':')[1]+'.json');
+  this.file=join(stateDir,'dot-media-'+botAccountId.split(':')[1]+(journalId?'-'+journalId:'')+'.json');
   this.state=fs.existsSync(this.file)?JSON.parse(fs.readFileSync(this.file,'utf8')):{groups:{}};
   this.pending=new Map();
   for(const g of Object.values(this.state.groups))if(['collecting','preparing','prepared'].includes(g.status))g.status='preparation_interrupted_requires_review';
@@ -77,12 +79,12 @@ export class DotMediaIngress{
     }
     total+=bytes.length;if(total>MAX_ALBUM_BYTES)throw Error('album_size_refused');
     const sha256=createHash('sha256').update(bytes).digest('hex');
-    const stagedName='tg-'+event.messageId+'-'+sha256.slice(0,16)+'.'+kind.ext;
+    const stagedName='tg-'+event.messageId+'-'+sha256.slice(0,16)+this.routeSuffix+'.'+kind.ext;
     filename||=stagedName;
     const directory=join(this.stateDir,'dot-media-files');fs.mkdirSync(directory,{recursive:true,mode:0o700});
     const path=join(directory,stagedName);
     const stagedBytes=fs.readdirSync(directory).reduce((total,name)=>{
-      if(!/^tg-[0-9]+-[a-f0-9]{16}\.(jpg|png|webp|bin)$/.test(name))return total;
+      if(!/^tg-[0-9]+-[a-f0-9]{16}(?:-[a-f0-9]{16})?\.(jpg|png|webp|bin)$/.test(name))return total;
       const stat=fs.lstatSync(join(directory,name));return total+(stat.isFile()?stat.size:0);
     },0);
     if(stagedBytes+bytes.length>256*1024*1024)throw Error('media_staging_quota');

@@ -6,6 +6,17 @@ import {fileChooserUid,validateMediaFiles,mediaPageAction} from './dot-browser-m
 const OWNER='111111111',BOT='telegram:333333333';
 const event=id=>({accountId:BOT,peerId:OWNER,senderId:OWNER,private:true,out:false,isEdit:false,messageId:String(id),text:''});
 const jpeg=()=>Buffer.from([255,216,255,224,1,2,3,4]);
+test('group media with a reused message id cannot overwrite or deduplicate private media history',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-route-media-')),paths=[];
+ const make=journalId=>new DotMediaIngress({stateDir:dir,botAccountId:BOT,journalId,download:async()=>jpeg(),deliver:async e=>{paths.push(e.media[0].path);return {status:'accepted'};},schedule:()=>{}});
+ const privateIngress=make();privateIngress.receive(event(42),{photo:{}});await privateIngress.flush('message:42');
+ const before=fs.readFileSync(privateIngress.file,'utf8');
+ const groupIngress=make('group-4352022764');
+ assert.notEqual(groupIngress.file,privateIngress.file);
+ assert.equal(groupIngress.receive(event(42),{photo:{}}).status,'media_collecting');await groupIngress.flush('message:42');
+ assert.equal(paths.length,2);assert.notEqual(paths[0],paths[1]);assert.equal(fs.readFileSync(privateIngress.file,'utf8'),before);
+ fs.rmSync(dir,{recursive:true});
+});
 test('an image sent as a document preserves its original filename',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'dot-document-image-')),delivered=[];
  const ingress=new DotMediaIngress({stateDir:dir,botAccountId:BOT,allowDocuments:true,download:async()=>Buffer.from([137,80,78,71,13,10,26,10]),deliver:async e=>(delivered.push(e),{status:'accepted'}),schedule:()=>{}});
