@@ -186,6 +186,16 @@ test('Dot composer receives a formatted hyperlink without interpreting input as 
  const result=await self.UserIODot.pageAction(url,room,'сайт',null,null,[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]);
  assert.equal(result.ok,true);assert.match(inserted,/<a\s+href="https:\/\/example\.org\/">сайт<\/a>/);assert.equal(clicks,1);
 });
+test('plain multiline text preserves hard breaks instead of adding a paragraph gap',async()=>{
+ const room='fixture',text='Никита Розанов:\nТест';let clicks=0;
+ const row={dataset:{messageId:room+'~'+room+'~CalpicoMessage~id'},closest:()=>null,classList:{contains:()=>true},querySelector:s=>s==='.message-text'?{innerText:'old'}:null,querySelectorAll:()=>[]};
+ const editor={innerText:'',getClientRects:()=>[1],focus:()=>{},querySelectorAll:()=>[]};
+ const button={disabled:false,getClientRects:()=>[1],getAttribute:()=> 'Send',click:()=>clicks++};
+ const document={querySelector:()=>null,querySelectorAll:s=>s.startsWith('article')?[row]:s.startsWith('[contenteditable')?[editor]:s==='button'?[button]:[],execCommand:(command,_ui,value)=>{editor.innerText=command==='insertText'?value.replace(/\n/g,'\n\n'):value.replace(/<br>/g,'\n');return true;}};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document,location:{href:url},URL,TextEncoder,crypto:globalThis.crypto,setTimeout:fn=>fn()});
+ const result=await self.UserIODot.pageAction(url,room,text,null);
+ assert.equal(result.ok,true);assert.equal(editor.innerText,text);assert.equal(clicks,1);
+});
 test('Dot extension stages media chunks only for the exact room and expected offset',async()=>{
  const room='fixture',id=room+'~'+room+'~CalpicoMessage~id';
  const row={dataset:{messageId:id},closest:()=>null};

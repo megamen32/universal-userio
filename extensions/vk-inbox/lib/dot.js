@@ -110,7 +110,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
     }
     const escape=value=>String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     let insertion=text,command='insertText';
-    if(entities.length){
+    if(entities.length||text.includes('\n')){
       const points=[...new Set([0,text.length,...entities.flatMap(e=>[e.offset,e.offset+e.length])])].sort((a,b)=>a-b);
       insertion='';command='insertHTML';
       for(let i=0;i<points.length-1;i++){
