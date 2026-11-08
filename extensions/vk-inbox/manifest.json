@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp8wuFGy/+2Me1uNY5ECfy9W57mmLPRdXh0BFp66g7E0VDIFbR/9UzvAlFs6th1UA5VPTfEtMSgJ6vyO90+8WvcWMNpJoExPZXOvBKeDTuqecNzdjsYdBNgI7DtQuC2G0hPX4u55ECRfpP2iT2f+WIijMkI+GaQR7MGwrNw5cKkeIzvRbeIUUnDF+juW0k+nhW6VwixvPLRGpgY/rWBs1DdMIdEBZoUfWmllkA83A6NfOkQl103kBOAcueZmqzy0mcJC8B6f9qVoOhMBnx5S9GZVbo7rFdJmt4deEWnkiIMfxRPQcOY1VtfB1Mdu7OdomdKvSQHr2Yl9Z8UT4BrA8aQIDAQAB",
   "name": "Universal UserIO Agent",
-  "version": "0.9.11",
+  "version": "0.9.13",
   "description": "VK Web inbox capture, long-poll command channel, and a session vault: back up cookies/localStorage to the cloud (UserIO server or Yandex Disk) and restore them on another machine. MV3 service worker.",
   "permissions": [
     "storage",
@@ -25,6 +25,19 @@
     "default_title": "Universal UserIO Agent"
   },
   "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content/chatgpt-passive-bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content/chatgpt-fetch-hook.js"],
+      "world": "MAIN",
+      "run_at": "document_start",
+      "all_frames": false
+    },
     {
       "matches": [
         "https://vk.com/*",

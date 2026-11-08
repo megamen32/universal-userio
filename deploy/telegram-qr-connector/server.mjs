@@ -1050,6 +1050,7 @@ async function tickGroupMirror(){
 }
 const additionalBindingPath=stateDir+'/dot-additional-bindings.json';
 const readExtraDots=()=>readAdditionalBindings(additionalBindingPath,{peerId:DOT_OWNER,
+ reservedRooms:[DOT_POLICY?.room,readGroupBinding(groupBindingPath)?.room].filter(Boolean),
  reserved:[...new Set([DOT_POLICY?.sourceAccountId,'telegram:'+DOT_OWNER,
   readDotBinding(undefined,true)?.botAccountId,readGroupBinding(groupBindingPath)?.botAccountId].filter(Boolean))]});
 const extraDots=new AdditionalPrivateDots({read:readExtraDots,create:async(binding,assertCurrent)=>{
@@ -1066,7 +1067,7 @@ const extraDots=new AdditionalPrivateDots({read:readExtraDots,create:async(bindi
   const pair=[...liveSlots.entries()].find(([slot,item])=>item.accountId===binding.botAccountId&&item.self?.bot===true&&enrollmentOwners.allowed(slot,binding.owner));
   if(!pair)throw Error('additional_bot_disconnected');return pair[1];
  };
- const transport=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:binding.url,room:binding.room,token});
+ const transport=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:binding.url,room:binding.room,token,assertAllowed:()=>{boundLive();}});
  const browserCall=(action,args)=>{boundLive();return transport(action,args);};
  const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',
   botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,browserCall,
@@ -1104,7 +1105,7 @@ const extraDots=new AdditionalPrivateDots({read:readExtraDots,create:async(bindi
  }};
 }});
 function relayAdditionalDotMessage(accountId,self,message,chatKey,isEdit){
- if(!readExtraDots().some(b=>b.botAccountId===accountId))return false;
+ if(!extraDots.matches(accountId))return false;
  if(!self.bot)return true;
  const event={accountId,peerId:chatKey,senderId:canonicalPrivateSender(message,chatKey),
   private:String(message.peerId?.userId||'')===DOT_OWNER,out:!!message.out,isEdit,messageId:String(message.id),

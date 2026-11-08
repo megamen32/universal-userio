@@ -594,7 +594,11 @@
       }
       case "gpt_identity": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
-        return root.ChatGPT.identity();
+        const identity=await root.ChatGPT.identity();
+        return {ok:identity.ok,...(identity.error?{error:identity.error}:{}),account_id:identity.account_id||'',email:identity.email||'',name:identity.name||''};
+      }
+      case "gpt_capture_status": {
+        return root.ChatGPT?.passiveStatus ? root.ChatGPT.passiveStatus() : {ok:false,error:'passive_capture_unavailable'};
       }
       case "gpt_register": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };

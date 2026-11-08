@@ -2,19 +2,22 @@ import {openSync,closeSync,fstatSync,readFileSync,constants} from 'node:fs';
 
 // Additional bindings reuse the existing connector, command channel and journals.
 // The two legacy bindings retain their paths and behavior.
-export function validateAdditionalBindings(rows,{peerId,reserved=[]}){
+export function validateAdditionalBindings(rows,{peerId,reserved=[],reservedRooms=[]}){
  if(!Array.isArray(rows)||rows.length>20)throw Error('invalid_additional_binding');
- const ids=new Set();
+ const ids=new Set(),rooms=new Set(reservedRooms);
  for(const b of rows){
+  if(b?.enabled===false)continue;
   if(!b||typeof b!=='object'||b.enabled!==true||!/^user_[a-z0-9]+$/.test(b.owner||'')||b.peerId!==peerId||
    !/^telegram:[1-9][0-9]+$/.test(b.botAccountId||'')||! /^[A-Za-z0-9_-]{1,100}$/.test(b.agentId||'')||
    !Number.isSafeInteger(b.pageId)||b.pageId<=0||! /^[a-f0-9]{32}$/.test(b.room||'')||
    !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(b.url||''))throw Error('invalid_additional_binding');
   if(reserved.includes(b.botAccountId))throw Error('reserved_additional_bot');
   if(ids.has(b.botAccountId))throw Error('duplicate_additional_binding');
+  if(rooms.has(b.room))throw Error('duplicate_additional_room');
+  rooms.add(b.room);
   ids.add(b.botAccountId);
  }
- return rows;
+ return rows.filter(b=>b.enabled===true);
 }
 export function readAdditionalBindings(path,policy){
  let fd;
@@ -28,6 +31,10 @@ export function readAdditionalBindings(path,policy){
 }
 export class AdditionalPrivateDots{
  constructor({read,create}){this.read=read;this.create=create;this.contexts=new Map();this.running=false;}
+ matches(accountId){
+  try{return this.read().some(b=>b.botAccountId===accountId);}
+  catch{return this.contexts.has(accountId);}
+ }
  assertCurrent(binding){
   const current=this.read().find(b=>b.botAccountId===binding.botAccountId);
   if(JSON.stringify(current)!==JSON.stringify(binding))throw Error('additional_binding_changed');

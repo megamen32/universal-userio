@@ -1,6 +1,15 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 import {createExtensionCaller} from './dot-extension-agent.mjs';
 const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000,preserveDraft:false};
+test('disable during draft backup blocks the subsequent send admission',async()=>{
+ let enabled=true,last;const posts=[];
+ const call=createExtensionCaller({...init,preserveDraft:true,assertAllowed:()=>{if(!enabled)throw Error('disabled');},fetcher:async(_url,opts)=>({ok:true,json:async()=>{
+  if(opts.method==='POST'){last=JSON.parse(opts.body);posts.push(last);return {queued:true,id:'browser:'+posts.length};}
+  enabled=false;return {results:[{id:'browser:'+posts.length,action:last.action,received_at:101,result:{ok:true}}]};
+ }})});
+ await assert.rejects(call('dot_send',{text:'hello'}),/disabled/);
+ assert.equal(posts.some(p=>p.action==='dot_action'&&p.args.operation==='send'),false);
+});
 test('preserves an existing draft around exactly one send',async()=>{
  const posts=[];let last;
  const caller=createExtensionCaller({...init,preserveDraft:true,transferId:()=> '12345678-1234-1234-1234-123456789abc',fetcher:async(_url,opts)=>({ok:true,json:async()=>{

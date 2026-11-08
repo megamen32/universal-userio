@@ -401,5 +401,6 @@ chrome.alarms.onAlarm.addListener((a) => {
 });
 
 COLLECT.start();
-GPT.start();
+importScripts('lib/chatgpt-passive.js');
+GPT.start().catch(() => {});
 AGENT.start();

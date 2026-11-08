@@ -3,7 +3,7 @@ import {validateMediaFiles} from './dot-browser-media.mjs';
 import {readDotMediaUsing} from './dot-browser-egress.mjs';
 // Scoped caller for the existing UserIO extension command channel. Delivery
 // requests are admitted once: timeout means UNKNOWN and is never retried.
-export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true}){
+export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true,assertAllowed=()=>{}}){
  if(!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(url)||!room||!agentId||!token)throw Error('invalid_extension_binding');
  const request=async(path,body)=>{
   const r=await fetcher(new URL(path,base),{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
@@ -13,6 +13,7 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
  const command=async(action,args)=>{
   const queuedAt=now()/1000;
   const payload={agent_id:agentId,action,args:{url,room,...args}};
+  assertAllowed();
   const q=await request('/v1/agent/commands',payload);
   if(!q.queued||typeof q.id!=='string')throw Error('extension_enqueue_unknown');
   for(let i=0;i<45;i++){

@@ -27,3 +27,12 @@ test('changed binding fails before using cached relay; disabling prevents subseq
  await assert.rejects(()=>dots.receive(e,{}),/binding_changed/);assert.equal(received,1);
  current=[];assert.equal(await dots.receive(e,{}),false);
 });
+test('room collisions and disabled rows cannot start duplicate mirrors',()=>{
+ assert.throws(()=>validateAdditionalBindings([binding,{...binding,botAccountId:'telegram:444444444'}],{peerId:binding.peerId}),/room/);
+ assert.throws(()=>validateAdditionalBindings([binding],{peerId:binding.peerId,reservedRooms:[binding.room]}),/room/);
+ assert.deepEqual(validateAdditionalBindings([{...binding,enabled:false}],{peerId:binding.peerId}),[]);
+});
+test('invalid additional configuration does not interrupt legacy routing',()=>{
+ const dots=new AdditionalPrivateDots({read:()=>{throw Error('bad JSON');},create:()=>{throw Error('unexpected');}});
+ assert.equal(dots.matches('telegram:legacy'),false);
+});
