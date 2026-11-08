@@ -150,3 +150,15 @@ def test_push_result_does_not_retain_unawaited_result(tmp_path, monkeypatch):
     agent_channel.push_result({"id": "orphan", "result": {"ok": True}}, user="owner")
     assert "orphan" not in agent_channel._RESULTS
     assert (tmp_path / "results.jsonl").exists()
+
+
+def test_agent_command_ids_do_not_repeat_after_server_restart(tmp_path, monkeypatch):
+    """Persisted receipts must not be mistaken for a post-restart command."""
+    import itertools
+    monkeypatch.setattr(agent_channel, 'COMMANDS_FILE', tmp_path / 'commands.jsonl')
+    monkeypatch.setattr(agent_channel, '_PENDING', {})
+    monkeypatch.setattr(agent_channel, '_SEQ', itertools.count(1), raising=False)
+    first = agent_channel.enqueue({'agent_id': 'same-browser', 'action': 'ping'}, user='owner')
+    monkeypatch.setattr(agent_channel, '_SEQ', itertools.count(1), raising=False)
+    second = agent_channel.enqueue({'agent_id': 'same-browser', 'action': 'ping'}, user='owner')
+    assert first['id'] != second['id']

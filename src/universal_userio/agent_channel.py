@@ -9,11 +9,11 @@ run inside the browser and only their JSON-serializable outputs come back.
 
 from __future__ import annotations
 
-import itertools
 import json
 import os
 import threading
 import time
+import uuid
 from collections import deque
 from pathlib import Path
 
@@ -30,7 +30,6 @@ _LOCK = threading.Lock()
 _PENDING: dict[tuple[str, str], deque] = {}
 _COND = threading.Condition(_LOCK)
 _LAST_POLL: dict[tuple[str, str], float] = {}
-_SEQ = itertools.count(1)
 # command id -> result object, kept so internal callers can block on one.
 _RESULTS: dict[str, dict] = {}
 _WAITING: set[str] = set()
@@ -49,7 +48,7 @@ def enqueue(payload: dict, *, user: str) -> dict:
     if args is not None and not isinstance(args, dict):
         raise ValueError("args must be an object")
     command = {
-        "id": f"{agent_id}:{next(_SEQ)}",
+        "id": f"{agent_id}:{uuid.uuid4().hex}",
         "agent_id": agent_id,
         "action": action,
         "args": args or {},
