@@ -13,6 +13,7 @@ import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
 import {claimNotAccepted,validateReplayReply} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
 import {createPrivateDotCaller} from './dot-private-extension.mjs';
+import {AdditionalPrivateDots,readAdditionalBindings} from './dot-additional.mjs';
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
 import http from "node:http";
@@ -1047,6 +1048,69 @@ async function tickGroupMirror(){
  }catch{groupMirrorNext=Date.now()+30000;console.error('group dot mirror requires review');}
  finally{groupMirrorRunning=false;}
 }
+const additionalBindingPath=stateDir+'/dot-additional-bindings.json';
+const readExtraDots=()=>readAdditionalBindings(additionalBindingPath,{peerId:DOT_OWNER,
+ reserved:[...new Set([DOT_POLICY?.sourceAccountId,'telegram:'+DOT_OWNER,
+  readDotBinding(undefined,true)?.botAccountId,readGroupBinding(groupBindingPath)?.botAccountId].filter(Boolean))]});
+const extraDots=new AdditionalPrivateDots({read:readExtraDots,create:async(binding,assertCurrent)=>{
+ const tokenPath=stateDir+'/dot-agent-'+binding.botAccountId.split(':')[1]+'.age';
+ const info=lstatSync(tokenPath);
+ if(!info.isFile()||(info.mode&0o777)!==0o600||info.uid!==process.getuid())throw Error('unsafe_additional_agent_credential');
+ const dec=spawnSync('age',['--decrypt','-i',keyPath,tokenPath],{encoding:'utf8',maxBuffer:16384});
+ if(dec.status!==0||!dec.stdout.trim())throw Error('additional_agent_credential_unavailable');
+ const token=dec.stdout.trim();
+ const check=await fetch(new URL('/v1/connection-principal',userIoUrl),{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(5000)});
+ if(!check.ok||(await check.json()).user_id!==binding.owner)throw Error('additional_agent_owner_mismatch');
+ const boundLive=()=>{
+  assertCurrent();
+  const pair=[...liveSlots.entries()].find(([slot,item])=>item.accountId===binding.botAccountId&&item.self?.bot===true&&enrollmentOwners.allowed(slot,binding.owner));
+  if(!pair)throw Error('additional_bot_disconnected');return pair[1];
+ };
+ const transport=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:binding.url,room:binding.room,token});
+ const browserCall=(action,args)=>{boundLive();return transport(action,args);};
+ const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',
+  botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,browserCall,
+  send:async(peer,text,replyTo,entities)=>{
+   if(peer!==binding.peerId)throw Error('wrong_additional_peer');
+   const options=mirrorSendOptions(text,replyTo,entities,Api);
+   const sent=await boundLive().client.sendMessage(BigInt(peer),options);
+   if(!sent?.id||!telegramFormatMatches(options.formattingEntities,sent.entities))throw Error('additional_send_unknown');return sent.id;
+  },
+  sendMedia:async(peer,media,caption,replyTo,origin,entities)=>{
+   if(peer!==binding.peerId||!origin?.source_message_id?.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_additional_media_source');
+   const options=dotTelegramMediaParams(media,caption,replyTo,CustomFile,entities,Api);
+   const sent=await boundLive().client.sendFile(BigInt(peer),options),first=Array.isArray(sent)?sent[0]:sent;
+   if(!telegramFormatMatches(options.formattingEntities,first?.entities))throw Error('additional_media_unknown');return dotTelegramMediaReceipts(sent,media.length);
+  },
+  edit:async(peer,receipt,text,expectedHash,entities,previousEntities)=>{
+   if(peer!==binding.peerId)throw Error('wrong_additional_edit_peer');const live=boundLive();
+   return editDotText({client:live.client,api:Api,peer:await live.client.getInputEntity(BigInt(peer)),messageId:Number(receipt),expectedHash,text,entities,previousEntities});
+  }});
+ relay.labels={ownerLabel:'Никита Розанов',assistantLabel:'Dot Apple'};
+ const prepare=event=>relay.prepareReceive(event,async(replyTo)=>{
+  const live=boundLive();const referenced=(await live.client.getMessages(BigInt(binding.peerId),{ids:[Number(replyTo)]}))?.[0];
+  return safeReplyContext(referenced,replyTo);
+ });
+ const ingress=new DotMediaIngress({stateDir,botAccountId:binding.botAccountId,allowDocuments:true,
+  download:source=>boundLive().client.downloadMedia(source,{progressCallback:(received,total)=>{if(Number(received)>MAX_IMAGE_BYTES||Number(total)>MAX_IMAGE_BYTES)throw Error('image_size_refused');}}),deliver:prepare});
+ return {mirror:new DotMirror(relay),receive:async(event,message)=>{
+  boundLive();const sender=await message.getSender();
+  if(!sender||sender.bot||String(sender.id)!==binding.peerId)return;
+  event={...event,text:groupDotText(sender,message),entities:groupDotEntities(sender,message)};
+  const kind=groupMediaKind(message);
+  if(kind==='image'||kind==='document')return ingress.receive(event,message);
+  if(kind==='other_media')return relay.holdIncoming({...event,media:[{kind:'provider_attachment'}]},'media_requires_review');
+  await ingress.waitForPending();return prepare(event);
+ }};
+}});
+function relayAdditionalDotMessage(accountId,self,message,chatKey,isEdit){
+ if(!readExtraDots().some(b=>b.botAccountId===accountId))return false;
+ if(!self.bot)return true;
+ const event={accountId,peerId:chatKey,senderId:canonicalPrivateSender(message,chatKey),
+  private:String(message.peerId?.userId||'')===DOT_OWNER,out:!!message.out,isEdit,messageId:String(message.id),
+  text:String(message.message||''),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+ void extraDots.receive(event,message).catch(()=>console.error('additional dot relay requires review'));return true;
+}
 function relayDotMessage(client,accountId,self,message,chatKey,isEdit) {
   const binding=readDotBinding(undefined,true);
   if(!isDedicatedDotBot(accountId,binding))return false;
@@ -1135,7 +1199,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   }
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
-  const isDotBot = relayGroupMessage(client, accountId, self, message, chatKey, isEdit, chatEntity) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
+  const isDotBot = relayAdditionalDotMessage(accountId,self,message,chatKey,isEdit) || relayGroupMessage(client, accountId, self, message, chatKey, isEdit, chatEntity) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
   if (!isDotBot && !isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
@@ -2827,5 +2891,5 @@ http.createServer(async (req, res) => {
   return res.end(pageShell.split("__PREFIX__").join(publicPrefix));
 }).listen(port, "127.0.0.1");
 
-// One bounded observer for the single explicitly bound dot room.
-setInterval(()=>{void tickDotMirror();void tickGroupMirror();},15000).unref();
+// One observer loop for all explicitly bound rooms; no extra provider client.
+setInterval(()=>{void tickDotMirror();void tickGroupMirror();void extraDots.tick().catch(()=>console.error('additional dot mirror requires review'));},15000).unref();
