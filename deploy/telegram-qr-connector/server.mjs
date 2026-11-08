@@ -4,7 +4,7 @@ import { createBoardDotNodeMount } from "./board-dot-mount.mjs";
 import { ROOM as DOT_BOARD_ROOM } from "./dot-relay.mjs";
 import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from "./dot-mirror.mjs";
 import {createExtensionCaller} from "./dot-extension-agent.mjs";
-import {readGroupBinding} from "./dot-group-binding.mjs";
+import {readGroupBinding,groupJournalPath} from "./dot-group-binding.mjs";
 import {createGroupBotSender,createGroupBotMediaSender} from "./dot-group-send.mjs";
 import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
 import {routeGroupDotEvent} from "./dot-group-receive.mjs";
@@ -997,7 +997,7 @@ async function initializeGroupRelay(binding,identity){
  const send=async(peer,text,replyTo,entities)=>{boundLive();return providerSend(peer,text,replyTo,entities);};
  const sendMedia=async(peer,media,caption,replyTo,origin,entities)=>{boundLive();if(typeof origin?.source_message_id!=='string'||!origin.source_message_id.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_group_media_source');return providerSendMedia(peer,media,caption,replyTo,entities);};
  const edit=async(peer,receipt,text,expectedHash,entities,previousEntities)=>{if(peer!==binding.peerId)throw Error('wrong_group_edit_peer');const live=boundLive();const target=await live.client.getInputEntity(peer);return editDotText({client:live.client,api:Api,peer:target,messageId:Number(receipt),expectedHash,text,entities,previousEntities});};
- const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia,edit});
+ const relay=new DotRelay({statePath:groupJournalPath(stateDir,binding),botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia,edit});
  relay.groupOptions=()=>readGroupSettings(groupSettingsPath,binding);
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;

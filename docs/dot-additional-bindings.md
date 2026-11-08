@@ -26,6 +26,14 @@ Removing an entry disables further admissions and operations. Changing an active
 binding is refused until reviewed and the connector restarted; retain all old
 journals and UNKNOWN operations. Never delete a journal to force a rebind.
 
+When moving a bot from private chat to a supergroup, disable its additional
+private entry before activating the group binding. Set the group's optional
+`journalId` to `group-<supergroup ID without the -100 prefix>`. Only that exact
+value is accepted. The group then uses its own journal while the original
+private journal remains intact. Bindings without `journalId` keep their legacy
+journal path. Back up the old group binding, settings and both journals under
+the release lease; activate the new binding after the connector has restarted.
+
 Acceptance requires a real incoming Telegram message, its exact Dot echo, and a
 Dot answer independently read from Telegram. A connected bot alone is not proof
 of a working mirror. Files and unsupported media retain the existing media
