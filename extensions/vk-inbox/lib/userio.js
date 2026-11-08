@@ -13,12 +13,22 @@
     token: CFG.token || "",
     source: "vk",
     routeId: CFG.routeId || "vk-browser",
-    agentId: CFG.agentId || "vk-browser",
+    agentId: "",
   };
 
+  let settingsPromise;
   lib.settings = async () => {
+    if (!settingsPromise) settingsPromise = (async () => {
+      const s = await chrome.storage.local.get(DEFAULTS);
+      if (!s.agentId) {
+        s.agentId = `browser-${crypto.randomUUID()}`;
+        await chrome.storage.local.set({ agentId: s.agentId });
+      }
+      return s.agentId;
+    })().catch((error) => { settingsPromise = null; throw error; });
+    const agentId = await settingsPromise;
     const s = await chrome.storage.local.get(DEFAULTS);
-    return { ...DEFAULTS, ...s };
+    return { ...DEFAULTS, ...s, agentId: s.agentId || agentId };
   };
 
   lib.accessToken = () => root.UserIOOAuth.accessToken();
