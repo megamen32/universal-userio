@@ -17,3 +17,10 @@ test('enrollment reserves only disabled exact bot, no overwrite',()=>{
  assert.deepEqual(reserveDotBotBinding('telegram:999999',p),b);
  assert.throws(()=>reserveDotBotBinding('telegram:222222',p));
 });
+
+test('extension binding requires an explicit valid agent and rejects unknown transports',()=>{
+ const p=join(mkdtempSync(join(tmpdir(),'dotextension-')),'binding');
+ const b={enabled:true,owner:'111111111',room:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',botAccountId:'telegram:999999',pageId:7,transport:'extension',agentId:'mac-mini-dot'};
+ writeFileSync(p,JSON.stringify(b),{mode:0o600});assert.equal(readDotBinding(p).transport,'extension');
+ for(const patch of [{agentId:''},{agentId:'../other'},{transport:'unknown'}]){writeFileSync(p,JSON.stringify({...b,...patch}));assert.throws(()=>readDotBinding(p));}
+});

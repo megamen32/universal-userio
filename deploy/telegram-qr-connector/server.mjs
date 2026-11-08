@@ -12,6 +12,7 @@ import {readGroupSettings,accessGroupSettings,groupTopicId,observeGroupMessage,r
 import {verifiedIncomingEcho} from "./dot-incoming-reconcile.mjs";
 import {claimNotAccepted,validateReplayReply} from "./dot-safe-retry.mjs";
 import { dotBrowserCall } from "./dot-browser-mcp.mjs";
+import {createPrivateDotCaller} from './dot-private-extension.mjs';
 import { readDotBinding, isDedicatedDotBot, reserveDotBotBinding } from "./dot-binding.mjs";
 import { DotRelay, OWNER as DOT_OWNER, canonicalPrivateSender, textHash } from "./dot-relay.mjs";
 import http from "node:http";
@@ -914,7 +915,13 @@ function getDotRelay(accountId,binding) {
     const relay = new DotRelay({
       statePath: `${stateDir}/dot-relay-${accountId.split(":")[1]}.json`,
       botAccountId:accountId,agentId:"existing-mac-mini-mcp",tabId:binding.pageId,
-      browserCall:dotBrowserCall,
+      browserCall:createPrivateDotCaller({binding,legacyCall:dotBrowserCall,loadExtension:()=>{
+        const path=stateDir+'/dot-private-agent-token.age',info=lstatSync(path);
+        if(!info.isFile()||(info.mode&0o777)!==0o600||info.uid!==process.getuid())throw Error('unsafe_private_agent_credential');
+        const dec=spawnSync('age',['--decrypt','-i',keyPath,path],{encoding:'utf8',maxBuffer:16384});
+        if(dec.status!==0||!dec.stdout.trim())throw Error('private_agent_credential_unavailable');
+        return createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:DOT_POLICY.browserUrl,room:binding.room,token:dec.stdout.trim()});
+      }}),
       send:async(owner,text,replyReceipt=null,entities=[])=>{
         if(owner!==DOT_OWNER)throw new Error("wrong_dot_owner");
         const live=boundLive();

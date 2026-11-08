@@ -180,3 +180,25 @@ serves the new zip at the same URL. To pick up the update in the browser:
 // in DevTools console on any VK page:
 indexedDB.deleteDatabase('userio_vk');
 ```
+
+### Обновление на macOS одной командой
+
+Скрипт `scripts/install_macos.py` находит существующее расширение по профилю
+Chrome, сохраняет ZIP-резерв и обновляет его файлы, сохраняя локальный
+`lib/config.js` и хранилище профиля. Он не принимает архив другой программы,
+смену ключа расширения, выход файлов за папку и понижение версии.
+
+```bash
+python3 install_macos.py --archive ~/Downloads/Universal-UserIO-Agent-0.9.11.zip
+```
+
+Без `--archive` используется опубликованный пакет
+`https://msg.bezrabotnyi.com/vk-userio-extension-mv3.zip`. Дополнительные параметры:
+`--profile "Profile 1"`, `--target /полный/путь/к/папке`, `--no-reload`.
+
+Скрипт просит уже установленное расширение выполнить `chrome.runtime.reload()`
+через разрешённый Chrome интерфейс Apple Events. Если Chrome отказал или
+расширение выключено, открывается `chrome://extensions` для обычной перезагрузки.
+Завершение копирования и принятие запроса перезагрузки сообщаются отдельно;
+рабочую версию подтверждает ответ расширения в UserIO. Первый запуск нового
+профиля требует обычного добавления распакованной папки и входа в UserIO.
