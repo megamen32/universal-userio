@@ -26,8 +26,15 @@
     const candidates=(await chrome.tabs.query({url:"https://chat.z.ai/*"}))
       .filter(t=>parse(t.url));
     let tab=candidates.find(t=>t.status==="complete")||candidates[0];
-    if(!tab && create)tab=await chrome.tabs.create({url:ORIGIN+"/",active:false});
+    if(tab) await root.UserIOTabGroups?.assign("zai",tab.id);
+    if(!tab && create){
+      const allocated=await root.UserIOTabGroups?.acquire("zai",{slot:"background",url:ORIGIN+"/?userio_slot=background",active:false,match:t=>String(t.url||"").startsWith(ORIGIN+"/?userio_slot=background")});
+      if(allocated?.ok)tab=allocated.tab;
+      else if(allocated?.error && allocated.error!=="tab_groups_unavailable")return allocated;
+      if(!tab)tab=await chrome.tabs.create({url:ORIGIN+"/",active:false});
+    }
     if(!tab)return {ok:false,error:"zai_tab_missing"};
+    await root.UserIOTabGroups?.assign("zai",tab.id);
     const deadline=Date.now()+25000;
     while(Date.now()<deadline){
       const current=await chrome.tabs.get(tab.id).catch(()=>null);

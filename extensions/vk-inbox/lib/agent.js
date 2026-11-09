@@ -105,10 +105,28 @@
     return tabs.find((t) => (t.url || "").startsWith(prefix)) || null;
   }
 
+  function serviceForUrl(url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname === "chat.z.ai") return "zai";
+      if (parsed.hostname === "chatgpt.com" && parsed.pathname.startsWith("/dots/")) return "dots";
+      if (parsed.hostname === "chatgpt.com") return "chatgpt";
+    } catch (_) {}
+    return null;
+  }
+
   async function ensureTab(url) {
-    let tab = await findTab(url.split("?")[0]);
+    const service = serviceForUrl(url);
+    let tab = null;
+    if (service && root.UserIOTabGroups?.acquire) {
+      const managed = await root.UserIOTabGroups.acquire(service,{slot:"navigate",url,active:false,retarget:true,match:t=>String(t.url||"").split("?")[0]===String(url).split("?")[0]});
+      if (managed?.ok) tab = managed.tab;
+      else if (managed?.error && managed.error !== "tab_groups_unavailable") return managed;
+    }
+    if (!tab) tab = await findTab(url.split("?")[0]);
     if (!tab) {
       tab = await chrome.tabs.create({ url, active: false });
+      if (service) await root.UserIOTabGroups?.assign(service,tab.id);
     } else if (tab.url !== url) {
       await chrome.tabs.update(tab.id, { url, active: true });
     } else {
@@ -540,6 +558,7 @@
         if(!root.UserIODot?.inspectComposer||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:'invalid_dot_request'};
         const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
+        await root.UserIOTabGroups?.assign("dots",tabs[0].id);
         const [result]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:'MAIN',func:root.UserIODot.inspectComposer,args:[args.url,args.room]});
         return result?.result||{ok:false,error:'inspection_failed'};
       }
@@ -548,6 +567,7 @@
         if(args.confirm!==(args.operation==='clear'?'preserve_then_clear':'restore_preserved_draft'))return {ok:false,error:'confirmation_required'};
         const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
+        await root.UserIOTabGroups?.assign("dots",tabs[0].id);
         const key='dot_draft_backup:'+args.backup_id, saved=(await chrome.storage.local.get(key))[key];
         if(!saved||saved.url!==args.url||saved.room!==args.room||typeof saved.text!=='string'||typeof saved.html!=='string')return {ok:false,error:'backup_not_found'};
         if((args.operation==='clear'&&!['saved','restored',undefined].includes(saved.phase))||(args.operation==='restore'&&saved.phase!=='cleared'))return {ok:false,error:'recovery_requires_review'};

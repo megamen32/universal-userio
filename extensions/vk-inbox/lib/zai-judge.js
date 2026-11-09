@@ -16,7 +16,11 @@
   };
   async function createdTab(owner){
     const url=ORIGIN+"/?agent-herder-zai-judge="+owner;
-    const tab=await chrome.tabs.create({url,active:false});
+    const managed=await root.UserIOTabGroups?.acquire("zai",{slot:"judge",url,active:false,retarget:true,match:t=>String(t.url||"").startsWith(ORIGIN+"/?agent-herder-zai-judge=")});
+    let tab=managed?.ok?managed.tab:null;
+    if(!tab && managed?.error && managed.error!=="tab_groups_unavailable")return managed;
+    if(!tab)tab=await chrome.tabs.create({url,active:false});
+    await root.UserIOTabGroups?.assign("zai",tab.id);
     const deadline=Date.now()+65000;
     while(Date.now()<deadline){
       const fresh=await chrome.tabs.get(tab.id).catch(()=>null);

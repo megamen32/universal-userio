@@ -13,7 +13,14 @@
     });
     if(matches.length>1)return {ok:false,error:"ambiguous_exact_tab"};
     let tab=matches[0];
+    if(tab) await root.UserIOTabGroups?.assign("chatgpt",tab.id);
+    if(!tab){
+      const allocated=await root.UserIOTabGroups?.acquire("chatgpt",{slot:"chat:"+ref,url,active:false,match:t=>{try{const u=new URL(t.url);return u.origin===ORIGIN&&u.pathname==="/c/"+ref}catch{return false}}});
+      if(allocated?.ok)tab=allocated.tab;
+      else if(allocated?.error && allocated.error!=="tab_groups_unavailable")return allocated;
+    }
     if(!tab)tab=await chrome.tabs.create({url,active:false});
+    if(tab) await root.UserIOTabGroups?.assign("chatgpt",tab.id);
     const started=Date.now();
     while(Date.now()-started<25000){
       const current=await chrome.tabs.get(tab.id).catch(()=>null);
@@ -32,6 +39,12 @@
     try{
       const tabs=await chrome.tabs.query({url:"https://chatgpt.com/*"});
       let tab=tabs.find(t=>{try{return new URL(t.url).origin===ORIGIN;}catch{return false;}});
+      if(tab) await root.UserIOTabGroups?.assign("chatgpt",tab.id);
+      if(!tab){
+        const allocated=await root.UserIOTabGroups?.acquire("chatgpt",{slot:"identity",url:ORIGIN+"/",active:false,match:t=>{try{return new URL(t.url).origin===ORIGIN}catch{return false}}});
+        if(allocated?.ok)tab=allocated.tab;
+        else if(allocated?.error && allocated.error!=="tab_groups_unavailable")return allocated;
+      }
       if(!tab)tab=await chrome.tabs.create({url:ORIGIN+"/",active:false});
       const deadline=Date.now()+25000;
       while(tab.status!=="complete" && Date.now()<deadline){
@@ -66,8 +79,14 @@
     if(scope && !/^[0-9a-f]{64}$/.test(scope))return {ok:false,error:"invalid_account_scope"};
     try{
       const tabs=await chrome.tabs.query({url:"https://chatgpt.com/*"});
-      const tab=tabs.find(t=>{try{return new URL(t.url).origin===ORIGIN;}catch{return false;}})
-        ||await chrome.tabs.create({url:ORIGIN+"/",active:false});
+      let tab=tabs.find(t=>{try{return new URL(t.url).origin===ORIGIN;}catch{return false;}});
+      if(tab) await root.UserIOTabGroups?.assign("chatgpt",tab.id);
+      if(!tab){
+        const allocated=await root.UserIOTabGroups?.acquire("chatgpt",{slot:"identity",url:ORIGIN+"/",active:false,match:t=>{try{return new URL(t.url).origin===ORIGIN}catch{return false}}});
+        if(allocated?.ok)tab=allocated.tab;
+        else if(allocated?.error && allocated.error!=="tab_groups_unavailable")return allocated;
+      }
+      if(!tab)tab=await chrome.tabs.create({url:ORIGIN+"/",active:false});
       const [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",
         func:async(scope)=>{
           if(location.origin!=="https://chatgpt.com")return {ok:false,error:"origin_mismatch"};

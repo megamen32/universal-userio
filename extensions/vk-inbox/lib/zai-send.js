@@ -107,7 +107,11 @@
     return {ok:true,clicked:true};
   }
   async function openExact(ref){
-    const tab=await chrome.tabs.create({url:"https://chat.z.ai/",active:false});
+    const managed=await root.UserIOTabGroups?.acquire("zai",{slot:"send",url:"https://chat.z.ai/?userio_slot=send",active:false,retarget:true,match:t=>String(t.url||"").startsWith("https://chat.z.ai/?userio_slot=send")});
+    let tab=managed?.ok?managed.tab:null;
+    if(!tab && managed?.error && managed.error!=="tab_groups_unavailable")return managed;
+    if(!tab)tab=await chrome.tabs.create({url:"https://chat.z.ai/",active:false});
+    await root.UserIOTabGroups?.assign("zai",tab.id);
     const deadline=Date.now()+25000;
     while(Date.now()<deadline){
       const now=await chrome.tabs.get(tab.id).catch(()=>null);
