@@ -105,10 +105,28 @@
     return tabs.find((t) => (t.url || "").startsWith(prefix)) || null;
   }
 
+  function serviceForUrl(url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname === "chat.z.ai") return "zai";
+      if (parsed.hostname === "chatgpt.com" && parsed.pathname.startsWith("/dots/")) return "dots";
+      if (parsed.hostname === "chatgpt.com") return "chatgpt";
+    } catch (_) {}
+    return null;
+  }
+
   async function ensureTab(url) {
-    let tab = await findTab(url.split("?")[0]);
+    const service = serviceForUrl(url);
+    let tab = null;
+    if (service && root.UserIOTabGroups?.acquire) {
+      const managed = await root.UserIOTabGroups.acquire(service,{slot:"navigate",url,active:false,retarget:true,match:t=>String(t.url||"").split("?")[0]===String(url).split("?")[0]});
+      if (managed?.ok) tab = managed.tab;
+      else if (managed?.error && managed.error !== "tab_groups_unavailable") return managed;
+    }
+    if (!tab) tab = await findTab(url.split("?")[0]);
     if (!tab) {
       tab = await chrome.tabs.create({ url, active: false });
+      if (service) await root.UserIOTabGroups?.assign(service,tab.id);
     } else if (tab.url !== url) {
       await chrome.tabs.update(tab.id, { url, active: true });
     } else {
@@ -219,13 +237,14 @@
     const text = String(args.text || "");
     if (!text) return { ok: false, error: "text required" };
     const mode = String(args.mode || "auto");
-    let tab = await findTab("https://chatgpt.com");
-    if (!tab) {
-      tab = await chrome.tabs.create({ url: "https://chatgpt.com/", active: false });
-      await waitForComplete(tab.id, 30000);
-      await sleep(3000);
-    }
-    if (mode === "ui") return cmdGptSendUi(tab, text, args.chat_ref);
+    if (!root.UserIOScopedChatGPT?.validRef(args.chat_ref)) return {ok:false,error:"invalid_chat_ref"};
+    if (!["auto","ui","api"].includes(mode)) return {ok:false,error:"invalid_mode"};
+    const exact = await root.UserIOScopedChatGPT.exactTab(args.chat_ref);
+    if (!exact.ok) return exact;
+    const tab = exact.tab;
+    // Auto must never try an uncertain API POST and then repeat via UI.
+    if (mode === "ui" || mode === "auto")
+      return cmdGptSendUi(tab, text, args.chat_ref, args.expected_account_scope);
     // "api" or "auto": try the in-page API first (sentinel requirements
     // token), fall back to the real composer unless mode forces api.
     const [api] = await chrome.scripting.executeScript({
@@ -234,6 +253,8 @@
       func: async (body, chatRef) => {
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         try {
+          if (location.origin !== "https://chatgpt.com" || location.pathname !== "/c/" + chatRef)
+            return {ok:false,error:"chat_ref_mismatch"};
           const session = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json());
           const token = String(session.accessToken || "");
           if (!token) return { ok: false, error: "no accessToken (logged out?)", status: 401 };
@@ -310,26 +331,37 @@
     });
     const apiResult = (api && api.result) || { ok: false };
     if (apiResult.ok || mode === "api") return apiResult;
-    // auto: API was rejected (Cloudflare/sentinel) — native composer.
-    const ui = await cmdGptSendUi(tab, text, args.chat_ref);
-    return { ...ui, transport: "ui", api_error: apiResult.error || null };
+    // A failed API POST has unknown admission; never replay through the UI.
+    return apiResult.ok ? apiResult : {ok:false,error:"api_submission_outcome_unknown"};
   }
 
-  async function cmdGptSendUi(tab, text, chatRef) {
+  async function cmdGptSendUi(tab, text, chatRef, expectedScope = "") {
     const url = chatRef
       ? `https://chatgpt.com/c/${encodeURIComponent(String(chatRef))}`
       : "https://chatgpt.com/";
-    if (!tab.url.startsWith(url.split("?")[0])) {
-      await chrome.tabs.update(tab.id, { url });
-    }
+    if (!root.UserIOScopedChatGPT?.validRef(chatRef)) return {ok:false,error:"invalid_chat_ref"};
+    const exact = await root.UserIOScopedChatGPT.exactTab(chatRef);
+    if (!exact.ok || exact.tab.id !== tab.id) return {ok:false,error:"chat_ref_mismatch"};
     await waitForComplete(tab.id, 30000);
     await sleep(3000);
     const [injection] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: "MAIN",
-      func: async (body) => {
+      func: async (body, ref, scope) => {
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         try {
+          if (location.origin !== "https://chatgpt.com" || location.pathname !== "/c/" + ref)
+            return {ok:false,error:"chat_ref_mismatch"};
+          if(scope){
+            if(!/^[a-f0-9]{64}$/.test(scope))return {ok:false,error:"invalid_account_scope"};
+            const auth=await fetch("/api/auth/session",{credentials:"include"});
+            if(!auth.ok)return {ok:false,error:"authentication_required"};
+            const session=await auth.json();
+            if(typeof session?.user?.id!=="string")return {ok:false,error:"account_scope_unavailable"};
+            const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(session.user.id));
+            const actual=Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("");
+            if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
+          }
           let composer = null;
           for (let i = 0; i < 40; i += 1) {
             composer = document.querySelector("#prompt-textarea");
@@ -369,7 +401,7 @@
           return { ok: false, error: String(e && e.message || e) };
         }
       },
-      args: [text],
+      args: [text, chatRef, expectedScope],
     });
     return (injection && injection.result) || { ok: false, error: "no injection result" };
   }
@@ -526,6 +558,7 @@
         if(!root.UserIODot?.inspectComposer||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:'invalid_dot_request'};
         const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
+        await root.UserIOTabGroups?.assign("dots",tabs[0].id);
         const [result]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:'MAIN',func:root.UserIODot.inspectComposer,args:[args.url,args.room]});
         return result?.result||{ok:false,error:'inspection_failed'};
       }
@@ -534,6 +567,7 @@
         if(args.confirm!==(args.operation==='clear'?'preserve_then_clear':'restore_preserved_draft'))return {ok:false,error:'confirmation_required'};
         const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
+        await root.UserIOTabGroups?.assign("dots",tabs[0].id);
         const key='dot_draft_backup:'+args.backup_id, saved=(await chrome.storage.local.get(key))[key];
         if(!saved||saved.url!==args.url||saved.room!==args.room||typeof saved.text!=='string'||typeof saved.html!=='string')return {ok:false,error:'backup_not_found'};
         if((args.operation==='clear'&&!['saved','restored',undefined].includes(saved.phase))||(args.operation==='restore'&&saved.phase!=='cleared'))return {ok:false,error:'recovery_requires_review'};
@@ -618,6 +652,33 @@
       case "gpt_register": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
         return root.ChatGPT.register();
+      }
+      case "zai_send": {
+        return root.UserIOZaiSend?.send(args) ?? {ok:false,error:"zai_send_unavailable"};
+      }
+      case "zai_judge": {
+        return root.UserIOZaiJudge?.infer(args) ?? {ok:false,error:"zai_judge_unavailable"};
+      }
+      case "zai_judge_status": {
+        return root.UserIOZaiJudge?.status(args) ?? {ok:false,error:"zai_judge_unavailable"};
+      }
+      case "zai_scope": {
+        return root.UserIOZai?.scope() ?? {ok:false,error:"zai_module_missing"};
+      }
+      case "zai_list": {
+        return root.UserIOZai?.list(args) ?? {ok:false,error:"zai_module_missing"};
+      }
+      case "zai_read": {
+        return root.UserIOZai?.read(args) ?? {ok:false,error:"zai_module_missing"};
+      }
+      case "gpt_scope": {
+        return root.UserIOScopedChatGPT?.accountScope() ?? {ok:false,error:"scoped_chatgpt_unavailable"};
+      }
+      case "gpt_list": {
+        return root.UserIOScopedChatGPT?.list(args) ?? {ok:false,error:"scoped_chatgpt_unavailable"};
+      }
+      case "gpt_read": {
+        return root.UserIOScopedChatGPT?.read(args) ?? {ok:false,error:"scoped_chatgpt_unavailable"};
       }
       case "gpt_send": {
         return cmdGptSend(args);

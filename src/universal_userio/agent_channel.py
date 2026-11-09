@@ -213,9 +213,13 @@ def enqueue(payload: dict, *, user: str) -> dict:
     args = payload.get("args")
     if args is not None and not isinstance(args, dict):
         raise ValueError("args must be an object")
+    target_instance = str(payload.get("agent_instance_id") or "").strip()
+    if target_instance and not INSTANCE_RE.fullmatch(target_instance):
+        raise ValueError("invalid agent_instance_id")
     command = {
         "id": f"{agent_id}:{uuid.uuid4().hex}",
         "agent_id": agent_id,
+        "agent_instance_id": target_instance,
         "action": action,
         "args": args or {},
         "queued_at": _now(),
@@ -224,7 +228,7 @@ def enqueue(payload: dict, *, user: str) -> dict:
     record = dict(command)
     COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        key = (user, agent_id)
+        key = (user, target_instance or agent_id)
         queue = _PENDING.setdefault(key, deque())
         if len(queue) >= MAX_PENDING_PER_AGENT:
             raise ValueError(f"pending queue full for {agent_id}")

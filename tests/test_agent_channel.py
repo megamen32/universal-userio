@@ -607,3 +607,36 @@ def test_addressed_commands_reach_each_instance_during_contest(tmp_path, monkeyp
     pending = {a['agent_id']: a['pending'] for a in agent_channel.status(user='owner')['agents']}
     assert pending[three] == 1
     assert pending.get(ONE, 0) == 0
+
+
+def test_scoped_command_is_never_delivered_to_wrong_browser(tmp_path, monkeypatch) -> None:
+    base = _server(tmp_path, monkeypatch)
+    a = "browser-11111111-1111-4111-8111-111111111111"
+    b = "browser-22222222-2222-4222-8222-222222222222"
+    status, ack = _post(base, "/v1/agent/commands", {
+        "agent_id": "shared-browser", "agent_instance_id": a,
+        "action": "gpt_read", "args": {"chat_ref": "11111111-1111-4111-8111-111111111111"},
+    })
+    assert status == 202 and ack["queued"]
+    _, other = _get(base, "/v1/agent/poll?agent_id=shared-browser&instance_id=" + b + "&wait=0")
+    assert other["command"] is None
+    _, exact = _get(base, "/v1/agent/poll?agent_id=shared-browser&instance_id=" + a + "&wait=0")
+    assert exact["command"]["id"] == ack["id"]
+    assert exact["command"]["agent_instance_id"] == a
+    _, empty = _get(base, "/v1/agent/poll?agent_id=shared-browser&instance_id=" + a + "&wait=0")
+    assert empty["command"] is None
+
+
+def test_scoped_command_rejects_invalid_uuid(tmp_path, monkeypatch) -> None:
+    base = _server(tmp_path, monkeypatch)
+    for instance in ("nope", "browser-../../../etc/passwd"):
+        request = Request(base + "/v1/agent/commands", method="POST",
+            data=json.dumps({"agent_id":"shared","agent_instance_id":instance,
+                             "action":"gpt_read"}).encode(),
+            headers={"Content-Type":"application/json","Authorization":"Bearer test-token"})
+        try:
+            urlopen(request)
+        except HTTPError as e:
+            assert e.code == 400
+        else:
+            raise AssertionError("malformed instance ID was accepted")
