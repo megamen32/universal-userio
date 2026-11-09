@@ -2331,6 +2331,7 @@ def handler(
                         query.get("agent_id", [""])[0],
                         query.get("wait", ["20"])[0],
                         user=principal.username,
+                        instance_id=query.get("instance_id", [""])[0],
                     ))
                 except ValueError as error:
                     self._reply(400, {"error": str(error)})

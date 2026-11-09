@@ -29,7 +29,10 @@ export function createExtensionCaller({base,agentId,url,room,token,fetcher=fetch
   const status=getAgentStatus?await getAgentStatus():await request('/v1/agent/status');
   if(!status||!Array.isArray(status.agents))throw Error('extension_agent_status_unavailable');
   const entry=status.agents.find(item=>item.agent_id===agentId);
-  if(!entry?.identity_conflict)return agentId;
+  // Before the first profile poll, a legacy alias cannot identify any room.
+  // Do not queue a send that whichever browser appears first might consume.
+  if(!entry)throw Error('extension_agent_status_unavailable');
+  if(!entry.identity_conflict)return agentId;
   const instances=entry.instances;
   if(entry.legacy_unaddressable||!Array.isArray(instances)||!instances.length||instances.length>32||
      new Set(instances).size!==instances.length||instances.some(id=>typeof id!=='string'||!/^browser-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)))

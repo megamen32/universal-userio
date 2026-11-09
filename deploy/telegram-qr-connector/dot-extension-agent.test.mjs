@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 import {createExtensionCaller} from './dot-extension-agent.mjs';
-const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000,preserveDraft:false,getAgentStatus:async()=>({agents:[]})};
+const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000,preserveDraft:false,getAgentStatus:async()=>({agents:[{agent_id:'browser',identity_conflict:false}]})};
 const instanceA='browser-11111111-1111-4111-8111-111111111111',instanceB='browser-22222222-2222-4222-8222-222222222222';
 function conflictChannel({matches=[instanceA],legacy=false,unverified=[]}={}){
  const posts=[],results=[];
@@ -16,6 +16,12 @@ function conflictChannel({matches=[instanceA],legacy=false,unverified=[]}={}){
  }});
  return {fetcher,posts};
 }
+test('does not enqueue a send before the bound browser route is known',async()=>{
+ let posts=0;
+ const call=createExtensionCaller({...init,getAgentStatus:async()=>({agents:[]}),fetcher:async()=>{posts++;throw Error('unexpected request');}});
+ await assert.rejects(call('dot_send',{text:'hello'}),/extension_agent_status_unavailable/);
+ assert.equal(posts,0);
+});
 test('conflicting legacy profiles route a Dot send only to the profile holding the room',async()=>{
  const channel=conflictChannel(),call=createExtensionCaller({...init,fetcher:channel.fetcher,getAgentStatus:undefined});
  assert.equal((await call('dot_send',{text:'hello'})).ok,true);
