@@ -608,6 +608,10 @@
         const identity=await root.ChatGPT.identity();
         return {ok:identity.ok,...(identity.error?{error:identity.error}:{}),account_id:identity.account_id||'',email:identity.email||'',name:identity.name||''};
       }
+      case "gpt_session_proof": {
+        if (!root.ChatGPT?.sessionProof) return {ok:false,error:"chatgpt_module_missing"};
+        return root.ChatGPT.sessionProof(args.nonce);
+      }
       case "gpt_capture_status": {
         return root.ChatGPT?.passiveStatus ? root.ChatGPT.passiveStatus() : {ok:false,error:'passive_capture_unavailable'};
       }

@@ -9,6 +9,8 @@ Deliberately no database; credentials never appear in operator-facing responses.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import os
 import re
 import threading
@@ -99,6 +101,52 @@ def load_session(slug: str, *, user: str) -> dict:
         raise KeyError(f"chatgpt session not found: {slug}") from None
     except json.JSONDecodeError as error:
         raise RuntimeError(f"chatgpt session file is corrupt: {slug}") from error
+
+
+def resolve_agent_instance(slug: str, legacy_agent_id: str, instances: list[str], *,
+                           user: str, challenge: str, probe) -> str | None:
+    """Match an existing session to a browser without exporting session cookies."""
+    if not isinstance(challenge, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", challenge):
+        raise ValueError("invalid profile challenge")
+    if (not isinstance(instances, list) or not instances or len(instances) > 32
+            or len(set(instances)) != len(instances)
+            or any(not isinstance(item, str) or not re.fullmatch(
+                r"browser-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", item) for item in instances)):
+        raise ValueError("invalid browser instances")
+    with _LOCK:
+        record = load_session(slug, user=user)
+        if str(record.get("agent_id") or "") != legacy_agent_id:
+            return None
+        cookies = record.get("cookie_chunks") or []
+        chunks = sorted([[str(c.get("name") or ""), str(c.get("value") or "")]
+                         for c in cookies if isinstance(c, dict)
+                         and (c.get("name") == "__Secure-next-auth.session-token"
+                              or str(c.get("name") or "").startswith("__Secure-next-auth.session-token."))
+                         and c.get("value")])
+    if not chunks or len({c[0] for c in chunks}) != len(chunks):
+        return None
+    key = json.dumps([challenge, chunks], ensure_ascii=False, separators=(",", ":")).encode()
+    expected = hmac.new(key, b"userio-profile-match-v1", hashlib.sha256).hexdigest()
+    matches = []
+    for instance in instances:
+        try:
+            result = probe(instance, challenge)
+        except Exception:
+            return None
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            return None
+        if result.get("present") is False:
+            continue
+        if not re.fullmatch(
+                r"[a-f0-9]{64}", str(result.get("proof") or "")):
+            return None
+        if hmac.compare_digest(expected, result["proof"]):
+            matches.append(instance)
+    with _LOCK:
+        current = load_session(slug, user=user)
+        if current.get("agent_id") != record.get("agent_id") or current.get("cookie_chunks") != record.get("cookie_chunks"):
+            return None
+    return matches[0] if len(matches) == 1 else None
 
 
 def list_sessions(*, user: str) -> list[dict]:

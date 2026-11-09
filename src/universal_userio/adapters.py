@@ -1884,6 +1884,24 @@ class ChatGPTWebOutbox:
             agent_id = str(record.get("agent_id") or "")
             if not agent_id:
                 raise RuntimeError(f"account {slug!r} has no browser agent registered for delivery") from error
+            from . import agent_channel
+            status = agent_channel.status(user=user)
+            entry = next((item for item in status.get("agents", []) if item.get("agent_id") == agent_id), None)
+            if entry and entry.get("identity_conflict"):
+                if entry.get("legacy_unaddressable"):
+                    raise RuntimeError("browser identity conflict cannot be verified") from error
+                instances = entry.get("instances")
+                try:
+                    target = chatgpt_sessions.resolve_agent_instance(
+                        slug, agent_id, instances, user=user, challenge=uuid.uuid4().hex,
+                        probe=lambda instance, nonce: agent_channel.call(
+                            instance, "gpt_session_proof", {"nonce": nonce}, user=user, timeout_sec=30.0),
+                    )
+                except (KeyError, ValueError, RuntimeError) as probe_error:
+                    raise RuntimeError("browser identity conflict cannot be verified") from probe_error
+                if not target:
+                    raise RuntimeError("browser identity conflict cannot be verified") from error
+                agent_id = target
             result = agent_fallback(agent_id=agent_id, text=body, chat_ref=chat_ref)
             return str(result.get("assistant_id") or f"chatgpt-agent-sent:{draft_id}")
 

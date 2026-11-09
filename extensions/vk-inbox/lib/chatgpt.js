@@ -24,6 +24,22 @@
     return match ? Number(match[1]) : 1000;
   }
 
+  // Match a previously registered session without sending cookies or making
+  // a ChatGPT request. Each one-use challenge produces a different digest.
+  lib.sessionProof = async (nonce) => {
+    if (typeof nonce !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(nonce)) return {ok:false,error:"invalid_challenge"};
+    const cookies = (await chrome.cookies.getAll({domain:"chatgpt.com"}))
+      .filter(c => c.name === COOKIE_PREFIX || c.name.startsWith(COOKIE_PREFIX + "."))
+      .map(c => ({name:String(c.name),value:String(c.value || "")}))
+      .filter(c => c.value).sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    if (!cookies.length) return {ok:true,present:false};
+    if (new Set(cookies.map(c=>c.name)).size!==cookies.length) return {ok:false,error:"ambiguous_session_cookie"};
+    const bytes = new TextEncoder().encode(JSON.stringify([nonce,cookies.map(c=>[c.name,c.value])]));
+    const key = await crypto.subtle.importKey("raw",bytes,{name:"HMAC",hash:"SHA-256"},false,["sign"]);
+    const digest = await crypto.subtle.sign("HMAC",key,new TextEncoder().encode("userio-profile-match-v1"));
+    return {ok:true,present:true,proof:Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("")};
+  };
+
   lib.identity = async () => {
     const all = await chrome.cookies.getAll({ domain: "chatgpt.com" });
     const sessionChunks = all

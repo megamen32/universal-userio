@@ -106,6 +106,21 @@ test('ChatGPT cookies are never posted by the remote action without an explicit 
   assert.equal(JSON.parse(userioPosts[0].init.body).agent_id, 'browser-11111111-1111-4111-8111-111111111111');
 });
 
+test('profile matching compares existing ChatGPT sessions without exporting credentials', async () => {
+  const ctx = {
+    self:{}, crypto:globalThis.crypto, TextEncoder,
+    chrome:{cookies:{getAll:async()=>[{name:'__Secure-next-auth.session-token.0',value:'fixture-secret-a'},{name:'__Secure-next-auth.session-token.1',value:'fixture-secret-b'}]}},
+  };
+  load('lib/chatgpt.js',ctx);
+  const result=await ctx.self.ChatGPT.sessionProof('fixture-nonce');
+  assert.equal(result.ok,true);
+  assert.match(result.proof,/^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(result).includes('fixture-secret'));
+  assert.notEqual((await ctx.self.ChatGPT.sessionProof('different-nonce')).proof,result.proof);
+  ctx.chrome.cookies.getAll=async()=>[];
+  assert.equal((await ctx.self.ChatGPT.sessionProof('fixture-nonce')).present,false);
+});
+
 function response(status, body) {
   return { ok: status < 400, status, json: async () => body };
 }
