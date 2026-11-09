@@ -368,13 +368,18 @@ class UserIOService:
             }.items() if value is not None
         }
 
-    def _chatgpt_agent_fallback(self, *, agent_id: str, text: str, chat_ref: str) -> dict:
-        """Deliver through the user's real browser when the server POST is blocked."""
+    def _chatgpt_agent_fallback(self, *, agent_id: str, text: str, chat_ref: str,
+                                user: str) -> dict:
+        """Deliver through this user's real browser when the server POST is blocked.
+
+        The agent queue is keyed by (user, agent_id): addressing it with any
+        identity other than the sending principal would hand the command to
+        a different user's browser when both registered the same agent id.
+        """
         from . import agent_channel
-        username = self._store.owner().username
         return agent_channel.call(
             agent_id, "gpt_send", {"text": text, "chat_ref": chat_ref},
-            user=username, timeout_sec=115.0,
+            user=user, timeout_sec=115.0,
         )
 
     def add_inbound_listener(self, listener: object) -> None:
@@ -2007,7 +2012,8 @@ class UserIOService:
                 send = partial(self.chatgpt_outbox.send_reply,
                     chat_ref=str(conversation["sender"]), draft_id=draft.id, body=draft.body,
                     account_ref=account_ref, user=principal.username,
-                    agent_fallback=self._chatgpt_agent_fallback,
+                    agent_fallback=partial(self._chatgpt_agent_fallback,
+                                           user=principal.username),
                 )
             else:
                 send_chatgpt_reply = getattr(self._outbox, "send_chatgpt_reply", None)
