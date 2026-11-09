@@ -13,8 +13,8 @@ INSTANCE_B = "browser-22222222-2222-4222-8222-222222222222"
 
 def proof(nonce, cookies):
     chunks = sorted([[x["name"], x["value"]] for x in cookies])
-    key = json.dumps([nonce, chunks], ensure_ascii=False, separators=(",", ":")).encode()
-    return hmac.new(key, b"userio-profile-match-v1", hashlib.sha256).hexdigest()
+    key = json.dumps(chunks, ensure_ascii=False, separators=(",", ":")).encode()
+    return hmac.new(key, ("userio-profile-match-v1:"+nonce).encode(), hashlib.sha256).hexdigest()
 
 
 def test_matching_existing_chatgpt_profile_is_unambiguous_and_user_scoped(tmp_path, monkeypatch):

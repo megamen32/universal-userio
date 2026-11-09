@@ -34,9 +34,9 @@
       .filter(c => c.value).sort((a,b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     if (!cookies.length) return {ok:true,present:false};
     if (new Set(cookies.map(c=>c.name)).size!==cookies.length) return {ok:false,error:"ambiguous_session_cookie"};
-    const bytes = new TextEncoder().encode(JSON.stringify([nonce,cookies.map(c=>[c.name,c.value])]));
+    const bytes = new TextEncoder().encode(JSON.stringify(cookies.map(c=>[c.name,c.value])));
     const key = await crypto.subtle.importKey("raw",bytes,{name:"HMAC",hash:"SHA-256"},false,["sign"]);
-    const digest = await crypto.subtle.sign("HMAC",key,new TextEncoder().encode("userio-profile-match-v1"));
+    const digest = await crypto.subtle.sign("HMAC",key,new TextEncoder().encode("userio-profile-match-v1:"+nonce));
     return {ok:true,present:true,proof:Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("")};
   };
 

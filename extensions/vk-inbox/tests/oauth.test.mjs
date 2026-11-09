@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHmac } from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -115,6 +116,8 @@ test('profile matching compares existing ChatGPT sessions without exporting cred
   const result=await ctx.self.ChatGPT.sessionProof('fixture-nonce');
   assert.equal(result.ok,true);
   assert.match(result.proof,/^[a-f0-9]{64}$/);
+  const key=JSON.stringify([['__Secure-next-auth.session-token.0','fixture-secret-a'],['__Secure-next-auth.session-token.1','fixture-secret-b']]);
+  assert.equal(result.proof,createHmac('sha256',key).update('userio-profile-match-v1:fixture-nonce').digest('hex'));
   assert.ok(!JSON.stringify(result).includes('fixture-secret'));
   assert.notEqual((await ctx.self.ChatGPT.sessionProof('different-nonce')).proof,result.proof);
   ctx.chrome.cookies.getAll=async()=>[];

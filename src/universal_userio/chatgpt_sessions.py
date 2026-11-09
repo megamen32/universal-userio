@@ -109,9 +109,9 @@ def resolve_agent_instance(slug: str, legacy_agent_id: str, instances: list[str]
     if not isinstance(challenge, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", challenge):
         raise ValueError("invalid profile challenge")
     if (not isinstance(instances, list) or not instances or len(instances) > 32
-            or len(set(instances)) != len(instances)
             or any(not isinstance(item, str) or not re.fullmatch(
-                r"browser-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", item) for item in instances)):
+                r"browser-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", item) for item in instances)
+            or len(set(instances)) != len(instances)):
         raise ValueError("invalid browser instances")
     with _LOCK:
         record = load_session(slug, user=user)
@@ -125,8 +125,8 @@ def resolve_agent_instance(slug: str, legacy_agent_id: str, instances: list[str]
                          and c.get("value")])
     if not chunks or len({c[0] for c in chunks}) != len(chunks):
         return None
-    key = json.dumps([challenge, chunks], ensure_ascii=False, separators=(",", ":")).encode()
-    expected = hmac.new(key, b"userio-profile-match-v1", hashlib.sha256).hexdigest()
+    key = json.dumps(chunks, ensure_ascii=False, separators=(",", ":")).encode()
+    expected = hmac.new(key, ("userio-profile-match-v1:" + challenge).encode(), hashlib.sha256).hexdigest()
     matches = []
     for instance in instances:
         try:
