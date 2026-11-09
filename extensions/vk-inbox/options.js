@@ -1,17 +1,15 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const CFG = window.USERIO_CONFIG || {};
-  const DEFAULTS = { endpoint: CFG.endpoint || "http://127.0.0.1:18093", routeId: CFG.routeId || "vk-browser" };
+  const DEFAULTS = { endpoint: CFG.endpoint || "http://127.0.0.1:18093" };
   chrome.storage.local.get(DEFAULTS).then((s) => {
     $("endpoint").value = s.endpoint;
-    $("routeId").value = s.routeId || "vk-browser";
     refreshUserIO();
     refreshChatGPT();
   });
   $("save").addEventListener("click", async () => {
     await chrome.storage.local.set({
       endpoint: $("endpoint").value.trim() || DEFAULTS.endpoint,
-      routeId: $("routeId").value.trim() || DEFAULTS.routeId,
     });
     $("status").textContent = "Сохранено";
     setTimeout(() => { $("status").textContent = ""; }, 1500);

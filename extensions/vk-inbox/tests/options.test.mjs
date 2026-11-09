@@ -11,6 +11,19 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   append(...children) { this.children.push(...children); }
 }
+test('settings do not ask for a route identifier and preserve an existing route', async () => {
+  const html = fs.readFileSync(path.join(root,'options.html'),'utf8');
+  assert.doesNotMatch(html, /id=["']routeId["']/);
+  const el = new Proxy({}, {get: (items,id) => items[id] ||= new Element()});
+  const stored = {endpoint:'https://old.example', routeId:'existing-route'};
+  const chrome = {storage:{local:{get:async defaults=>({...defaults,...stored}), set:async value=>Object.assign(stored,value)}},runtime:{sendMessage:(_msg,cb)=>cb({ok:true,accounts:[]})}};
+  vm.runInNewContext(fs.readFileSync(path.join(root,'options.js'),'utf8'),{window:{USERIO_CONFIG:{},confirm:()=>true},document:{getElementById:id=>id==='routeId'?null:el[id],createElement:()=>new Element()},chrome,setTimeout:()=>0});
+  await new Promise(resolve=>setImmediate(resolve));
+  el.endpoint.value='https://new.example';
+  await el.save.listeners.click();
+  assert.equal(stored.endpoint,'https://new.example');
+  assert.equal(stored.routeId,'existing-route');
+});
 test('settings show the connected account and disconnect only the selected account', async () => {
   const ids = ['endpoint','routeId','save','status','userioStatus','userioDisconnect','userioConnect','chatgptSelect','chatgptConnect','chatgptStatus','chatgptAccounts'];
   const el = Object.fromEntries(ids.map(id => [id, new Element()]));
