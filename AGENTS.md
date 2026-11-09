@@ -22,7 +22,12 @@ and rollback. Never expose credentials, phone numbers or private transcripts.
 
 Discover exact installed API/MCP schemas and capabilities before use. Accepted,
 queued, ringing, answered and explicitly confirmed decisions are different.
-Unknown delivery is reconciled by the original request identity, never replayed.
+Actively verify an unknown delivery against the original request identity,
+provider and recipient history, current state, and available audit evidence.
+Continue independent work while investigating. Use a confirmed delivery; when
+the evidence establishes that no delivery occurred, a corrected authorized
+attempt linked to the original may proceed. Do not assume that missing evidence
+proves absence or bypass a stop, access refusal, or mandatory check.
 
 Write operational instructions, code comments and agent coordination in English;
 keep Russian user-facing guides/responses in Russian and preserve raw evidence.
