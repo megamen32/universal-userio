@@ -63,7 +63,7 @@ read and isolated send canary.
 
 ## Z.AI as a first-class MV3 provider
 
-Universal UserIO Agent 0.9.23 also supports profile-pinned commands
+Universal UserIO Agent 0.9.24 also supports profile-pinned commands
 for Z.AI at https://chat.z.ai, without Vibe.
 
 - zai_scope derives a SHA-256 account scope entirely in the browser.

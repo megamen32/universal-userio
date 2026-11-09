@@ -244,3 +244,32 @@ test("ZAI exact-chat sender does not retry an uncertain click",async()=>{
  assert.equal((await f.context.self.UserIOZaiSend.send(input)).error,"zai_send_duplicate_attempt_refused");
  assert.equal(clicks,1);
 });
+
+test("ZAI judge admits a tab while Chrome still reports loading but composer is ready",async()=>{
+ const f=fixture();
+ vm.runInNewContext(readFileSync(new URL("lib/zai-judge.js",ROOT),"utf8"),f.context);
+ f.context.document={querySelector:()=>({value:""})};
+ f.chrome.tabs.create=async({url})=>{
+   const tab={id:f.tabs.length+1,url,status:"loading"};
+   f.tabs.push(tab);f.created.push(tab);return tab;
+ };
+ const phases=[];
+ f.context.self.UserIOZaiJudgePageOperation=async p=>{
+   phases.push(p.step);
+   if(p.step==="claim")return {ok:true,path:"/",phase:"idle",draft:false};
+   if(p.step==="click"){
+     const tab=f.tabs.at(-1);tab.url="https://chat.z.ai/c/"+ID;
+     return {ok:true};
+   }
+   if(p.step==="read")return {ok:true,text:'{"kind":"ok"}',
+     userMessageId:USER,assistantMessageId:ASST};
+   if(p.step==="state")return {ok:true,path:"/c/"+ID,phase:"idle",draft:false};
+   return {ok:true};
+ };
+ const r=await f.context.self.UserIOZaiJudge.infer({
+   request_id:ID,expected_account_scope:SCOPE,model:"glm-5.3-flash",prompt:"one-time"
+ });
+ assert.equal(r.kind,"answer");
+ assert.equal(phases.filter(x=>x==="click").length,1);
+ assert.equal(f.created.length,1);
+});

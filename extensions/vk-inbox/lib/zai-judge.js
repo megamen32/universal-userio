@@ -17,20 +17,53 @@
   async function createdTab(owner){
     const url=ORIGIN+"/?agent-herder-zai-judge="+owner;
     const tab=await chrome.tabs.create({url,active:false});
-    const deadline=Date.now()+25000;
+    const deadline=Date.now()+65000;
     while(Date.now()<deadline){
       const fresh=await chrome.tabs.get(tab.id).catch(()=>null);
       if(!fresh)return {ok:false,error:"judge_tab_closed"};
       if(!sameOrigin(fresh.url)&&fresh.status==="complete")
         return {ok:false,error:"judge_origin_changed"};
-      if(fresh.status==="complete"){
+      if(sameOrigin(fresh.url)){
         const loc=new URL(fresh.url);
-        if(loc.pathname!=="/")return {ok:false,error:"judge_tab_not_blank"};
-        return {ok:true,tab:fresh};
+        if(loc.pathname!=="/")return {ok:false,error:"judge_tab_not_blank",tabId:tab.id};
+        if(fresh.status==="complete")return {ok:true,tab:fresh};
+        // Chrome can report "loading" long after Z.AI's composer is ready.
+        // Check actual DOM readiness without navigating or touching an
+        // existing chat, and retain the exact created-tab identity.
+        try{
+          const [probe]=await chrome.scripting.executeScript({
+            target:{tabId:tab.id,allFrames:false},world:"MAIN",
+            func:()=>location.origin==="https://chat.z.ai"
+              &&location.pathname==="/"
+              &&!!document.querySelector('textarea[placeholder="Send a Message"]')
+              &&!!document.querySelector("#send-message-button")
+          });
+          if(probe?.result===true)return {ok:true,tab:fresh};
+        }catch{ /* page is not yet ready */ }
       }
       await sleep(400);
     }
-    return {ok:false,error:"judge_tab_load_timeout"};
+    return {ok:false,error:"judge_tab_load_timeout",tabId:tab.id};
+  }
+  async function discardUnclaimed(tabId,owner){
+    const tab=await chrome.tabs.get(tabId).catch(()=>null);
+    if(!tab||!sameOrigin(tab.url)||new URL(tab.url).pathname!=="/")return;
+    try{
+      const [probe]=await chrome.scripting.executeScript({
+        target:{tabId,allFrames:false},world:"MAIN",
+        func:(name)=>{
+          if(location.origin!=="https://chat.z.ai"||location.pathname!=="/"
+            ||(window.name&&window.name!=="agent-herder-zai-judge:"+name))
+            return false;
+          const editor=document.querySelector('textarea[placeholder="Send a Message"]');
+          const active=[...document.querySelectorAll("button")].some(button=>
+            button.getClientRects().length>0
+            &&!!button.querySelector(":scope > span.block.size-3.rounded-xs.bg-text-inverted"));
+          return !!editor && editor.value==="" && !active;
+        },args:[owner]
+      });
+      if(probe?.result===true)await chrome.tabs.remove(tabId).catch(()=>undefined);
+    }catch{ /* unknown page state: do not close */ }
   }
   const page=async(tabId,step,owner,path,scope,model,extra={})=>{
     const tab=await chrome.tabs.get(tabId).catch(()=>null);
@@ -90,6 +123,8 @@
       const allocated=await createdTab(owner);
       if(!allocated.ok){
         await checkpoint("rejected");
+        if(Number.isSafeInteger(allocated.tabId))
+          await discardUnclaimed(allocated.tabId,owner);
         return {ok:false,error:allocated.error};
       }
       tabId=allocated.tab.id;
