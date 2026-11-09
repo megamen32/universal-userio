@@ -14,26 +14,34 @@
     source: "vk",
     routeId: CFG.routeId || "vk-browser",
     agentId: "",
+    agentInstanceId: "",
   };
 
   let settingsPromise;
   lib.settings = async () => {
     if (!settingsPromise) settingsPromise = (async () => {
       const s = await chrome.storage.local.get({ ...DEFAULTS, agentState: null });
+      const changed = {};
+      if (!s.agentInstanceId) {
+        s.agentInstanceId = `browser-${crypto.randomUUID()}`;
+        changed.agentInstanceId = s.agentInstanceId;
+      }
       if (!s.agentId) {
         // An older installation has already polled under its baked identity.
         // Keep that route until its existing bindings can be migrated; a
         // fresh profile has no previous poll state and gets its own ID.
         s.agentId = s.agentState && typeof s.agentState === 'object'
           ? (CFG.agentId || 'vk-browser')
-          : `browser-${crypto.randomUUID()}`;
-        await chrome.storage.local.set({ agentId: s.agentId });
+          : s.agentInstanceId;
+        changed.agentId = s.agentId;
       }
-      return s.agentId;
+      if (Object.keys(changed).length) await chrome.storage.local.set(changed);
+      return { agentId: s.agentId, agentInstanceId: s.agentInstanceId };
     })().catch((error) => { settingsPromise = null; throw error; });
-    const agentId = await settingsPromise;
+    const identity = await settingsPromise;
     const s = await chrome.storage.local.get(DEFAULTS);
-    return { ...DEFAULTS, ...s, agentId: s.agentId || agentId };
+    return { ...DEFAULTS, ...s, agentId: s.agentId || identity.agentId,
+      agentInstanceId: s.agentInstanceId || identity.agentInstanceId };
   };
 
   lib.accessToken = () => root.UserIOOAuth.accessToken();

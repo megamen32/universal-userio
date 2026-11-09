@@ -19,6 +19,7 @@ test('fresh profiles create distinct persistent automatic agent identities', asy
   const a = profile(), b = profile();
   const [first, concurrent, other] = await Promise.all([a.settings(), a.settings(), b.settings()]);
   assert.match(first.agentId, /^browser-[0-9a-f-]{36}$/);
+  assert.equal(first.agentId, first.agentInstanceId);
   assert.equal(first.agentId, concurrent.agentId);
   assert.notEqual(first.agentId, other.agentId);
   assert.equal((await a.settings()).agentId, first.agentId);
@@ -30,4 +31,12 @@ test('an existing legacy installation keeps its bound agent identity on upgrade'
   const existing = profile({ agentState: { lastOkAt: 100, ts: 101 } });
   assert.equal((await existing.settings()).agentId, 'vk-browser');
   assert.equal(existing.data.agentId, 'vk-browser');
+});
+test('two legacy profiles have distinct persistent instance identities', async () => {
+  const a = profile({agentId:'vk-browser'}), b = profile({agentId:'vk-browser'});
+  const [left,right] = await Promise.all([a.settings(),b.settings()]);
+  assert.match(left.agentInstanceId, /^browser-[0-9a-f-]{36}$/);
+  assert.notEqual(left.agentInstanceId,right.agentInstanceId);
+  assert.equal((await a.settings()).agentInstanceId,left.agentInstanceId);
+  assert.equal(left.agentId,'vk-browser');
 });

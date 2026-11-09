@@ -74,13 +74,14 @@
   async function pollOnce() {
     const s = await root.UserIO.settings();
     const base = s.endpoint.replace(/\/+$/, "");
-    const url = `${base}/v1/agent/poll?agent_id=${encodeURIComponent(s.agentId)}&wait=${POLL_WAIT_SEC}`;
+    const url = `${base}/v1/agent/poll?agent_id=${encodeURIComponent(s.agentId)}&instance_id=${encodeURIComponent(s.agentInstanceId)}&wait=${POLL_WAIT_SEC}`;
     const headers = {};
     const token = await root.UserIO.accessToken();
     if (token) headers["Authorization"] = "Bearer " + token;
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error(`poll HTTP ${res.status}`);
     const data = await res.json().catch(() => ({}));
+    if (data && data.identity_conflict) throw new Error('agent_identity_conflict');
     return data && data.command;
   }
 
@@ -568,6 +569,16 @@
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.inspectDraft,args:[args.url,args.room,args.expected_hash]});
         return r?.result||{ok:false,error:"dot_result_unknown"};
+      }
+      case "dot_profile_probe": {
+        if (!root.UserIODot || typeof args.room!=="string" || !args.room || typeof args.url!=="string" || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)) return {ok:false,error:"invalid_dot_request"};
+        const tabs = (await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        if (!tabs.length) return {ok:true,matches:false};
+        if (tabs.length!==1) return {ok:false,error:"dot_tab_not_unique"};
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.pageAction,args:[args.url,args.room,null,null,null,[]]});
+        if (!r?.result?.ok || r.result.room!==args.room || !r.result.cursor) return {ok:false,error:"dot_probe_unverified"};
+        // Only return the binding check; do not persist the snapshot in the command audit.
+        return {ok:true,matches:true};
       }
       case "dot_action": {
         if (!root.UserIODot || !["snapshot","send"].includes(args.operation) || typeof args.room!=="string" || !args.room || typeof args.url!=="string" || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)) return {ok:false,error:"invalid_dot_request"};

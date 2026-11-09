@@ -6,13 +6,25 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {webcrypto,createHash} from 'node:crypto';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-function setup(tabs){
+function setup(tabs,snapshot={ok:true,room:'r',cursor:'verified'}){
  let calls=[];const self={UserIODot:{pageAction:()=>{},mediaAction:()=>{},inspectDraft:()=>{}},UserIODotRead:{pageAction:()=>{}}};
- const chrome={tabs:{query:async()=>tabs},scripting:{executeScript:async x=>(calls.push(x),[{result:{ok:true,room:'r'}}])}};
+ const chrome={tabs:{query:async()=>tabs},scripting:{executeScript:async x=>(calls.push(x),[{result:snapshot}])}};
  const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');
  vm.runInNewContext(src,{self,chrome,setTimeout,Promise});return {execute:self.Agent.testExecute,calls};
 }
 const url='https://chatgpt.com/dots/aaa~bbb';
+test('profile probe confirms the exact Dot room without exposing its messages',async()=>{
+ const absent=setup([]),none=await absent.execute({action:'dot_profile_probe',args:{url,room:'r'}});
+ assert.equal(none.ok,true);assert.equal(none.matches,false);assert.equal(absent.calls.length,0);
+ const one=setup([{id:7,url}]),result=await one.execute({action:'dot_profile_probe',args:{url,room:'r'}});
+ assert.equal(result.ok,true);assert.equal(result.matches,true);assert.equal(one.calls.length,1);
+ assert.deepEqual(Object.keys(result).sort(),['matches','ok']);
+ const duplicate=setup([{id:1,url},{id:2,url}]);
+ assert.equal((await duplicate.execute({action:'dot_profile_probe',args:{url,room:'r'}})).error,'dot_tab_not_unique');
+ assert.equal(duplicate.calls.length,0);
+ const wrong=setup([{id:1,url}],{ok:true,room:'other',cursor:'verified'});
+ assert.equal((await wrong.execute({action:'dot_profile_probe',args:{url,room:'r'}})).error,'dot_probe_unverified');
+});
 test('draft backup stores sensitive content locally and returns only verification metadata',async()=>{
  const draft='private draft text',saved={};
  const self={UserIODot:{captureDraft:()=>{}}};

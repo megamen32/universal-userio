@@ -1,6 +1,51 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 import {createExtensionCaller} from './dot-extension-agent.mjs';
-const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000,preserveDraft:false};
+const init={base:'http://127.0.0.1:18093',agentId:'browser',url:'https://chatgpt.com/dots/a~b',room:'room',token:'fixture',wait:async()=>{},now:()=>100000,preserveDraft:false,getAgentStatus:async()=>({agents:[]})};
+const instanceA='browser-11111111-1111-4111-8111-111111111111',instanceB='browser-22222222-2222-4222-8222-222222222222';
+function conflictChannel({matches=[instanceA],legacy=false,unverified=[]}={}){
+ const posts=[],results=[];
+ const fetcher=async(url,opts)=>({ok:true,json:async()=>{
+  if(url.pathname==='/v1/agent/status')return {agents:[{agent_id:'browser',identity_conflict:true,instances:[instanceA,instanceB],legacy_unaddressable:legacy}]};
+  if(opts.method==='POST'){
+   const body=JSON.parse(opts.body),id=body.agent_id+':'+(posts.length+1);posts.push(body);
+   const isProbe=body.action==='dot_profile_probe';
+   const result=isProbe?(unverified.includes(body.agent_id)?{ok:false,error:'dot_probe_unverified'}:{ok:true,matches:matches.includes(body.agent_id)}):{ok:true};
+   results.push({id,action:body.action,received_at:101,result});return {queued:true,id};
+  }
+  return {results};
+ }});
+ return {fetcher,posts};
+}
+test('conflicting legacy profiles route a Dot send only to the profile holding the room',async()=>{
+ const channel=conflictChannel(),call=createExtensionCaller({...init,fetcher:channel.fetcher,getAgentStatus:undefined});
+ assert.equal((await call('dot_send',{text:'hello'})).ok,true);
+ const probes=channel.posts.filter(x=>x.action==='dot_profile_probe');
+ assert.deepEqual(probes.map(x=>x.agent_id).sort(),[instanceA,instanceB]);
+ const sends=channel.posts.filter(x=>x.action==='dot_action'&&x.args.operation==='send');
+ assert.equal(sends.length,1);assert.equal(sends[0].agent_id,instanceA);
+});
+test('conflicting legacy profiles do not send if room ownership is ambiguous',async()=>{
+ const channel=conflictChannel({matches:[instanceA,instanceB]}),call=createExtensionCaller({...init,fetcher:channel.fetcher,getAgentStatus:undefined});
+ await assert.rejects(call('dot_send',{text:'hello'}),/identity_conflict/);
+ assert.equal(channel.posts.filter(x=>x.args.operation==='send').length,0);
+});
+test('an active legacy profile that cannot be probed prevents guessing the target',async()=>{
+ const channel=conflictChannel({legacy:true}),call=createExtensionCaller({...init,fetcher:channel.fetcher,getAgentStatus:undefined});
+ await assert.rejects(call('dot_send',{text:'hello'}),/identity_conflict/);
+ assert.equal(channel.posts.filter(x=>x.args.operation==='send').length,0);
+});
+test('an unverified profile prevents a send even when another profile matches',async()=>{
+ const channel=conflictChannel({unverified:[instanceB]}),call=createExtensionCaller({...init,fetcher:channel.fetcher,getAgentStatus:undefined});
+ await assert.rejects(call('dot_send',{text:'hello'}),/identity_conflict/);
+ assert.equal(channel.posts.filter(x=>x.args.operation==='send').length,0);
+});
+test('draft preservation and send stay pinned to the same verified profile',async()=>{
+ const channel=conflictChannel(),call=createExtensionCaller({...init,fetcher:channel.fetcher,getAgentStatus:undefined,preserveDraft:true,transferId:()=> '12345678-1234-1234-1234-123456789abc'});
+ assert.equal((await call('dot_send',{text:'hello'})).ok,true);
+ const actions=channel.posts.filter(x=>x.action!=='dot_profile_probe');
+ assert.deepEqual(actions.map(x=>x.action),['dot_draft_backup','dot_draft_recover','dot_action','dot_draft_recover']);
+ assert.ok(actions.every(x=>x.agent_id===instanceA));
+});
 test('disable during draft backup blocks the subsequent send admission',async()=>{
  let enabled=true,last;const posts=[];
  const call=createExtensionCaller({...init,preserveDraft:true,assertAllowed:()=>{if(!enabled)throw Error('disabled');},fetcher:async(_url,opts)=>({ok:true,json:async()=>{
