@@ -78,7 +78,8 @@
       return { ok: false, error: "Аккаунт ChatGPT изменился после выбора. Проверьте его снова." };
     }
     const platform = await chrome.runtime.getPlatformInfo().catch(() => ({}));
-    const agentId = (await root.UserIO.settings()).agentId;
+    const settings = await root.UserIO.settings();
+    const agentId = settings.agentInstanceId || settings.agentId;
     const result = await root.UserIO.call("POST", "/v1/chatgpt/sessions", {
       cookies: identity.cookies,
       email: identity.email,

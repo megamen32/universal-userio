@@ -80,7 +80,7 @@ test('ChatGPT cookies are never posted by the remote action without an explicit 
     storage: { local: { get: async (defaults) => ({ ...defaults, endpoint: 'https://userio.example', agentId: 'test' }) } },
   };
   const ctx = {
-    self: { UserIO: { settings: async () => ({ agentId: 'test' }), call: async (_method, url, body) => { userioPosts.push({ url: 'https://userio.example' + url, init: { body: JSON.stringify(body) } }); return { accepted: true, account_id: "chatgpt:fixture" }; } } },
+    self: { UserIO: { settings: async () => ({ agentId: 'legacy', agentInstanceId: 'browser-11111111-1111-4111-8111-111111111111' }), call: async (_method, url, body) => { userioPosts.push({ url: 'https://userio.example' + url, init: { body: JSON.stringify(body) } }); return { accepted: true, account_id: "chatgpt:fixture" }; } } },
     chrome, navigator: { userAgent: 'fixture-agent' }, URL, URLSearchParams,
     crypto: globalThis.crypto, TextEncoder,
     fetch: async (url, init) => {
@@ -103,6 +103,7 @@ test('ChatGPT cookies are never posted by the remote action without an explicit 
   assert.equal(allowed.ok, true);
   assert.equal(userioPosts.length, 1);
   assert.equal(userioPosts[0].url, 'https://userio.example/v1/chatgpt/sessions');
+  assert.equal(JSON.parse(userioPosts[0].init.body).agent_id, 'browser-11111111-1111-4111-8111-111111111111');
 });
 
 function response(status, body) {
