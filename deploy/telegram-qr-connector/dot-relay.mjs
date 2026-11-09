@@ -13,6 +13,12 @@ function normalizedFormat(entities){
  for(const e of entries){const prev=merged.at(-1);if(prev&&prev.type===e.type&&prev.url===e.url&&prev.offset+prev.length===e.offset)prev.length+=e.length;else merged.push({...e});}
  return JSON.stringify(merged);
 }
+function formatEchoMatches(expected,actual){
+ // Dot renders a preformatted block and an inline code span with the same
+ // markup, so both arrive back as one code entity.
+ const semantic=items=>(items||[]).map(e=>({...e,type:e.type==='pre'||e.type==='code'?'code':e.type})).sort((a,b)=>a.type.localeCompare(b.type)||a.offset-b.offset||a.length-b.length||String(a.url||'').localeCompare(String(b.url||'')));
+ return JSON.stringify(semantic(JSON.parse(expected)))===JSON.stringify(semantic(JSON.parse(actual)));
+}
 export function canonicalPrivateSender(message,peerId){
  if(message.out || peerId!==OWNER || String(message.peerId?.userId||'')!==OWNER)return '';
  const explicit=message.senderId ?? message.fromId?.userId;
@@ -125,7 +131,7 @@ export class DotRelay {
     if(matches.length>1){record.status='ambiguous_echo_requires_review';this.save();return record;}
     if(matches.length===1){
      record.echo=matches[0].id;
-     if(entities.length&&(matches[0].format_incomplete||normalizedFormat(matches[0].entities)!==normalizedFormat(entities))){record.status='echo_format_requires_review';this.save();return record;}
+     if(entities.length&&(matches[0].format_incomplete||!formatEchoMatches(normalizedFormat(entities),normalizedFormat(matches[0].entities)))){record.status='echo_format_requires_review';this.save();return record;}
      record.status='accepted';this.save();return record;
     }
    }

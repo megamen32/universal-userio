@@ -25,3 +25,12 @@ test('edit does not claim success if the provider readback loses the link',async
  await assert.rejects(editDotText({client:f.client,api,peer:'p',messageId:42,expectedHash:textHash('Dot:\nсайт'),text:'Dot:\nсайт',entities:link,previousEntities:[]}),/unknown/);
  assert.equal(f.calls,1);
 });
+test('edit refuses provider readback with a duplicated formatting entity',async()=>{
+ const f=fixture(),invoke=f.client.invoke;
+ f.client.invoke=async request=>{
+  await invoke(request);
+  f.setMessage({entities:[...request.entities,...request.entities]});
+ };
+ await assert.rejects(editDotText({client:f.client,api,peer:'p',messageId:42,expectedHash:textHash('Dot:\nсайт'),text:'Dot:\nсайт',entities:link,previousEntities:[]}),/unknown/);
+ assert.equal(f.calls,1);
+});

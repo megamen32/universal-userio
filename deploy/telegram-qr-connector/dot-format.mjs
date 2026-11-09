@@ -12,5 +12,8 @@ export function telegramEntities(text,entities=[],api){
 }
 export function telegramFormatMatches(expected,actual){
  if(!Array.isArray(expected)||!Array.isArray(actual))return !expected?.length;
- return expected.every(e=>actual.some(a=>a.className===e.className&&a.offset===e.offset&&a.length===e.length&&(!e.url||a.url===e.url)));
+ const automatic=new Set(['MessageEntityUrl','MessageEntityEmail','MessageEntityMention','MessageEntityHashtag','MessageEntityBotCommand','MessageEntityCashtag','MessageEntityPhone']);
+ const identity=e=>JSON.stringify({type:e.className,offset:e.offset,length:e.length,...(e.url?{url:e.url}:{}),...(e.language?{language:e.language}:{})});
+ const want=expected.map(identity).sort(),got=actual.filter(e=>!automatic.has(e.className)).map(identity).sort();
+ return want.length===got.length&&want.every((value,index)=>value===got[index]);
 }

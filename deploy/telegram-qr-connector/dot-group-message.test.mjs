@@ -19,6 +19,14 @@ test('unsupported provider formatting remains explicit instead of throwing away 
  const sender={firstName:'Оля',id:43},message={message:'секрет',entities:[{className:'MessageEntitySpoiler',offset:0,length:6}]};
  assert.deepEqual(groupDotEntities(sender,message),[{type:'unsupported',provider_type:'MessageEntitySpoiler',offset:5,length:6}]);
 });
+test('a link the Dot composer cannot represent is held for review instead of dropping the message',()=>{
+ const sender={firstName:'Оля',id:43},message={message:'открыть',entities:[{className:'MessageEntityTextUrl',offset:0,length:6,url:'tg://resolve?domain=x'}]};
+ assert.deepEqual(groupDotEntities(sender,message),[{type:'unsupported',provider_type:'MessageEntityTextUrl',offset:5,length:6}]);
+});
+test('an entity range outside the message text is held for review instead of throwing',()=>{
+ const sender={firstName:'Оля',id:43},message={message:'коротко',entities:[{className:'MessageEntityBold',offset:2,length:40}]};
+ assert.deepEqual(groupDotEntities(sender,message),[{type:'unsupported',provider_type:'MessageEntityBold',offset:7,length:40}]);
+});
 test('a link preview is ordinary text, while pictures and other files are distinct',()=>{
  assert.equal(groupMediaKind({message:'ссылка',media:{className:'MessageMediaWebPage'}}),'text');
  assert.equal(groupMediaKind({message:'',media:{className:'MessageMediaPhoto',photo:{}}}),'image');

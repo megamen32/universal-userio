@@ -26,10 +26,13 @@ export function groupDotEntities(sender,message,options={}){
  const plain=new Set(['MessageEntityUrl','MessageEntityEmail','MessageEntityMention','MessageEntityHashtag','MessageEntityBotCommand','MessageEntityCashtag','MessageEntityPhone']);
  return (message.entities||[]).flatMap(e=>{
   const type=e.className==='MessageEntityBlockquote'&&e.collapsed?null:kinds[e.className];if(!type&&plain.has(e.className))return [];
-  if(!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>raw.length)throw Error('invalid_telegram_format');
+  // A range or link the Dot composer cannot represent is held for review as
+  // an explicit unsupported entity, never thrown away with the message.
+  if(!Number.isSafeInteger(e.offset)||!Number.isSafeInteger(e.length)||e.offset<0||e.length<1||e.offset+e.length>raw.length)
+   return [{type:'unsupported',provider_type:line(e.className)||'unknown',offset:prefix+e.offset,length:e.length}];
   if(!type)return [{type:'unsupported',provider_type:line(e.className)||'unknown',offset:prefix+e.offset,length:e.length}];
   const item={type,offset:prefix+e.offset,length:e.length};
-  if(type==='text_url'){let u;try{u=new URL(e.url)}catch{throw Error('invalid_telegram_link')};if(!['http:','https:'].includes(u.protocol))throw Error('invalid_telegram_link');item.url=u.href;}
+  if(type==='text_url'){let u;try{u=new URL(e.url)}catch{return [{type:'unsupported',provider_type:line(e.className)||'unknown',offset:prefix+e.offset,length:e.length}];}if(!['http:','https:'].includes(u.protocol))return [{type:'unsupported',provider_type:line(e.className)||'unknown',offset:prefix+e.offset,length:e.length}];item.url=u.href;}
   return [item];
  });
 }

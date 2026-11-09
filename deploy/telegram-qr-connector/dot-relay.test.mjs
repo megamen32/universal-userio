@@ -65,6 +65,12 @@ test('a plain echo cannot confirm an originally formatted delivery',async()=>{
  const result=await relay.receive({...event,text:'сайт',entities:[{type:'text_url',offset:0,length:4,url:'https://example.org/'}]});
  assert.equal(result.status,'echo_format_requires_review');
 });
+test('a preformatted block echoed as inline code still confirms the delivery',async()=>{
+ const x=setup();
+ const relay=new DotRelay({...x.config,statePath:x.path+'-pre-code',room:ROOM,wait:async()=>{},browserCall:async(action,args)=>action==='dot_send'?{ok:true}:args.after?{ok:true,room:ROOM,cursor:'new',messages:[{id:'echo',role:'user',text:'блок',entities:[{type:'code',offset:0,length:4}]}]}:{ok:true,room:ROOM,cursor:'old'}});
+ const result=await relay.receive({...event,text:'блок',entities:[{type:'pre',offset:0,length:4}]});
+ assert.equal(result.status,'accepted');
+});
 test('unsupported formatting is journalled once before any browser action',async()=>{
  const x=setup();const e={...event,entities:[{type:'unsupported',provider_type:'MessageEntitySpoiler',offset:0,length:5}]};
  const r=await x.relay.receive(e);assert.equal(r.status,'format_requires_review');assert.equal(x.counts().calls,0);

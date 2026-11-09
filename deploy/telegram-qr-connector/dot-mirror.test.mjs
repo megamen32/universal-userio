@@ -111,6 +111,19 @@ test('mirror sends labelled links as entities offset after the speaker label',as
  await settle(x);
  assert.deepEqual(x.sends[0].entities,[{type:'text_url',offset:15,length:4,url:'https://example.org/path'}]);
 });
+test('a link crossing a chunk boundary is projected into both parts without losing its range',async()=>{
+ const x=fixture();await x.mirror.tick();
+ const body='я'.repeat(2998)+' сайт '+'я'.repeat(100);
+ const start=2998,length=5;
+ x.rows([msg('baseline','user','old'),{...msg('linked','assistant',body),entities:[{type:'text_url',offset:start,length,url:'https://example.org/'}]}]);
+ await settle(x);
+ assert.equal(x.sends.length,2);
+ assert.equal(x.relay.state.mirror.published.linked.status,'accepted');
+ const projected=x.sends.flatMap(part=>part.entities||[]);
+ assert.ok(projected.length>=1);
+ for(const e of projected)assert.ok(e.length>0);
+ assert.equal(projected.reduce((total,e)=>total+e.length,0),length);
+});
 test('mirror holds a message when its displayed formatting cannot be mapped',async()=>{
  const x=fixture();await x.mirror.tick();
  x.rows([msg('baseline','user','old'),{...msg('bad','assistant','Откройте сайт'),format_incomplete:true}]);
