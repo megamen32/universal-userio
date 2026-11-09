@@ -60,3 +60,35 @@ The macOS installer creates protected ZIP backups under
 Retain the previous backend image and agent_channel.py backup. Do not
 disable a working owner or enable new autopilot workers before a verified
 read and isolated send canary.
+
+## Z.AI as a first-class MV3 provider
+
+Universal UserIO Agent 0.9.23 also supports profile-pinned commands
+for Z.AI at https://chat.z.ai, without Vibe.
+
+- zai_scope derives a SHA-256 account scope entirely in the browser.
+- zai_list returns bounded native conversation inventory.
+- zai_read returns a specific chat's native messages and completion state.
+- zai_send sends to an existing exact chat, then reads a native receipt,
+  never replaying UNKNOWN.
+- zai_judge(model,prompt,request_id,expected_account_scope) uses one
+  extension-created background tab with model and identity guards,
+  native prompt correlation, and distinct user/assistant message IDs.
+- zai_judge_status(request_id) reads its persisted outcome.
+
+Supported GLM models: 5.3, 5.2, 5.3-Flash. The Herder model
+cycle still owns the retry policy and honors Retry-After. An uncertain
+click is never retried.
+
+Each independent extension profile has its own agent_instance_id and
+site authentication. The V1 Browser Autopilot transport userio supports
+one to three explicit profile bindings with endpoint, agentId, instanceId,
+accountScope, tokenFile; each token must belong to the same UserIO
+principal as its extension.
+
+Z.AI browserMcpUrl Vibe transport is rejected, not selected as a fallback.
+Direct CDP remains an explicitly configured compatibility route.
+
+Do not enable production fan-out until the account scope, UserIO principal,
+a disposable Z.AI native-correlated inference, and the ChatGPT sender's
+readback canary have passed. Check for competing Herder owner leases.

@@ -633,6 +633,24 @@
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };
         return root.ChatGPT.register();
       }
+      case "zai_send": {
+        return root.UserIOZaiSend?.send(args) ?? {ok:false,error:"zai_send_unavailable"};
+      }
+      case "zai_judge": {
+        return root.UserIOZaiJudge?.infer(args) ?? {ok:false,error:"zai_judge_unavailable"};
+      }
+      case "zai_judge_status": {
+        return root.UserIOZaiJudge?.status(args) ?? {ok:false,error:"zai_judge_unavailable"};
+      }
+      case "zai_scope": {
+        return root.UserIOZai?.scope() ?? {ok:false,error:"zai_module_missing"};
+      }
+      case "zai_list": {
+        return root.UserIOZai?.list(args) ?? {ok:false,error:"zai_module_missing"};
+      }
+      case "zai_read": {
+        return root.UserIOZai?.read(args) ?? {ok:false,error:"zai_module_missing"};
+      }
       case "gpt_scope": {
         return root.UserIOScopedChatGPT?.accountScope() ?? {ok:false,error:"scoped_chatgpt_unavailable"};
       }
