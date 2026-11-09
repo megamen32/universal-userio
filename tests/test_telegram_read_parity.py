@@ -56,14 +56,21 @@ def test_explicit_read_refreshes_owned_history_and_promotes_actual_authors(mirro
     assert all(m["seen_at"] is None for m in result["chat"]["messages"])
 
 
-def test_refresh_failure_is_explicit_and_does_not_leak_provider_errors(mirror):
+def test_refresh_failure_is_explicit_and_does_not_leak_provider_errors(mirror, monkeypatch):
     store, service, _, cid = mirror
+    # The refresh coordinator is a process-global keyed on
+    # (user_id, account_ref, peer_id, before_id, history_limit) and the fresh
+    # store owner id is the constant "user_owner", so the default key can
+    # collide with an earlier test's cached success. A distinct history_limit
+    # isolates this test's key from any cached entry.
     def runner(*args, **kw):
         raise OSError("private transport detail")
     adapter = TelegramChannelAdapter(store, service, store.default_user_id,
         bridge_url="http://127.0.0.1:1234", runner=runner)
-    result = adapter.read(chat_id=cid)
-    assert result["sync"] == {"status":"failed","fresh":False,"error":"OSError"}
+    result = adapter.read(chat_id=cid, history_limit=51)
+    sync = result["sync"]
+    assert (sync["status"], sync["fresh"], sync["error"]) == ("failed", False, "OSError")
+    assert sync["stale"] is True and sync["refreshing"] is False
     assert len(result["chat"]["messages"]) == 1
     assert "private transport detail" not in json.dumps(result)
 
@@ -107,3 +114,4 @@ def test_history_replay_preserves_existing_voice_transcript(mirror):
     assert message["body"] == "caption\n\nspoken text"
     assert message["attachments"][0]["transcript"] == "spoken text"
     assert message["attachments"][0]["transcription_status"] == "completed"
+

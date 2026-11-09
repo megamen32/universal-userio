@@ -9,11 +9,41 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 
 from .account_connections import _NoRedirect
 from .messenger import Messenger, canonical
 from .contracts import DeliveryNotSubmittedError, InboxMessage, UserPrincipal
+
+
+class ProviderReadUnavailable(ValueError):
+    """Typed transport failure on a provider read; never carries provider details."""
+    def __init__(self, code):
+        super().__init__(code)
+
+
+def _read_transport_guard(fn):
+    """Normalize bridge transport failures on provider reads to typed errors.
+
+    A read timeout, unreachable bridge or bridge-issued HTTP error is an
+    honest, retryable condition: it must surface as ValueError the dispatch
+    boundary reports as-is, not as an unexpected exception masked by the
+    catch-all as provider_result_unknown_read_action_status. Validation
+    ValueErrors raised inside the guarded block keep their own codes, and
+    errors the function already normalized pass through untouched.
+    """
+    def guarded(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ValueError:
+            raise
+        except urllib.error.HTTPError as error:
+            raise ProviderReadUnavailable(f'provider_read_http_{error.code}') from None
+        except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as error:
+            code = 'provider_read_timeout' if isinstance(error, TimeoutError) else 'provider_read_unavailable'
+            raise ProviderReadUnavailable(code) from None
+    return guarded
 
 
 class IdentityReadUnavailable(ValueError):
@@ -155,6 +185,7 @@ class TelegramMirrorProvider:
             raise ValueError('Telegram identity receipt conflict')
         return {'account_ref':self.account_ref,'peer_id':result['peer_id']}
 
+    @_read_transport_guard
     def history(self, *, peer_id, conversation_id, limit=50, cursor=''):
         before=0
         if cursor:
@@ -216,6 +247,7 @@ class TelegramMirrorProvider:
                                'fetched':fetched,'terminal_empty':terminal},'observed_at':time.time(),
             'native_fetched':page.get('fetched'),'provider_read_acknowledged':False}
 
+    @_read_transport_guard
     def message(self, *, peer_id, provider_message_id, conversation_id, read_media=False, attachment_index=0):
         """Resolve one exact native message id, live-confirmed, and project it.
 

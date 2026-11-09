@@ -18,6 +18,7 @@ from universal_userio.store import SQLiteUserIOStore
 class Provider:
     account_ref = 'telegram:900000103'
     operations = {'reply', 'edit', 'react', 'sticker', 'file', 'typing', 'history', 'download'}
+    reaction_remove_supported = True
     def __init__(self): self.calls = []; self.fail = False
     def execute(self, envelope):
         self.calls.append(envelope)

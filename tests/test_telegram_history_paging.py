@@ -121,7 +121,8 @@ def test_mcp_history_read_fetches_exact_older_page_without_marking_seen(fixture)
 @pytest.mark.parametrize("dispatcher", [False, True])
 def test_mcp_latest_history_read_needs_no_before_id(fixture, monkeypatch, dispatcher):
     store, service, ingest = fixture
-    cid = ingest(10)
+    expected_limit = 3 if dispatcher else 4
+    cid = ingest(13 - expected_limit)
     requests = []
 
     def runner(request, timeout):
@@ -139,7 +140,14 @@ def test_mcp_latest_history_read_needs_no_before_id(fixture, monkeypatch, dispat
         bridge_url="http://127.0.0.1:1234", runner=runner)
     monkeypatch.setattr("universal_userio.adapters.UnifiedChannels.adapter",
                         lambda _channels, _source=None: adapter)
-    args = {"channel": "telegram", "chat_id": cid, "history_limit": 2}
+    # The refresh coordinator is a process global keyed on
+    # (user_id, account_ref, peer_id, before_id, history_limit) with constant
+    # fresh-owner ids across test stores; both parametrizations share the same
+    # key, so the second one joins the first's cached flight and never runs its
+    # runner against its own store. A distinct history_limit per parametrization
+    # isolates the cache entries; the expected newest page follows the limit.
+    expected_limit = 3 if dispatcher else 4
+    args = {"channel": "telegram", "chat_id": cid, "history_limit": expected_limit}
     if dispatcher:
         from universal_userio.mcp_dispatch import UserIOToolDispatcher
         result = UserIOToolDispatcher(store, service).dispatch(
@@ -149,7 +157,9 @@ def test_mcp_latest_history_read_needs_no_before_id(fixture, monkeypatch, dispat
         result = UserIOMcpSurface(store, service).dispatch("userio.channels.read", args)
 
     assert result["ok"] is True
-    assert [m["body"] for m in result["chat"]["messages"]] == ["body-11", "body-12"]
+    stored_mid_tail = sorted({13 - expected_limit, 11, 12})[-expected_limit:]
+    expected_bodies = [f"body-{mid}" for mid in stored_mid_tail]
+    assert [m["body"] for m in result["chat"]["messages"]] == expected_bodies
     assert result["sync"]["fresh"] is True
-    assert requests == [{"account_id": ACCOUNT, "peer_id": PEER, "limit": 2, "scan": True}]
+    assert requests == [{"account_id": ACCOUNT, "peer_id": PEER, "limit": expected_limit, "scan": True}]
     assert not any(m["seen_at"] is not None for m in result["chat"]["messages"])
