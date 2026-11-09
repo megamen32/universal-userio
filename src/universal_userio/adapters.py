@@ -1887,7 +1887,9 @@ class ChatGPTWebOutbox:
             from . import agent_channel
             status = agent_channel.status(user=user)
             entry = next((item for item in status.get("agents", []) if item.get("agent_id") == agent_id), None)
-            if entry and entry.get("identity_conflict"):
+            if entry is None:
+                raise RuntimeError("browser agent route is not registered for delivery") from error
+            if entry.get("identity_conflict"):
                 if entry.get("legacy_unaddressable"):
                     raise RuntimeError("browser identity conflict cannot be verified") from error
                 instances = entry.get("instances")
@@ -1905,6 +1907,33 @@ class ChatGPTWebOutbox:
             result = agent_fallback(agent_id=agent_id, text=body, chat_ref=chat_ref)
             return str(result.get("assistant_id") or f"chatgpt-agent-sent:{draft_id}")
 
+    @staticmethod
+    def _read_delivery_by_message_id(user: str, slug: str, chat_ref: str,
+                                     message_id: str, *, body: str = "") -> dict[str, Any]:
+        """Confirm delivery only from the selected account's original history.
+
+        Missing data or an unreadable conversation is UNKNOWN, never evidence
+        that a potentially accepted POST can safely be retried.
+        """
+        if not chat_ref:
+            return {"state": "unknown"}
+        try:
+            chat = _chatgpt_conversation(user, slug, chat_ref)
+        except (RuntimeError, KeyError, ValueError):
+            return {"state": "unknown"}
+        for node in (chat.get("mapping") or {}).values():
+            message = node.get("message") if isinstance(node, Mapping) else None
+            if not isinstance(message, Mapping):
+                continue
+            if (str(message.get("id") or "") != message_id
+                    or str((message.get("author") or {}).get("role") or "") != "user"):
+                continue
+            parts = (message.get("content") or {}).get("parts") or []
+            if body and body not in [part for part in parts if isinstance(part, str)]:
+                return {"state": "unknown"}
+            return {"state": "delivered", "assistant_id": ""}
+        return {"state": "unknown"}
+
     def _send_web(self, *, chat_ref: str, draft_id: str, body: str, account_ref: str = "", user: str) -> str:
         _chatgpt_require_configured(user)
         accounts = _chatgpt_accounts(user)
@@ -1912,29 +1941,67 @@ class ChatGPTWebOutbox:
             slug = account_ref
         else:
             # Unknown chat refs (fresh UserIO conversations) ride the first
-            # real account; _send tolerates the stale ref and starts anew.
+            # real account. A supplied ref is still verified below before any
+            # mutation; an unavailable requested account is never silently
+            # replaced with an empty/default account session.
+            if account_ref:
+                raise AdapterNotSupported(f"ChatGPT account is not registered: {account_ref}")
             slug = next(iter(accounts))
         parent = str(uuid.uuid4())
-        conversation_payload: dict[str, Any] = {
-            "action": "next",
-            "messages": [{
-                "id": str(uuid.uuid4()),
-                "author": {"role": "user"},
-                "content": {"content_type": "text", "parts": [body]},
-            }],
-            "model": "auto",
-            "parent_message_id": parent,
-        }
         if chat_ref:
             try:
                 chat = _chatgpt_conversation(user, slug, chat_ref)
+            except RuntimeError as error:
+                # A transient read failure (especially 429) is not proof that
+                # the caller supplied a stale chat ref. Never turn a reply
+                # into a new conversation merely because history was unreadable.
+                raise RuntimeError("ChatGPT original conversation could not be verified") from error
+            except KeyError:
+                pass  # unknown/stale chat ref: start a fresh conversation
+            else:
                 last = _chatgpt_last_message(chat.get("mapping") or {})
                 if last:
-                    conversation_payload["parent_message_id"] = str(last.get("node_id") or parent)
-                conversation_payload["conversation_id"] = chat_ref
-            except (RuntimeError, KeyError):
-                pass  # unknown/stale chat ref: start a fresh conversation
-        stream = _chatgpt_raw(user, slug, "https://chatgpt.com/backend-api/conversation", bearer_needed=True, json_body=conversation_payload)
+                    parent = str(last.get("node_id") or parent)
+        else:
+            chat = None
+
+        def payload_for(message_id: str) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "action": "next",
+                "messages": [{
+                    "id": message_id,
+                    "author": {"role": "user"},
+                    "content": {"content_type": "text", "parts": [body]},
+                }],
+                "model": "auto",
+                "parent_message_id": parent,
+            }
+            if chat is not None and chat_ref:
+                payload["conversation_id"] = chat_ref
+            return payload
+
+        message_id = str(uuid.uuid4())
+        conversation_payload = payload_for(message_id)
+        try:
+            stream = _chatgpt_raw(user, slug, "https://chatgpt.com/backend-api/conversation",
+                                  bearer_needed=True, json_body=conversation_payload)
+        except RuntimeError as error:
+            if not _is_unknown_chatgpt_post(error):
+                raise
+            outcome = self._read_delivery_by_message_id(
+                user, slug, chat_ref, message_id, body=body,
+            ) if chat_ref else {"state": "unknown"}
+            if outcome.get("state") == "delivered":
+                return str(outcome.get("assistant_id") or f"chatgpt-sent:{draft_id}")
+            if outcome.get("state") != "absent":
+                raise RuntimeError("ChatGPT delivery outcome unknown; refusing to retry") from error
+            # The selected account history has proved absence for the exact
+            # original message id. One corrected attempt is now safe; it keeps
+            # the same chat and parent but uses a fresh id to distinguish it.
+            message_id = str(uuid.uuid4())
+            conversation_payload = payload_for(message_id)
+            stream = _chatgpt_raw(user, slug, "https://chatgpt.com/backend-api/conversation",
+                                  bearer_needed=True, json_body=conversation_payload)
         assistant_id = ""
         for line in stream.splitlines():
             line = line.strip()
@@ -1950,7 +2017,6 @@ class ChatGPTWebOutbox:
             if (message.get("author") or {}).get("role") == "assistant":
                 assistant_id = str(message.get("id") or assistant_id)
         return assistant_id or f"chatgpt-sent:{draft_id}"
-
 
 class ChatGPTWebChannelAdapter:
     """Read ChatGPT chats headlessly for every registered account.
@@ -2141,6 +2207,15 @@ def _chatgpt_request(
     return json.loads(text)
 
 
+def _is_unknown_chatgpt_post(error: RuntimeError) -> bool:
+    """Only transport failures have an unknown mutation outcome.
+
+    Explicit HTTP responses (including 429) are not retried here; their
+    status is known and must remain visible to the caller.
+    """
+    return str(error).startswith("ChatGPT transport failed:")
+
+
 def _chatgpt_raw(
     user: str, slug: str, url: str, *, bearer_needed: bool = True, json_body: dict[str, Any] | None = None,
 ) -> str:
@@ -2155,21 +2230,37 @@ def _chatgpt_raw(
     # Cache hit means an existing, unexpired *local auth bearer* was reused.
     # It does NOT mean the conversation HTTP call was avoided.
     auth_cache_hit = False
+    post_headers: dict[str, str] | None = None
     if bearer_needed:
         cached = _chatgpt_tokens.get((user, slug))
         auth_cache_hit = bool(cached and cached[0] and time.time() < cached[1])
-        headers["Authorization"] = f"Bearer {_chatgpt_bearer(user, slug)}"
+        if json_body is None:
+            headers["Authorization"] = f"Bearer {_chatgpt_bearer(user, slug)}"
+        else:
+            post_headers = dict(headers)
     if json_body is not None:
         headers["Content-Type"] = "application/json"
         headers["Accept"] = "text/event-stream"
     response = None
     last_error: Exception | None = None
     operation, endpoint = classify_endpoint(url, method="POST" if json_body is not None else "GET")
-    for attempt in range(3):  # Each physical attempt gets one upstream record.
+    attempts = 1 if json_body is not None else 3
+    for attempt in range(attempts):  # Each physical attempt gets one upstream record.
+        if json_body is not None and post_headers is not None:
+            # A transport-unknown POST is reconciled by history before the
+            # mutation is ever replayed. Obtain a bearer via a separate GET,
+            # outside the POST exception classifier.
+            cached_token = _chatgpt_tokens.get((user, slug))
+            if cached_token and cached_token[0] and time.time() < cached_token[1]:
+                post_headers["Authorization"] = f"Bearer {cached_token[0]}"
+            else:
+                # Session mint remains a GET and precedes the mutation. Keep
+                # it outside the POST transport-unknown retry boundary.
+                post_headers["Authorization"] = f"Bearer {_chatgpt_bearer(user, slug)}"
         client = _chatgpt_client(user, slug)
         started = time.perf_counter()
         try:
-            response = client.post(url, headers=headers, json=json_body) if json_body is not None \
+            response = client.post(url, headers=post_headers or headers, json=json_body) if json_body is not None \
                 else client.get(url, headers=headers)
         except Exception as error:  # curl_cffi raises its own hierarchy
             last_error = error
@@ -2181,7 +2272,8 @@ def _chatgpt_raw(
                     cache_hit=auth_cache_hit)
             except Exception:
                 pass  # Telemetry must never change delivery outcomes.
-            time.sleep(1)
+            if json_body is None:
+                time.sleep(1)
             continue
         try:
             retry_header = getattr(getattr(response, "headers", None), "get", lambda _key: None)("Retry-After")
