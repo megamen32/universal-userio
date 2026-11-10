@@ -19,7 +19,7 @@ test('explicit account bindings and idempotent legacy migration', async () => {
 test('logout one connection preserves the other persisted binding', async()=>{
   const data={endpoint:'https://e'}; const chrome={storage:{local:{async get(k){if(typeof k==='string')return {[k]:data[k]};return {...k,...data}},async set(p){Object.assign(data,p)},async remove(k){for(const x of k)delete data[x]}}}};
   const self={}; vm.runInNewContext(fs.readFileSync(new URL('../lib/connections.js',import.meta.url),'utf8'),{self,chrome,crypto:{randomUUID},URL});
-  const a=await self.UserIOConnections.save({label:'work'}),b=await self.UserIOConnections.save({label:'personal'});
+  const a=await self.UserIOConnections.save({label:'work',endpoint:'https://e'}),b=await self.UserIOConnections.save({label:'personal',endpoint:'https://e'});
   assert.equal((await self.UserIOConnections.list()).length,3); await chrome.storage.local.remove(['oauthAccessToken:'+a.id]); assert.ok((await self.UserIOConnections.get(b.id)));
 });
 test('pure transition preserves input and describes the storage effect', async()=>{

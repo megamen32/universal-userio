@@ -1636,10 +1636,10 @@ def handler(
                     self._reply(202, {"accepted": True, "account_id": f"chatgpt:{slug}", "slug": slug})
                     return
                 if path == "/v1/agent/commands":
-                    self._reply(202, agent_channel.enqueue(self._json(), user=principal.username))
+                    self._reply(202, agent_channel.enqueue(self._json(), user=principal.username, principal_id=user_id))
                     return
                 if path == "/v1/agent/results":
-                    agent_channel.push_result(self._json(), user=principal.username)
+                    agent_channel.push_result(self._json(), user=principal.username, principal_id=user_id)
                     self._reply(202, {"accepted": True})
                     return
                 if path.startswith("/v1/vault/sessions/"):

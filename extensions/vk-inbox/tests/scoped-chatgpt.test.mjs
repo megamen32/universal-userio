@@ -5,6 +5,7 @@ import { webcrypto } from "node:crypto";
 import vm from "node:vm";
 
 const SRC=new URL("../lib/scoped-chatgpt.js", import.meta.url);
+const STATE_SRC=new URL("../lib/chatgpt-state.js", import.meta.url);
 const REF="11111111-1111-4111-8111-111111111111";
 const USER="22222222-2222-4222-8222-222222222222";
 const FINAL="33333333-3333-4333-8333-333333333333";
@@ -36,9 +37,14 @@ function fixture({history,scopeId="account-test",historyResponse,existingUrl="ht
       }
     }
   };
+  const values={};
+  chrome.storage={local:{get:async defaults=>({...defaults,...values}),set:async next=>Object.assign(values,next)}};
   const context={self:{},chrome,URL,location:{origin:"https://chatgpt.com",pathname:"/c/"+REF},
     crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch};
-  vm.runInNewContext(readFileSync(SRC,"utf8"),context);
+  vm.createContext(context);
+  vm.runInContext(readFileSync(new URL("../lib/chatgpt-core.js",import.meta.url),"utf8"),context);
+  vm.runInContext(readFileSync(STATE_SRC,"utf8"),context);
+  vm.runInContext(readFileSync(SRC,"utf8"),context);
   return {api:context.self.UserIOScopedChatGPT,tabs,events,expectedScope};
 }
 const message=(id,role,text,status="finished_successfully",end_turn=true,channel="final")=>({

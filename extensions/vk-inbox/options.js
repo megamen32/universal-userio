@@ -6,6 +6,7 @@
     $("endpoint").value = s.endpoint;
     refreshUserIO();
     refreshChatGPT();
+    refreshConnections();
   });
   $("save").addEventListener("click", async () => {
     await chrome.storage.local.set({
@@ -18,6 +19,27 @@
   function message(kind, extra = {}) {
     return new Promise((resolve) => chrome.runtime.sendMessage({ kind, ...extra }, resolve));
   }
+
+  async function refreshConnections() {
+    if (!$("connections") || !$("connectionAccounts") || !$("connectionsStatus")) return;
+    const [cr, ar, br] = await Promise.all([message("connectionsList"), message("accountsList"), message("accountBindingsGet")]);
+    const connections = cr?.ok && Array.isArray(cr.connections) ? cr.connections : [];
+    const accounts = ar?.ok && Array.isArray(ar.accounts) ? ar.accounts.map((account) => ({ ...account, accountKey: account.accountKey || account.key })) : [];
+    const bindings = br?.ok && br.bindings ? br.bindings : {};
+    $("connections").replaceChildren(); $("connectionAccounts").replaceChildren();
+    $("connectionsStatus").textContent = connections.length ? "Статус показывается отдельно для каждого подключения." : "Подключения ещё не настроены.";
+    for (const connection of connections) { const row = document.createElement("div"); row.className = "account"; row.dataset.connectionId = connection.id; const name = document.createElement("span"); name.textContent = (connection.label || "Без названия") + " · " + (connection.endpoint || ""); const status = document.createElement("span"); status.textContent = connection.lastError ? "Ошибка: " + connection.lastError : (connection.enabled ? "Включено" : "Отключено"); const check = document.createElement("button"); check.textContent = "Проверить"; check.addEventListener("click", async () => { status.textContent = "Проверяем…"; const response = await message("userioStatus", { connectionId: connection.id }); status.textContent = response?.ok ? (response.connected ? "Подключено: " + (response.accountLabel || "аккаунт") : "Нет входа") : "Ошибка: " + (response?.error || "нет ответа"); }); const connect = document.createElement("button"); connect.textContent = "Войти"; connect.addEventListener("click", async () => { status.textContent = "Открываем вход…"; const response = await message("userioConnect", { connectionId: connection.id }); status.textContent = response?.ok ? "Подключено: " + (response.accountLabel || "аккаунт") : "Ошибка входа: " + (response?.error || "нет ответа"); }); const disconnect = document.createElement("button"); disconnect.textContent = "Отключить"; disconnect.addEventListener("click", async () => { const response = await message("userioDisconnect", { connectionId: connection.id }); status.textContent = response?.ok ? "Отключено" : "Ошибка отключения: " + (response?.error || "нет ответа"); }); const chatgpt = document.createElement("button"); chatgpt.textContent = "Подключить ChatGPT"; chatgpt.addEventListener("click", async () => { const identity = await message("gptIdentity"); if (!identity?.ok) { status.textContent = "ChatGPT: " + (identity?.error || "аккаунт не найден"); return; } if (!window.confirm("Подключить аккаунт ChatGPT " + (identity.email || identity.name || "из этого профиля") + " к «" + (connection.label || "подключению") + "»?")) return; const registered = await message("gptRegister", { userInitiated: true, expectedFingerprint: identity.fingerprint, connectionId: connection.id }); status.textContent = registered?.ok ? "ChatGPT подключён" : "Ошибка ChatGPT: " + (registered?.error || "нет ответа"); await refreshChatGPT(connection.id); }); row.append(name, status, check, connect, disconnect, chatgpt); $("connections").append(row); }
+    for (const account of accounts) { const row = document.createElement("div"); row.className = "account"; row.dataset.accountKey = account.accountKey; const title = document.createElement("strong"); title.textContent = (account.label || account.accountId) + " · " + account.provider + (account.accountScope ? " · " + account.accountScope : ""); row.append(title); for (const connection of connections) { const label = document.createElement("label"); label.style.display = "inline-block"; label.dataset.connectionId = connection.id; const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.dataset.connectionId = connection.id; checkbox.checked = (bindings[account.accountKey] || []).includes(connection.id); checkbox.addEventListener("change", async () => { const ids = [...row.children].filter((item) => item.dataset?.connectionId && item.children?.[0]?.checked).map((item) => item.dataset.connectionId); await message("accountBindingsSave", { accountKey: account.accountKey, connectionIds: ids }); }); label.append(checkbox, connection.label || connection.id); row.append(label); } $("connectionAccounts").append(row); }
+  }
+
+  $("connectionForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = $("connectionAdd"); button.disabled = true;
+    const result = await message("connectionsSave", { input: { label: $("connectionLabel").value.trim(), endpoint: $("connectionEndpoint").value.trim(), enabled: true, kind: "userio" } });
+    if (!result?.ok) $("connectionsStatus").textContent = "Не удалось добавить: " + (result?.error || "нет ответа");
+    else { $("connectionForm").reset(); $("connectionsStatus").textContent = "Подключение добавлено."; await refreshConnections(); }
+    button.disabled = false;
+  });
 
   async function refreshUserIO() {
     const result = await message("userioStatus");
@@ -51,8 +73,8 @@
     await refreshChatGPT();
   });
 
-  async function refreshChatGPT() {
-    const result = await message("gptConnectionStatus");
+  async function refreshChatGPT(connectionId) {
+    const result = await message("gptConnectionStatus", connectionId ? { connectionId } : {});
     const list = $("chatgptAccounts");
     list.replaceChildren();
     $("chatgptConnect").hidden = true;
@@ -72,7 +94,7 @@
       disconnect.addEventListener("click", async () => {
         if (!window.confirm(`Отключить ${name.textContent} от UserIO?`)) return;
         disconnect.disabled = true;
-        const response = await message("gptDisconnect", { slug: account.slug });
+        const response = await message("gptDisconnect", { slug: account.slug, ...(connectionId ? { connectionId } : {}) });
         if (!response || !response.ok) { $("chatgptStatus").textContent = `Не удалось отключить: ${response?.error || "нет ответа"}`; disconnect.disabled = false; return; }
         await refreshChatGPT();
       });
@@ -81,9 +103,13 @@
   }
 
   let selectedChatGPT = null;
-  $("chatgptSelect").addEventListener("click", async () => {
+  $("chatgptSelect").addEventListener("click", async (event) => {
+    const connectionId = event?.currentTarget?.dataset?.connectionId || undefined;
+    if (!connectionId) { $("chatgptStatus").textContent = "Сначала выберите подключение UserIO."; return; }
     const result = await message("gptIdentity");
     selectedChatGPT = result && result.ok ? result.fingerprint : null;
+    $("chatgptConnect").dataset ||= {};
+    $("chatgptConnect").dataset.connectionId = connectionId;
     $("chatgptStatus").textContent = selectedChatGPT
       ? `Выбран аккаунт этого профиля: ${result.name || result.email || "имя не определено"}${result.email && result.name ? ` (${result.email})` : ""}`
       : `Аккаунт не найден: ${(result && result.error) || "войдите в ChatGPT в этом профиле Chrome"}`;
@@ -94,7 +120,9 @@
     if (!selectedChatGPT || !window.confirm("Передать cookies выбранного аккаунта ChatGPT в UserIO для подключения?")) return;
     $("chatgptConnect").disabled = true;
     try {
-      const result = await message("gptRegister", { userInitiated: true, expectedFingerprint: selectedChatGPT });
+      const connectionId = $("chatgptConnect").dataset.connectionId;
+      if (!connectionId) { $("chatgptStatus").textContent = "Выберите подключение UserIO для этого аккаунта."; return; }
+      const result = await message("gptRegister", { userInitiated: true, expectedFingerprint: selectedChatGPT, connectionId });
       if (!result || !result.ok) throw new Error(result && result.error || "Передача не удалась");
       selectedChatGPT = null;
       await refreshChatGPT();

@@ -1,11 +1,12 @@
-import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
+import {webcrypto} from 'node:crypto';import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
 const script=fs.readFileSync(new URL('../lib/chatgpt-passive.js',import.meta.url),'utf8');
+const stateScript=fs.readFileSync(new URL('../lib/chatgpt-state.js',import.meta.url),'utf8');
 function fixture(status=200){
  const values={},cleared=[],calls=[],listeners=[];
  const self={ChatGPT:{start:()=>{throw Error('legacy poller started');}},UserIO:{call:async()=>({accounts:[]})}};
  const fetch=async(url)=>{calls.push(String(url));return new Response('{}',{status,headers:{'Retry-After':'120'}});};
  const chrome={alarms:{clear:async name=>cleared.push(name)},storage:{local:{get:async defaults=>({...defaults,...values}),set:async next=>Object.assign(values,next)}},runtime:{onMessage:{addListener:f=>listeners.push(f)}}};
- const context={self,chrome,fetch,Response,URL,Date,Map,Set,console,setTimeout,clearTimeout};vm.createContext(context);vm.runInContext(script,context);
+ const context={self,chrome,fetch,Response,URL,Date,Map,Set,console,setTimeout,clearTimeout,crypto:webcrypto,TextEncoder,Uint8Array};vm.createContext(context);vm.runInContext(fs.readFileSync(new URL('../lib/chatgpt-core.js',import.meta.url),'utf8'),context);vm.runInContext(stateScript,context);vm.runInContext(script,context);
  return {context,self,values,cleared,calls,listeners};
 }
 test('startup removes legacy sweep and makes no ChatGPT request',async()=>{
@@ -54,4 +55,16 @@ test('observed 429 takes effect even when UserIO history forwarding is blocked',
  await new Promise(r=>setImmediate(r));
  assert.equal((await f.context.fetch('https://chatgpt.com/api/auth/session')).status,429);assert.equal(f.calls.length,0);
  unblock();await Promise.all([conversation,rate]);
+});
+test('passive projection and addressed consumer share native snapshot',async()=>{
+ const f=fixture(),sent=[];f.self.UserIO.call=async(method,path,body)=>{if(method==='GET')return {accounts:[{slug:'owner-example.test'}]};sent.push(body);return {ok:true};};
+ f.self.UserIO.publishChatSnapshot=async snapshot=>{for(const m of snapshot.messages)await f.self.UserIO.call('POST','/v1/messages',{route_id:'chatgpt',message:{message_id:snapshot.chat_ref+':'+m.id,body:'['+m.role+'] '+m.text}});return {ok:true,results:[{ok:true,connectionId:'fixture'}]};};
+ const sender={tab:{id:1,url:'https://chatgpt.com/'},frameId:0};
+ const post=o=>new Promise(resolve=>f.listeners[0]({kind:'userioChatGPTObserved',pageKey:'page',observation:o},sender,resolve));
+ await post({kind:'identity',email:'owner@example.test',accountLabel:'owner@example.test',workspaceId:'workspace',accountId:'account'});
+ await post({kind:'conversation',chatId:'chat1',messages:[{id:'m1',role:'user',text:'hello',ts:12}]});
+ const digest=await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:'account',workspace_id:'workspace'})));
+ const scope=Buffer.from(digest).toString('hex'),key=f.self.UserIOChatGPTCore.accountKey('chatgpt','account','workspace'),view=f.self.UserIOChatGPTCore.view(f.self.UserIOChatGPTState.records[key+':chat1']);
+ assert.equal(view.messages[0].id,'m1');assert.equal(view.coverage,'partial');assert.equal(view.ready,false);
+ assert.equal(sent[0].message.message_id,'chat1:m1');assert.equal(sent[0].message.body,'[user] hello');
 });

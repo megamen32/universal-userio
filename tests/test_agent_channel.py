@@ -153,9 +153,30 @@ def test_push_result_does_not_retain_unawaited_result(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_channel, "RESULTS_FILE", tmp_path / "results.jsonl")
     agent_channel._RESULTS.clear()
     agent_channel._WAITING.clear()
+    agent_channel._COMMANDS.clear()
     agent_channel.push_result({"id": "orphan", "result": {"ok": True}}, user="owner")
     assert "orphan" not in agent_channel._RESULTS
     assert (tmp_path / "results.jsonl").exists()
+
+
+def test_result_receipt_preserves_profile_and_principal_context(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_channel, "COMMANDS_FILE", tmp_path / "commands.jsonl")
+    monkeypatch.setattr(agent_channel, "RESULTS_FILE", tmp_path / "results.jsonl")
+    monkeypatch.setattr(agent_channel, "_PENDING", {})
+    agent_channel._COMMANDS.clear()
+    instance = "browser-11111111-1111-4111-8111-111111111111"
+    queued = agent_channel.enqueue({
+        "agent_id": "browser-agent", "agent_instance_id": instance,
+        "connection_id": "work", "action": "ping",
+    }, user="owner", principal_id="principal-work")
+    agent_channel.push_result({
+        "id": queued["id"], "agent_id": "browser-agent", "agent_instance_id": instance,
+        "connection_id": "work", "principal_id": "principal-work", "action": "ping", "result": {"ok": True},
+    }, user="owner", principal_id="principal-work")
+    record = json.loads((tmp_path / "results.jsonl").read_text().splitlines()[-1])
+    assert record["connection_id"] == "work"
+    assert record["principal_id"] == "principal-work"
+    assert record["agent_instance_id"] == instance
 
 
 def test_agent_command_ids_do_not_repeat_after_server_restart(tmp_path, monkeypatch):

@@ -50,23 +50,22 @@
   if(!o||typeof o!=='object')return {ok:false};
   if(o.kind==='rate_limit'){await rateLimit(o.retryAfter);return {ok:true};}
   if(o.kind==='identity'){
-   if(typeof o.email!=='string'||o.email.length>254||!o.email.includes('@')||typeof o.accountId!=='string'||!o.accountId||o.accountId.length>160)return {ok:false};
-   identities.set(key,{email:o.email,accountId:o.accountId});
+   if(typeof o.accountId!=='string'||!o.accountId||o.accountId.length>160||typeof o.workspaceId!=='string'||o.workspaceId.length>160)return {ok:false};
+   identities.set(key,{label:typeof o.accountLabel==='string'&&o.accountLabel?o.accountLabel:(typeof o.email==='string'?o.email:o.accountId),email:typeof o.email==='string'?o.email:'',accountId:o.accountId,workspaceId:o.workspaceId});
    if(identities.size>30)identities.delete(identities.keys().next().value);
    return {ok:true};
   }
   const identity=identities.get(key);
-  if(!identity||o.kind!=='conversation'||typeof o.chatId!=='string'||! /^[A-Za-z0-9_-]{1,128}$/.test(o.chatId)||!Array.isArray(o.messages)||o.messages.length>100)return {ok:false,reason:'identity_or_source_unconfirmed'};
-  const slug=identity.email.toLowerCase().replace(/[^a-z0-9._-]+/g,'-').replace(/^[.-]+|[.-]+$/g,'').slice(0,64);
-  const accounts=await root.UserIO.call('GET','/v1/chatgpt/sessions');
-  if(!accounts?.accounts?.some(a=>a.slug===slug))return {ok:false,reason:'account_not_registered'};
-  let count=0;
-  for(const m of o.messages){
-   if(!m||typeof m.id!=='string'||! /^[A-Za-z0-9_-]{1,128}$/.test(m.id)||!['user','assistant'].includes(m.role)||typeof m.text!=='string'||m.text.length>8000||!Number.isFinite(m.ts)||m.ts<0)continue;
-   await root.UserIO.call('POST','/v1/messages',{route_id:'chatgpt',message:{schema:'universal.inbox.message.v1',source:'chatgpt:'+slug,message_id:o.chatId+':'+m.id,sender:o.chatId,sender_name:String(o.title||'ChatGPT').slice(0,80),body:'['+m.role+'] '+m.text,received_at:m.ts}});count++;
-  }
-  await chrome.storage.local.set({chatgptPassiveReport:{mode:'passive',lastCaptureAt:Date.now(),messages:count}});
-  return {ok:true,messages:count};
+  if(!identity||o.kind!=='conversation'||typeof o.chatId!=='string'||! /^[A-Za-z0-9_-]{1,128}$/.test(o.chatId)||(!o.data&&(!Array.isArray(o.messages)||o.messages.length>100)))return {ok:false,reason:'identity_or_source_unconfirmed'};
+  if(!root.UserIOChatGPTCore||!root.UserIOChatGPTStore)return {ok:false,reason:'chatgpt_core_unavailable'};
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:identity.accountId,workspace_id:identity.workspaceId})));
+  const scope=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
+  const result=await root.UserIOChatGPTStore.transition({provider:'chatgpt',user_id:identity.accountId,workspace_id:identity.workspaceId,account_label:identity.label,account_email:identity.email,account_scope:scope,data:o.data,messages:o.messages,chat_ref:o.chatId,coverage:'partial',observed_at:Date.now()});
+  const snapshot=result.snapshot;
+  if(!snapshot.ok)return snapshot;
+  const deliveries=(result.effect_results||[]).reduce((sum,item)=>sum+(Array.isArray(item?.results)?item.results.filter(v=>v?.ok).length:0),0);
+  await chrome.storage.local.set({chatgptPassiveReport:{mode:'passive',lastCaptureAt:Date.now(),messages:snapshot.messages.length,deliveries}});
+  return {ok:true,messages:snapshot.messages.length,deliveries,effect_results:result.effect_results||[]};
  }
  chrome.runtime.onMessage.addListener((packet,sender,reply)=>{
   if(packet?.kind!=='userioChatGPTObserved')return false;

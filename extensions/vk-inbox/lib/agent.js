@@ -45,17 +45,14 @@
       .finally(() => { running = false; });
   };
 
+  const loops = new Map();
   async function runLoop() {
     for (;;) {
       try {
         chrome.runtime.getPlatformInfo(() => {});
-        const connections = root.UserIOConnections ? await root.UserIOConnections.list() : [{id:"legacy-default"}];
-        for (const connection of connections.filter(c=>c.enabled!==false)) {
-          const command = await pollOnce(connection.id);
-          if (!command) continue;
-          const result = await execute(command).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
-          handled += 1;
-          await root.UserIO.call("POST", "/v1/agent/results", { id: command.id, agent_id: command.agent_id, action: command.action, connection_id: connection.id, agent_instance_id: (await root.UserIO.settings(connection.id)).agentInstanceId, result }, connection.id);
+        const connections = await root.UserIOConnections.list();
+        for (const connection of connections.filter(c=>c.enabled!==false)) if (!loops.has(connection.id)) {
+          const task=connectionLoop(connection.id).finally(()=>loops.delete(connection.id)); loops.set(connection.id,task);
         }
         lastOkAt = Date.now();
         lastError = "";
@@ -64,8 +61,37 @@
         await sleep(5000);
       }
       await saveState();
+      await sleep(5000);
     }
   }
+
+  async function connectionLoop(connectionId) {
+    while ((await root.UserIOConnections.get(connectionId))?.enabled) {
+      try { const context=await root.UserIO.settings(connectionId); const principal=await root.UserIO.call('GET','/v1/connection-principal',null,connectionId); if(!principal?.user_id)throw new Error('principal_unavailable');
+        const command=await pollOnce(connectionId); if(command)await processCommand(command,{connectionId,agentInstanceId:context.agentInstanceId,principalId:principal.user_id});
+      } catch(e) { lastError=String(e?.message||e); await sleep(5000); }
+    }
+  }
+
+  async function processCommand(command,context) {
+    if(!command?.id || !context?.connectionId || !context?.principalId || !context?.agentInstanceId) throw new Error('invalid_command_context');
+    if(command.connection_id && command.connection_id!==context.connectionId || command.agent_instance_id && command.agent_instance_id!==context.agentInstanceId || command.principal_id && command.principal_id!==context.principalId) throw new Error('command_context_mismatch');
+    const key='userioCommandReceipt:'+JSON.stringify([context.connectionId,context.principalId,context.agentInstanceId,String(command.id)]);
+    const prior=(await chrome.storage.local.get(key))[key]; if(prior) return {ok:false,error:'command_already_seen',phase:prior.phase};
+    await chrome.storage.local.set({[key]:{phase:'started'}});
+    const metadata=new Set(['ping','gpt_identity','gpt_scope','zai_scope']);
+    const allowed={gpt_list:'chatgpt',gpt_read:'chatgpt',gpt_send:'chatgpt',zai_list:'zai',zai_read:'zai',zai_send:'zai'};
+    let result;
+    if(!metadata.has(command.action)) {const provider=allowed[command.action],scope=command.args?.expected_account_scope;
+      const selected=provider && scope ? await root.UserIOConnections.subscriptions({provider,accountId:scope,accountScope:scope}) : [];
+      if(!selected.some(c=>c.id===context.connectionId)) result={ok:false,error:'account_not_authorized'};
+    }
+    if(!result) result=await execute(command).catch(e=>({ok:false,error:String(e?.message||e)}));
+    const receipt={phase:'executed',result}; await chrome.storage.local.set({[key]:receipt}); handled++;
+    await root.UserIO.call('POST','/v1/agent/results',{id:command.id,agent_id:command.agent_id,action:command.action,connection_id:context.connectionId,agent_instance_id:context.agentInstanceId,result},context.connectionId);
+    await chrome.storage.local.set({[key]:{...receipt,phase:'delivered'}}); return result;
+  }
+  lib.processCommand=processCommand;
 
   async function pollOnce(connectionId) {
     const s = await root.UserIO.settings(connectionId);

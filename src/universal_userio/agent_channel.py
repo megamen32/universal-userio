@@ -56,6 +56,7 @@ _ACTIVE_POLLERS: dict[tuple[str, str], dict[str, float]] = {}
 # command id -> result object, kept so internal callers can block on one.
 _RESULTS: dict[str, dict] = {}
 _WAITING: set[str] = set()
+_COMMANDS: dict[str, dict] = {}
 
 
 def _now() -> float:
@@ -205,7 +206,7 @@ def _durable_routes(user: str) -> dict[str, dict]:
 # --- command queue --------------------------------------------------------
 
 
-def enqueue(payload: dict, *, user: str) -> dict:
+def enqueue(payload: dict, *, user: str, principal_id: str = "") -> dict:
     agent_id = str(payload.get("agent_id") or "").strip()
     action = str(payload.get("action") or "").strip()
     if not agent_id or not action:
@@ -216,6 +217,15 @@ def enqueue(payload: dict, *, user: str) -> dict:
     target_instance = str(payload.get("agent_instance_id") or "").strip()
     if target_instance and not INSTANCE_RE.fullmatch(target_instance):
         raise ValueError("invalid agent_instance_id")
+    connection_id = str(payload.get("connection_id") or "").strip()
+    if len(connection_id) > 256:
+        raise ValueError("connection_id is too long")
+    # The authenticated HTTP principal is authoritative. A caller-supplied
+    # field may label the command, but it must never override the server's
+    # account identity.
+    principal = str(principal_id or payload.get("principal_id") or "").strip()
+    if len(principal) > 256:
+        raise ValueError("principal_id is too long")
     command = {
         "id": f"{agent_id}:{uuid.uuid4().hex}",
         "agent_id": agent_id,
@@ -225,6 +235,10 @@ def enqueue(payload: dict, *, user: str) -> dict:
         "queued_at": _now(),
         "user": user,
     }
+    if connection_id:
+        command["connection_id"] = connection_id
+    if principal:
+        command["principal_id"] = principal
     record = dict(command)
     COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
@@ -233,6 +247,10 @@ def enqueue(payload: dict, *, user: str) -> dict:
         if len(queue) >= MAX_PENDING_PER_AGENT:
             raise ValueError(f"pending queue full for {agent_id}")
         queue.append(command)
+        _COMMANDS[command["id"]] = dict(command)
+        if len(_COMMANDS) > 10000:
+            for old_id in list(_COMMANDS)[:1000]:
+                _COMMANDS.pop(old_id, None)
         _COND.notify_all()
     with _LOCK:
         with COMMANDS_FILE.open("a", encoding="utf-8") as handle:
@@ -368,13 +386,23 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") ->
     return answer
 
 
-def push_result(payload: dict, *, user: str) -> dict:
+def push_result(payload: dict, *, user: str, principal_id: str = "") -> dict:
     command_id = str(payload.get("id") or "").strip()
     if not command_id:
         raise ValueError("id required")
     outcome = payload.get("result")
     if outcome is None or not isinstance(outcome, dict):
         raise ValueError("result object required")
+    command = _COMMANDS.get(command_id)
+    if command and command.get("user") != user:
+        raise ValueError("result user mismatch")
+    if principal_id and payload.get("principal_id") and str(payload.get("principal_id")) != str(principal_id):
+        raise ValueError("result principal_id mismatch")
+    for key in ("agent_id", "action", "connection_id", "principal_id", "agent_instance_id"):
+        expected = str(command.get(key) or "") if command else ""
+        supplied = str(payload.get(key) or "")
+        if expected and supplied and expected != supplied:
+            raise ValueError(f"result {key} mismatch")
     record = {
         "type": "universal.agent.result.v1",
         "id": command_id,
@@ -384,6 +412,10 @@ def push_result(payload: dict, *, user: str) -> dict:
         "user": user,
         "received_at": _now(),
     }
+    for key, fallback in (("connection_id", ""), ("agent_instance_id", ""), ("principal_id", principal_id)):
+        value = str(payload.get(key) or (command or {}).get(key) or fallback).strip()
+        if value:
+            record[key] = value
     encoded = json.dumps(record, ensure_ascii=False)
     if len(encoded.encode()) > MAX_RESULT_BYTES:
         raise ValueError("result exceeds MAX_RESULT_BYTES")

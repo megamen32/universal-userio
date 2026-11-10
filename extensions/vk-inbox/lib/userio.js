@@ -75,9 +75,19 @@
   lib.updateBindings = (key, ids) => root.UserIOConnections.updateBindings(key, ids);
   lib.subscriptions = (account) => root.UserIOConnections.subscriptions(account);
   lib.publishChatSnapshot = async (snapshot) => {
-    const selected = await lib.subscriptions({provider:"chatgpt", accountScope:snapshot.account_scope, accountId:snapshot.account_scope});
+    if (!snapshot || !/^[a-f0-9]{64}$/.test(snapshot.account_scope||'') || !snapshot.chat_ref || !Array.isArray(snapshot.messages)) throw new Error('invalid_snapshot');
+    const selected = await lib.subscriptions({provider:snapshot.provider||"chatgpt", userId:snapshot.user_id||"", workspaceId:snapshot.workspace_id||"", accountScope:snapshot.account_scope, accountId:snapshot.workspace_id||snapshot.account_scope, label:snapshot.account_label||""});
+    const slug = String(snapshot.account_email||snapshot.account_label||snapshot.account_scope).toLowerCase().replace(/[^a-z0-9._-]+/g,'-').replace(/^[.-]+|[.-]+$/g,'').slice(0,64) || snapshot.account_scope;
     const results=[];
-    for (const c of selected) { try { results.push(await call("POST","/v1/chatgpt/snapshots",{...snapshot,source:"chatgpt"},c.id)); } catch(e) { results.push({ok:false,connectionId:c.id,error:e.message}); } }
+    for (const c of selected) { try {
+      const accounts=await call("GET","/v1/chatgpt/sessions",undefined,c.id);
+      if(!accounts?.accounts?.some(a=>a&&a.slug===slug))throw new Error('account_not_registered');
+      for (const m of snapshot.messages) {
+        if (!m.id || !['user','assistant'].includes(m.role) || typeof m.text!=='string') throw new Error('invalid_message');
+        await call("POST","/v1/messages",{route_id:'chatgpt',message:{schema:'universal.inbox.message.v1',source:'chatgpt:'+slug,message_id:String(snapshot.chat_ref)+':'+String(m.id),sender:String(snapshot.chat_ref),sender_name:String(snapshot.account_label||'ChatGPT').slice(0,80),body:('['+m.role+'] '+m.text).slice(0,8000),received_at:Number(m.create_time)||0}},c.id);
+      }
+      results.push({ok:true,connectionId:c.id,accountScope:snapshot.account_scope});
+    } catch(e) { results.push({ok:false,connectionId:c.id,error:e.message}); } }
     return {ok:results.every(r=>r.ok!==false),results};
   };
 
@@ -100,9 +110,9 @@
     call("POST", `/v1/drafts/${encodeURIComponent(draftId)}/approve`, {});
 
   // Convenience: forward a captured message envelope to UserIO.
-  lib.forwardCapture = async ({ peerId, peerName, msgId, body, ts, direction, attachments, connectionId }) => {
+  lib.forwardCapture = async ({ peerId, peerName, msgId, body, ts, direction, attachments, accountId }) => {
     const attList = Array.isArray(attachments) ? attachments : [];
-    return lib.call("POST", "/v1/messages", {
+    const message = {
       schema: "universal.inbox.message.v1",
       source: "vk",
       message_id: String(msgId),
@@ -124,7 +134,9 @@
             })),
           }
         : {}),
-    }, connectionId || "legacy-default");
+    };
+    const selected=await lib.subscriptions({provider:'vk',...(accountId?{accountId:String(accountId)}:{})});
+    return Promise.all(selected.map(async c=>{try {const s=await lib.settings(c.id);return {ok:true,connectionId:c.id,result:await lib.call('POST','/v1/messages',{route_id:s.routeId,message},c.id)};}catch(e){return {ok:false,connectionId:c.id,error:e.message}}}));
   };
 
   function guessAttachmentKind(a) {

@@ -84,7 +84,7 @@
     };
   };
 
-  lib.register = async ({ userInitiated = false, expectedFingerprint = "" } = {}) => {
+  lib.register = async ({ userInitiated = false, expectedFingerprint = "", connectionId } = {}) => {
     if (!userInitiated) {
       return { ok: false, error: "Выберите аккаунт ChatGPT и подтвердите передачу в окне расширения." };
     }
@@ -94,7 +94,7 @@
       return { ok: false, error: "Аккаунт ChatGPT изменился после выбора. Проверьте его снова." };
     }
     const platform = await chrome.runtime.getPlatformInfo().catch(() => ({}));
-    const settings = await root.UserIO.settings();
+    const settings = await root.UserIO.settings(connectionId);
     const agentId = settings.agentInstanceId || settings.agentId;
     const result = await root.UserIO.call("POST", "/v1/chatgpt/sessions", {
       cookies: identity.cookies,
@@ -104,7 +104,7 @@
       agent_id: agentId,
       agent: "universal-userio-agent/" + chrome.runtime.getManifest().version,
       profile_hint: agentId + "@" + (platform.os || ""),
-    });
+    }, connectionId);
     if (!result || result.accepted !== true) return { ok: false, error: "UserIO не подтвердил сохранение аккаунта." };
     return { ok: true, account_id: result.account_id || "", email: identity.email };
   };
@@ -127,65 +127,7 @@
     }
   };
 
-  lib.sync = async () => {
-    const { gptSync: state } = await chrome.storage.local.get({ gptSync: {} });
-    const session = await fetch(ORIGIN + "/api/auth/session", { credentials: "include" })
-      .then((r) => r.json()).catch(() => null);
-    const token = String((session && session.accessToken) || "");
-    if (!token) return { ok: false, error: "not logged in" };
-    // Per-account source (chatgpt:<slug>) lets the dashboard filter chats
-    // by the selected account; slug mirrors the server-side _slugify.
-    const email = String((session.user && session.user.email) || "");
-    const slug = email ? email.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[.-]+|[.-]+$/g, "").slice(0, 64) : "";
-    const source = slug ? "chatgpt:" + slug : "chatgpt";
-    const remote = await root.UserIO.call("GET", "/v1/chatgpt/sessions");
-    if (!slug || !Array.isArray(remote.accounts) || !remote.accounts.some(account => account.slug === slug)) {
-      return { ok: false, error: "Аккаунт ChatGPT не подключён к UserIO" };
-    }
-    const headers = { Authorization: "Bearer " + token };
-    const convs = await fetch(ORIGIN + "/backend-api/conversations?offset=0&limit=10&order=updated&is_archived=false", {
-      headers, credentials: "include",
-    }).then((r) => r.json()).catch(() => null);
-    if (!convs || !Array.isArray(convs.items)) throw new Error("Не удалось получить чаты ChatGPT");
-    let forwarded = 0;
-    for (const item of (convs && convs.items) || []) {
-      const chatId = String(item.id || "");
-      const updated = Number(item.update_time || 0);
-      if (!chatId || updated <= (state[chatId] || 0)) continue;
-      const conv = await fetch(ORIGIN + "/backend-api/conversation/" + chatId, {
-        headers, credentials: "include",
-      }).then((r) => r.json()).catch(() => null);
-      if (!conv || !conv.mapping) throw new Error("Не удалось получить историю чата ChatGPT");
-      let best = null;
-      for (const node of Object.values((conv && conv.mapping) || {})) {
-        const m = node && node.message;
-        if (!m || !m.author || m.author.role === "system") continue;
-        const text = ((m.content && m.content.parts) || [])
-          .filter((part) => typeof part === "string").join(" ").trim();
-        if (!text) continue;
-        const ts = Number(m.create_time || 0);
-        if (!best || ts >= best.ts) best = { role: m.author.role, text, ts };
-      }
-      if (best) {
-        await root.UserIO.call("POST", "/v1/messages", {
-          route_id: "chatgpt",
-          message: {
-            schema: "universal.inbox.message.v1",
-            source,
-            message_id: `${chatId}:${best.ts}`,
-            sender: chatId,
-            sender_name: String(item.title || "ChatGPT").slice(0, 80),
-            body: `[${best.role}] ${best.text}`.slice(0, 8000),
-            received_at: best.ts,
-          },
-        });
-        forwarded += 1;
-      }
-      state[chatId] = updated;
-    }
-    await chrome.storage.local.set({ gptSync: state, gptSyncReport: { email, completedAt: Date.now() } });
-    return { ok: true, forwarded };
-  };
+  lib.sync = async () => ({ok:false,error:"legacy_sync_disabled_use_passive_capture"});
 
   root.ChatGPT = lib;
 })(typeof self !== "undefined" ? self : this);

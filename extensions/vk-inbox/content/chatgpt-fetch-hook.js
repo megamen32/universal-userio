@@ -13,18 +13,27 @@
    return JSON.parse(new TextDecoder().decode(bytes));
   }catch{return null;}
  }
+ function safeData(value,depth=0){
+  if(depth>8)return null;
+  if(value===null||typeof value==='string'||typeof value==='number'||typeof value==='boolean')return value;
+  if(Array.isArray(value))return value.slice(0,100).map(v=>safeData(v,depth+1));
+  if(typeof value!=='object')return null;
+  const out={};for(const [k,v] of Object.entries(value)){
+   if(/token|cookie|authorization|secret|session|accesskey|bearer/i.test(k))continue;
+   out[k]=safeData(v,depth+1);
+  }return out;
+ }
  async function capture(url,response){
   if(response.status===429){emit({kind:'rate_limit',retryAfter:response.headers.get('Retry-After')||''});return;}
   if(!response.ok||!String(response.headers.get('Content-Type')||'').includes('application/json'))return;
   if(url.pathname!=='/api/auth/session'&&! /^\/backend-api\/conversation\/[A-Za-z0-9_-]+$/.test(url.pathname))return;
   const data=await boundedJSON(response);if(!data)return;
   if(url.pathname==='/api/auth/session'){
-   if(data.user?.id&&data.user?.email)emit({kind:'identity',accountId:String(data.user.id).slice(0,160),email:String(data.user.email).slice(0,254)});
+   if(data.user?.id)emit({kind:'identity',accountId:String(data.user.id).slice(0,160),workspaceId:String(data.account?.id||'').slice(0,160),accountLabel:String(data.user.name||data.user.email||data.user.id).slice(0,80),email:typeof data.user.email==='string'?data.user.email.slice(0,254):undefined});
    return;
   }
-  const messages=Object.values(data.mapping||{}).map(n=>n?.message).filter(m=>m&&['user','assistant'].includes(m.author?.role)&&m.id)
-   .slice(-100).map(m=>({id:String(m.id).slice(0,128),role:m.author.role,text:(m.content?.parts||[]).filter(p=>typeof p==='string').join('\n').slice(0,8000),ts:Number(m.create_time)||0})).filter(m=>m.text);
-  emit({kind:'conversation',chatId:url.pathname.split('/').pop(),title:String(data.title||'ChatGPT').slice(0,80),messages});
+  const bounded=safeData(data);if(!bounded)return;
+  emit({kind:'conversation',chatId:url.pathname.split('/').pop(),title:String(data.title||'ChatGPT').slice(0,80),data:bounded});
  }
  window.fetch=function(...args){
   const promise=original.apply(this,args);

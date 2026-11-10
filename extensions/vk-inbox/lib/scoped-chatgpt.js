@@ -65,8 +65,10 @@
             const accountId=session?.user?.id;
             if(typeof accountId!=="string"||!accountId)
               return {ok:false,error:"account_scope_unavailable"};
-            const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(accountId));
-            return {ok:true,account_scope:Array.from(new Uint8Array(digest),
+            const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:accountId,workspace_id:session.account?.id||""})));
+            const workspace_id=String(session.account?.id||"");
+            return {ok:true,provider:"chatgpt",user_id:String(accountId),account_id:workspace_id,workspace_id,
+              account_scope:Array.from(new Uint8Array(digest),
               value=>value.toString(16).padStart(2,"0")).join("")};
           }catch(e){return {ok:false,error:e?.name==="AbortError"?"account_scope_timeout":"account_scope_unavailable"};}
           finally{clearTimeout(timer);}
@@ -98,7 +100,7 @@
             if(!token)return {ok:false,error:"authentication_required"};
             if(scope){
               if(typeof s?.user?.id!=="string")return {ok:false,error:"account_scope_unavailable"};
-              const bytes=new TextEncoder().encode(s.user.id);
+              const bytes=new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,workspace_id:s.account?.id||""}));
               const digest=await crypto.subtle.digest("SHA-256",bytes);
               const actual=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("");
               if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
@@ -124,6 +126,7 @@
     const ref=args.chat_ref,scope=args.expected_account_scope||"";
     if(!lib.validRef(ref))return {ok:false,error:"invalid_chat_ref"};
     if(scope && !/^[0-9a-f]{64}$/.test(scope))return {ok:false,error:"invalid_account_scope"};
+    const requestStarted=Date.now();
     try{
       const located=await lib.exactTab(ref);
       if(!located.ok)return located;
@@ -139,7 +142,7 @@
             if(!token)return {ok:false,error:"authentication_required"};
             if(scope){
               if(typeof s?.user?.id!=="string")return {ok:false,error:"account_scope_unavailable"};
-              const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s.user.id));
+              const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,workspace_id:s.account?.id||""})));
               const actual=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("");
               if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
             }
@@ -181,56 +184,22 @@
               chain.reverse();
             }else return {ok:false,error:"history_invalid"};
             if(!chain.length)return {ok:false,error:"history_empty"};
-            const readPart=part=>{
-              if(typeof part==="string")return part;
-              if(!part||typeof part!=="object")return "";
-              if(typeof part.text==="string")return part.text;
-              if(typeof part.content==="string")return part.content;
-              if(part.content_type==="image_asset_pointer"||part.content_type==="image")return "[Изображение]";
-              return "";
-            };
-            const shape=m=>{
-              const role=m?.author?.role;
-              if(role!=="user"&&role!=="assistant")return null;
-              const channel=typeof m.channel==="string"?m.channel:"";
-              if(role==="assistant"&&((channel&&channel!=="final"&&channel!=="commentary")
-                ||(m.recipient&&m.recipient!=="all")))return null;
-              const parts=Array.isArray(m.content?.parts)?m.content.parts:[];
-              const text=(parts.length?parts.map(readPart).join("\n")
-                :(typeof m.content?.text==="string"?m.content.text:"")).trim().slice(0,maxText);
-              if(!text)return null;
-              return {id:String(m.id||"").slice(0,128),role,text,
-                status:typeof m.status==="string"?m.status:"",
-                end_turn:m.end_turn===true,create_time:Number(m.create_time)||0,
-                update_time:Number(m.update_time)||0,
-                phase:channel||((typeof m.metadata?.phase==="string")?m.metadata.phase:""),
-                model:typeof m.metadata?.model_slug==="string"?m.metadata.model_slug:""};
-            };
-            let latest_user=null,latest_assistant=null;
-            let lastAssistant=null,latestCompleted=null;
-            for(const m of chain){
-              const v=shape(m);if(!v)continue;
-              if(v.role==="user"){
-                latest_user=v;lastAssistant=null;latestCompleted=null;
-              }else if(latest_user){
-                lastAssistant=v;
-                if(v.status==="finished_successfully"&&v.end_turn===true)
-                  latestCompleted=v;
-              }
-            }
-            if(!latest_user)return {ok:false,error:"latest_user_unavailable"};
-            latest_assistant=latestCompleted||lastAssistant;
-            // A later native in-progress assistant invalidates the completed
-            // receipt. Never infer completion from text, DOM stability, or age.
-            const ready=!!latestCompleted&&lastAssistant===latestCompleted;
-            return {ok:true,chat_ref:ref,latest_user,latest_assistant,ready,
-              phase:ready?"idle":"unknown"};
+            const workspace_id=String(s.account?.id||"");
+            const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,workspace_id})));
+            const account_scope=Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,"0")).join("");
+            return {ok:true,chat_ref:ref,account_scope,provider:"chatgpt",user_id:String(s.user.id),account_id:workspace_id,workspace_id,account_label:String(s.user.name||s.user.email||s.user.id),account_email:String(s.user.email||""),data:{conversation_id:data.conversation_id,messages:data.messages,mapping:data.mapping,current_node:data.current_node}};
           }catch(e){return {ok:false,error:e?.name==="AbortError"?"read_timeout":"history_unavailable"};}
           finally{clearTimeout(timer);}
         },args:[ref,16000,scope]});
       const result=entry?.result??{ok:false,error:"read_no_result"};
       if(result.ok&&result.chat_ref!==ref)return {ok:false,error:"read_ref_mismatch"};
-      return result;
+      if(!result.ok)return result;
+      if(!root.UserIOChatGPTCore)return {ok:false,error:"chatgpt_core_unavailable"};
+      if(!root.UserIOChatGPTStore)return {ok:false,error:"chatgpt_core_unavailable"};
+      const update=await root.UserIOChatGPTStore.transition({provider:result.provider||"chatgpt",user_id:result.user_id,workspace_id:result.workspace_id??result.account_id??"",account_label:result.account_label,account_email:result.account_email,account_scope:result.account_scope,chat_ref:ref,data:result.data,coverage:"addressed",observed_at:requestStarted});
+      const snapshot=update.snapshot;
+      if(snapshot.ok&&!snapshot.latest_user)return {ok:false,error:"latest_user_unavailable"};
+      return {...snapshot,effect_results:update.effect_results||[]};
     }catch{return {ok:false,error:"read_transport_unavailable"};}
   };
   root.UserIOScopedChatGPT=lib;

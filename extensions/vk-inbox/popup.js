@@ -6,6 +6,10 @@
   $("userioLogin").onclick = settings;
   $("chatgptSetup").onclick = settings;
   async function refresh() {
+    const connections = await send("connectionsList");
+    const connectionItems = connections.ok && Array.isArray(connections.connections) ? connections.connections : [];
+    $("connectionsBadge").textContent = connectionItems.length ? connectionItems.filter((item) => item.enabled).length + " включено" : "Нет подключений";
+    $("connectionsSummary").textContent = connectionItems.length ? connectionItems.map((item) => (item.label || "Без названия") + " · " + (item.enabled ? "включено" : "ошибка/выкл.")).join("; ") : "VK Web · ChatGPT · Z.ai · настройте подключения";
     const user = await send("userioStatus");
     const connected = !!user.connected;
     $("userioBadge").textContent = connected ? "Выполнен вход" : "Нет входа";

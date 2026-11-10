@@ -5,7 +5,7 @@
 // lib/*.js attach themselves to `self.UserIODB` / `self.UserIO` /
 // `self.Collect` / `self.Agent`; importScripts loads them in order.
 
-importScripts("lib/config.js", "lib/update.js", "lib/db.js", "lib/oauth.js", "lib/tab-groups.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/scoped-chatgpt.js", "lib/zai.js", "lib/zai-judge-page.js", "lib/zai-judge.js", "lib/zai-send.js", "lib/dot.js", "lib/dot-media-read.js", "lib/agent.js");
+importScripts("lib/config.js", "lib/update.js", "lib/db.js", "lib/connections.js", "lib/oauth.js", "lib/tab-groups.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/chatgpt-core.js", "lib/chatgpt-state.js", "lib/scoped-chatgpt.js", "lib/zai.js", "lib/zai-judge-page.js", "lib/zai-judge.js", "lib/zai-send.js", "lib/dot.js", "lib/dot-media-read.js", "lib/agent.js");
 
 const DB = self.UserIODB;
 const USERIO = self.UserIO;
@@ -331,8 +331,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "extensionVersion":
           sendResponse(await self.UserIOUpdate.check());
           break;
+        case "connectionsList":
+          sendResponse({ok:true,connections:await self.UserIOConnections.list()}); break;
+        case "connectionsSave":
+          sendResponse({ok:true,connection:await self.UserIOConnections.save(msg.input||msg.connection||{})}); break;
+        case "connectionsRemove":
+          sendResponse(await self.UserIOConnections.remove(msg.connectionId)); break;
+        case "accountsList": {
+          const accounts=await self.UserIOConnections.accounts();
+          sendResponse({ok:true,accounts:accounts.map(a=>({...a,accountKey:a.key}))}); break;
+        }
+        case "accountBindingsGet": {
+          const accounts=await self.UserIOConnections.accounts();
+          sendResponse({ok:true,bindings:Object.fromEntries(accounts.map(a=>[a.key,a.connectionIds]))}); break;
+        }
+        case "accountBindingsSave":
+          sendResponse({ok:true,binding:await self.UserIOConnections.updateBindings(msg.accountKey,msg.connectionIds)}); break;
         case "gptConnectionStatus":
-          sendResponse({ ok: true, ...(await self.UserIO.call("GET", "/v1/chatgpt/sessions")), ...(await chrome.storage.local.get({ gptSyncReport: null })) });
+          sendResponse({ ok: true, ...(await self.UserIO.call("GET", "/v1/chatgpt/sessions", undefined, msg.connectionId)), ...(await chrome.storage.local.get({ gptSyncReport: null })) });
           break;
         case "gptDisconnect": {
           if (sender?.url !== chrome.runtime.getURL("options.html")) {
@@ -340,14 +356,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             break;
           }
           const slug = String(msg.slug || "");
-          const { accounts } = await self.UserIO.call("GET", "/v1/chatgpt/sessions");
+          const { accounts } = await self.UserIO.call("GET", "/v1/chatgpt/sessions", undefined, msg.connectionId);
           if (!Array.isArray(accounts) || !accounts.some(account => account.slug === slug)) {
             sendResponse({ ok: false, error: "Аккаунт не найден. Обновите страницу." });
             break;
           }
-          const result = await self.UserIO.call("DELETE", "/v1/accounts/" + encodeURIComponent("chatgpt:" + slug));
+          const result = await self.UserIO.call("DELETE", "/v1/accounts/" + encodeURIComponent("chatgpt:" + slug), undefined, msg.connectionId);
           if (!result.deleted) { sendResponse({ ok: false, error: "UserIO не подтвердил отключение." }); break; }
-          const readback = await self.UserIO.call("GET", "/v1/chatgpt/sessions");
+          const readback = await self.UserIO.call("GET", "/v1/chatgpt/sessions", undefined, msg.connectionId);
           sendResponse({ ok: Array.isArray(readback.accounts) && !readback.accounts.some(account => account.slug === slug), error: "Не удалось подтвердить отключение." });
           break;
         }
@@ -361,19 +377,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             userInitiated: msg.userInitiated === true
               && sender?.url === chrome.runtime.getURL("options.html"),
             expectedFingerprint: msg.expectedFingerprint,
+            connectionId: msg.connectionId,
           }));
           break;
         case "userioConnect":
           sendResponse(sender?.url === chrome.runtime.getURL("options.html")
-            ? await self.UserIOOAuth.connect()
+            ? await self.UserIOOAuth.connect(msg.connectionId)
             : { ok: false, error: "Вход доступен только в настройках расширения." });
           break;
         case "userioStatus":
-          sendResponse(await self.UserIOOAuth.status());
+          sendResponse(await self.UserIOOAuth.status(msg.connectionId));
           break;
         case "userioDisconnect":
           sendResponse(sender?.url === chrome.runtime.getURL("options.html")
-            ? await self.UserIOOAuth.disconnect()
+            ? await self.UserIOOAuth.disconnect(msg.connectionId)
             : { ok: false, error: "Сброс доступен только в настройках расширения." });
           break;
         case "purge":

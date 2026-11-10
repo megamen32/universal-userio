@@ -5,6 +5,13 @@
   const suffix = (id) => id && id !== "legacy-default" ? ":" + id : "";
   const keys = (id) => TOKEN_KEYS.map((key) => key + suffix(id));
   const connection = async (id) => id && root.UserIOConnections ? root.UserIOConnections.get(id) : null;
+  const revisions = new Map();
+  const mutations = new Map();
+  function locked(id,fn){const k=identity(id),prev=mutations.get(k)||Promise.resolve(),p=prev.then(fn);mutations.set(k,p.catch(()=>{}));return p;}
+  const identity = (id) => id || "legacy-default";
+  const revisionKey = (id) => "oauthRevision:" + identity(id);
+  async function revision(id) { const k=revisionKey(id), v=await chrome.storage.local.get({[k]:0}); return Number(v[k])||0; }
+  async function assertRevision(id, expected) { if (revisions.get(identity(id)) !== expected || await revision(id) !== expected) throw new Error("oauth_session_changed"); }
 
   function randomVerifier() {
     const bytes = new Uint8Array(32);
@@ -32,7 +39,7 @@
   async function endpoint(connectionId) {
     const configured = root.USERIO_CONFIG || {};
     const c = await connection(connectionId);
-    if (connectionId && connectionId !== "legacy-default" && !c) throw new Error("unknown_connection");
+    if (connectionId && !c) throw new Error("unknown_connection");
     const values = await chrome.storage.local.get({ endpoint: configured.endpoint || "http://127.0.0.1:18093" });
     const value = String(c?.endpoint || values.endpoint || configured.endpoint || "http://127.0.0.1:18093").replace(/\/+$/, "");
     const parsed = new URL(value);
@@ -72,6 +79,7 @@
 
   const refreshInFlight = new Map();
   async function accessToken(connectionId) {
+    if(connectionId) await endpoint(connectionId);
     const [a,r,e,c,d,endpointKey]=keys(connectionId), values = await chrome.storage.local.get([a,r,e,c,d,endpointKey]);
     if (!values[a]) return "";
     if (values[endpointKey] !== await endpoint(connectionId)) {
@@ -82,10 +90,13 @@
     if (!values[r] || !values[c]) throw new Error("Сеанс UserIO истёк: подключите аккаунт снова.");
     if (!refreshInFlight.has(connectionId || "legacy")) {
       refreshInFlight.set(connectionId || "legacy", (async () => {
+        const rev=await revision(connectionId); if(!revisions.has(identity(connectionId))) revisions.set(identity(connectionId),rev);
+        await assertRevision(connectionId,rev);
         const data = await formPost(await endpoint(connectionId), "/token", {
           grant_type: "refresh_token", client_id: values[c], refresh_token: values[r],
         });
-        await saveTokens(data, connectionId);
+        await locked(connectionId,async()=>{await assertRevision(connectionId,rev);await saveTokens(data,connectionId);});
+        await assertRevision(connectionId,rev);
         return data.access_token;
       })().finally(() => { refreshInFlight.delete(connectionId || "legacy"); }));
     }
@@ -149,7 +160,9 @@
   }
 
   async function disconnect(connectionId) {
-    await chrome.storage.local.remove(keys(connectionId));
+    if(connectionId) await endpoint(connectionId);
+    await locked(connectionId,async()=>{const rev=Math.max(revisions.get(identity(connectionId))||0,await revision(connectionId))+1;
+      revisions.set(identity(connectionId),rev); await chrome.storage.local.set({[revisionKey(connectionId)]:rev}); await chrome.storage.local.remove(keys(connectionId));});
     return { ok: true, connected: false };
   }
 

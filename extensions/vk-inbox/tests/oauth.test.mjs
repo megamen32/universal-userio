@@ -127,3 +127,15 @@ test('profile matching compares existing ChatGPT sessions without exporting cred
 function response(status, body) {
   return { ok: status < 400, status, json: async () => body };
 }
+
+test('unknown connection cannot reach global endpoint and logout fences an in-flight refresh', async () => {
+  const values = {endpoint:'https://same.example', 'oauthAccessToken:work':'old', 'oauthRefreshToken:work':'refresh', 'oauthClientId:work':'client', 'oauthExpiresAt:work':1, 'oauthEndpoint:work':'https://same.example'};
+  let unblock, started; const startedPromise=new Promise(r=>started=r);
+  const chrome={storage:{local:{get:async k=>Array.isArray(k)?Object.fromEntries(k.map(x=>[x,values[x]])):{...k,...values},set:async p=>Object.assign(values,p),remove:async keys=>keys.forEach(k=>delete values[k])}}};
+  const self={UserIOConnections:{get:async id=>id==='work'?{id,endpoint:'https://same.example'}:null}};
+  const fetch=async()=>{started();await new Promise(r=>unblock=r);return response(200,{access_token:'new',refresh_token:'new-refresh',expires_in:3600,token_type:'Bearer'})};
+  const ctx={self,chrome,fetch,URL,URLSearchParams,crypto:globalThis.crypto,TextEncoder,btoa}; load('lib/oauth.js',ctx);
+  await assert.rejects(()=>self.UserIOOAuth.connect('missing'),/unknown_connection/);
+  const refresh=self.UserIOOAuth.accessToken('work'); await startedPromise; await self.UserIOOAuth.disconnect('work'); unblock();
+  await assert.rejects(refresh,/session_changed/); assert.equal(values['oauthAccessToken:work'],undefined);
+});

@@ -63,12 +63,15 @@ test('another connected ChatGPT never hides explicit selection of the local prof
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(el.chatgptSelect.hidden,false,'existing remote account must not prevent adding this profile');
   assert.equal(calls.some(x=>x.kind==='gptRegister'),false);
-  await el.chatgptSelect.listeners.click();
+  el.chatgptSelect.dataset ||= {}; el.chatgptSelect.dataset.connectionId='personal';
+  await el.chatgptSelect.listeners.click({currentTarget:el.chatgptSelect});
   assert.match(el.chatgptStatus.textContent,/local@example.test/);
   assert.equal(el.chatgptConnect.hidden,false);assert.equal(confirms,0);
   assert.equal(calls.some(x=>x.kind==='gptRegister'),false,'identity inspection must not upload cookies');
+  el.chatgptConnect.dataset ||= {}; el.chatgptConnect.dataset.connectionId='personal';
   await el.chatgptConnect.listeners.click();
   assert.equal(confirms,1);assert.equal(calls.find(x=>x.kind==='gptRegister').expectedFingerprint,'local-fingerprint');
+  assert.equal(calls.find(x=>x.kind==='gptRegister').connectionId,'personal');
   assert.equal(el.chatgptAccounts.children.length,2);
   assert.equal(el.chatgptSelect.hidden,false,'further profiles remain connectable');
 });
