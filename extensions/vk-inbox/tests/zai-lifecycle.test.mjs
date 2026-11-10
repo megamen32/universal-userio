@@ -58,3 +58,18 @@ test('first send confirms native identities once and refuses replay after uncert
   assert.equal((await root.UserIOZaiLifecycle.firstSend(uncertain)).error,'zai_first_duplicate');
   assert.equal(clicks,2);
 });
+test('first send executes the page function against a fake DOM and verifies native admission',async()=>{
+  const storage=new Map(),tabs=new Map(), owner='55555555-5555-4555-8555-555555555555';
+  let clicks=0;
+  class TextArea { constructor(){this._value=''} get value(){return this._value} set value(v){this._value=v} getClientRects(){return [1]} dispatchEvent(){} }
+  const editor=new TextArea(),location={origin:'https://chat.z.ai',pathname:'/'};
+  const button={disabled:false,getClientRects:()=>[1],click(){clicks++;const tab=tabs.get(1);tab.url='https://chat.z.ai/c/'+id;location.pathname='/c/'+id}};
+  const document={querySelector:s=>s.startsWith('textarea')?editor:s==='#send-message-button'?button:null,querySelectorAll:()=>[]};
+  const chrome={storage:{local:{get:async k=>({[k]:storage.get(k)}),set:async v=>Object.entries(v).forEach(([k,x])=>storage.set(k,x))}},tabs:{
+    create:async({url})=>{const t={id:1,url,status:'complete'};tabs.set(1,t);return t},get:async k=>tabs.get(k),remove:async k=>tabs.delete(k)}};
+  const root={UserIOZai:{list:async()=>({ok:true}),_invoke:async(_tab,func,args)=>func(...args),raw:async()=>({ok:true,batches:[JSON.stringify({data:{[msg]:{id:msg,role:'user',content:'hello'}}})]})}};
+  const context={self:root,chrome,URL,setTimeout,clearTimeout,Date,location,document,HTMLTextAreaElement:TextArea,Event:class {},crypto:webcrypto,TextEncoder,fetch:async()=>({ok:true,json:async()=>({id:'fixture-owner'})})};
+  vm.runInNewContext(readFileSync(new URL('../lib/zai-lifecycle.js',import.meta.url),'utf8'),context);
+  const result=await root.UserIOZaiLifecycle.firstSend({request_id:owner,expected_account_scope:scope,text:'hello'});
+  assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,msg);assert.equal(clicks,1);
+});

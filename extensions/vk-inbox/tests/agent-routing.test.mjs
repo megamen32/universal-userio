@@ -51,3 +51,16 @@ test('scoped first send is fenced and never replayed',async()=>{
 test('command with mismatched connection or principal never executes or posts',async()=>{
   const f=fixture(); await assert.rejects(()=>f.self.Agent.processCommand({id:'1',action:'gpt_read',connection_id:'personal'},{connectionId:'work',principalId:'alice',agentInstanceId:'i'}),/command_context_mismatch/); assert.equal(f.calls.length,0);
 });
+test('Z.ai lifecycle commands require a bound destination and dispatch to exact handlers',async()=>{
+  const f=fixture(),ctx={connectionId:'work',principalId:'alice',agentInstanceId:'instance'}, seen=[];
+  f.self.UserIOZai={raw:async args=>{seen.push(['raw',args]);return {ok:true}},archive:async args=>{seen.push(['archive',args]);return {ok:true}}};
+  f.self.UserIOZaiLifecycle={firstSend:async args=>{seen.push(['first',args]);return {ok:true}}};
+  for(const [action,name] of [['zai_raw','raw'],['zai_first_send','first'],['zai_archive','archive']]){
+    const denied={id:action+'-no',action,args:{expected_account_scope:'scope-b'}};
+    assert.equal((await f.self.Agent.processCommand(denied,ctx)).error,'account_not_authorized');
+    const allowed={id:action+'-yes',action,args:{expected_account_scope:'scope-a'}};
+    assert.equal((await f.self.Agent.processCommand(allowed,ctx)).ok,true);
+    assert.equal(seen.at(-1)[0],name);
+  }
+  assert.equal(seen.length,3);
+});

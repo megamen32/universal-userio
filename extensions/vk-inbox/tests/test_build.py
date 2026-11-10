@@ -53,7 +53,7 @@ def test_release_archives_match_extension_source():
             assert shipped['version'] == manifest['version'], 'shipped extension version is stale'
             for name in ('background.js', 'popup.js', 'popup.html', 'options.js', 'options.html',
                          'lib/connections.js', 'lib/chatgpt-core.js', 'lib/chatgpt-state.js', 'lib/chatgpt-passive.js',
-                         'lib/oauth.js', 'lib/update.js', 'lib/tab-groups.js', 'lib/chatgpt.js', 'lib/scoped-chatgpt.js', 'lib/zai.js', 'lib/zai-judge-page.js', 'lib/zai-judge.js', 'lib/zai-send.js', 'lib/agent.js', 'lib/userio.js'):
+                         'lib/oauth.js', 'lib/update.js', 'lib/tab-groups.js', 'lib/chatgpt.js', 'lib/scoped-chatgpt.js', 'lib/zai.js', 'lib/zai-lifecycle.js', 'lib/zai-judge-page.js', 'lib/zai-judge.js', 'lib/zai-send.js', 'lib/agent.js', 'lib/userio.js'):
                 assert package.read(name) == (ROOT / name).read_bytes(), f'stale release asset: {name}'
 
 
