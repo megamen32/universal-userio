@@ -1,10 +1,31 @@
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
 from universal_userio.runtime import SummaryCacheMaintenance, build_service, load_runtime_identity
+
+
+def test_http_server_queues_connection_bursts() -> None:
+    source = Path(__file__).parents[1] / "src" / "universal_userio" / "runtime.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+    server = next(
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.ClassDef) and node.name == "UserIOHTTPServer"
+    )
+    backlog = next(
+        node.value
+        for node in server.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "request_queue_size" for target in node.targets)
+    )
+    assert isinstance(backlog, ast.Constant)
+    assert backlog.value == 128
 
 
 def test_summary_cache_maintenance_runs_only_when_due() -> None:
