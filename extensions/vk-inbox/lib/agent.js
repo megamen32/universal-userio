@@ -425,6 +425,7 @@
             const candidates=[...document.querySelectorAll('[data-message-author-role="user"]')].filter(n=>(n.textContent||"").trim()===body.trim()).map(n=>n.getAttribute('data-message-id')||n.closest('[data-message-id]')?.getAttribute('data-message-id')).filter(id=>id&&!priorUsers.has(id)&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
             if(candidates.length===1)userId=candidates[0];
             else if(candidates.length>1)return {ok:false,error:"send_outcome_unknown"};
+            if(userId)return {ok:true,admission:"confirmed",native_user_message_id:userId,chat_ref:ref,chat_url:location.href};
             const replies = document.querySelectorAll('[data-message-author-role="assistant"]');
             if (replies.length <= before) continue;  // only the NEW reply counts
             const last = replies[replies.length - 1];
