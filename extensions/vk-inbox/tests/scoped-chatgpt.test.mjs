@@ -89,6 +89,24 @@ test("in-progress assistant after final fails closed",async()=>{
   assert.equal(r.ok,true);
   assert.equal(r.ready,false);
 });
+test("provider pagination and absent terminal proof never claim full history",async()=>{
+  for(const markers of [{has_more:true},{next_cursor:'older'},{has_more:false,next_cursor:'older'},{has_more:false,nextCursor:'older'},{}]){
+    const f=fixture({history:{conversation_id:REF,messages:[message(USER,'user','task'),message(FINAL,'assistant','done')],...markers}});
+    const r=await f.api.read({chat_ref:REF});
+    assert.equal(r.complete,false);assert.equal(r.coverage,'partial');assert.equal(r.ready,true);
+  }
+  const f=fixture({history:{conversation_id:REF,has_more:false,messages:[message(USER,'user','task'),message(FINAL,'assistant','done')]}});
+  assert.equal((await f.api.read({chat_ref:REF})).complete,true);
+  const busy=fixture({history:{conversation_id:REF,has_more:true,messages:[message(USER,'user','task'),message(FINAL,'assistant','working','in_progress',false)]}});
+  assert.equal((await busy.api.read({chat_ref:REF})).ready,false);
+});
+test("legacy branch must reach an explicit root; missing parents and cycles stay partial",async()=>{
+  for(const parent of ['missing',FINAL]){
+    const history={current_node:FINAL,mapping:{[FINAL]:{parent:USER,message:message(FINAL,'assistant','done')},[USER]:{parent,message:message(USER,'user','task')}}};
+    const r=await fixture({history,historyResponse:fail(404)}).api.read({chat_ref:REF});
+    assert.equal(r.ok,true);assert.equal(r.complete,false);assert.equal(r.coverage,'partial');assert.equal(r.ready,false);
+  }
+});
 test("falls back to legacy mapping only on 404",async()=>{
   const a=message(USER,"user","request");
   const b=message(FINAL,"assistant","response");
@@ -96,7 +114,7 @@ test("falls back to legacy mapping only on 404",async()=>{
     [USER]:{parent:null,message:a},[FINAL]:{parent:USER,message:b}}};
   const f=fixture({history,historyResponse:fail(404)});
   const r=await f.api.read({chat_ref:REF});
-  assert.equal(r.ok,true);assert.equal(r.ready,true);
+  assert.equal(r.ok,true);assert.equal(r.ready,true);assert.equal(r.complete,true);
   assert.equal(r.latest_assistant.text,"response");
   assert.equal(f.events.filter(p=>p.startsWith("/backend-api/")).length,2);
 });

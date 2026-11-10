@@ -45,6 +45,16 @@ test('bounded snapshots do not claim a complete history',()=>{
  const r=core.transition(core.initialState(),{provider:'chatgpt',user_id:'person',workspace_id:'workspace',account_scope:expected,chat_ref:ref,coverage:'addressed',messages});
  assert.equal(r.snapshot.messages.length,100);assert.equal(r.snapshot.complete,false);
 });
+test('persisted snapshots require the new completeness evidence',()=>{
+ const core=setup().self.UserIOChatGPTCore;
+ const event={provider:'chatgpt',user_id:'person',workspace_id:'workspace',account_scope:expected,chat_ref:ref,coverage:'addressed',messages:[{id:'u',role:'user',text:'hi'},{id:'a',role:'assistant',text:'done',status:'finished_successfully',end_turn:true}]};
+ const state=core.transition(core.initialState(),event).state;
+ const id=Object.keys(state.records)[0];
+ assert.equal(core.view(core.hydrate(core.serialize(state)).records[id]).complete,true);
+ delete state.records[id].completenessVerified;delete state.records[id].tailVerified;
+ const old=core.view(core.hydrate(state).records[id]);
+ assert.equal(old.complete,false);assert.equal(old.ready,false);
+});
 
 test('API send rechecks the active account before any provider operation',async()=>{
  const f=setup({session:{...session,account:{id:'other-workspace'}}}),c=f.self.UserIOConnections;

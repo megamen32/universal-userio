@@ -166,28 +166,33 @@
             if(!response.ok)return {ok:false,error:response.status===429?"history_http_429":"history_unavailable",
               status:response.status,retry_after:Math.min(3600,Math.max(0,Number(response.headers.get("Retry-After"))||0))};
             const data=await response.json();
-            let chain=[];
+            let chain=[], complete=false, tailVerified=false;
+            const more=data?.has_more===true||data?.hasMore===true||!!data?.next_cursor||!!data?.nextCursor;
             if(!legacy && Array.isArray(data?.messages)){
               if(data.conversation_id!==ref)return {ok:false,error:"history_identity_mismatch"};
               chain=data.messages;
+              tailVerified=true;
+              complete=data.has_more===false&&!more;
             }else if(data?.mapping&&typeof data.mapping==="object"){
               const mapping=data.mapping;
               let current=typeof data.current_node==="string"?data.current_node:null;
               const seen=new Set();
               for(let n=0;current&&n<10000;n++){
-                if(seen.has(current))return {ok:false,error:"history_cycle"};
+                if(seen.has(current))break;
                 seen.add(current);const node=mapping[current];
                 if(!node)break;
                 if(node.message)chain.push(node.message);
+                if(node.parent===null){complete=!more;current=null;break;}
                 current=typeof node.parent==="string"?node.parent:null;
               }
               chain.reverse();
+              tailVerified=complete;
             }else return {ok:false,error:"history_invalid"};
             if(!chain.length)return {ok:false,error:"history_empty"};
             const workspace_id=String(s.account?.id||"");
             const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:workspace_id})));
             const account_scope=Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,"0")).join("");
-            return {ok:true,chat_ref:ref,account_scope,provider:"chatgpt",user_id:String(s.user.id),account_id:workspace_id,workspace_id,account_label:String(s.user.name||s.user.email||s.user.id),account_email:String(s.user.email||""),data:{conversation_id:data.conversation_id,messages:data.messages,mapping:data.mapping,current_node:data.current_node}};
+            return {ok:true,chat_ref:ref,account_scope,provider:"chatgpt",user_id:String(s.user.id),account_id:workspace_id,workspace_id,account_label:String(s.user.name||s.user.email||s.user.id),account_email:String(s.user.email||""),complete,tailVerified,data:{conversation_id:data.conversation_id,messages:data.messages,mapping:data.mapping,current_node:data.current_node}};
           }catch(e){return {ok:false,error:e?.name==="AbortError"?"read_timeout":"history_unavailable"};}
           finally{clearTimeout(timer);}
         },args:[ref,16000,scope]});
@@ -196,7 +201,7 @@
       if(!result.ok)return result;
       if(!root.UserIOChatGPTCore)return {ok:false,error:"chatgpt_core_unavailable"};
       if(!root.UserIOChatGPTStore)return {ok:false,error:"chatgpt_core_unavailable"};
-      const update=await root.UserIOChatGPTStore.transition({provider:result.provider||"chatgpt",user_id:result.user_id,workspace_id:result.workspace_id??result.account_id??"",account_label:result.account_label,account_email:result.account_email,account_scope:result.account_scope,chat_ref:ref,data:result.data,coverage:"addressed",observed_at:requestStarted});
+      const update=await root.UserIOChatGPTStore.transition({provider:result.provider||"chatgpt",user_id:result.user_id,workspace_id:result.workspace_id??result.account_id??"",account_label:result.account_label,account_email:result.account_email,account_scope:result.account_scope,chat_ref:ref,data:result.data,coverage:result.complete?"addressed":"partial",tail_verified:result.tailVerified,observed_at:requestStarted});
       const snapshot=update.snapshot;
       if(snapshot.ok&&!snapshot.latest_user)return {ok:false,error:"latest_user_unavailable"};
       return {...snapshot,effect_results:update.effect_results||[]};
