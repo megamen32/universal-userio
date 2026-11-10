@@ -26,14 +26,16 @@
  async function capture(url,response){
   if(response.status===429){emit({kind:'rate_limit',retryAfter:response.headers.get('Retry-After')||''});return;}
   if(!response.ok||!String(response.headers.get('Content-Type')||'').includes('application/json'))return;
-  if(url.pathname!=='/api/auth/session'&&! /^\/backend-api\/conversation\/[A-Za-z0-9_-]+$/.test(url.pathname))return;
+  const history=url.pathname.match(/^\/backend-api\/conversations?\/([A-Za-z0-9_-]{1,128})$/);
+  if(url.pathname!=='/api/auth/session'&&!history)return;
   const data=await boundedJSON(response);if(!data)return;
   if(url.pathname==='/api/auth/session'){
    if(data.user?.id)emit({kind:'identity',accountId:String(data.user.id).slice(0,160),workspaceId:String(data.account?.id||'').slice(0,160),accountLabel:String(data.user.name||data.user.email||data.user.id).slice(0,80),email:typeof data.user.email==='string'?data.user.email.slice(0,254):undefined});
    return;
   }
+  if(Object.hasOwn(data,'conversation_id')&&data.conversation_id!==history[1])return;
   const bounded=safeData(data);if(!bounded)return;
-  emit({kind:'conversation',chatId:url.pathname.split('/').pop(),title:String(data.title||'ChatGPT').slice(0,80),data:bounded});
+  emit({kind:'conversation',chatId:history[1],title:String(data.title||'ChatGPT').slice(0,80),data:bounded});
  }
  window.fetch=function(...args){
   const promise=original.apply(this,args);

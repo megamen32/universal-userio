@@ -12,6 +12,42 @@ function fixture(status=200){
 test('startup removes legacy sweep and makes no ChatGPT request',async()=>{
  const f=fixture();await f.self.ChatGPT.start();assert.deepEqual(f.cleared,['userio-gpt-sync']);assert.equal(f.calls.length,0);
 });
+test('passive identity alone observes an unbound account for explicit user selection',async()=>{
+ for(const workspaceId of ['workspace','']){
+  const f=fixture();
+  for(const file of ['connections','userio'])vm.runInContext(fs.readFileSync(new URL('../lib/'+file+'.js',import.meta.url),'utf8'),f.context);
+  const sender={tab:{id:1,url:'https://chatgpt.com/'},frameId:0};
+  const reply=await new Promise(resolve=>f.listeners[0]({kind:'userioChatGPTObserved',pageKey:'page',observation:{kind:'identity',accountId:'account',workspaceId,accountLabel:'Account',email:'owner@example.test'}},sender,resolve));
+  assert.equal(reply.ok,true);const accounts=await f.self.UserIOConnections.accounts();
+  assert.equal(accounts.length,1);assert.equal(accounts[0].workspaceId,workspaceId);assert.equal(accounts[0].userId,'account');
+  assert.deepEqual(Array.from(accounts[0].connectionIds),[]);
+  const expected=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'account',account_id:workspaceId})).digest('hex');
+  assert.equal(accounts[0].accountScope,expected);assert.equal((await f.self.UserIOConnections.subscriptionsForScope('chatgpt',expected)).length,0);
+  await f.self.UserIOConnections.updateBindings(accounts[0].key,['legacy-default']);
+  await new Promise(resolve=>f.listeners[0]({kind:'userioChatGPTObserved',pageKey:'page',observation:{kind:'identity',accountId:'account',workspaceId}},sender,resolve));
+  assert.deepEqual(Array.from((await f.self.UserIOConnections.accounts())[0].connectionIds),['legacy-default']);
+  assert.equal(f.calls.length,0);
+ }
+});
+test('natural plural fetch passes hook and passive reducer as partial without granting access',async()=>{
+ const f=fixture(),observations=[],pending=[];
+ for(const file of ['connections','userio'])vm.runInContext(fs.readFileSync(new URL('../lib/'+file+'.js',import.meta.url),'utf8'),f.context);
+ const sender={tab:{id:1,url:'https://chatgpt.com/'},frameId:0};
+ const window={fetch:async url=>new Response(JSON.stringify(String(url)==='/api/auth/session'?{user:{id:'account'},account:{id:'workspace'},accessToken:'private'}:{conversation_id:'chat1',has_more:true,messages:[{id:'m1',author:{role:'user'},content:{parts:['hello']}}]}),{headers:{'Content-Type':'application/json'}}),postMessage:event=>{observations.push(event.observation);pending.push(new Promise(resolve=>f.listeners[0]({kind:'userioChatGPTObserved',pageKey:'page',observation:event.observation},sender,resolve)));}};
+ const page={window,location:{origin:'https://chatgpt.com',href:'https://chatgpt.com/'},URL,TextDecoder,Uint8Array};vm.createContext(page);
+ vm.runInContext(fs.readFileSync(new URL('../content/chatgpt-fetch-hook.js',import.meta.url),'utf8'),page);
+ await window.fetch('/api/auth/session');
+ for(let i=0;i<30&&pending.length<1;i++)await new Promise(r=>setImmediate(r));
+ await pending[0];
+ await window.fetch('/backend-api/conversations/chat1?num_turns=60&include_has_versions=true');
+ for(let i=0;i<30&&pending.length<2;i++)await new Promise(r=>setImmediate(r));
+ assert.equal(pending.length,2);assert.equal((await pending[1]).ok,true);
+ const accounts=await f.self.UserIOConnections.accounts();assert.equal(accounts.length,1);assert.deepEqual(Array.from(accounts[0].connectionIds),[]);
+ const key=f.self.UserIOChatGPTCore.accountKey('chatgpt','account','workspace');
+ const view=f.self.UserIOChatGPTCore.view(f.self.UserIOChatGPTState.records[key+':chat1']);
+ assert.equal(view.messages[0].text,'hello');assert.equal(view.complete,false);assert.equal(view.ready,false);
+ assert.doesNotMatch(JSON.stringify(observations),/private/);assert.equal(f.calls.length,0);
+});
 test('429 persists cooldown and later extension requests do not reach ChatGPT',async()=>{
  const f=fixture(429);await f.context.fetch('https://chatgpt.com/api/auth/session');
  assert.ok(f.values.chatgptSyncCooldownUntil>Date.now()+100_000);

@@ -53,6 +53,11 @@
    if(typeof o.accountId!=='string'||!o.accountId||o.accountId.length>160||typeof o.workspaceId!=='string'||o.workspaceId.length>160)return {ok:false};
    identities.set(key,{label:typeof o.accountLabel==='string'&&o.accountLabel?o.accountLabel:(typeof o.email==='string'?o.email:o.accountId),email:typeof o.email==='string'?o.email:'',accountId:o.accountId,workspaceId:o.workspaceId});
    if(identities.size>30)identities.delete(identities.keys().next().value);
+   if(root.UserIOConnections?.observeAccount){
+    const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:o.accountId,account_id:o.workspaceId})));
+    const accountScope=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
+    await root.UserIOConnections.observeAccount({provider:'chatgpt',userId:o.accountId,workspaceId:o.workspaceId,accountScope,label:identities.get(key).label});
+   }
    return {ok:true};
   }
   const identity=identities.get(key);
