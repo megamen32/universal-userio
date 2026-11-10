@@ -29,6 +29,7 @@
       }
       if(tab.status!=="complete")return {ok:false,error:"tab_load_timeout"};
       let entry;
+      const attemptStarted=Date.now();
       try { [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",func:async(scope,text)=>{
         let clicked=false;
         const getEditor=()=>{
@@ -107,12 +108,15 @@
       postClickStage=uncertainClick?"before_click":"wait_route";
       lastReason=uncertainClick?"script_outcome_unknown":"route_not_ready";
       const deadline=Date.now()+60000;
+      let pinnedRef=null;
       while(Date.now()<deadline){
         const current=await chrome.tabs.get(tab.id);
         let url;try{url=new URL(current.url);}catch{return unknown("wait_route","invalid_url");}
         if(url.origin!==ORIGIN)return unknown("wait_route","wrong_origin");
         const match=url.pathname.match(/^\/c\/([0-9a-f-]+)$/i);
         if(match&&lib.validRef(match[1])){
+          if(pinnedRef&&pinnedRef!==match[1])return unknown("wait_route","wrong_native");
+          pinnedRef=match[1];
           postClickStage="read_snapshot";
           const ref=match[1],snapshot=await lib.read({chat_ref:ref,expected_account_scope:scope});
           postClickStage="recheck_route";
@@ -122,11 +126,17 @@
           postClickStage="read_snapshot";
           if(snapshot.ok&&snapshot.chat_ref===ref&&snapshot.account_scope===scope&&Array.isArray(snapshot.messages)){
             const matches=snapshot.messages.filter(m=>m?.role==="user"&&typeof m.text==="string"&&m.text.trim()===text.trim()&&lib.validRef(m.id));
-            if(matches.length===1)return {ok:true,admission:"confirmed",chat_ref:ref,native_user_message_id:matches[0].id};
+            if(matches.length===1){
+              const created=Number(matches[0].create_time)*1000;
+              if(Number.isFinite(created)&&created>0&&created>=attemptStarted-10000&&created<=Date.now()+60000)
+                return {ok:true,admission:"confirmed",chat_ref:ref,native_user_message_id:matches[0].id};
+              return unknown("read_snapshot","message_not_fresh");
+            }
             if(matches.length>1)return unknown("read_snapshot","multiple_matches");
             lastReason="message_not_found";
           }else lastReason="snapshot_unverified";
-        }else if(url.pathname!=="/")return unknown("wait_route","wrong_native");
+        }else if(pinnedRef)return unknown("wait_route","wrong_native");
+        else if(url.pathname!=="/"){postClickStage="wait_route";lastReason="transient_route";}
         await new Promise(resolve=>setTimeout(resolve,500));
       }
       return unknown(postClickStage,lastReason);

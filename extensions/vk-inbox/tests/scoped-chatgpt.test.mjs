@@ -86,7 +86,7 @@ test("first send checks an empty owned tab and returns exact route and user mess
     scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
   const context={self:{},chrome,URL,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok(session)};
   vm.createContext(context); vm.runInContext(readFileSync(SRC,'utf8'),context);
-  context.self.UserIOScopedChatGPT.read=async()=>({ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello'}]});
+  context.self.UserIOScopedChatGPT.read=async()=>({ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000}]});
   const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
   assert.equal(result.ok,true);assert.equal(result.chat_ref,REF);assert.equal(result.native_user_message_id,USER);assert.equal(clicks,1);assert.equal(insertions,1);
 });
@@ -113,10 +113,10 @@ test('first send uses unique visible ProseMirror without an id',async()=>{
     querySelectorAll(s){if(s==='[contenteditable="true"].ProseMirror')return [editor];if(s==='button[aria-label="Send"]')return editor.textContent?[button]:[];return []},
     execCommand(_c,_s,t){writes++;editor.textContent=t;return true}};
   const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com'+location.pathname})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
-  let clock=0;class Clock extends Date {static now(){if(clicks)clock+=20000;return clock}}
+  let clock=Date.now();class Clock extends Date {static now(){if(clicks)clock+=20000;return clock}}
   const context={self:{},chrome,URL,Date:Clock,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
   vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
-  let reads=0;context.self.UserIOScopedChatGPT.read=async args=>{reads++;assert.equal(args.chat_ref,REF);assert.equal(args.expected_account_scope,scope);return {ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello'}]}};
+  let reads=0;context.self.UserIOScopedChatGPT.read=async args=>{reads++;assert.equal(args.chat_ref,REF);assert.equal(args.expected_account_scope,scope);return {ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000}]}};
   const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
   assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,USER);assert.equal(reads,1);assert.equal(writes,1);assert.equal(clicks,1);
 });
@@ -142,9 +142,36 @@ test('first click stays unknown when native snapshot has wrong scope or duplicat
     class Clock extends Date {static now(){if(clicks)clock+=15000;return clock}}
     const context={self:{},chrome,URL,Date:Clock,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout:fn=>{queueMicrotask(fn);return 1},clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
     vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
-    context.self.UserIOScopedChatGPT.read=async()=>({ok:true,chat_ref:REF,account_scope:variant==='wrong-scope'?'f'.repeat(64):scope,messages:variant==='duplicate'?[{id:USER,role:'user',text:'hello'},{id:FINAL,role:'user',text:'hello'}]:[{id:USER,role:'user',text:'hello'}]});
+    context.self.UserIOScopedChatGPT.read=async()=>({ok:true,chat_ref:REF,account_scope:variant==='wrong-scope'?'f'.repeat(64):scope,messages:variant==='duplicate'?[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000},{id:FINAL,role:'user',text:'hello',create_time:Date.now()/1000}]:[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000}]});
     const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
     assert.equal(result.error,'first_send_outcome_unknown');assert.equal(clicks,1);
+  }
+});
+test('first receipt observes transient same-origin routes and pins one fresh native chat',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  for(const variant of ['confirmed','foreign-origin','changed-native','changed-later','wrong-scope','duplicate','stale','missing-time','timeout']){
+    let clicks=0,ticks=0,post=0,reads=0;const base=Date.now();const location={origin:'https://chatgpt.com',pathname:'/'};
+    const editor={textContent:'',focus(){}};const button={disabled:false,click(){clicks++}};
+    const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t;return true}};
+    const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>{
+      if(!clicks)return {id:1,status:'complete',url:'https://chatgpt.com/'};
+      post++;let url=post===1?'https://chatgpt.com/':post===2?'https://chatgpt.com/private-transition?secret=secret':('https://chatgpt.com/c/'+REF);
+      if(variant==='foreign-origin'&&post===2)url='https://other.invalid/secret';
+      if(variant==='timeout')url='https://chatgpt.com/private-transition?secret=secret';
+      if(variant==='changed-native'&&reads)url='https://chatgpt.com/c/'+FINAL;
+      if(variant==='changed-later'&&post>=5)url='https://chatgpt.com/c/'+FINAL;
+      return {id:1,status:'complete',url};
+    }},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+    class Clock extends Date {static now(){return base+(ticks++*1000)}}
+    const context={self:{},chrome,URL,Date:Clock,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout:fn=>{queueMicrotask(fn);return 1},clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+    vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+    context.self.UserIOScopedChatGPT.read=async()=>{reads++;const m={id:USER,role:'user',text:'hello',create_time:variant==='stale'?(base-60000)/1000:variant==='missing-time'?0:base/1000};return {ok:true,chat_ref:REF,account_scope:variant==='wrong-scope'?'f'.repeat(64):scope,messages:variant==='changed-later'?[]:variant==='duplicate'?[m,{...m,id:FINAL}]:[m]}};
+    const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+    if(variant==='confirmed'){assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,USER);}
+    else {assert.equal(result.error,'first_send_outcome_unknown');assert.ok(result.diagnostic?.stage);assert.ok(result.diagnostic?.reason)}
+    assert.equal(clicks,1);assert.equal(JSON.stringify(result).includes('secret'),false);
+    if(['foreign-origin','timeout'].includes(variant))assert.equal(reads,0);
+    if(variant==='changed-later'){assert.equal(reads,1);assert.equal(result.diagnostic.reason,'wrong_native');}
   }
 });
 test('first receipt tolerates query-only changes on the same owned native chat and rejects changed chat',async()=>{
@@ -156,7 +183,7 @@ test('first receipt tolerates query-only changes on the same owned native chat a
   const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com'+(afterRead&&changedChat?'/c/'+FINAL:location.pathname)+(afterRead?'?model=auto':'')})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
   const context={self:{},chrome,URL,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
   vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
-  context.self.UserIOScopedChatGPT.read=async()=>{afterRead=true;return {ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello'}]}};
+  context.self.UserIOScopedChatGPT.read=async()=>{afterRead=true;return {ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000}]}};
   const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
   if(changedChat){assert.equal(result.error,'first_send_outcome_unknown');assert.equal(result.diagnostic.stage,'recheck_route');assert.equal(result.diagnostic.reason,'wrong_native');}
   else {assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,USER)}
@@ -166,14 +193,14 @@ test('first receipt tolerates query-only changes on the same owned native chat a
 test('frame rejection after click observes canonical receipt without another click',async()=>{
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   for(const variant of ['confirmed','wrong-scope','duplicate','wrong-route','history-unavailable','before-script']){
-    let clicks=0,clock=0,reads=0;const location={origin:'https://chatgpt.com',pathname:'/'};
+    let clicks=0,clock=Date.now(),reads=0;const location={origin:'https://chatgpt.com',pathname:'/'};
     const editor={textContent:'',focus(){}};const button={disabled:false,click(){clicks++;location.pathname='/c/'+REF}};
     const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t;return true}};
     const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com'+(variant==='wrong-route'&&clicks?'/c/'+FINAL:location.pathname)})},scripting:{executeScript:async({func,args})=>{if(variant!=='before-script')await func(...args);throw Error('secret frame navigation')}}};
     class Clock extends Date {static now(){if(clicks||variant==='before-script')clock+=15000;return clock}}
     const context={self:{},chrome,URL,Date:Clock,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout:fn=>{queueMicrotask(fn);return 1},clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
     vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
-    context.self.UserIOScopedChatGPT.read=async({chat_ref})=>{reads++;return variant==='history-unavailable'?{ok:false}:{ok:true,chat_ref:variant==='wrong-route'?REF:chat_ref,account_scope:variant==='wrong-scope'?'f'.repeat(64):scope,messages:variant==='duplicate'?[{id:USER,role:'user',text:'hello'},{id:FINAL,role:'user',text:'hello'}]:[{id:USER,role:'user',text:'hello'}]}};
+    context.self.UserIOScopedChatGPT.read=async({chat_ref})=>{reads++;return variant==='history-unavailable'?{ok:false}:{ok:true,chat_ref:variant==='wrong-route'?REF:chat_ref,account_scope:variant==='wrong-scope'?'f'.repeat(64):scope,messages:variant==='duplicate'?[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000},{id:FINAL,role:'user',text:'hello',create_time:Date.now()/1000}]:[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000}]}};
     const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
     if(variant==='confirmed'){assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,USER);}
     else {assert.equal(result.error,'first_send_outcome_unknown');assert.ok(result.diagnostic?.stage);assert.ok(result.diagnostic?.reason)}
