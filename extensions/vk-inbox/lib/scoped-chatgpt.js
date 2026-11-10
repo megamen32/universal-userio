@@ -39,9 +39,17 @@
           const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:String(s.account?.id||"")})));
           if(Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
           const editor=document.querySelector("#prompt-textarea"),send=document.querySelector('[data-testid="send-button"]');
-          if(!editor||!send||send.disabled||editor.textContent.trim()||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_not_empty_or_ready"};
+          if(!editor||!send||editor.textContent.trim()||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_not_empty_or_ready"};
           editor.focus(); document.execCommand("insertText",false,text);
+          await new Promise(resolve=>setTimeout(resolve,100));
           if(editor.textContent.trim()!==text.trim()||send.disabled)return {ok:false,error:"composer_changed"};
+          const current=await fetch("/api/auth/session",{credentials:"include"});
+          if(!current.ok)return {ok:false,error:"authentication_required"};
+          const now=await current.json();
+          if(typeof now?.user?.id!=="string"||!now.user.id)return {ok:false,error:"account_scope_unavailable"};
+          const currentHash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:now.user.id,account_id:String(now.account?.id||"")})));
+          if(Array.from(new Uint8Array(currentHash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
+          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||editor.textContent.trim()!==text.trim()||send.disabled||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_changed"};
           clicked=true; send.click();
           const until=Date.now()+120000;
           while(Date.now()<until){

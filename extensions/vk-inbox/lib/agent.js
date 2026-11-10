@@ -398,20 +398,33 @@
             await sleep(500);
           }
           if (!composer) return { ok: false, error: "composer not found (logged out?)" };
+          if((composer.textContent||"").trim())return {ok:false,error:"composer_not_empty"};
+          const priorUsers = new Set([...document.querySelectorAll('[data-message-author-role="user"]')].map(n=>n.getAttribute('data-message-id')||n.closest('[data-message-id]')?.getAttribute('data-message-id')).filter(Boolean));
           composer.focus();
           document.execCommand("insertText", false, body);
           await sleep(500);
           const before = document.querySelectorAll('[data-message-author-role="assistant"]').length;
           let send = document.querySelector('[data-testid="send-button"]');
-          if (!send) {
-            composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-          } else {
-            send.click();
+          if (!send || send.disabled || (composer.textContent||"").trim()!==body.trim() || location.pathname!=="/c/"+ref) return {ok:false,error:"composer_changed"};
+          if(scope){
+            const check=await fetch("/api/auth/session",{credentials:"include"});
+            if(!check.ok)return {ok:false,error:"authentication_required"};
+            const current=await check.json();
+            if(typeof current?.user?.id!=="string"||!current.user.id)return {ok:false,error:"account_scope_unavailable"};
+            const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:current.user.id,account_id:String(current.account?.id||"")})));
+            if(Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
           }
+          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/c/"+ref||(composer.textContent||"").trim()!==body.trim()||send.disabled)return {ok:false,error:"composer_changed"};
+          send.click();
+          let userId="";
           let lastText = "";
           let stable = 0;
           for (let i = 0; i < 120; i += 1) {
             await sleep(1000);
+            if(location.origin!=="https://chatgpt.com"||location.pathname!=="/c/"+ref)return {ok:false,error:"send_outcome_unknown"};
+            const candidates=[...document.querySelectorAll('[data-message-author-role="user"]')].filter(n=>(n.textContent||"").trim()===body.trim()).map(n=>n.getAttribute('data-message-id')||n.closest('[data-message-id]')?.getAttribute('data-message-id')).filter(id=>id&&!priorUsers.has(id)&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+            if(candidates.length===1)userId=candidates[0];
+            else if(candidates.length>1)return {ok:false,error:"send_outcome_unknown"};
             const replies = document.querySelectorAll('[data-message-author-role="assistant"]');
             if (replies.length <= before) continue;  // only the NEW reply counts
             const last = replies[replies.length - 1];
@@ -424,8 +437,8 @@
               lastText = t;
             }
           }
-          if (!lastText) return { ok: false, error: "no assistant reply detected" };
-          return { ok: true, reply: lastText.slice(0, 4000), chat_url: location.href };
+          if (!userId) return { ok: false, error: "send_outcome_unknown" };
+          return { ok: true, admission:"confirmed", native_user_message_id:userId, chat_ref:ref, reply: lastText.slice(0, 4000), chat_url: location.href };
         } catch (e) {
           return { ok: false, error: String(e && e.message || e) };
         }

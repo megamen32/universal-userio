@@ -75,7 +75,7 @@ test("first send checks an empty owned tab and returns exact route and user mess
   const location={origin:'https://chatgpt.com',pathname:'/'};
   const editor={textContent:'',focus(){}}; let clicks=0;
   const msg={textContent:'hello',getAttribute:()=>USER};
-  const button={disabled:false,click(){clicks++;location.pathname='/c/'+REF;}};
+  const button={get disabled(){return !editor.textContent},click(){clicks++;location.pathname='/c/'+REF;}};
   const document={querySelector(selector){
     if(selector==='#prompt-textarea')return editor;
     if(selector==='[data-testid="send-button"]')return button;
@@ -88,6 +88,17 @@ test("first send checks an empty owned tab and returns exact route and user mess
   vm.createContext(context); vm.runInContext(readFileSync(SRC,'utf8'),context);
   const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
   assert.equal(result.ok,true);assert.equal(result.chat_ref,REF);assert.equal(result.native_user_message_id,USER);assert.equal(clicks,1);
+});
+test('first send refuses an account switch immediately before click',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  let calls=0,clicks=0;const editor={textContent:'',focus(){}};
+  const button={get disabled(){return !editor.textContent},click(){clicks++}};
+  const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t}};
+  const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  const context={self:{},chrome,URL,location:{origin:'https://chatgpt.com',pathname:'/'},document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:++calls===1?'user':'other'},account:{id:'account'}})};
+  vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+  const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+  assert.equal(result.error,'account_scope_mismatch');assert.equal(clicks,0);
 });
 test("archive uses exact scope and confirms the same conversation after PATCH",async()=>{
   const session={accessToken:'test-only',user:{id:'user'},account:{id:'account'}};
