@@ -73,27 +73,40 @@ test("first send checks an empty owned tab and returns exact route and user mess
   const session={user:{id:'user'},account:{id:'account'}};
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   const location={origin:'https://chatgpt.com',pathname:'/'};
-  const editor={textContent:'',focus(){}}; let clicks=0;
+  const editor={textContent:'',focus(){}}; let clicks=0,insertions=0,editorQueries=0,buttonQueries=0;
   const msg={textContent:'hello',getAttribute:()=>USER};
   const button={get disabled(){return !editor.textContent},click(){clicks++;location.pathname='/c/'+REF;}};
   const document={querySelector(selector){
-    if(selector==='#prompt-textarea')return editor;
-    if(selector==='[data-testid="send-button"]')return button;
+    if(selector==='#prompt-textarea')return ++editorQueries<3?null:editor;
+    if(selector==='[data-testid="send-button"]')return editor.textContent&&++buttonQueries>=3?button:null;
     if(selector==='[data-message-author-role]')return null;
     return null;
-  },querySelectorAll(){return clicks?[msg]:[]},execCommand(_cmd,_show,text){editor.textContent=text}};
+  },querySelectorAll(){return clicks?[msg]:[]},execCommand(_cmd,_show,text){insertions++;editor.textContent=text;return true}};
   const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},
     scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
   const context={self:{},chrome,URL,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok(session)};
   vm.createContext(context); vm.runInContext(readFileSync(SRC,'utf8'),context);
   const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
-  assert.equal(result.ok,true);assert.equal(result.chat_ref,REF);assert.equal(result.native_user_message_id,USER);assert.equal(clicks,1);
+  assert.equal(result.ok,true);assert.equal(result.chat_ref,REF);assert.equal(result.native_user_message_id,USER);assert.equal(clicks,1);assert.equal(insertions,1);
+});
+test('first send never overwrites a foreign draft or existing conversation',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  for(const foreignMessage of [false,true]){
+    let writes=0,clicks=0;const editor={textContent:foreignMessage?'':'foreign draft',focus(){}};
+    const button={disabled:false,click(){clicks++}};
+    const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:s==='[data-message-author-role]'&&foreignMessage?{}:null},querySelectorAll(){return []},execCommand(){writes++;return true}};
+    const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+    const context={self:{},chrome,URL,location:{origin:'https://chatgpt.com',pathname:'/'},document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+    vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+    const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+    assert.equal(result.ok,false);assert.equal(writes,0);assert.equal(clicks,0);
+  }
 });
 test('first send refuses an account switch immediately before click',async()=>{
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   let calls=0,clicks=0;const editor={textContent:'',focus(){}};
   const button={get disabled(){return !editor.textContent},click(){clicks++}};
-  const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t}};
+  const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t;return true}};
   const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
   const context={self:{},chrome,URL,location:{origin:'https://chatgpt.com',pathname:'/'},document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:++calls===1?'user':'other'},account:{id:'account'}})};
   vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
