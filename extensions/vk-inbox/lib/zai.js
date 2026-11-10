@@ -249,14 +249,14 @@
       if(before.id!==id||!before.user_id)return {ok:false,error:"identity_mismatch"};
       const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(before.user_id)));
       if(Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
-      if(before.archived===true)return {ok:true,already:true};
+      if(before.archived===true)return {ok:true,chat_ref:id,archived:true,already:true};
       if(before.archived!==false)return {ok:false,error:"archive_state_unknown"};
       if(["running","pending","in_progress"].includes(before.last_run?.status))return {ok:false,error:"conversation_busy"};
       mutation=true;
       const response=await fetch(url+"/archive",{method:"POST",credentials:"same-origin",signal:ac.signal});
       if(!response.ok)return {ok:false,error:"archive_outcome_unknown"};
       const after=await read();
-      return after.id===id&&after.user_id===before.user_id&&after.archived===true?{ok:true}:{ok:false,error:"archive_outcome_unknown"};
+      return after.id===id&&after.user_id===before.user_id&&after.archived===true?{ok:true,chat_ref:id,archived:true}:{ok:false,error:"archive_outcome_unknown"};
     }catch{return {ok:false,error:mutation?"archive_outcome_unknown":"archive_preflight_failed"};}
     finally{clearTimeout(timer);}
   }

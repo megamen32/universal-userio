@@ -7,13 +7,13 @@ import vm from 'node:vm';
 const id='11111111-1111-4111-8111-111111111111';
 const msg='22222222-2222-4222-8222-222222222222';
 const scope=createHash('sha256').update('fixture-owner').digest('hex');
-function fixture(){
+function fixture({before={},after={}}={}){
   let archived=false,posts=0; const bodies=[];
   const fetch=async(url,opts={})=>{
     if(url.endsWith('/archive')){posts++;archived=!archived;return {ok:true};}
     const body=url.endsWith('/messages/batch')
       ? ` { "chat_id":"${id}", "data":{"${msg}":{"id":"${msg}","content":"native  text"}} } `
-      : JSON.stringify({id,user_id:'fixture-owner',archived,chat:{history:{messages:{[msg]:{}}}}});
+      : JSON.stringify({id,user_id:'fixture-owner',archived,chat:{history:{messages:{[msg]:{}}}},...(posts?after:before)});
     bodies.push(body);return {ok:true,text:async()=>body,json:async()=>JSON.parse(body)};
   };
   const tab={id:1,url:'https://chat.z.ai/',status:'complete'};
@@ -33,9 +33,21 @@ test('archive checks scope and readback and does not toggle twice',async()=>{
   const f=fixture();
   assert.equal((await f.api.archive({chat_ref:id,expected_account_scope:'f'.repeat(64)})).error,'account_scope_mismatch');
   assert.equal(f.posts(),0);
-  assert.equal((await f.api.archive({chat_ref:id,expected_account_scope:scope})).ok,true);
-  assert.equal((await f.api.archive({chat_ref:id,expected_account_scope:scope})).already,true);
+  const first=await f.api.archive({chat_ref:id,expected_account_scope:scope});
+  assert.equal(first.ok,true);assert.equal(first.chat_ref,id);assert.equal(first.archived,true);
+  const second=await f.api.archive({chat_ref:id,expected_account_scope:scope});
+  assert.equal(second.ok,true);assert.equal(second.chat_ref,id);assert.equal(second.archived,true);assert.equal(second.already,true);
   assert.equal(f.posts(),1);
+});
+test('archive returns no confirmation for changed identity or unconfirmed readback',async()=>{
+  for(const before of [{id:msg},{user_id:'wrong-user'},{archived:null}]){
+    const f=fixture({before});const result=await f.api.archive({chat_ref:id,expected_account_scope:scope});
+    assert.equal(result.ok,false);assert.equal(result.archived,undefined);assert.equal(f.posts(),0);
+  }
+  for(const after of [{id:msg},{user_id:'wrong-user'},{archived:false}]){
+    const f=fixture({after});const result=await f.api.archive({chat_ref:id,expected_account_scope:scope});
+    assert.equal(result.ok,false);assert.equal(result.error,'archive_outcome_unknown');assert.equal(result.archived,undefined);assert.equal(f.posts(),1);
+  }
 });
 test('first send confirms native identities once and refuses replay after uncertain click',async()=>{
   const storage=new Map(),tabs=new Map(), owner='33333333-3333-4333-8333-333333333333';
