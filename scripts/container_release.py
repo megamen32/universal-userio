@@ -7,6 +7,7 @@ The original units and deployment files remain available for rollback.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import io
 import json
@@ -15,6 +16,7 @@ import pwd
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import socket
 import sqlite3
 import stat
 import subprocess
@@ -1419,6 +1421,57 @@ def _archive_voice_locked(receipt_directory: Path):
         raise
 
 
+def _backend_listeners(container_id):
+    """Snapshot TCP listeners owned by the running host-network container."""
+    rows = output(['docker', 'top', container_id, '-eo', 'pid']).splitlines()[1:]
+    pids = {int(row.strip()) for row in rows if row.strip()}
+    if not pids:
+        raise RuntimeError('backend listener discovery found no processes')
+    lines = output(['ss', '-H', '-ltnp']).splitlines()
+    listeners = set()
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 4:
+            raise RuntimeError('backend listener discovery received malformed socket data')
+        owners = {int(pid) for pid in re.findall(r'pid=(\d+)', line)}
+        if not owners.intersection(pids):
+            continue
+        address, port = fields[3].rsplit(':', 1)
+        address = address.strip('[]')
+        if address == '*':
+            address = '::'
+        listeners.add((address, int(port)))
+    if not listeners:
+        raise RuntimeError('backend listener discovery found no TCP listeners')
+    return sorted(listeners)
+
+
+def _stop_backend_for_replacement(api, listeners, *, timeout=30):
+    """Stop, wait for precisely the old TCP endpoints, then remove the old container."""
+    api('POST', 'containers/userio-backend/stop?t=40')
+    deadline = time.monotonic() + timeout
+    while True:
+        busy = []
+        for address, port in listeners:
+            family = socket.AF_INET6 if ':' in address else socket.AF_INET
+            try:
+                with socket.socket(family, socket.SOCK_STREAM) as probe:
+                    if family == socket.AF_INET6:
+                        probe.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    probe.bind((address, port))
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                busy.append((address, port))
+        if not busy:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError('backend listener remains busy after stop: ' + repr(busy))
+        time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+    api('DELETE', 'containers/userio-backend')
+
+
 def _replace_backend_locked(*, image: str, revision: str, expected_container: str, receipt_directory: Path):
     """Routine replacement of the canonical backend; never replay migration cutover."""
     import http.client
@@ -1552,6 +1605,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
     account_ids = accounts()
     health()
     assert_idle()
+    listeners = _backend_listeners(old['Id'])
     receipt_directory.mkdir(parents=True, mode=0o700, exist_ok=False)
     save(receipt_directory / 'baseline.json', {'backend': old, 'others': others,
         'account_ids': account_ids, 'candidate': candidate, 'image_id': image_id,
@@ -1567,8 +1621,7 @@ def _replace_backend_locked(*, image: str, revision: str, expected_container: st
         raise RuntimeError('baseline changed after preflight; no replacement attempted')
     removed = False
     try:
-        api('POST', 'containers/userio-backend/stop?t=40')
-        api('DELETE', 'containers/userio-backend')
+        _stop_backend_for_replacement(api, listeners)
         removed = True
         expected_config = _backend_replacement_config(old['Config'], image=image, revision=full_revision)
         body = dict(expected_config, HostConfig=old['HostConfig'])

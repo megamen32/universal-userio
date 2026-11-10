@@ -38,6 +38,188 @@ def _load_release_module():
     return module
 
 
+def test_backend_handover_does_not_delete_old_container_when_listener_is_busy():
+    import socket
+    import pytest
+    release = _load_release_module()
+    with socket.socket() as holder:
+        holder.bind(('127.0.0.1', 0))
+        holder.listen()
+        address = holder.getsockname()
+        operations = []
+        def api(method, path):
+            operations.append((method, path))
+        with pytest.raises(RuntimeError, match='listener'):
+            release._stop_backend_for_replacement(api, [address], timeout=0)
+        assert operations == [('POST', 'containers/userio-backend/stop?t=40')]
+        assert holder.fileno() >= 0
+
+
+def test_backend_handover_removes_old_container_after_listener_released():
+    import socket
+    release = _load_release_module()
+    holder = socket.socket()
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(('127.0.0.1', 0))
+    holder.listen()
+    address = holder.getsockname()
+    operations = []
+    def api(method, path):
+        operations.append((method, path))
+        if method == 'POST':
+            holder.close()
+    release._stop_backend_for_replacement(api, [address], timeout=0)
+    assert operations == [('POST', 'containers/userio-backend/stop?t=40'),
+                          ('DELETE', 'containers/userio-backend')]
+
+
+def test_backend_listener_snapshot_only_includes_container_processes(monkeypatch):
+    release = _load_release_module()
+    def output(argv):
+        if argv[0] == 'docker':
+            return 'PID\n123\n456\n'
+        return ('LISTEN 0 128 127.0.0.1:18096 0.0.0.0:* users:(("node",pid=456,fd=8))\n'
+                'LISTEN 0 128 127.0.0.1:18111 0.0.0.0:* users:(("node",pid=789,fd=8))')
+    monkeypatch.setattr(release, 'output', output)
+    assert release._backend_listeners('container') == [('127.0.0.1', 18096)]
+
+
+def _replacement_fixture(tmp_path, monkeypatch, *, busy, rollback_healthy=True):
+    import http.client
+    import socket
+    import subprocess
+    import urllib.request
+    from types import SimpleNamespace
+
+    release = _load_release_module()
+    config = tmp_path / 'config'
+    config.mkdir()
+    original = b'{"services":{"backend":{"image":"old"}}}'
+    (config / 'compose.host.json').write_bytes(original)
+    (config / 'processes.json').write_text(json.dumps({'processes': [
+        {'name': 'telegram', 'environment': {'USERIO_API_TOKEN': 'fixture'}}]}))
+    monkeypatch.setattr(release, 'CONFIG', config)
+    monkeypatch.setattr(release, 'BACKEND_SOURCE_HASH_PATHS', ())
+    monkeypatch.setattr(release, 'assert_idle', lambda: None)
+    monkeypatch.setattr(release.os, 'getuid', lambda: 0)
+    monkeypatch.setattr(release, 'repo_git_argv', lambda root, *args: list(args))
+    monkeypatch.setattr(release, 'command', lambda *args, **kwargs: None)
+    holder = socket.socket()
+    holder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    holder.bind(('127.0.0.1', 0))
+    holder.listen()
+    address = holder.getsockname()
+    host = {'NetworkMode': 'host', 'AutoRemove': False, 'OomKillDisable': False}
+    old = {'Id': 'old-id', 'Image': 'old-image', 'State': {'Running': True},
+           'HostConfig': host, 'Mounts': [], 'Config': {'Image': 'old-tag', 'Labels': {}}}
+    other = {'Id': 'other', 'Image': 'other-image', 'Config': {}, 'HostConfig': {}}
+    state = {'container': copy.deepcopy(old), 'operations': [], 'health_calls': 0}
+
+    def output(argv):
+        if argv[0] == 'rev-parse': return 'revision'
+        if argv[:2] == ['docker', 'top']: return 'PID\n123\n'
+        if argv[0] == 'ss':
+            return f'LISTEN 0 128 {address[0]}:{address[1]} 0.0.0.0:* users:(("node",pid=123,fd=3))'
+        if argv[:2] == ['docker', 'run']:
+            return json.dumps({'release': {'commit': 'revision'}, 'hashes': {}})
+        raise AssertionError(argv)
+    monkeypatch.setattr(release, 'output', output)
+    class Response:
+        status = 200
+        def __init__(self, value): self.value = value
+        def read(self): return json.dumps(self.value).encode() if self.value is not None else b''
+    def request(self, method, path, body=None, headers=None):
+        route = path.removeprefix('/v1.55/')
+        state['operations'].append((method, route))
+        if route.startswith('images/'):
+            result = {'Id': 'old-image' if 'old-tag' in route else 'new-image'}
+        elif route.startswith('containers/userio-frontend') or route.startswith('containers/userio-voice'):
+            result = other
+        elif route == 'containers/userio-backend/json':
+            result = state['container']
+        elif route.startswith('containers/userio-backend/stop'):
+            state['container']['State']['Running'] = False
+            if not busy: holder.close()
+            result = None
+        elif route == 'containers/userio-backend' and method == 'DELETE':
+            state['container'] = None
+            result = None
+        elif route.startswith('containers/create'):
+            cfg = json.loads(body)
+            state['container'] = {'Id': 'new-id', 'Image': 'new-image',
+                'State': {'Running': False}, 'HostConfig': cfg.pop('HostConfig'),
+                'Config': cfg, 'Mounts': []}
+            result = {'Id': 'new-id'}
+        elif route.endswith('/start'):
+            state['container']['State']['Running'] = True
+            result = None
+        else: raise AssertionError((method, route))
+        self.fixture_response = Response(result)
+    monkeypatch.setattr(http.client.HTTPConnection, 'request', request)
+    monkeypatch.setattr(http.client.HTTPConnection, 'getresponse', lambda self: self.fixture_response)
+    monkeypatch.setattr(http.client.HTTPConnection, 'close', lambda self: None)
+    class Accounts:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self): return b'{"accounts":[{"id":"one"}]}'
+    monkeypatch.setattr(urllib.request, 'urlopen', lambda *a, **k: Accounts())
+    def run(*args, **kwargs):
+        state['health_calls'] += 1
+        return SimpleNamespace(returncode=0 if rollback_healthy or state['health_calls'] == 1 else 1)
+    monkeypatch.setattr(subprocess, 'run', run)
+    monkeypatch.setattr(release.time, 'sleep', lambda _: None)
+    clock = iter(range(0, 10000, 31))
+    monkeypatch.setattr(release.time, 'monotonic', lambda: next(clock))
+    return release, state, holder, config, original
+
+
+def test_replacement_busy_listener_restores_old_without_deleting_or_creating(tmp_path, monkeypatch):
+    release, state, holder, config, original = _replacement_fixture(tmp_path, monkeypatch, busy=True)
+    try:
+        failure = None
+        try:
+            release._replace_backend_locked(image='new', revision='revision', expected_container='old-id',
+                                            receipt_directory=tmp_path / 'receipt')
+        except RuntimeError as error:
+            failure = error
+        destructive = [(m, r) for m, r in state['operations']
+                       if m == 'DELETE' or r.startswith('containers/create')]
+        assert destructive == []
+        assert failure is not None and 'listener' in str(failure)
+        assert state['container']['Id'] == 'old-id'
+        assert state['container']['State']['Running']
+        assert ('POST', 'containers/userio-backend/start') in state['operations']
+        assert (config / 'compose.host.json').read_bytes() == original
+        assert json.loads((tmp_path / 'receipt/receipt.json').read_text())['status'] == 'rolled_back'
+    finally:
+        holder.close()
+
+
+def test_replacement_busy_listener_does_not_claim_healthy_failed_rollback(tmp_path, monkeypatch):
+    import pytest
+    release, state, holder, _, _ = _replacement_fixture(tmp_path, monkeypatch, busy=True, rollback_healthy=False)
+    try:
+        with pytest.raises(RuntimeError, match='supervisor readiness failed'):
+            release._replace_backend_locked(image='new', revision='revision', expected_container='old-id',
+                                            receipt_directory=tmp_path / 'receipt')
+        assert ('POST', 'containers/userio-backend/start') in state['operations']
+        assert not (tmp_path / 'receipt/receipt.json').exists()
+    finally:
+        holder.close()
+
+
+def test_replacement_after_listener_released_installs_candidate(tmp_path, monkeypatch):
+    release, state, holder, _, _ = _replacement_fixture(tmp_path, monkeypatch, busy=False)
+    try:
+        release._replace_backend_locked(image='new', revision='revision', expected_container='old-id',
+                                        receipt_directory=tmp_path / 'receipt')
+        assert state['container']['Id'] == 'new-id'
+        assert state['container']['State']['Running']
+        assert json.loads((tmp_path / 'receipt/receipt.json').read_text())['status'] == 'installed'
+    finally:
+        holder.close()
+
+
 def _voice_archive_fixture(tmp_path, monkeypatch):
     module = _load_release_module()
     archive_root = tmp_path / 'backups' / 'universal-userio'
