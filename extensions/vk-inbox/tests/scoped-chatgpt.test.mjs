@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { webcrypto } from "node:crypto";
+import { webcrypto, createHash } from "node:crypto";
 import vm from "node:vm";
 
 const SRC=new URL("../lib/scoped-chatgpt.js", import.meta.url);
@@ -56,6 +56,54 @@ test("rejects untrusted references and never navigates on invalid input",async()
   assert.equal((await f.api.read({chat_ref:"../not-a-chat"})).error,"invalid_chat_ref");
   assert.equal(f.tabs.length,1);
   assert.equal(f.events.length,0);
+});
+test("first send rejects missing scope or empty text before opening a tab",async()=>{
+  const f=fixture();
+  assert.equal((await f.api.firstSend({text:'hello',expected_account_scope:'bad'})).error,'invalid_first_send');
+  assert.equal((await f.api.firstSend({text:' ',expected_account_scope:SCOPE})).error,'invalid_first_send');
+  assert.equal(f.tabs.length,1);
+  assert.equal(f.events.length,0);
+});
+test("archive rejects untrusted target before opening a tab",async()=>{
+  const f=fixture();
+  assert.equal((await f.api.archive({chat_ref:'../bad',expected_account_scope:SCOPE})).error,'invalid_archive_request');
+  assert.equal(f.tabs.length,1);
+});
+test("first send checks an empty owned tab and returns exact route and user message",async()=>{
+  const session={user:{id:'user'},account:{id:'account'}};
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  const location={origin:'https://chatgpt.com',pathname:'/'};
+  const editor={textContent:'',focus(){}}; let clicks=0;
+  const msg={textContent:'hello',getAttribute:()=>USER};
+  const button={disabled:false,click(){clicks++;location.pathname='/c/'+REF;}};
+  const document={querySelector(selector){
+    if(selector==='#prompt-textarea')return editor;
+    if(selector==='[data-testid="send-button"]')return button;
+    if(selector==='[data-message-author-role]')return null;
+    return null;
+  },querySelectorAll(){return clicks?[msg]:[]},execCommand(_cmd,_show,text){editor.textContent=text}};
+  const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},
+    scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  const context={self:{},chrome,URL,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok(session)};
+  vm.createContext(context); vm.runInContext(readFileSync(SRC,'utf8'),context);
+  const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+  assert.equal(result.ok,true);assert.equal(result.chat_ref,REF);assert.equal(result.native_user_message_id,USER);assert.equal(clicks,1);
+});
+test("archive uses exact scope and confirms the same conversation after PATCH",async()=>{
+  const session={accessToken:'test-only',user:{id:'user'},account:{id:'account'}};
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  let archived=false,patches=0;
+  const fetch=async(path,options={})=>{
+    if(path==='/api/auth/session')return ok(session);
+    if(options.method==='PATCH'){patches++;archived=true;return ok({});}
+    return ok({conversation_id:REF,is_archived:archived});
+  };
+  const tab={id:1,url:'https://chatgpt.com/c/'+REF,status:'complete'};
+  const chrome={tabs:{query:async()=>[tab],get:async()=>tab},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  const context={self:{},chrome,URL,location:{origin:'https://chatgpt.com',pathname:'/c/'+REF},crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch};
+  vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+  const r=await context.self.UserIOScopedChatGPT.archive({chat_ref:REF,expected_account_scope:scope});
+  assert.equal(r.ok,true);assert.equal(r.archived,true);assert.equal(r.chat_ref,REF);assert.equal(patches,1);
 });
 test("matches a full exact ChatGPT route, never a colliding prefix",async()=>{
   const f=fixture({existingUrl:"https://chatgpt.com/c/"+REF+"-extra"});

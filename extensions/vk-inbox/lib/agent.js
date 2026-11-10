@@ -80,7 +80,7 @@
     const prior=(await chrome.storage.local.get(key))[key]; if(prior) return {ok:false,error:'command_already_seen',phase:prior.phase};
     await chrome.storage.local.set({[key]:{phase:'started'}});
     const metadata=new Set(['ping','gpt_identity','gpt_scope','zai_scope','gpt_session_proof']);
-    const allowed={gpt_list:'chatgpt',gpt_read:'chatgpt',gpt_send:'chatgpt',zai_list:'zai',zai_read:'zai',zai_send:'zai'};
+    const allowed={gpt_list:'chatgpt',gpt_read:'chatgpt',gpt_send:'chatgpt',gpt_first_send:'chatgpt',gpt_archive:'chatgpt',zai_list:'zai',zai_read:'zai',zai_send:'zai'};
     let result;
     if(!metadata.has(command.action)) {const provider=allowed[command.action],scope=command.args?.expected_account_scope;
       const selected=provider && scope ? await root.UserIOConnections.subscriptionsForScope(provider,scope) : [];
@@ -711,6 +711,12 @@
       }
       case "gpt_send": {
         return cmdGptSend(args);
+      }
+      case "gpt_first_send": {
+        return root.UserIOScopedChatGPT?.firstSend(args) ?? {ok:false,error:'scoped_chatgpt_unavailable'};
+      }
+      case "gpt_archive": {
+        return root.UserIOScopedChatGPT?.archive(args) ?? {ok:false,error:'scoped_chatgpt_unavailable'};
       }
       case "gpt_sync": {
         if (!root.ChatGPT) return { ok: false, error: "chatgpt module missing" };

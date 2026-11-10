@@ -11,6 +11,83 @@
     await root.UserIOConnections?.observeAccount({provider:"chatgpt",userId,workspaceId,accountScope,label,connectionIds:[]});
   };
   lib.validRef=v=>typeof v==="string"&&UUID.test(v);
+  // The agent persists its command receipt before invoking this one-shot action.
+  lib.firstSend=async(args={})=>{
+    const scope=args.expected_account_scope,text=args.text;
+    if(!/^[0-9a-f]{64}$/.test(scope||"")||typeof text!=="string"||!text.trim()||text.length>16000)
+      return {ok:false,error:"invalid_first_send"};
+    let tab;
+    try {
+      tab=await chrome.tabs.create({url:ORIGIN+"/",active:false});
+      await root.UserIOTabGroups?.assign("chatgpt",tab.id);
+      const until=Date.now()+25000;
+      while(Date.now()<until){
+        tab=await chrome.tabs.get(tab.id);
+        if(tab.status==="complete")break;
+        await new Promise(resolve=>setTimeout(resolve,350));
+      }
+      if(tab.status!=="complete")return {ok:false,error:"tab_load_timeout"};
+      const [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",func:async(scope,text)=>{
+        const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        let clicked=false;
+        try {
+          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/")return {ok:false,error:"not_empty_route"};
+          const response=await fetch("/api/auth/session",{credentials:"include"});
+          if(!response.ok)return {ok:false,error:"authentication_required"};
+          const s=await response.json();
+          if(typeof s?.user?.id!=="string"||!s.user.id)return {ok:false,error:"account_scope_unavailable"};
+          const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:String(s.account?.id||"")})));
+          if(Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
+          const editor=document.querySelector("#prompt-textarea"),send=document.querySelector('[data-testid="send-button"]');
+          if(!editor||!send||send.disabled||editor.textContent.trim()||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_not_empty_or_ready"};
+          editor.focus(); document.execCommand("insertText",false,text);
+          if(editor.textContent.trim()!==text.trim()||send.disabled)return {ok:false,error:"composer_changed"};
+          clicked=true; send.click();
+          const until=Date.now()+120000;
+          while(Date.now()<until){
+            const match=location.pathname.match(/^\/c\/([^/]+)$/);
+            const nodes=[...document.querySelectorAll('[data-message-author-role="user"]')];
+            const matching=nodes.filter(n=>n.textContent.trim()===text.trim());
+            const id=matching[0]?.getAttribute("data-message-id")||matching[0]?.closest("[data-message-id]")?.getAttribute("data-message-id");
+            if(match&&uuid.test(match[1])&&matching.length===1&&uuid.test(id||""))
+              return {ok:true,admission:"confirmed",chat_ref:match[1],native_user_message_id:id};
+            await new Promise(resolve=>setTimeout(resolve,500));
+          }
+          return {ok:false,error:"first_send_outcome_unknown"};
+        }catch{return {ok:false,error:clicked?"first_send_outcome_unknown":"first_send_preflight_failed"};}
+      },args:[scope,text]});
+      return entry?.result??{ok:false,error:"first_send_outcome_unknown"};
+    }catch{return {ok:false,error:"first_send_outcome_unknown"};}
+  };
+  lib.archive=async(args={})=>{
+    const ref=args.chat_ref,scope=args.expected_account_scope;
+    if(!lib.validRef(ref)||!/^[0-9a-f]{64}$/.test(scope||""))return {ok:false,error:"invalid_archive_request"};
+    const exact=await lib.exactTab(ref); if(!exact.ok)return exact;
+    try {
+      const [entry]=await chrome.scripting.executeScript({target:{tabId:exact.tab.id},world:"MAIN",func:async(ref,scope)=>{
+        let mutation=false;
+        const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
+        try {
+          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/c/"+ref)return {ok:false,error:"chat_ref_mismatch"};
+          const auth=await fetch("/api/auth/session",{credentials:"include",signal:controller.signal});
+          if(!auth.ok)return {ok:false,error:"authentication_required"};
+          const s=await auth.json(); if(typeof s?.user?.id!=="string"||!s.user.id||!s.accessToken)return {ok:false,error:"account_scope_unavailable"};
+          const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:String(s.account?.id||"")})));
+          if(Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
+          const headers={authorization:"Bearer "+s.accessToken,"content-type":"application/json",...(s.account?.id?{"chatgpt-account-id":s.account.id}:{})};
+          const url="/backend-api/conversation/"+encodeURIComponent(ref);
+          const read=async()=>{const r=await fetch(url,{headers,credentials:"same-origin",signal:controller.signal});if(!r.ok)throw new Error("read");return r.json()};
+          const before=await read(); if(before.conversation_id!==ref)return {ok:false,error:"chat_ref_mismatch"};
+          if(before.is_archived===true)return {ok:true,chat_ref:ref,archived:true,already:true};
+          if(before.async_status==="running"||before.is_generating===true)return {ok:false,error:"conversation_busy"};
+          mutation=true; const result=await fetch(url,{method:"PATCH",headers,credentials:"same-origin",signal:controller.signal,body:JSON.stringify({is_archived:true})});
+          if(!result.ok)return {ok:false,error:"archive_outcome_unknown"};
+          const after=await read(); return after.conversation_id===ref&&after.is_archived===true?{ok:true,chat_ref:ref,archived:true}:{ok:false,error:"archive_outcome_unknown"};
+        }catch{return {ok:false,error:mutation?"archive_outcome_unknown":"archive_preflight_failed"};}finally{clearTimeout(timer);}
+      },args:[ref,scope]});
+      return entry?.result??{ok:false,error:"archive_outcome_unknown"};
+    }catch{return {ok:false,error:"archive_outcome_unknown"};}
+  };
   lib.exactTab=async(ref)=>{
     if(!lib.validRef(ref))return {ok:false,error:"invalid_chat_ref"};
     const url=ORIGIN+"/c/"+ref;
