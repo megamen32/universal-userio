@@ -81,8 +81,8 @@ test('adding work and personal connections emits separate save commands', async 
 test('per-connection OAuth and ChatGPT registration carry distinct connection ids', async () => {
   const state = boot(); await flush();
   for (const card of state.elements.connections.children) {
-    const login = card.children.find((child) => child.textContent === 'Войти'); await login.listeners.click();
-    const chatgpt = card.children.find((child) => child.textContent === 'Подключить ChatGPT'); await chatgpt.listeners.click();
+    const login = card.children[1].children.find((child) => child.textContent === 'Войти'); await login.listeners.click();
+    const chatgpt = card.children[1].children.find((child) => child.textContent === 'Подключить ChatGPT'); await chatgpt.listeners.click();
   }
   assert.deepEqual(state.calls.filter((call) => call.kind === 'userioConnect').map((call) => call.connectionId), ['work', 'personal']);
   assert.deepEqual(state.calls.filter((call) => call.kind === 'gptRegister').map((call) => call.connectionId), ['work', 'personal']);
@@ -99,4 +99,38 @@ test('destination matrix renders saved A-both and B-personal bindings after relo
 test('options UI does not expose route ids or tokens', () => {
   const html = fs.readFileSync(path.join(root, 'options.html'), 'utf8');
   assert.doesNotMatch(html, /id="routeId"|access_token|refresh_token/);
+});
+
+test('named destinations do not show a misleading global login and long scopes stay out of account labels', async () => {
+  const state = boot();
+  state.accounts[1].accountScope = 'a'.repeat(64);
+  await flush();
+  assert.equal(state.elements.legacyUserIOCard.hidden, true);
+  assert.equal(state.elements.legacyChatGPTCard.hidden, true);
+  const row = state.elements.connectionAccounts.children.find(item => item.dataset.accountKey === 'chatgpt:scope-a');
+  assert.equal(row.children[0].textContent, 'ChatGPT A · chatgpt');
+  assert.equal(row.children[0].title, 'a'.repeat(64));
+  assert.match(state.html, /\.connection-actions\s*\{[^}]*flex-wrap:\s*wrap/s);
+  assert.match(state.html, /\.binding-choice\s*\{[^}]*white-space:\s*nowrap/s);
+});
+
+test('legacy destination is explicit and all connection statuses are scoped', async () => {
+  const state = boot();
+  state.connections.push({id:'legacy-default',label:'UserIO',endpoint:'https://legacy.test',enabled:true});
+  await flush();
+  const legacy = state.elements.connections.children.find(row => row.dataset.connectionId === 'legacy-default');
+  assert.equal(legacy.children[0].children[0].textContent, 'Основное подключение (ранее настроенное)');
+  assert.equal(legacy.children[0].children[2].textContent, 'Подключено: Пользователь');
+  assert.ok(state.calls.some(call => call.kind === 'userioStatus' && call.connectionId === 'legacy-default'));
+});
+
+test('ChatGPT account management opens for the chosen destination', async () => {
+  const state = boot(); await flush();
+  const card = state.elements.connections.children.find(row => row.dataset.connectionId === 'personal');
+  const manage = card.children[1].children.find(child => child.textContent === 'Аккаунты ChatGPT');
+  await manage.listeners.click();
+  assert.equal(state.elements.legacyChatGPTCard.hidden, false);
+  assert.equal(state.elements.chatgptCardTitle.textContent, 'ChatGPT · Личный');
+  assert.equal(state.elements.chatgptSelect.dataset.connectionId, 'personal');
+  assert.ok(state.calls.some(call => call.kind === 'gptConnectionStatus' && call.connectionId === 'personal'));
 });
