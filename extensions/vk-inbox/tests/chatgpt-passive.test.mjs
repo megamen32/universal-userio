@@ -1,4 +1,4 @@
-import {webcrypto} from 'node:crypto';import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
+import {webcrypto,createHash} from 'node:crypto';import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import vm from 'node:vm';
 const script=fs.readFileSync(new URL('../lib/chatgpt-passive.js',import.meta.url),'utf8');
 const stateScript=fs.readFileSync(new URL('../lib/chatgpt-state.js',import.meta.url),'utf8');
 function fixture(status=200){
@@ -63,8 +63,30 @@ test('passive projection and addressed consumer share native snapshot',async()=>
  const post=o=>new Promise(resolve=>f.listeners[0]({kind:'userioChatGPTObserved',pageKey:'page',observation:o},sender,resolve));
  await post({kind:'identity',email:'owner@example.test',accountLabel:'owner@example.test',workspaceId:'workspace',accountId:'account'});
  await post({kind:'conversation',chatId:'chat1',messages:[{id:'m1',role:'user',text:'hello',ts:12}]});
- const digest=await webcrypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:'account',workspace_id:'workspace'})));
- const scope=Buffer.from(digest).toString('hex'),key=f.self.UserIOChatGPTCore.accountKey('chatgpt','account','workspace'),view=f.self.UserIOChatGPTCore.view(f.self.UserIOChatGPTState.records[key+':chat1']);
+ const key=f.self.UserIOChatGPTCore.accountKey('chatgpt','account','workspace'),view=f.self.UserIOChatGPTCore.view(f.self.UserIOChatGPTState.records[key+':chat1']);
  assert.equal(view.messages[0].id,'m1');assert.equal(view.coverage,'partial');assert.equal(view.ready,false);
  assert.equal(sent[0].message.message_id,'chat1:m1');assert.equal(sent[0].message.body,'[user] hello');
+});
+
+test('passive snapshot and scoped identity match Herder account digest',async()=>{
+ for(const workspace of ['workspace','']){
+  const f=fixture(),published=[];
+  f.self.UserIO.publishChatSnapshot=async snapshot=>{published.push(snapshot);return {ok:true,results:[]};};
+  const sender={tab:{id:1,url:'https://chatgpt.com/'},frameId:0};
+  const post=observation=>new Promise(resolve=>f.listeners[0]({kind:'userioChatGPTObserved',pageKey:'page',observation},sender,resolve));
+  await post({kind:'identity',accountId:'account',workspaceId:workspace,email:'owner@example.test'});
+  await post({kind:'conversation',chatId:'chat1',messages:[{id:'m1',role:'user',text:'hello'}]});
+  assert.equal(published.length,1);
+  f.context.chrome.tabs={query:async()=>[{id:1,url:'https://chatgpt.com/',status:'complete'}]};
+  f.context.chrome.scripting={executeScript:async({func,args=[]})=>[{result:await func(...args)}]};
+  f.context.location={origin:'https://chatgpt.com'};
+  f.context.AbortController=AbortController;
+  f.context.fetch=async()=>({ok:true,json:async()=>({user:{id:'account'},account:{id:workspace}})});
+  vm.runInContext(fs.readFileSync(new URL('../lib/scoped-chatgpt.js',import.meta.url),'utf8'),f.context);
+  const scoped=await f.self.UserIOScopedChatGPT.accountScope();
+  const herder=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'account',account_id:workspace})).digest('hex');
+  assert.equal(scoped.ok,true);
+  assert.equal(scoped.account_scope,herder);
+  assert.equal(published[0].account_scope,herder);
+ }
 });

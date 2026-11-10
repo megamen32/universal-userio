@@ -58,7 +58,7 @@
   const identity=identities.get(key);
   if(!identity||o.kind!=='conversation'||typeof o.chatId!=='string'||! /^[A-Za-z0-9_-]{1,128}$/.test(o.chatId)||(!o.data&&(!Array.isArray(o.messages)||o.messages.length>100)))return {ok:false,reason:'identity_or_source_unconfirmed'};
   if(!root.UserIOChatGPTCore||!root.UserIOChatGPTStore)return {ok:false,reason:'chatgpt_core_unavailable'};
-  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:identity.accountId,workspace_id:identity.workspaceId})));
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:identity.accountId,account_id:identity.workspaceId})));
   const scope=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
   const result=await root.UserIOChatGPTStore.transition({provider:'chatgpt',user_id:identity.accountId,workspace_id:identity.workspaceId,account_label:identity.label,account_email:identity.email,account_scope:scope,data:o.data,messages:o.messages,chat_ref:o.chatId,coverage:'partial',observed_at:Date.now()});
   const snapshot=result.snapshot;
