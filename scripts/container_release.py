@@ -67,7 +67,7 @@ VOICE = {
 }
 PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-container-platform.conf')
 BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
-    'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py',
+    'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py', 'agent_channel.py',
     'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
     'delivery_reconciliation.py', 'provider_readback.py', 'gmail_sent_reconciliation.py', 'channels/max_client.py', 'channels/whatsapp.py', 'channels/sms_gateway.py', 'store.py', 'adapters.py', 'runtime.py',
     'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',

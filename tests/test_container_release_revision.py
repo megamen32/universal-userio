@@ -15,6 +15,7 @@ def test_reviewed_revision_label_does_not_fail_an_otherwise_identical_cutover():
     spec.loader.exec_module(module)
     assert 'src/universal_userio/matrix_calls.py' in module.BACKEND_SOURCE_HASH_PATHS
     assert 'src/universal_userio/noticeplace_calls.py' in module.BACKEND_SOURCE_HASH_PATHS
+    assert 'src/universal_userio/agent_channel.py' in module.BACKEND_SOURCE_HASH_PATHS
     previous = {'Image': 'old', 'Labels': {}, 'Env': ['SENTINEL=preserve'],
                 'Cmd': ['original-worker'], 'WorkingDir': '/opt/application'}
     frozen = copy.deepcopy(previous)
