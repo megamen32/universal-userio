@@ -102,6 +102,34 @@ test('first send never overwrites a foreign draft or existing conversation',asyn
     assert.equal(result.ok,false);assert.equal(writes,0);assert.equal(clicks,0);
   }
 });
+test('first send uses unique visible ProseMirror without an id',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  const location={origin:'https://chatgpt.com',pathname:'/'};
+  const editor={tagName:'DIV',id:'',isContentEditable:true,textContent:'',getClientRects:()=>[1],focus(){}};
+  let clicks=0,writes=0;
+  const msg={textContent:'hello',getAttribute:()=>USER};
+  const button={disabled:false,getClientRects:()=>[1],click(){clicks++;location.pathname='/c/'+REF}};
+  const document={querySelector(){return null},
+    querySelectorAll(s){if(s==='[contenteditable="true"].ProseMirror')return [editor];if(s==='button[aria-label="Send"]')return editor.textContent?[button]:[];return clicks?[msg]:[]},
+    execCommand(_c,_s,t){writes++;editor.textContent=t;return true}};
+  const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  const context={self:{},chrome,URL,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+  vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+  const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+  assert.equal(result.admission,'confirmed');assert.equal(writes,1);assert.equal(clicks,1);
+});
+test('ambiguous ProseMirror returns bounded no-effect diagnostics and never writes',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  const node={tagName:'DIV',id:'',textContent:'private draft value',getClientRects:()=>[1]};let writes=0,clock=0;
+  class Clock extends Date { static now(){clock+=5000;return clock;} }
+  const document={querySelector(){return null},querySelectorAll(s){return s==='[data-message-author-role]'?[]:s==='[contenteditable="true"].ProseMirror'?[node,node]:[node,node]},execCommand(){writes++}};
+  const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete'})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  const context={self:{},chrome,URL,Date:Clock,location:{origin:'https://chatgpt.com',pathname:'/'},document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+  vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+  const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+  assert.equal(result.effect,'none');assert.equal(result.admission,'not_submitted');assert.equal(result.diagnostic.hasEditor,false);
+  assert.equal(result.diagnostic.candidates.length,2);assert.equal(JSON.stringify(result).includes('private draft value'),false);assert.equal(writes,0);
+});
 test('first send refuses an account switch immediately before click',async()=>{
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   let calls=0,clicks=0;const editor={textContent:'',focus(){}};

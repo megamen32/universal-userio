@@ -30,46 +30,73 @@
       const [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",func:async(scope,text)=>{
         const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         let clicked=false;
+        const getEditor=()=>{
+          const exact=document.querySelector("#prompt-textarea");
+          if(exact)return exact;
+          const matches=[...document.querySelectorAll('[contenteditable="true"].ProseMirror')]
+            .filter(node=>node.getClientRects().length>0);
+          return matches.length===1?matches[0]:null;
+        };
+        const getSend=()=>{
+          const exact=document.querySelector('[data-testid="send-button"]');
+          if(exact)return exact;
+          const matches=[...document.querySelectorAll('button[aria-label="Send"]')]
+            .filter(node=>node.getClientRects().length>0);
+          return matches.length===1?matches[0]:null;
+        };
+        // Return only bounded structural metadata, never page text or HTML.
+        const preflight=(error)=>{
+          const editor=getEditor();
+          const send=getSend();
+          const nodes=[...document.querySelectorAll('textarea,[contenteditable="true"],[role="textbox"]')].slice(0,12);
+          const candidates=nodes.map(node=>({tag:/^[A-Z]{1,16}$/.test(node.tagName||"")?node.tagName.toLowerCase():"unknown",
+            id:typeof node.id==="string"&&/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(node.id)?node.id:""}));
+          return {ok:false,error,effect:"none",admission:"not_submitted",diagnostic:{
+            route:location.origin==="https://chatgpt.com"&&location.pathname==="/"?"home":"other",
+            hasEditor:!!editor,editorEmpty:editor?!String(editor.textContent||"").trim():null,
+            hasIdEditor:!!document.querySelector("#prompt-textarea"),hasSendButton:!!send,sendEnabled:send?!send.disabled:null,
+            messageCount:Math.min(100,document.querySelectorAll('[data-message-author-role]').length),candidates}};
+        };
         try {
-          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/")return {ok:false,error:"not_empty_route"};
+          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/")return preflight("not_empty_route");
           const response=await fetch("/api/auth/session",{credentials:"include"});
-          if(!response.ok)return {ok:false,error:"authentication_required"};
+          if(!response.ok)return preflight("authentication_required");
           const s=await response.json();
-          if(typeof s?.user?.id!=="string"||!s.user.id)return {ok:false,error:"account_scope_unavailable"};
+          if(typeof s?.user?.id!=="string"||!s.user.id)return preflight("account_scope_unavailable");
           const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:String(s.account?.id||"")})));
-          if(Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
+          if(Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return preflight("account_scope_mismatch");
           let editor;
           const editorDeadline=Date.now()+10000;
           while(Date.now()<editorDeadline){
-            if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_not_empty_or_ready"};
-            editor=document.querySelector("#prompt-textarea");
+            if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||document.querySelector('[data-message-author-role]'))return preflight("composer_not_empty_or_ready");
+            editor=getEditor();
             if(editor){
-              if(editor.textContent.trim())return {ok:false,error:"composer_not_empty_or_ready"};
+              if(editor.textContent.trim())return preflight("composer_not_empty_or_ready");
               if(editor.isContentEditable!==false&&!editor.hasAttribute?.("disabled"))break;
             }
             editor=null;await new Promise(resolve=>setTimeout(resolve,100));
           }
-          if(!editor)return {ok:false,error:"composer_not_empty_or_ready"};
+          if(!editor)return preflight("composer_not_empty_or_ready");
           editor.focus();
-          if(document.querySelector("#prompt-textarea")!==editor||editor.textContent.trim()||location.pathname!=="/"||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_changed"};
-          if(!document.execCommand("insertText",false,text))return {ok:false,error:"composer_changed"};
+          if(getEditor()!==editor||editor.textContent.trim()||location.pathname!=="/"||document.querySelector('[data-message-author-role]'))return preflight("composer_changed");
+          if(!document.execCommand("insertText",false,text))return preflight("composer_changed");
           let send;
           const sendDeadline=Date.now()+10000;
           while(Date.now()<sendDeadline){
-            if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||document.querySelector("#prompt-textarea")!==editor||editor.textContent.trim()!==text.trim()||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_changed"};
-            send=document.querySelector('[data-testid="send-button"]');
+            if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||getEditor()!==editor||editor.textContent.trim()!==text.trim()||document.querySelector('[data-message-author-role]'))return preflight("composer_changed");
+            send=getSend();
             if(send&&!send.disabled)break;
             send=null;await new Promise(resolve=>setTimeout(resolve,100));
           }
-          if(!send)return {ok:false,error:"composer_changed"};
+          if(!send)return preflight("composer_changed");
           const current=await fetch("/api/auth/session",{credentials:"include"});
-          if(!current.ok)return {ok:false,error:"authentication_required"};
+          if(!current.ok)return preflight("authentication_required");
           const now=await current.json();
-          if(typeof now?.user?.id!=="string"||!now.user.id)return {ok:false,error:"account_scope_unavailable"};
+          if(typeof now?.user?.id!=="string"||!now.user.id)return preflight("account_scope_unavailable");
           const currentHash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:now.user.id,account_id:String(now.account?.id||"")})));
-          if(Array.from(new Uint8Array(currentHash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
-          send=document.querySelector('[data-testid="send-button"]');
-          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||document.querySelector("#prompt-textarea")!==editor||editor.textContent.trim()!==text.trim()||!send||send.disabled||document.querySelector('[data-message-author-role]'))return {ok:false,error:"composer_changed"};
+          if(Array.from(new Uint8Array(currentHash),v=>v.toString(16).padStart(2,"0")).join("")!==scope)return preflight("account_scope_mismatch");
+          send=getSend();
+          if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||getEditor()!==editor||editor.textContent.trim()!==text.trim()||!send||send.disabled||document.querySelector('[data-message-author-role]'))return preflight("composer_changed");
           clicked=true; send.click();
           const until=Date.now()+120000;
           while(Date.now()<until){
@@ -82,7 +109,7 @@
             await new Promise(resolve=>setTimeout(resolve,500));
           }
           return {ok:false,error:"first_send_outcome_unknown"};
-        }catch{return {ok:false,error:clicked?"first_send_outcome_unknown":"first_send_preflight_failed"};}
+        }catch{return clicked?{ok:false,error:"first_send_outcome_unknown"}:preflight("first_send_preflight_failed");}
       },args:[scope,text]});
       return entry?.result??{ok:false,error:"first_send_outcome_unknown"};
     }catch{return {ok:false,error:"first_send_outcome_unknown"};}
