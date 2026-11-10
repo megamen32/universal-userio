@@ -147,6 +147,53 @@ test('first click stays unknown when native snapshot has wrong scope or duplicat
     assert.equal(result.error,'first_send_outcome_unknown');assert.equal(clicks,1);
   }
 });
+test('first receipt tolerates query-only changes on the same owned native chat and rejects changed chat',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  for(const changedChat of [false,true]){
+  let clicks=0,afterRead=false;const location={origin:'https://chatgpt.com',pathname:'/'};
+  const editor={textContent:'',focus(){}};const button={disabled:false,click(){clicks++;location.pathname='/c/'+REF}};
+  const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t;return true}};
+  const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com'+(afterRead&&changedChat?'/c/'+FINAL:location.pathname)+(afterRead?'?model=auto':'')})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  const context={self:{},chrome,URL,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+  vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+  context.self.UserIOScopedChatGPT.read=async()=>{afterRead=true;return {ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello'}]}};
+  const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+  if(changedChat){assert.equal(result.error,'first_send_outcome_unknown');assert.equal(result.diagnostic.stage,'recheck_route');assert.equal(result.diagnostic.reason,'wrong_native');}
+  else {assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,USER)}
+  assert.equal(clicks,1);
+  }
+});
+test('frame rejection after click observes canonical receipt without another click',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  for(const variant of ['confirmed','wrong-scope','duplicate','wrong-route','history-unavailable','before-script']){
+    let clicks=0,clock=0,reads=0;const location={origin:'https://chatgpt.com',pathname:'/'};
+    const editor={textContent:'',focus(){}};const button={disabled:false,click(){clicks++;location.pathname='/c/'+REF}};
+    const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t;return true}};
+    const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com'+(variant==='wrong-route'&&clicks?'/c/'+FINAL:location.pathname)})},scripting:{executeScript:async({func,args})=>{if(variant!=='before-script')await func(...args);throw Error('secret frame navigation')}}};
+    class Clock extends Date {static now(){if(clicks||variant==='before-script')clock+=15000;return clock}}
+    const context={self:{},chrome,URL,Date:Clock,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout:fn=>{queueMicrotask(fn);return 1},clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+    vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+    context.self.UserIOScopedChatGPT.read=async({chat_ref})=>{reads++;return variant==='history-unavailable'?{ok:false}:{ok:true,chat_ref:variant==='wrong-route'?REF:chat_ref,account_scope:variant==='wrong-scope'?'f'.repeat(64):scope,messages:variant==='duplicate'?[{id:USER,role:'user',text:'hello'},{id:FINAL,role:'user',text:'hello'}]:[{id:USER,role:'user',text:'hello'}]}};
+    const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+    if(variant==='confirmed'){assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,USER);}
+    else {assert.equal(result.error,'first_send_outcome_unknown');assert.ok(result.diagnostic?.stage);assert.ok(result.diagnostic?.reason)}
+    assert.equal(clicks,variant==='before-script'?0:1);assert.equal(JSON.stringify(result).includes('secret'),false);
+    if(variant==='before-script')assert.equal(reads,0);
+  }
+});
+test('click exception returns only a bounded post-click diagnostic',async()=>{
+  const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
+  let clicks=0;const editor={textContent:'',focus(){}};
+  const button={disabled:false,click(){clicks++;throw Error('secret url and prompt')}};
+  const document={querySelector(s){return s==='#prompt-textarea'?editor:s==='[data-testid="send-button"]'?button:null},querySelectorAll(){return []},execCommand(_c,_s,t){editor.textContent=t;return true}};
+  const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com/'})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
+  let clock=0;class Clock extends Date {static now(){if(clicks)clock+=15000;return clock}}
+  const context={self:{},chrome,URL,Date:Clock,location:{origin:'https://chatgpt.com',pathname:'/'},document,crypto:webcrypto,TextEncoder,AbortController,setTimeout:fn=>{queueMicrotask(fn);return 1},clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
+  vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
+  const result=await context.self.UserIOScopedChatGPT.firstSend({text:'hello',expected_account_scope:scope});
+  assert.equal(result.error,'first_send_outcome_unknown');assert.equal(result.diagnostic?.stage,'before_click');assert.equal(result.diagnostic?.reason,'script_outcome_unknown');
+  assert.equal(JSON.stringify(result).includes('secret'),false);assert.equal(clicks,1);
+});
 test('first send refuses an account switch immediately before click',async()=>{
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   let calls=0,clicks=0;const editor={textContent:'',focus(){}};

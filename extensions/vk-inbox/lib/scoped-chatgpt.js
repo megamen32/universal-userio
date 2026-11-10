@@ -16,7 +16,8 @@
     const scope=args.expected_account_scope,text=args.text;
     if(!/^[0-9a-f]{64}$/.test(scope||"")||typeof text!=="string"||!text.trim()||text.length>16000)
       return {ok:false,error:"invalid_first_send"};
-    let tab;
+    let tab,postClickStage="before_click",lastReason="unknown";
+    const unknown=(stage,reason)=>({ok:false,error:"first_send_outcome_unknown",diagnostic:{stage,reason}});
     try {
       tab=await chrome.tabs.create({url:ORIGIN+"/",active:false});
       await root.UserIOTabGroups?.assign("chatgpt",tab.id);
@@ -27,7 +28,8 @@
         await new Promise(resolve=>setTimeout(resolve,350));
       }
       if(tab.status!=="complete")return {ok:false,error:"tab_load_timeout"};
-      const [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",func:async(scope,text)=>{
+      let entry;
+      try { [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",func:async(scope,text)=>{
         let clicked=false;
         const getEditor=()=>{
           const exact=document.querySelector("#prompt-textarea");
@@ -99,28 +101,36 @@
           clicked=true; send.click();
           return {ok:true,clicked:true};
         }catch{return clicked?{ok:false,error:"first_send_outcome_unknown"}:preflight("first_send_preflight_failed");}
-      },args:[scope,text]});
-      if(!entry?.result?.clicked)return entry?.result??{ok:false,error:"first_send_outcome_unknown"};
+      },args:[scope,text]}); } catch { /* A navigation may destroy the frame after the click. */ }
+      if(entry?.result && !entry.result.clicked && entry.result.error!=="first_send_outcome_unknown")return entry.result;
+      const uncertainClick=!entry?.result?.clicked;
+      postClickStage=uncertainClick?"before_click":"wait_route";
+      lastReason=uncertainClick?"script_outcome_unknown":"route_not_ready";
       const deadline=Date.now()+60000;
       while(Date.now()<deadline){
         const current=await chrome.tabs.get(tab.id);
-        let url;try{url=new URL(current.url);}catch{return {ok:false,error:"first_send_outcome_unknown"};}
-        if(url.origin!==ORIGIN)return {ok:false,error:"first_send_outcome_unknown"};
+        let url;try{url=new URL(current.url);}catch{return unknown("wait_route","invalid_url");}
+        if(url.origin!==ORIGIN)return unknown("wait_route","wrong_origin");
         const match=url.pathname.match(/^\/c\/([0-9a-f-]+)$/i);
         if(match&&lib.validRef(match[1])){
+          postClickStage="read_snapshot";
           const ref=match[1],snapshot=await lib.read({chat_ref:ref,expected_account_scope:scope});
+          postClickStage="recheck_route";
           const again=await chrome.tabs.get(tab.id);
-          if(again.url!==url.href)return {ok:false,error:"first_send_outcome_unknown"};
+          let after;try{after=new URL(again.url);}catch{return unknown("recheck_route","invalid_url");}
+          if(after.origin!==ORIGIN||after.pathname!=="/c/"+ref)return unknown("recheck_route","wrong_native");
+          postClickStage="read_snapshot";
           if(snapshot.ok&&snapshot.chat_ref===ref&&snapshot.account_scope===scope&&Array.isArray(snapshot.messages)){
             const matches=snapshot.messages.filter(m=>m?.role==="user"&&typeof m.text==="string"&&m.text.trim()===text.trim()&&lib.validRef(m.id));
             if(matches.length===1)return {ok:true,admission:"confirmed",chat_ref:ref,native_user_message_id:matches[0].id};
-            if(matches.length>1)return {ok:false,error:"first_send_outcome_unknown"};
-          }
-        }else if(url.pathname!=="/")return {ok:false,error:"first_send_outcome_unknown"};
+            if(matches.length>1)return unknown("read_snapshot","multiple_matches");
+            lastReason="message_not_found";
+          }else lastReason="snapshot_unverified";
+        }else if(url.pathname!=="/")return unknown("wait_route","wrong_native");
         await new Promise(resolve=>setTimeout(resolve,500));
       }
-      return {ok:false,error:"first_send_outcome_unknown"};
-    }catch{return {ok:false,error:"first_send_outcome_unknown"};}
+      return unknown(postClickStage,lastReason);
+    }catch{return unknown(postClickStage,"exception");}
   };
   lib.archive=async(args={})=>{
     const ref=args.chat_ref,scope=args.expected_account_scope;
