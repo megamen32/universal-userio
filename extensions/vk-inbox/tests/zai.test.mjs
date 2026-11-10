@@ -45,7 +45,7 @@ function fixture({list=[{id:ID,title:"Existing",updated_at:1800000000}],
   }},
   storage:{local:{
     items:new Map(),
-    async get(k){return {[k]:this.items.get(k)};},
+    async get(k){if(typeof k==='object')return Object.fromEntries(Object.entries(k).map(([key,value])=>[key,this.items.has(key)?this.items.get(key):value]));return {[k]:this.items.get(k)};},
     async set(value){for(const [k,v] of Object.entries(value))this.items.set(k,v);}
   }}
  };
@@ -62,6 +62,21 @@ test("ZAI list is scoped and returns native IDs without browser secrets",async()
  assert.equal(r.chats[0].id,ID);assert.equal(r.account_scope,SCOPE);
  assert.equal("user_id" in r,false);assert.equal("cookies" in r,false);
  assert.equal(f.fetches.length,3);
+});
+test("ZAI observes actual identity without granting a connection and preserves explicit binding",async()=>{
+ const f=fixture();
+ vm.runInNewContext(readFileSync(new URL("lib/connections.js",ROOT),"utf8"),f.context);
+ assert.equal((await f.api.scope()).account_scope,SCOPE);
+ const accounts=await f.context.self.UserIOConnections.accounts();
+ assert.equal(accounts.length,1);
+ assert.equal(accounts[0].userId,"zai-user-private");
+ assert.equal(accounts[0].accountScope,SCOPE);
+ assert.equal(accounts[0].connectionIds.length,0);
+ assert.equal((await f.context.self.UserIOConnections.subscriptionsForScope("zai",SCOPE)).length,0);
+ await f.context.self.UserIOConnections.updateBindings(accounts[0].key,["legacy-default"]);
+ await f.api.scope();
+ assert.equal((await f.context.self.UserIOConnections.subscriptionsForScope("zai",SCOPE)).length,1);
+ assert.equal((await f.context.self.UserIOConnections.subscriptionsForScope("zai","f".repeat(64))).length,0);
 });
 test("ZAI read uses exact chat identity and batch, preserving the latest pair",async()=>{
  const f=fixture();

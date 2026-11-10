@@ -101,7 +101,7 @@
         if(detail.id!==chats[0].id||String(detail.user_id||"")!==auth.id)
           return {ok:false,error:"zai_scope_identity_mismatch"};
       }
-      return {ok:true,account_scope:scope,chats:chats.slice(0,100)};
+      return {ok:true,account_scope:scope,chats:chats.slice(0,100),_native_user_id:auth.id};
     }catch(e){return {ok:false,error:e?.name==="AbortError"?"zai_timeout":"zai_list_unavailable"};}
     finally{clearTimeout(timer);}
   }
@@ -109,7 +109,15 @@
     const expectedScope=args.expected_account_scope||"";
     if(expectedScope&&!lib.validScope(expectedScope))return {ok:false,error:"invalid_account_scope"};
     const tab=await lib.findTab();if(!tab.ok)return tab;
-    return invoke(tab.tab,listPage,[expectedScope]);
+    const result=await invoke(tab.tab,listPage,[expectedScope]);
+    if(result.ok){
+      const userId=result._native_user_id;
+      delete result._native_user_id;
+      if(typeof userId!=="string"||!userId||!lib.validScope(result.account_scope))return {ok:false,error:"zai_auth_identity_invalid"};
+      await root.UserIOConnections?.observeAccount({provider:"zai",userId,
+        accountScope:result.account_scope,label:"Z.ai",connectionIds:[]});
+    }
+    return result;
   };
   lib.scope=async()=>{
     const r=await lib.list();
@@ -187,6 +195,75 @@
     const result=await invoke(tab.tab,readPage,[ref,scope]);
     if(result.ok&&result.chat_ref!==ref)return {ok:false,error:"zai_read_identity_mismatch"};
     return result;
+  };
+  // Retain native response bodies, rather than labelling normalized display
+  // messages as a full transcript. A bounded result is intentionally partial.
+  async function rawPage(id,scope){
+    if(location.origin!=="https://chat.z.ai")return {ok:false,error:"zai_origin_changed"};
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),22000);
+    try{
+      const url="/api/v1/chats/"+encodeURIComponent(id);
+      const r=await fetch(url,{credentials:"same-origin",signal:controller.signal});
+      if(!r.ok)return {ok:false,error:"zai_chat_unavailable",status:r.status};
+      const detail=await r.text();
+      if(new TextEncoder().encode(detail).length>200000)return {ok:false,error:"zai_raw_too_large"};
+      const chat=JSON.parse(detail);
+      if(chat.id!==id||!chat.user_id)return {ok:false,error:"zai_chat_identity_mismatch"};
+      const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(chat.user_id)));
+      const actual=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");
+      if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
+      const mapping=chat.chat?.history?.messages;
+      if(!mapping||typeof mapping!=="object"||Array.isArray(mapping))return {ok:false,error:"zai_history_invalid"};
+      const ids=Object.keys(mapping), batches=[];
+      let size=new TextEncoder().encode(detail).length;
+      for(let start=0;start<ids.length;start+=60){
+        const requested=ids.slice(start,start+60);
+        const b=await fetch(url+"/messages/batch",{method:"POST",credentials:"same-origin",
+          headers:{"content-type":"application/json"},body:JSON.stringify({ids:requested}),signal:controller.signal});
+        if(!b.ok)return {ok:false,error:"zai_batch_unavailable",status:b.status};
+        const body=await b.text();size+=new TextEncoder().encode(body).length;
+        if(size>200000)return {ok:false,error:"zai_raw_too_large"};
+        const parsed=JSON.parse(body);
+        if(parsed.chat_id!==id||!parsed.data||requested.some(key=>parsed.data[key]?.id!==key))
+          return {ok:false,error:"zai_batch_identity_mismatch"};
+        batches.push(body);
+      }
+      return {ok:true,chat_ref:id,detail,batches,complete:false,
+        limitations:["Native response bodies are preserved; a consistent snapshot and attachment bytes are not established."]};
+    }catch(e){return {ok:false,error:e?.name==="AbortError"?"zai_timeout":"zai_raw_unavailable"};}
+    finally{clearTimeout(timer);}
+  }
+  lib.raw=async(args={})=>{
+    if(!lib.validRef(args.chat_ref)||!lib.validScope(args.expected_account_scope))return {ok:false,error:"zai_invalid_reference"};
+    const tab=await lib.findTab();if(!tab.ok)return tab;
+    return invoke(tab.tab,rawPage,[args.chat_ref,args.expected_account_scope]);
+  };
+  async function archivePage(id,scope){
+    if(location.origin!=="https://chat.z.ai")return {ok:false,error:"zai_origin_changed"};
+    const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),20000);let mutation=false;
+    try{
+      const url="/api/v1/chats/"+encodeURIComponent(id);
+      const read=async()=>{const r=await fetch(url,{credentials:"same-origin",signal:ac.signal});
+        if(!r.ok)throw new Error("read_failed");return r.json();};
+      const before=await read();
+      if(before.id!==id||!before.user_id)return {ok:false,error:"identity_mismatch"};
+      const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(before.user_id)));
+      if(Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("")!==scope)return {ok:false,error:"account_scope_mismatch"};
+      if(before.archived===true)return {ok:true,already:true};
+      if(before.archived!==false)return {ok:false,error:"archive_state_unknown"};
+      if(["running","pending","in_progress"].includes(before.last_run?.status))return {ok:false,error:"conversation_busy"};
+      mutation=true;
+      const response=await fetch(url+"/archive",{method:"POST",credentials:"same-origin",signal:ac.signal});
+      if(!response.ok)return {ok:false,error:"archive_outcome_unknown"};
+      const after=await read();
+      return after.id===id&&after.user_id===before.user_id&&after.archived===true?{ok:true}:{ok:false,error:"archive_outcome_unknown"};
+    }catch{return {ok:false,error:mutation?"archive_outcome_unknown":"archive_preflight_failed"};}
+    finally{clearTimeout(timer);}
+  }
+  lib.archive=async(args={})=>{
+    if(!lib.validRef(args.chat_ref)||!lib.validScope(args.expected_account_scope))return {ok:false,error:"zai_invalid_reference"};
+    const tab=await lib.findTab();if(!tab.ok)return tab;
+    return invoke(tab.tab,archivePage,[args.chat_ref,args.expected_account_scope]);
   };
   lib._invoke=invoke;
   root.UserIOZai=lib;
