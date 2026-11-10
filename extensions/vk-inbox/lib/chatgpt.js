@@ -62,22 +62,25 @@
     let email = "";
     let name = "";
     let accountId = "";
+    let workspaceId = "";
     try {
       const res = await fetch(ORIGIN + "/api/auth/session", { credentials: "include" });
       if (res.ok) {
         const session = await res.json();
         accountId = String((session.user && session.user.id) || "");
+        workspaceId = String((session.account && session.account.id) || "");
         email = String((session.user && session.user.email) || "");
         name = String((session.user && session.user.name) || "");
       }
     } catch (_) { /* offline; cookies alone are still exportable */ }
     if (!accountId && !email) return { ok: false, error: "Не удалось подтвердить аккаунт ChatGPT. Войдите в ChatGPT и повторите проверку." };
-    return { ok: true, cookies, session_chunks: sessionChunks, account_id: accountId, email, name, user_agent: navigator.userAgent };
+    return { ok: true, cookies, session_chunks: sessionChunks, account_id: accountId, workspace_id: workspaceId, email, name, user_agent: navigator.userAgent };
   };
 
   lib.describe = async () => {
     const identity = await lib.identity();
     if (!identity.ok) return identity;
+    if (identity.account_id) await root.UserIOScopedChatGPT?.observeIdentity(identity.account_id, identity.workspace_id, identity.name || identity.email);
     return {
       ok: true, email: identity.email, name: identity.name,
       fingerprint: await fingerprint(identity),

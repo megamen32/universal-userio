@@ -15,7 +15,7 @@ class Element {
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function boot() {
+function boot(discover = false) {
   const html = fs.readFileSync(path.join(root, 'options.html'), 'utf8');
   const ids = [...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]);
   const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
@@ -35,6 +35,7 @@ function boot() {
   const calls = [];
   const chrome = { storage: { local: { get: async (defaults) => defaults, set: async () => {} } }, runtime: { sendMessage: (message, callback) => {
     calls.push(message); let result = { ok: true };
+    if (message.kind === 'gptIdentity' && discover && !accounts.some(a => a.accountKey === 'chatgpt:discovered')) accounts.push({accountKey:'chatgpt:discovered',provider:'chatgpt',userId:'person',accountScope:'a'.repeat(64)});
     if (message.kind === 'connectionsList') result = { ok: true, connections };
     if (message.kind === 'accountsList') result = { ok: true, accounts };
     if (message.kind === 'accountBindingsGet') result = { ok: true, bindings };
@@ -47,6 +48,14 @@ function boot() {
   vm.runInNewContext(fs.readFileSync(path.join(root, 'options.js'), 'utf8'), context);
   return { elements, calls, bindings, accounts, connections, html };
 }
+
+test('refresh observes identity before listing accounts and renders an unbound row', async () => {
+  const state = boot(true); await flush();
+  assert.ok(state.calls.findIndex(x=>x.kind==='gptIdentity') < state.calls.findIndex(x=>x.kind==='accountsList'));
+  const row=state.elements.connectionAccounts.children.find(x=>x.dataset.accountKey==='chatgpt:discovered');
+  assert.ok(row); assert.ok(row.children.filter(x=>x.dataset?.connectionId).every(x=>!x.children[0].checked));
+  assert.equal(state.calls.some(x=>x.kind==='accountBindingsSave'),false);
+});
 
 test('connection UI renders named endpoint cards and independent account destinations', async () => {
   const state = boot(); await flush();

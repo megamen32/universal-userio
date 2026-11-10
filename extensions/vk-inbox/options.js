@@ -22,6 +22,7 @@
 
   async function refreshConnections() {
     if (!$("connections") || !$("connectionAccounts") || !$("connectionsStatus")) return;
+    await message("gptIdentity");
     const [cr, ar, br] = await Promise.all([message("connectionsList"), message("accountsList"), message("accountBindingsGet")]);
     if ($("legacyUserIOCard")) $("legacyUserIOCard").hidden = !!cr?.ok;
     if ($("legacyChatGPTCard")) $("legacyChatGPTCard").hidden = !!cr?.ok;

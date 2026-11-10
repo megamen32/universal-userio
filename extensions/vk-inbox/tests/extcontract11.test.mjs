@@ -9,13 +9,26 @@ const expected=createHash('sha256').update(JSON.stringify({provider:'chatgpt',us
 function setup(overrides={}){
  const data={},calls=[],provider=[],activeSession=overrides.session||session;
  const chrome={storage:{local:{get:async k=>typeof k==='string'?{[k]:data[k]}:{...k,...data},set:async p=>Object.assign(data,p)}},cookies:{getAll:async()=>[{name:'__Secure-next-auth.session-token',value:'fixture-cookie'}]},tabs:{query:async()=>[{id:1,url:'https://chatgpt.com/c/'+ref,status:'complete'}],get:async()=>({id:1,url:'https://chatgpt.com/c/'+ref,status:'complete'})},scripting:{executeScript:async ({func,args=[]})=>[{result:await func(...args)}]}};
- const fetch=async p=>{provider.push(p);return {ok:true,status:200,headers:{get:()=>null},json:async()=>p==='/api/auth/session'?activeSession:{conversation_id:ref,messages:[{id:'u1',author:{role:'user'},content:{parts:['hi']}},{id:'a1',author:{role:'assistant'},content:{parts:['hello']},status:'finished_successfully',end_turn:true}]}}};
+ const fetch=async p=>{provider.push(p);return {ok:true,status:200,headers:{get:()=>null},json:async()=>p.endsWith('/api/auth/session')?activeSession:{conversation_id:ref,messages:[{id:'u1',author:{role:'user'},content:{parts:['hi']}},{id:'a1',author:{role:'assistant'},content:{parts:['hello']},status:'finished_successfully',end_turn:true}]}}};
  const self={UserIO:{call:async (...x)=>{calls.push(x);return {ok:true}}}};
- const c={self,chrome,fetch,crypto:webcrypto,TextEncoder,URL,AbortController,setTimeout,clearTimeout,location:{origin:'https://chatgpt.com',pathname:'/c/'+ref},console};vm.createContext(c);
+ const c={self,chrome,fetch,crypto:webcrypto,TextEncoder,URL,AbortController,setTimeout,clearTimeout,navigator:{userAgent:'fixture'},location:{origin:'https://chatgpt.com',pathname:'/c/'+ref},console};vm.createContext(c);
  for(const file of ['connections','chatgpt','chatgpt-core','chatgpt-state','scoped-chatgpt','agent'])vm.runInContext(readFileSync(new URL('../lib/'+file+'.js',import.meta.url),'utf8'),c);
  return {self,data,calls,provider};
 }
 const ctx={connectionId:'legacy-default',principalId:'principal',agentInstanceId:'browser'};
+test('verified scope discovers an unbound account and never overwrites selected bindings',async()=>{
+ const f=setup(),c=f.self.UserIOConnections;
+ assert.equal((await f.self.UserIOScopedChatGPT.accountScope()).account_scope,expected);
+ let a=(await c.accounts())[0]; assert.ok(a); assert.equal(a.accountScope,expected); assert.equal(a.connectionIds.length,0);
+ assert.equal((await c.subscriptionsForScope('chatgpt','a'.repeat(64))).length,0);
+ await c.updateBindings(a.key,['legacy-default']); await f.self.UserIOScopedChatGPT.accountScope();
+ a=(await c.accounts())[0]; assert.deepEqual([...a.connectionIds],['legacy-default']);
+});
+test('describe observes verified identity without exposing private data',async()=>{
+ const f=setup(),result=await f.self.ChatGPT.describe(),accounts=await f.self.UserIOConnections.accounts();
+ assert.deepEqual(Object.keys(result).sort(),['email','fingerprint','name','ok']);
+ assert.equal(accounts.length,1);assert.equal(accounts[0].accountScope,expected);assert.equal(accounts[0].connectionIds.length,0);
+});
 test('scope agrees with Herder identity and is shared by list and read',async()=>{
  const f=setup(), scope=await f.self.UserIOScopedChatGPT.accountScope();
  assert.equal(scope.account_scope,expected);

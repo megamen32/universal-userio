@@ -3,6 +3,13 @@
   const ORIGIN="https://chatgpt.com";
   const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const lib={};
+  lib.observeIdentity=async(userId,workspaceId,label="")=>{
+    if(typeof userId!=="string"||!userId||typeof workspaceId!=="string")return;
+    const bytes=new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:userId,account_id:workspaceId}));
+    const digest=await crypto.subtle.digest("SHA-256",bytes);
+    const accountScope=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("");
+    await root.UserIOConnections?.observeAccount({provider:"chatgpt",userId,workspaceId,accountScope,label,connectionIds:[]});
+  };
   lib.validRef=v=>typeof v==="string"&&UUID.test(v);
   lib.exactTab=async(ref)=>{
     if(!lib.validRef(ref))return {ok:false,error:"invalid_chat_ref"};
@@ -73,7 +80,9 @@
           }catch(e){return {ok:false,error:e?.name==="AbortError"?"account_scope_timeout":"account_scope_unavailable"};}
           finally{clearTimeout(timer);}
         }});
-      return entry?.result??{ok:false,error:"account_scope_no_result"};
+      const result=entry?.result??{ok:false,error:"account_scope_no_result"};
+      if(result.ok)await lib.observeIdentity(result.user_id,result.workspace_id);
+      return result;
     }catch{return {ok:false,error:"account_scope_transport_unavailable"};}
   };
   lib.list=async(args={})=>{
