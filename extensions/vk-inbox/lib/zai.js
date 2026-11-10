@@ -59,6 +59,9 @@
   // No API bearer or cookie value is ever passed back to the extension worker.
   async function listPage(expectedScope){
     if(location.origin!=="https://chat.z.ai")return {ok:false,error:"zai_origin_changed"};
+    const token=localStorage.getItem("token");
+    if(location.pathname.startsWith("/auth")||typeof token!=="string"||!token.trim()||/\s/.test(token))return {ok:false,error:"authentication_required"};
+    const headers={authorization:"Bearer "+token};
     const expected=/^[a-f0-9]{64}$/;
     if(expectedScope && !expected.test(expectedScope))return {ok:false,error:"invalid_account_scope"};
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),18000);
@@ -66,9 +69,10 @@
       // Native auth identity is available even in a brand-new account with
       // zero chat history. Never ship the raw user id out of the page.
       const authResponse=await fetch("/api/v1/auths/",{
-        credentials:"same-origin",signal:controller.signal});
-      if(!authResponse.ok)return {ok:false,error:"zai_auth_unavailable",status:authResponse.status};
+        credentials:"same-origin",headers,signal:controller.signal});
+      if(!authResponse.ok)return {ok:false,error:[401,403].includes(authResponse.status)?"authentication_required":"zai_auth_unavailable",status:authResponse.status};
       const auth=await authResponse.json();
+      if(typeof auth?.role!=="string"||!auth.role||auth.role.toLowerCase()==="guest")return {ok:false,error:"authentication_required"};
       if(typeof auth?.id!=="string"||!auth.id)return {ok:false,error:"zai_auth_identity_invalid"};
       const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(auth.id));
       const scope=Array.from(new Uint8Array(digest),x=>x.toString(16).padStart(2,"0")).join("");
@@ -76,7 +80,7 @@
       const seen=new Set(),chats=[];
       for(let page=1;page<=2;page++){
         const response=await fetch("/api/v1/chats/?page="+page+"&type=all&channel=zai-web&project_id=",{
-          credentials:"same-origin",signal:controller.signal
+          credentials:"same-origin",headers,signal:controller.signal
         });
         if(!response.ok)return {ok:false,error:response.status===429?"zai_http_429":"zai_list_unavailable",
           status:response.status,retry_after:Math.min(86400,Math.max(0,Number(response.headers.get("Retry-After"))||0))};
@@ -95,7 +99,7 @@
       chats.sort((a,b)=>b.updated_at-a.updated_at);
       if(chats.length){
         const response=await fetch("/api/v1/chats/"+encodeURIComponent(chats[0].id),{
-          credentials:"same-origin",signal:controller.signal});
+          credentials:"same-origin",headers,signal:controller.signal});
         if(!response.ok)return {ok:false,error:"zai_scope_unavailable",status:response.status};
         const detail=await response.json();
         if(detail.id!==chats[0].id||String(detail.user_id||"")!==auth.id)
@@ -125,12 +129,15 @@
   };
   async function readPage(id,scope){
     if(location.origin!=="https://chat.z.ai")return {ok:false,error:"zai_origin_changed"};
+    const token=localStorage.getItem("token");
+    if(location.pathname.startsWith("/auth")||typeof token!=="string"||!token.trim()||/\s/.test(token))return {ok:false,error:"authentication_required"};
+    const headers={authorization:"Bearer "+token};
     if(!/^[a-f0-9-]{12,80}$/i.test(id)||!(/^[a-f0-9]{64}$/).test(scope))
       return {ok:false,error:"zai_invalid_reference"};
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),22000);
     try{
       const response=await fetch("/api/v1/chats/"+encodeURIComponent(id),{
-        credentials:"same-origin",signal:controller.signal});
+        credentials:"same-origin",headers,signal:controller.signal});
       if(!response.ok)return {ok:false,error:response.status===429?"zai_http_429":"zai_chat_unavailable",
         status:response.status,retry_after:Math.min(86400,Math.max(0,Number(response.headers.get("Retry-After"))||0))};
       const chat=await response.json();
@@ -147,7 +154,7 @@
       for(let i=0;i<ids.length;i+=60){
         const chunk=ids.slice(i,i+60);
         const r=await fetch("/api/v1/chats/"+encodeURIComponent(id)+"/messages/batch",{
-          method:"POST",credentials:"same-origin",headers:{"content-type":"application/json"},
+          method:"POST",credentials:"same-origin",headers:{...headers,"content-type":"application/json"},
           body:JSON.stringify({ids:chunk}),signal:controller.signal});
         if(!r.ok)return {ok:false,error:r.status===429?"zai_http_429":"zai_batch_unavailable",
           status:r.status,retry_after:Math.min(86400,Math.max(0,Number(r.headers.get("Retry-After"))||0))};
@@ -200,10 +207,13 @@
   // messages as a full transcript. A bounded result is intentionally partial.
   async function rawPage(id,scope){
     if(location.origin!=="https://chat.z.ai")return {ok:false,error:"zai_origin_changed"};
+    const token=localStorage.getItem("token");
+    if(location.pathname.startsWith("/auth")||typeof token!=="string"||!token.trim()||/\s/.test(token))return {ok:false,error:"authentication_required"};
+    const headers={authorization:"Bearer "+token};
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),22000);
     try{
       const url="/api/v1/chats/"+encodeURIComponent(id);
-      const r=await fetch(url,{credentials:"same-origin",signal:controller.signal});
+      const r=await fetch(url,{credentials:"same-origin",headers,signal:controller.signal});
       if(!r.ok)return {ok:false,error:"zai_chat_unavailable",status:r.status};
       const detail=await r.text();
       if(new TextEncoder().encode(detail).length>200000)return {ok:false,error:"zai_raw_too_large"};
@@ -219,7 +229,7 @@
       for(let start=0;start<ids.length;start+=60){
         const requested=ids.slice(start,start+60);
         const b=await fetch(url+"/messages/batch",{method:"POST",credentials:"same-origin",
-          headers:{"content-type":"application/json"},body:JSON.stringify({ids:requested}),signal:controller.signal});
+          headers:{...headers,"content-type":"application/json"},body:JSON.stringify({ids:requested}),signal:controller.signal});
         if(!b.ok)return {ok:false,error:"zai_batch_unavailable",status:b.status};
         const body=await b.text();size+=new TextEncoder().encode(body).length;
         if(size>200000)return {ok:false,error:"zai_raw_too_large"};
@@ -240,10 +250,13 @@
   };
   async function archivePage(id,scope){
     if(location.origin!=="https://chat.z.ai")return {ok:false,error:"zai_origin_changed"};
+    const token=localStorage.getItem("token");
+    if(location.pathname.startsWith("/auth")||typeof token!=="string"||!token.trim()||/\s/.test(token))return {ok:false,error:"authentication_required"};
+    const headers={authorization:"Bearer "+token};
     const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),20000);let mutation=false;
     try{
       const url="/api/v1/chats/"+encodeURIComponent(id);
-      const read=async()=>{const r=await fetch(url,{credentials:"same-origin",signal:ac.signal});
+      const read=async()=>{const r=await fetch(url,{credentials:"same-origin",headers,signal:ac.signal});
         if(!r.ok)throw new Error("read_failed");return r.json();};
       const before=await read();
       if(before.id!==id||!before.user_id)return {ok:false,error:"identity_mismatch"};
@@ -253,7 +266,7 @@
       if(before.archived!==false)return {ok:false,error:"archive_state_unknown"};
       if(["running","pending","in_progress"].includes(before.last_run?.status))return {ok:false,error:"conversation_busy"};
       mutation=true;
-      const response=await fetch(url+"/archive",{method:"POST",credentials:"same-origin",signal:ac.signal});
+      const response=await fetch(url+"/archive",{method:"POST",credentials:"same-origin",headers,signal:ac.signal});
       if(!response.ok)return {ok:false,error:"archive_outcome_unknown"};
       const after=await read();
       return after.id===id&&after.user_id===before.user_id&&after.archived===true?{ok:true,chat_ref:id,archived:true}:{ok:false,error:"archive_outcome_unknown"};

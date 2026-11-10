@@ -13,7 +13,7 @@ function response(body,status=200,after=null){
    headers:{get:key=>key.toLowerCase()==="retry-after"?after:null},json:async()=>body};
 }
 function fixture({list=[{id:ID,title:"Existing",updated_at:1800000000}],
- status=200,scope="zai-user-private",history}={}){
+ status=200,scope="zai-user-private",history,token="fixture-token",role="user",path="/",requireAuth=false,authStatus=200}={}){
  const fetches=[],created=[],removed=[],tabs=[{id:1,url:"https://chat.z.ai/",status:"complete"}];
  const texts={
   [USER]:{id:USER,role:"user",content:"Hello",created_at:1},
@@ -22,8 +22,9 @@ function fixture({list=[{id:ID,title:"Existing",updated_at:1800000000}],
  };
  const map=history || {[USER]:{},[ASST]:{}};
  const fetch=async(path,opts={})=>{
-  fetches.push({path,method:opts.method||"GET",body:opts.body||null});
-  if(path==="/api/v1/auths/")return response({id:scope});
+  fetches.push({path,method:opts.method||"GET",body:opts.body||null,authorization:opts.headers?.authorization});
+  if(requireAuth&&opts.headers?.authorization!=="Bearer "+token)return response({},401);
+  if(path==="/api/v1/auths/")return response({id:scope,role},authStatus);
   if(path.startsWith("/api/v1/chats/?"))return response(list,status,"47");
   if(path.endsWith("/messages/batch")){
     const ids=JSON.parse(opts.body).ids;
@@ -50,11 +51,27 @@ function fixture({list=[{id:ID,title:"Existing",updated_at:1800000000}],
   }}
  };
  const context={self:{},chrome,URL,
-   location:{origin:"https://chat.z.ai",pathname:"/",href:"https://chat.z.ai/"},
+   location:{origin:"https://chat.z.ai",pathname:path,href:"https://chat.z.ai"+path},localStorage:{getItem:()=>token},
    crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch};
  vm.runInNewContext(readFileSync(new URL("lib/zai.js",ROOT),"utf8"),context);
  return {api:context.self.UserIOZai,fetches,created,removed,tabs,context,chrome};
 }
+test("ZAI never observes anonymous identities or accounts on auth page",async()=>{
+ for(const id of ["guest-one","guest-two"]){
+  for(const overrides of [{token:null},{role:"guest"},{path:"/auth"},{authStatus:401}]){
+   const f=fixture({scope:id,...overrides});let observed=0;
+   f.context.self.UserIOConnections={observeAccount:async()=>{observed++;}};
+   const result=await f.api.scope();assert.equal(result.ok,false);assert.equal(result.error,"authentication_required");assert.equal(observed,0);
+  }
+ }
+});
+test("ZAI uses authenticated native requests without exposing the token",async()=>{
+ const f=fixture({requireAuth:true});
+ assert.equal((await f.api.list({expected_account_scope:SCOPE})).ok,true);
+ assert.equal((await f.api.read({chat_ref:ID,expected_account_scope:SCOPE})).ok,true);
+ assert.ok(f.fetches.every(x=>x.authorization==='Bearer fixture-token'));
+ assert.equal(JSON.stringify(await f.api.scope()).includes('fixture-token'),false);
+});
 test("ZAI list is scoped and returns native IDs without browser secrets",async()=>{
  const f=fixture();
  const r=await f.api.list({expected_account_scope:SCOPE});

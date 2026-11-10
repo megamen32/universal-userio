@@ -10,6 +10,7 @@ const scope=createHash('sha256').update('fixture-owner').digest('hex');
 function fixture({before={},after={}}={}){
   let archived=false,posts=0; const bodies=[];
   const fetch=async(url,opts={})=>{
+    assert.equal(opts.headers?.authorization,'Bearer fixture-token');
     if(url.endsWith('/archive')){posts++;archived=!archived;return {ok:true};}
     const body=url.endsWith('/messages/batch')
       ? ` { "chat_id":"${id}", "data":{"${msg}":{"id":"${msg}","content":"native  text"}} } `
@@ -18,7 +19,7 @@ function fixture({before={},after={}}={}){
   };
   const tab={id:1,url:'https://chat.z.ai/',status:'complete'};
   const chrome={tabs:{query:async()=>[tab],get:async()=>tab},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
-  const context={self:{},chrome,URL,location:{origin:'https://chat.z.ai'},crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch};
+  const context={self:{},chrome,URL,location:{origin:'https://chat.z.ai',pathname:'/'},localStorage:{getItem:()=> 'fixture-token'},crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch};
   vm.runInNewContext(readFileSync(new URL('../lib/zai.js',import.meta.url),'utf8'),context);
   return {api:context.self.UserIOZai,bodies,posts:()=>posts};
 }
@@ -72,7 +73,7 @@ test('first send confirms native identities once and refuses replay after uncert
 });
 test('first send executes the page function against a fake DOM and verifies native admission',async()=>{
   const storage=new Map(),tabs=new Map(), owner='55555555-5555-4555-8555-555555555555';
-  let clicks=0;
+  let clicks=0,currentToken='fixture-token',currentRole='user';
   class TextArea { constructor(){this._value=''} get value(){return this._value} set value(v){this._value=v} getClientRects(){return [1]} dispatchEvent(){} }
   const editor=new TextArea(),location={origin:'https://chat.z.ai',pathname:'/'};
   const button={disabled:false,getClientRects:()=>[1],click(){clicks++;const tab=tabs.get(1);tab.url='https://chat.z.ai/c/'+id;location.pathname='/c/'+id}};
@@ -80,8 +81,13 @@ test('first send executes the page function against a fake DOM and verifies nati
   const chrome={storage:{local:{get:async k=>({[k]:storage.get(k)}),set:async v=>Object.entries(v).forEach(([k,x])=>storage.set(k,x))}},tabs:{
     create:async({url})=>{const t={id:1,url,status:'complete'};tabs.set(1,t);return t},get:async k=>tabs.get(k),remove:async k=>tabs.delete(k)}};
   const root={UserIOZai:{list:async()=>({ok:true}),_invoke:async(_tab,func,args)=>func(...args),raw:async()=>({ok:true,batches:[JSON.stringify({data:{[msg]:{id:msg,role:'user',content:'hello'}}})]})}};
-  const context={self:root,chrome,URL,setTimeout,clearTimeout,Date,location,document,HTMLTextAreaElement:TextArea,Event:class {},crypto:webcrypto,TextEncoder,fetch:async()=>({ok:true,json:async()=>({id:'fixture-owner'})})};
+  const context={self:root,chrome,URL,setTimeout,clearTimeout,Date,location,document,HTMLTextAreaElement:TextArea,Event:class {},crypto:webcrypto,TextEncoder,localStorage:{getItem:()=>currentToken},fetch:async(_url,opts)=>({ok:opts.headers.authorization==='Bearer fixture-token',json:async()=>({id:'fixture-owner',role:currentRole})})};
   vm.runInNewContext(readFileSync(new URL('../lib/zai-lifecycle.js',import.meta.url),'utf8'),context);
   const result=await root.UserIOZaiLifecycle.firstSend({request_id:owner,expected_account_scope:scope,text:'hello'});
   assert.equal(result.admission,'confirmed');assert.equal(result.native_user_message_id,msg);assert.equal(clicks,1);
+  for(const [rid,token,role] of [['66666666-6666-4666-8666-666666666666',null,'user'],['77777777-7777-4777-8777-777777777777','fixture-token','guest']]){
+    currentToken=token;currentRole=role;location.pathname='/';
+    const refused=await root.UserIOZaiLifecycle.firstSend({request_id:rid,expected_account_scope:scope,text:'hello'});
+    assert.equal(refused.ok,false);assert.equal(clicks,1);
+  }
 });

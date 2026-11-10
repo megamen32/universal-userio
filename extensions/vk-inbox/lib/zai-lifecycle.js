@@ -7,10 +7,12 @@
   async function firstClick(scope,text){
     if(location.origin!=='https://chat.z.ai'||location.pathname!=='/')return {ok:false};
     try{
-      const auth=await fetch('/api/v1/auths/',{credentials:'same-origin'});
+      const token=localStorage.getItem('token');
+      if(typeof token!=='string'||!token.trim()||/\s/.test(token))return {ok:false};
+      const auth=await fetch('/api/v1/auths/',{credentials:'same-origin',headers:{authorization:'Bearer '+token}});
       if(!auth.ok)return {ok:false};
       const identity=await auth.json();
-      if(typeof identity.id!=='string'||!identity.id)return {ok:false};
+      if(typeof identity.id!=='string'||!identity.id||typeof identity.role!=='string'||!identity.role||identity.role.toLowerCase()==='guest')return {ok:false};
       const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(identity.id));
       if(Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('')!==scope)return {ok:false};
       const editor=document.querySelector('textarea[placeholder="Send a Message"]');
