@@ -79,11 +79,11 @@
     const key='userioCommandReceipt:'+JSON.stringify([context.connectionId,context.principalId,context.agentInstanceId,String(command.id)]);
     const prior=(await chrome.storage.local.get(key))[key]; if(prior) return {ok:false,error:'command_already_seen',phase:prior.phase};
     await chrome.storage.local.set({[key]:{phase:'started'}});
-    const metadata=new Set(['ping','gpt_identity','gpt_scope','zai_scope']);
+    const metadata=new Set(['ping','gpt_identity','gpt_scope','zai_scope','gpt_session_proof']);
     const allowed={gpt_list:'chatgpt',gpt_read:'chatgpt',gpt_send:'chatgpt',zai_list:'zai',zai_read:'zai',zai_send:'zai'};
     let result;
     if(!metadata.has(command.action)) {const provider=allowed[command.action],scope=command.args?.expected_account_scope;
-      const selected=provider && scope ? await root.UserIOConnections.subscriptions({provider,accountId:scope,accountScope:scope}) : [];
+      const selected=provider && scope ? await root.UserIOConnections.subscriptionsForScope(provider,scope) : [];
       if(!selected.some(c=>c.id===context.connectionId)) result={ok:false,error:'account_not_authorized'};
     }
     if(!result) result=await execute(command).catch(e=>({ok:false,error:String(e?.message||e)}));
@@ -274,12 +274,17 @@
     const [api] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: "MAIN",
-      func: async (body, chatRef) => {
+      func: async (body, chatRef, scope) => {
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         try {
           if (location.origin !== "https://chatgpt.com" || location.pathname !== "/c/" + chatRef)
             return {ok:false,error:"chat_ref_mismatch"};
           const session = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json());
+          if (!/^[a-f0-9]{64}$/.test(scope || "") || typeof session?.user?.id !== "string" || !session.user.id)
+            return {ok:false,error:"account_scope_unavailable"};
+          const digest = await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:session.user.id,account_id:String(session.account?.id||"")})));
+          const actual = Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("");
+          if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
           const token = String(session.accessToken || "");
           if (!token) return { ok: false, error: "no accessToken (logged out?)", status: 401 };
           const did = (document.cookie.match(/oai-did=([^;]+)/) || [])[1];
@@ -351,7 +356,7 @@
           return { ok: false, error: String(e && e.message || e) };
         }
       },
-      args: [text, args.chat_ref ? String(args.chat_ref) : ""],
+      args: [text, args.chat_ref ? String(args.chat_ref) : "", args.expected_account_scope],
     });
     const apiResult = (api && api.result) || { ok: false };
     if (apiResult.ok || mode === "api") return apiResult;
@@ -382,7 +387,7 @@
             if(!auth.ok)return {ok:false,error:"authentication_required"};
             const session=await auth.json();
             if(typeof session?.user?.id!=="string")return {ok:false,error:"account_scope_unavailable"};
-            const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(session.user.id));
+            const hash=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:session.user.id,account_id:String(session.account?.id||"")})));
             const actual=Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,"0")).join("");
             if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
           }

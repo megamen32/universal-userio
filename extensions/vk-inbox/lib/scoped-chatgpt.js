@@ -65,7 +65,7 @@
             const accountId=session?.user?.id;
             if(typeof accountId!=="string"||!accountId)
               return {ok:false,error:"account_scope_unavailable"};
-            const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:accountId,workspace_id:session.account?.id||""})));
+            const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:accountId,account_id:String(session.account?.id||"")})));
             const workspace_id=String(session.account?.id||"");
             return {ok:true,provider:"chatgpt",user_id:String(accountId),account_id:workspace_id,workspace_id,
               account_scope:Array.from(new Uint8Array(digest),
@@ -100,7 +100,7 @@
             if(!token)return {ok:false,error:"authentication_required"};
             if(scope){
               if(typeof s?.user?.id!=="string")return {ok:false,error:"account_scope_unavailable"};
-              const bytes=new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,workspace_id:s.account?.id||""}));
+              const bytes=new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:String(s.account?.id||"")}));
               const digest=await crypto.subtle.digest("SHA-256",bytes);
               const actual=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("");
               if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
@@ -142,7 +142,7 @@
             if(!token)return {ok:false,error:"authentication_required"};
             if(scope){
               if(typeof s?.user?.id!=="string")return {ok:false,error:"account_scope_unavailable"};
-              const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,workspace_id:s.account?.id||""})));
+              const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:String(s.account?.id||"")})));
               const actual=Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,"0")).join("");
               if(actual!==scope)return {ok:false,error:"account_scope_mismatch"};
             }
@@ -185,7 +185,7 @@
             }else return {ok:false,error:"history_invalid"};
             if(!chain.length)return {ok:false,error:"history_empty"};
             const workspace_id=String(s.account?.id||"");
-            const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,workspace_id})));
+            const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({provider:"chatgpt",user_id:s.user.id,account_id:workspace_id})));
             const account_scope=Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,"0")).join("");
             return {ok:true,chat_ref:ref,account_scope,provider:"chatgpt",user_id:String(s.user.id),account_id:workspace_id,workspace_id,account_label:String(s.user.name||s.user.email||s.user.id),account_email:String(s.user.email||""),data:{conversation_id:data.conversation_id,messages:data.messages,mapping:data.mapping,current_node:data.current_node}};
           }catch(e){return {ok:false,error:e?.name==="AbortError"?"read_timeout":"history_unavailable"};}

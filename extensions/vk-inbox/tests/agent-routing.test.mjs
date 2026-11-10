@@ -6,7 +6,7 @@ import vm from 'node:vm';
 function fixture() {
   const data={}, calls=[], executed=[];
   const chrome={storage:{local:{async get(k){return {[k]:data[k]}},async set(p){Object.assign(data,p)}}}};
-  const self={UserIOConnections:{subscriptions:async ({accountScope})=>accountScope==='scope-a'?[{id:'work'}]:[{id:'personal'}]},UserIO:{call:async (...args)=>{calls.push(args);return {accepted:true}}},UserIOScopedChatGPT:{read:async args=>{executed.push(args);return {ok:true}}}};
+  const self={UserIOConnections:{subscriptionsForScope:async (_provider,accountScope)=>accountScope==='scope-a'?[{id:'work'}]:[{id:'personal'}]},UserIO:{call:async (...args)=>{calls.push(args);return {accepted:true}}},UserIOScopedChatGPT:{read:async args=>{executed.push(args);return {ok:true}}}};
   vm.runInNewContext(fs.readFileSync(new URL('../lib/agent.js',import.meta.url),'utf8'),{self,chrome,URL,setTimeout,console});
   return {self,data,calls,executed};
 }

@@ -40,8 +40,8 @@
   const ak=expected;
   const id=ak+':'+event.chat_ref,old=state.records[id],at=Number(event.observed_at)||0,version=Number(event.source_version)||0;
   if(old&&(at<old.observedAt||(version&&old.sourceVersion&&version<old.sourceVersion))){const s=view(old);s.conflict='older_snapshot_ignored';s.limitations=[...s.limitations,'older_snapshot_ignored'];return {state:clone(state),snapshot:s,effects:[]};}
-  const incoming=Array.isArray(event.messages)?event.messages:fromProvider(event.data),parsed=incoming.map(normalize).filter(Boolean).slice(-100);if(!parsed.length)return {state:clone(state),snapshot:{ok:false,error:'provider_snapshot_unreadable'},effects:[]};
-  const next={provider:name,userId:user,workspaceId:workspace,label:typeof event.account_label==='string'?event.account_label.slice(0,160):'',email:typeof event.account_email==='string'?event.account_email.slice(0,254):'',scope:event.account_scope,accountKey:ak,ref:event.chat_ref,messages:parsed,coverage:event.coverage,epoch:state.epoch+1,revision:(old?.revision||0)+1,observedAt:at,sourceVersion:version,stale:false};
+  const incoming=Array.isArray(event.messages)?event.messages:fromProvider(event.data),normalized=incoming.map(normalize).filter(Boolean),parsed=normalized.slice(-100);if(!parsed.length)return {state:clone(state),snapshot:{ok:false,error:'provider_snapshot_unreadable'},effects:[]};
+  const next={provider:name,userId:user,workspaceId:workspace,label:typeof event.account_label==='string'?event.account_label.slice(0,160):'',email:typeof event.account_email==='string'?event.account_email.slice(0,254):'',scope:event.account_scope,accountKey:ak,ref:event.chat_ref,messages:parsed,coverage:normalized.length>100?'partial':event.coverage,epoch:state.epoch+1,revision:(old?.revision||0)+1,observedAt:at,sourceVersion:version,stale:false};
   const records={...state.records,[id]:next};return {state:{epoch:next.epoch,records},snapshot:view(next),effects:[{type:'publishChatSnapshot',snapshot:view(next)}]};
  }
  root.UserIOChatGPTCore={initialState,hydrate,serialize,transition,fromProvider,accountKey,view};

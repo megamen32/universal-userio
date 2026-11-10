@@ -16,7 +16,7 @@
   const serialize=fn=>{const result=queue.then(fn);queue=result.catch(()=>{});return result};
   function reduce(state, action){
     const next={connections:state.connections.map(c=>({...c})),bindings:Object.fromEntries(Object.entries(state.bindings).map(([k,v])=>[k,{...v,connectionIds:[...v.connectionIds]}]))};
-    if(action.type==='observe'){const a=action.account;if(!a||!['vk','chatgpt','zai'].includes(a.provider))return {ok:false,error:'invalid_provider'};const k=key(a);if(!next.bindings[k])next.bindings[k]={provider:a.provider,userId:a.userId||'',workspaceId:a.workspaceId||a.accountId||a.accountScope||'',accountScope:a.accountScope||'',label:a.label||'',connectionIds:a.provider==='vk'&&!a.accountId&&!a.accountScope&&!a.userId?['legacy-default']:[]};return {ok:true,state:next,value:{key:k,...next.bindings[k]},effects:[{type:'storage.set',key:BIND,value:next.bindings}]};}
+    if(action.type==='observe'){const a=action.account;if(!a||!['vk','chatgpt','zai'].includes(a.provider))return {ok:false,error:'invalid_provider'};const k=key(a);const existing=next.bindings[k];if(existing&&a.provider==='chatgpt'&&a.userId&&(existing.userId!==a.userId||existing.workspaceId!==(a.workspaceId??a.accountId??a.accountScope??'')))return {ok:false,error:'account_identity_collision'};if(!next.bindings[k])next.bindings[k]={provider:a.provider,userId:a.userId||'',workspaceId:a.workspaceId??a.accountId??a.accountScope??'',accountScope:a.accountScope||'',label:a.label||'',connectionIds:a.provider==='vk'&&!a.accountId&&!a.accountScope&&!a.userId?['legacy-default']:[]};return {ok:true,state:next,value:{key:k,...next.bindings[k]},effects:[{type:'storage.set',key:BIND,value:next.bindings}]};}
     if(action.type==='bind'){if(!next.bindings[action.key])return {ok:false,error:'account_not_observed'};if(!Array.isArray(action.ids)||action.ids.some(id=>!connectionId(id)||!next.connections.some(c=>c.id===id)))return {ok:false,error:'unknown_connection'};next.bindings[action.key].connectionIds=[...new Set(action.ids)];return {ok:true,state:next,value:next.bindings[action.key],effects:[{type:'storage.set',key:BIND,value:next.bindings}]};}
     const r=transitionConnections(next.connections,action);return r.ok?{...r,state:{...next,connections:r.state}}:r;
   }
@@ -26,12 +26,28 @@
   async function save(input){return serialize(async()=>{const cs=await raw(), result=reduce({connections:cs,bindings:await bindings()},{type:"save",input:{...input,id:input.id||crypto.randomUUID(),label:String(input.label||"UserIO"),endpoint:input.endpoint}}); if(!result.ok)throw new Error(result.error); for(const e of result.effects)await chrome.storage.local.set({[e.key]:e.value}); return result.value})}
   async function remove(id){const result=transitionConnections(await raw(),{type:"remove",id}); if(!result.ok)throw new Error(result.error); await chrome.storage.local.set({[KEY]:result.state}); return {ok:true}}
   async function bindings(){return (await chrome.storage.local.get({[BIND]:{}}))[BIND]||{}}
-  function key(a){return [a.provider,a.userId||"",a.workspaceId||a.accountId||a.accountScope||"legacy"].join(":")}
+  function key(a){return [a.provider,a.userId||"",a.workspaceId??a.accountId??a.accountScope??"legacy"].join(":")}
   async function apply(action){return serialize(async()=>{const result=reduce({connections:await raw(),bindings:await bindings()},action);if(!result.ok)throw new Error(result.error);for(const e of result.effects)await chrome.storage.local.set({[e.key]:e.value});return result.value})}
   async function observeAccount(a){return apply({type:'observe',account:a})}
   async function updateBindings(k,ids){return apply({type:'bind',key:k,ids})}
   async function accounts(){return Object.entries(await bindings()).map(([key,value])=>({key,...value}))}
   async function subscriptions(a){const account=await observeAccount(a),cs=await raw(); return account.connectionIds.map(id=>cs.find(c=>c.id===id)).filter(c=>c&&c.enabled)}
+  // Resolve only existing bindings; never observe or grant an account from a command.
+  async function subscriptionsForScope(provider,scope){
+    if(!['chatgpt','zai'].includes(provider)||!/^[a-f0-9]{64}$/.test(scope||''))return [];
+    const found=[];
+    for(const account of Object.values(await bindings())){
+      if(account.provider!==provider)continue;
+      if(provider==='chatgpt'){
+        if(!account.userId || typeof account.workspaceId!=='string')continue;
+        const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({provider:'chatgpt',user_id:account.userId,account_id:account.workspaceId})));
+        if(Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('')!==scope)continue;
+      }else if(account.accountScope!==scope)continue;
+      found.push(account);
+    }
+    if(found.length!==1)return [];
+    const cs=await raw();return found[0].connectionIds.map(id=>cs.find(c=>c.id===id)).filter(c=>c&&c.enabled);
+  }
   const validateReceipt=(receipt, expected)=>Boolean(receipt&&expected&&receipt.id===expected.id&&receipt.connectionId===expected.connectionId&&receipt.agentInstanceId===expected.agentInstanceId);
-  root.UserIOConnections={list,get,save,remove,accounts,observeAccount,updateBindings,subscriptions,accountKey:key,validateConnection,transitionConnections,reduce,validateReceipt};
+  root.UserIOConnections={list,get,save,remove,accounts,observeAccount,updateBindings,subscriptions,subscriptionsForScope,accountKey:key,validateConnection,transitionConnections,reduce,validateReceipt};
 })(typeof self!=="undefined"?self:this);
