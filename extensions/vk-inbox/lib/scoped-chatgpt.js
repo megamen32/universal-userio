@@ -28,7 +28,6 @@
       }
       if(tab.status!=="complete")return {ok:false,error:"tab_load_timeout"};
       const [entry]=await chrome.scripting.executeScript({target:{tabId:tab.id},world:"MAIN",func:async(scope,text)=>{
-        const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         let clicked=false;
         const getEditor=()=>{
           const exact=document.querySelector("#prompt-textarea");
@@ -98,20 +97,29 @@
           send=getSend();
           if(location.origin!=="https://chatgpt.com"||location.pathname!=="/"||getEditor()!==editor||editor.textContent.trim()!==text.trim()||!send||send.disabled||document.querySelector('[data-message-author-role]'))return preflight("composer_changed");
           clicked=true; send.click();
-          const until=Date.now()+120000;
-          while(Date.now()<until){
-            const match=location.pathname.match(/^\/c\/([^/]+)$/);
-            const nodes=[...document.querySelectorAll('[data-message-author-role="user"]')];
-            const matching=nodes.filter(n=>n.textContent.trim()===text.trim());
-            const id=matching[0]?.getAttribute("data-message-id")||matching[0]?.closest("[data-message-id]")?.getAttribute("data-message-id");
-            if(match&&uuid.test(match[1])&&matching.length===1&&uuid.test(id||""))
-              return {ok:true,admission:"confirmed",chat_ref:match[1],native_user_message_id:id};
-            await new Promise(resolve=>setTimeout(resolve,500));
-          }
-          return {ok:false,error:"first_send_outcome_unknown"};
+          return {ok:true,clicked:true};
         }catch{return clicked?{ok:false,error:"first_send_outcome_unknown"}:preflight("first_send_preflight_failed");}
       },args:[scope,text]});
-      return entry?.result??{ok:false,error:"first_send_outcome_unknown"};
+      if(!entry?.result?.clicked)return entry?.result??{ok:false,error:"first_send_outcome_unknown"};
+      const deadline=Date.now()+60000;
+      while(Date.now()<deadline){
+        const current=await chrome.tabs.get(tab.id);
+        let url;try{url=new URL(current.url);}catch{return {ok:false,error:"first_send_outcome_unknown"};}
+        if(url.origin!==ORIGIN)return {ok:false,error:"first_send_outcome_unknown"};
+        const match=url.pathname.match(/^\/c\/([0-9a-f-]+)$/i);
+        if(match&&lib.validRef(match[1])){
+          const ref=match[1],snapshot=await lib.read({chat_ref:ref,expected_account_scope:scope});
+          const again=await chrome.tabs.get(tab.id);
+          if(again.url!==url.href)return {ok:false,error:"first_send_outcome_unknown"};
+          if(snapshot.ok&&snapshot.chat_ref===ref&&snapshot.account_scope===scope&&Array.isArray(snapshot.messages)){
+            const matches=snapshot.messages.filter(m=>m?.role==="user"&&typeof m.text==="string"&&m.text.trim()===text.trim()&&lib.validRef(m.id));
+            if(matches.length===1)return {ok:true,admission:"confirmed",chat_ref:ref,native_user_message_id:matches[0].id};
+            if(matches.length>1)return {ok:false,error:"first_send_outcome_unknown"};
+          }
+        }else if(url.pathname!=="/")return {ok:false,error:"first_send_outcome_unknown"};
+        await new Promise(resolve=>setTimeout(resolve,500));
+      }
+      return {ok:false,error:"first_send_outcome_unknown"};
     }catch{return {ok:false,error:"first_send_outcome_unknown"};}
   };
   lib.archive=async(args={})=>{
