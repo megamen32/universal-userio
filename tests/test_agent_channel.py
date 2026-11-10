@@ -13,6 +13,75 @@ from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
 
 
+def test_results_poll_reads_only_needed_tail_of_large_journal(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    journal = tmp_path / 'results.jsonl'
+    old = b'{"user":"other","agent_id":"a","pad":"' + b'x' * 220 + b'"}\n'
+    with journal.open('wb') as stream:
+        for _ in range(70000):
+            stream.write(old)
+        stream.write(b'{"user":"owner","agent_id":"a","id":"latest"}\n')
+    cutoff = journal.stat().st_size - 1024 * 1024
+    original_open, original_read_text = Path.open, Path.read_text
+
+    class GuardedFile:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+        def __enter__(self):
+            self.wrapped.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.wrapped.__exit__(*args)
+        def read(self, size=-1):
+            assert self.wrapped.tell() >= cutoff, 'read reached old journal prefix'
+            assert 0 <= size <= 1024 * 1024, 'unbounded read'
+            return self.wrapped.read(size)
+        def __getattr__(self, name):
+            return getattr(self.wrapped, name)
+
+    def guarded_open(path, *args, **kwargs):
+        stream = original_open(path, *args, **kwargs)
+        return GuardedFile(stream) if path == journal else stream
+
+    def guarded_read_text(path, *args, **kwargs):
+        assert path != journal, 'whole-journal read'
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', guarded_open)
+    monkeypatch.setattr(Path, 'read_text', guarded_read_text)
+    monkeypatch.setattr(agent_channel, 'RESULTS_FILE', journal)
+    assert agent_channel.read_results(user='owner', agent_id='a', limit='1')['results'][0]['id'] == 'latest'
+
+
+def test_results_tail_filter_limits_partial_and_large_utf8_record(tmp_path, monkeypatch):
+    journal = tmp_path / 'results.jsonl'
+    monkeypatch.setattr(agent_channel, 'RESULTS_FILE', journal)
+    def row(user, agent, ident, **extra):
+        return json.dumps({'user': user, 'agent_id': agent, 'id': ident, **extra},
+                          ensure_ascii=False).encode('utf-8')
+
+    giant = row('owner', 'a', 'giant', text='я' * 140000)
+    journal.write_bytes(b'\n'.join([
+        row('owner', 'a', 'old'), giant, b'{broken',
+        row('other', 'a', 'wrong-user'), row('owner', 'ab', 'wrong-agent'),
+        row('owner', 'a', 'new', text='🌍' * 19000), b'{"user":"owner"',
+    ]))
+    found = agent_channel.read_results(user='owner', agent_id='a', limit='200')['results']
+    assert [r['id'] for r in found] == ['new', 'giant', 'old']
+    assert found[0]['text'] == '🌍' * 19000
+    assert found[1]['text'] == 'я' * 140000
+    assert agent_channel.read_results(user='owner', agent_id='a', limit='0')['results'][0]['id'] == 'new'
+    with journal.open('ab') as stream:
+        stream.write(b',"agent_id":"a","id":"appended"}')
+    assert agent_channel.read_results(user='owner', agent_id='a', limit='1')['results'][0]['id'] == 'appended'
+    with journal.open('ab') as stream:
+        stream.write(b'\n' + b'\n'.join(row('owner', 'a', str(i)) for i in range(205)))
+    found = agent_channel.read_results(user='owner', agent_id='a', limit='999')['results']
+    assert len(found) == 200
+    assert (found[0]['id'], found[-1]['id']) == ('204', '5')
+
+
 class Generator:
     def suggest(self, *, conversation_id, latest_message):
         return "draft"

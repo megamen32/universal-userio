@@ -456,28 +456,54 @@ def call(agent_id: str, action: str, args: dict | None = None, *, user: str,
     return result
 
 
+def _reverse_journal_lines(stream):
+    """Yield complete byte lines newest first, including an unterminated tail."""
+    stream.seek(0, os.SEEK_END)
+    position = stream.tell()
+    fragments = []
+    while position:
+        size = min(position, 64 * 1024)
+        position -= size
+        stream.seek(position)
+        chunk = stream.read(size)
+        end = len(chunk)
+        while True:
+            newline = chunk.rfind(b"\n", 0, end)
+            if newline < 0:
+                break
+            fragments.append(chunk[newline + 1:end])
+            yield b"".join(reversed(fragments))
+            fragments.clear()
+            end = newline
+        fragments.append(chunk[:end])
+    if fragments:
+        yield b"".join(reversed(fragments))
+
+
 def read_results(*, user: str, agent_id: str = "", limit: str = "20") -> dict:
     try:
         count = int(limit)
     except (TypeError, ValueError):
         raise ValueError("limit must be an integer") from None
     count = max(1, min(count, 200))
-    try:
-        lines = RESULTS_FILE.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        lines = []
     results = []
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if record.get("user") != user:
-            continue
-        if agent_id and record.get("agent_id") != agent_id:
-            continue
-        results.append(record)
-    return {"results": results[::-1][:count]}
+    try:
+        with RESULTS_FILE.open("rb") as stream:
+            for line in _reverse_journal_lines(stream):
+                try:
+                    record = json.loads(line.decode("utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                if record.get("user") != user:
+                    continue
+                if agent_id and record.get("agent_id") != agent_id:
+                    continue
+                results.append(record)
+                if len(results) == count:
+                    break
+    except FileNotFoundError:
+        pass
+    return {"results": results}
 
 
 def resolve_owner(user: str, agent_id: str, instance_id: str) -> dict:
