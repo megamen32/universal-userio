@@ -32,6 +32,12 @@ def test_public_archives_never_embed_api_token():
                     f"{archive_path.name} does not use an empty token"
                 )
         assert archives[0].read_bytes() == archives[1].read_bytes(), "ZIP aliases differ"
+        expected = archives[0].read_bytes()
+        with zipfile.ZipFile(archives[0], "a") as package:
+            package.writestr("obsolete-build-file.txt", "must not survive")
+        subprocess.run([str(ROOT / "scripts/build.sh")], cwd=ROOT, env=env, check=True)
+        assert archives[0].read_bytes() == expected, "identical inputs must produce identical clean archives"
+        assert archives[1].read_bytes() == expected
 
 
 def test_release_archives_match_extension_source():
@@ -46,6 +52,7 @@ def test_release_archives_match_extension_source():
             shipped = json.loads(package.read('manifest.json'))
             assert shipped['version'] == manifest['version'], 'shipped extension version is stale'
             for name in ('background.js', 'popup.js', 'popup.html', 'options.js', 'options.html',
+                         'lib/connections.js', 'lib/chatgpt-core.js', 'lib/chatgpt-state.js', 'lib/chatgpt-passive.js',
                          'lib/oauth.js', 'lib/update.js', 'lib/tab-groups.js', 'lib/chatgpt.js', 'lib/scoped-chatgpt.js', 'lib/zai.js', 'lib/zai-judge-page.js', 'lib/zai-judge.js', 'lib/zai-send.js', 'lib/agent.js', 'lib/userio.js'):
                 assert package.read(name) == (ROOT / name).read_bytes(), f'stale release asset: {name}'
 

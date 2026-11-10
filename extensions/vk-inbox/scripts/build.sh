@@ -18,7 +18,6 @@ if [[ ! -d "${STATIC_DIR}" ]]; then
     echo "Static dir not found: ${STATIC_DIR}" >&2
     exit 1
 fi
-if ! command -v zip >/dev/null; then echo "zip not found" >&2; exit 1; fi
 if ! command -v python3 >/dev/null; then echo "python3 not found" >&2; exit 1; fi
 
 cd "${ROOT}"
@@ -50,6 +49,23 @@ body = (
 open(path, "w", encoding="utf-8").write(body)
 PY
 
-( cd "${PKG}" && zip -qr "${STATIC_DIR}/vk-userio-extension.zip" . )
+python3 - "${PKG}" "${STATIC_DIR}/vk-userio-extension.zip" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+root, target = map(Path, sys.argv[1:])
+# Recreate the archive so removed files cannot survive a previous build.
+# Stable order, timestamps and modes make identical inputs byte-identical.
+with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as package:
+    for source in sorted(root.rglob("*")):
+        if not source.is_file():
+            continue
+        entry = zipfile.ZipInfo(source.relative_to(root).as_posix(), (1980, 1, 1, 0, 0, 0))
+        entry.create_system = 3
+        entry.external_attr = 0o100644 << 16
+        entry.compress_type = zipfile.ZIP_DEFLATED
+        package.writestr(entry, source.read_bytes(), compresslevel=9)
+PY
 cp "${STATIC_DIR}/vk-userio-extension.zip" "${STATIC_DIR}/vk-userio-extension-mv3.zip"
 echo "Built ${STATIC_DIR}/vk-userio-extension.zip (+ mv3 alias)"
