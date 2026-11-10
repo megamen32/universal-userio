@@ -2,7 +2,7 @@
 // site cookies are read here; the user completes UserIO's own consent screen.
 (function (root) {
   const TOKEN_KEYS = ["oauthAccessToken", "oauthRefreshToken", "oauthExpiresAt", "oauthClientId", "oauthRedirectUri", "oauthEndpoint"];
-  const suffix = (id) => id ? ":" + id : "";
+  const suffix = (id) => id && id !== "legacy-default" ? ":" + id : "";
   const keys = (id) => TOKEN_KEYS.map((key) => key + suffix(id));
   const connection = async (id) => id && root.UserIOConnections ? root.UserIOConnections.get(id) : null;
 
@@ -32,6 +32,7 @@
   async function endpoint(connectionId) {
     const configured = root.USERIO_CONFIG || {};
     const c = await connection(connectionId);
+    if (connectionId && connectionId !== "legacy-default" && !c) throw new Error("unknown_connection");
     const values = await chrome.storage.local.get({ endpoint: configured.endpoint || "http://127.0.0.1:18093" });
     const value = String(c?.endpoint || values.endpoint || configured.endpoint || "http://127.0.0.1:18093").replace(/\/+$/, "");
     const parsed = new URL(value);
@@ -72,10 +73,10 @@
   const refreshInFlight = new Map();
   async function accessToken(connectionId) {
     const [a,r,e,c,d,endpointKey]=keys(connectionId), values = await chrome.storage.local.get([a,r,e,c,d,endpointKey]);
-    if (!values[a]) return connectionId ? "" : String((await chrome.storage.local.get({ token: "" })).token || "");
+    if (!values[a]) return "";
     if (values[endpointKey] !== await endpoint(connectionId)) {
       await chrome.storage.local.remove(keys(connectionId));
-      return connectionId ? "" : String((await chrome.storage.local.get({ token: "" })).token || "");
+      return "";
     }
     if (Number(values[e]) > Date.now() + 60_000) return values[a];
     if (!values[r] || !values[c]) throw new Error("Сеанс UserIO истёк: подключите аккаунт снова.");

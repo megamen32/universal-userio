@@ -39,8 +39,9 @@
       return { agentId: s.agentId, agentInstanceId: s.agentInstanceId };
     })().catch((error) => { settingsPromise = null; throw error; });
     const identity = await settingsPromise;
-    const s = await chrome.storage.local.get(DEFAULTS);
-    return { ...DEFAULTS, ...(connectionId && root.UserIOConnections ? s : {}), agentId: s.agentId || identity.agentId,
+    const s = connectionId && root.UserIOConnections ? await root.UserIOConnections.get(connectionId) : await chrome.storage.local.get(DEFAULTS);
+    if (connectionId && !s) throw new Error("unknown_connection");
+    return { ...DEFAULTS, ...(connectionId && s ? s : {}), agentId: s.agentId || identity.agentId,
       agentInstanceId: s.agentInstanceId || identity.agentInstanceId };
   };
 
