@@ -49,17 +49,13 @@
     for (;;) {
       try {
         chrome.runtime.getPlatformInfo(() => {});
-        const command = await pollOnce();
-        if (command) {
-          const result = await execute(command)
-            .catch((e) => ({ ok: false, error: String(e && e.message || e) }));
+        const connections = root.UserIOConnections ? await root.UserIOConnections.list() : [{id:"legacy-default"}];
+        for (const connection of connections.filter(c=>c.enabled!==false)) {
+          const command = await pollOnce(connection.id);
+          if (!command) continue;
+          const result = await execute(command).catch((e) => ({ ok: false, error: String(e && e.message || e) }));
           handled += 1;
-          await root.UserIO.call("POST", "/v1/agent/results", {
-            id: command.id,
-            agent_id: command.agent_id,
-            action: command.action,
-            result,
-          });
+          await root.UserIO.call("POST", "/v1/agent/results", { id: command.id, agent_id: command.agent_id, action: command.action, connection_id: connection.id, agent_instance_id: (await root.UserIO.settings(connection.id)).agentInstanceId, result }, connection.id);
         }
         lastOkAt = Date.now();
         lastError = "";
@@ -71,18 +67,20 @@
     }
   }
 
-  async function pollOnce() {
-    const s = await root.UserIO.settings();
+  async function pollOnce(connectionId) {
+    const s = await root.UserIO.settings(connectionId);
     const base = s.endpoint.replace(/\/+$/, "");
-    const url = `${base}/v1/agent/poll?agent_id=${encodeURIComponent(s.agentId)}&instance_id=${encodeURIComponent(s.agentInstanceId)}&wait=${POLL_WAIT_SEC}`;
+    const url = `${base}/v1/agent/poll?agent_id=${encodeURIComponent(s.agentId)}&instance_id=${encodeURIComponent(s.agentInstanceId)}&connection_id=${encodeURIComponent(connectionId || "legacy-default")}&wait=${POLL_WAIT_SEC}`;
     const headers = {};
-    const token = await root.UserIO.accessToken();
+    const token = await root.UserIO.accessToken(connectionId);
     if (token) headers["Authorization"] = "Bearer " + token;
     const res = await fetch(url, { headers });
     if (!res.ok) throw new Error(`poll HTTP ${res.status}`);
     const data = await res.json().catch(() => ({}));
     if (data && data.identity_conflict) throw new Error('agent_identity_conflict');
-    return data && data.command;
+    const command=data && data.command;
+    if (command && (command.connection_id && command.connection_id!==connectionId || command.agent_instance_id && command.agent_instance_id!==s.agentInstanceId)) return null;
+    return command;
   }
 
   async function saveState() {

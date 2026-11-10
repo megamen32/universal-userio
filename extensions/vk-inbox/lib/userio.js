@@ -18,7 +18,7 @@
   };
 
   let settingsPromise;
-  lib.settings = async () => {
+  lib.settings = async (connectionId) => {
     if (!settingsPromise) settingsPromise = (async () => {
       const s = await chrome.storage.local.get({ ...DEFAULTS, agentState: null });
       const changed = {};
@@ -40,17 +40,17 @@
     })().catch((error) => { settingsPromise = null; throw error; });
     const identity = await settingsPromise;
     const s = await chrome.storage.local.get(DEFAULTS);
-    return { ...DEFAULTS, ...s, agentId: s.agentId || identity.agentId,
+    return { ...DEFAULTS, ...(connectionId && root.UserIOConnections ? s : {}), agentId: s.agentId || identity.agentId,
       agentInstanceId: s.agentInstanceId || identity.agentInstanceId };
   };
 
-  lib.accessToken = () => root.UserIOOAuth.accessToken();
+  lib.accessToken = (connectionId) => root.UserIOOAuth.accessToken(connectionId);
 
-  async function call(method, path, body) {
-    const s = await lib.settings();
+  async function call(method, path, body, connectionId) {
+    const s = await lib.settings(connectionId);
     const url = s.endpoint.replace(/\/+$/, "") + path;
     const headers = { "Content-Type": "application/json" };
-    const token = await lib.accessToken();
+    const token = await lib.accessToken(connectionId);
     if (token) headers["Authorization"] = "Bearer " + token;
     const res = await fetch(url, {
       method,
@@ -69,6 +69,16 @@
   }
 
   lib.call = call;
+  lib.connections = () => root.UserIOConnections.list();
+  lib.observeAccount = (account) => root.UserIOConnections.observeAccount(account);
+  lib.updateBindings = (key, ids) => root.UserIOConnections.updateBindings(key, ids);
+  lib.subscriptions = (account) => root.UserIOConnections.subscriptions(account);
+  lib.publishChatSnapshot = async (snapshot) => {
+    const selected = await lib.subscriptions({provider:"chatgpt", accountScope:snapshot.account_scope, accountId:snapshot.account_scope});
+    const results=[];
+    for (const c of selected) { try { results.push(await call("POST","/v1/chatgpt/snapshots",{...snapshot,source:"chatgpt"},c.id)); } catch(e) { results.push({ok:false,connectionId:c.id,error:e.message}); } }
+    return {ok:results.every(r=>r.ok!==false),results};
+  };
 
   lib.postMessage = async (message) => {
     const s = await lib.settings();
@@ -89,9 +99,9 @@
     call("POST", `/v1/drafts/${encodeURIComponent(draftId)}/approve`, {});
 
   // Convenience: forward a captured message envelope to UserIO.
-  lib.forwardCapture = async ({ peerId, peerName, msgId, body, ts, direction, attachments }) => {
+  lib.forwardCapture = async ({ peerId, peerName, msgId, body, ts, direction, attachments, connectionId }) => {
     const attList = Array.isArray(attachments) ? attachments : [];
-    return lib.postMessage({
+    return lib.call("POST", "/v1/messages", {
       schema: "universal.inbox.message.v1",
       source: "vk",
       message_id: String(msgId),
@@ -113,7 +123,7 @@
             })),
           }
         : {}),
-    });
+    }, connectionId || "legacy-default");
   };
 
   function guessAttachmentKind(a) {
