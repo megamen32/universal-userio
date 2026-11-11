@@ -36,22 +36,31 @@
     if(running)return {ok:false,error:'zai_first_busy',admission:'not_submitted'};
     running=true;
     const slot=key(rid);
-    let tab,started=false;
+    let tab,started=false,stage='storage_preflight';
     const save=async(phase,extra={})=>chrome.storage.local.set({[slot]:{phase,...extra,at:Date.now()}});
     try{
       if((await chrome.storage.local.get(slot))[slot])return {ok:false,error:'zai_first_duplicate',admission:'unknown'};
       await save('preflight');
+      stage='scope_list';
       const verify=await root.UserIOZai.list({expected_account_scope:scope});
       if(!verify.ok)throw new Error('scope');
-      tab=await chrome.tabs.create({url:'https://chat.z.ai/?userio_first='+rid,active:false});
+      stage='tab_create';
+      const target='https://chat.z.ai/?userio_first='+rid;
+      tab=await chrome.tabs.create({url:target,active:false});
+      stage='route';
       const deadline=Date.now()+25000;
+      let ready=false;
       while(Date.now()<deadline){
         const now=await chrome.tabs.get(tab.id);
-        const url=new URL(now.url);
-        if(url.origin!=='https://chat.z.ai'||url.pathname!=='/')throw new Error('target');
-        if(now.status==='complete')break;
-        await sleep(350);
+        if(now.status!=='complete' && now.pendingUrl===target){await sleep(350);continue;}
+        if(now.status!=='complete' && !now.pendingUrl && now.url===target){await sleep(350);continue;}
+        let url;try{url=new URL(now.url);}catch{stage='route_mismatch';throw new Error('target');}
+        if(url.origin!=='https://chat.z.ai'||url.pathname!=='/' || now.pendingUrl){stage='route_mismatch';throw new Error('target');}
+        if(now.status==='complete'){tab=now;ready=true;break;}
+        stage='route_mismatch';throw new Error('target');
       }
+      if(!ready){stage='route_timeout';throw new Error('timeout');}
+      stage='admission_record';
       await save('admission_unknown',{tab_id:tab.id});started=true;
       const result=await root.UserIOZai._invoke(tab,firstClick,[scope,text]);
       if(!result.ok)throw new Error('click');
@@ -77,9 +86,9 @@
       }
       throw new Error('timeout');
     }catch{
-      await save(started?'unknown':'rejected',tab?{tab_id:tab.id}:{});
+      try{await save(started?'unknown':'rejected',tab?{tab_id:tab.id}:{});}catch{}
       if(!started&&tab)await chrome.tabs.remove(tab.id).catch(()=>undefined);
-      return {ok:false,error:started?'zai_first_outcome_unknown':'zai_first_preflight_failed',admission:started?'unknown':'not_submitted'};
+      return {ok:false,error:started?'zai_first_outcome_unknown':'zai_first_preflight_failed',admission:started?'unknown':'not_submitted',...(!started?{diagnostic:stage}:{})};
     }finally{running=false;}
   };
   root.UserIOZaiLifecycle=lib;
