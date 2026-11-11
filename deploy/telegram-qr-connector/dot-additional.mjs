@@ -8,7 +8,7 @@ export function validateAdditionalBindings(rows,{peerId,reserved=[],reservedRoom
  for(const b of rows){
   if(b?.enabled===false)continue;
   if(!b||typeof b!=='object'||b.enabled!==true||!/^user_[a-z0-9]+$/.test(b.owner||'')||b.peerId!==peerId||
-   !/^telegram:[1-9][0-9]+$/.test(b.botAccountId||'')||! /^[A-Za-z0-9_-]{1,100}$/.test(b.agentId||'')||
+   !/^telegram:[1-9][0-9]+$/.test(b.botAccountId||'')||! /^[A-Za-z0-9_-]{1,100}$/.test(b.agentId||'')||! /^[A-Za-z0-9._:-]{1,128}$/.test(b.connectionId||'')||! /^[a-f0-9]{64}$/.test(b.accountScope||'')||
    !Number.isSafeInteger(b.pageId)||b.pageId<=0||! /^[a-f0-9]{32}$/.test(b.room||'')||
    !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(b.url||''))throw Error('invalid_additional_binding');
   if(reserved.includes(b.botAccountId))throw Error('reserved_additional_bot');

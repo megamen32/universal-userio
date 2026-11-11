@@ -2,7 +2,7 @@ import './dot-test-policy.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {AdditionalPrivateDots,validateAdditionalBindings} from './dot-additional.mjs';
-const binding={enabled:true,owner:'user_airlock',peerId:'111111111',botAccountId:'telegram:333333333',agentId:'mini',pageId:42,room:'cccccccccccccccccccccccccccccccc',url:'https://chatgpt.com/dots/new-room'};
+const binding={enabled:true,owner:'user_airlock',peerId:'111111111',botAccountId:'telegram:333333333',agentId:'mini',connectionId:'airlock',accountScope:'a'.repeat(64),pageId:42,room:'cccccccccccccccccccccccccccccccc',url:'https://chatgpt.com/dots/new-room'};
 test('additional private bot cannot replace existing bots or target a different recipient',()=>{
  assert.throws(()=>validateAdditionalBindings([binding],{peerId:'999',reserved:[]}),/binding/);
  assert.throws(()=>validateAdditionalBindings([binding],{peerId:binding.peerId,reserved:[binding.botAccountId]}),/reserved/);

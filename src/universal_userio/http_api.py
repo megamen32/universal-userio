@@ -2332,6 +2332,7 @@ def handler(
                         query.get("wait", ["20"])[0],
                         user=principal.username,
                         instance_id=query.get("instance_id", [""])[0],
+                        connection_id=query.get("connection_id", [""])[0],
                     ))
                 except ValueError as error:
                     self._reply(400, {"error": str(error)})
@@ -2341,6 +2342,7 @@ def handler(
                     self._reply(200, agent_channel.read_results(
                         user=principal.username,
                         agent_id=query.get("agent_id", [""])[0].strip(),
+                        connection_id=query.get("connection_id", [""])[0].strip(),
                         limit=query.get("limit", ["20"])[0],
                     ))
                 except ValueError as error:

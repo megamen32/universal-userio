@@ -38,6 +38,9 @@ def test_chatgpt_agent_fallback_targets_the_sending_user_queue(tmp_path, monkeyp
     monkeypatch.setattr(agent_channel, "COMMANDS_FILE", tmp_path / "commands.jsonl")
     monkeypatch.setattr(agent_channel, "RESULTS_FILE", tmp_path / "results.jsonl")
     monkeypatch.setattr(agent_channel, "IDENTITY_DIR", tmp_path / "identity")
+    # The fallback intentionally requires an active route before enqueueing;
+    # establish the sender's legacy poller so the test exercises queue user isolation.
+    agent_channel.poll("vk-browser", 0, user=alice.username)
 
     conversation = store.create_conversation(
         "chatgpt:work", "chat-ref-alice", user_id=alice.user_id)

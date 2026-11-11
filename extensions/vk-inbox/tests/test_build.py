@@ -71,7 +71,7 @@ def test_build_retains_the_configured_legacy_identity_for_migration():
             assert data.get('agentId') == 'same-for-all'
 
 
-def test_sanitizer_retains_the_public_legacy_fallback_without_credentials():
+def test_sanitizer_removes_public_legacy_identity_without_credentials():
     import json
     import re
     with tempfile.TemporaryDirectory(prefix='userio-identity-sanitize-') as temp:
@@ -84,5 +84,5 @@ def test_sanitizer_retains_the_public_legacy_fallback_without_credentials():
         with zipfile.ZipFile(archive) as package:
             config = package.read('lib/config.js').decode()
             data = json.loads(re.search(r'USERIO_CONFIG\s*=\s*(\{[^;]+\})', config).group(1))
-            assert data.get('agentId') == 'vk-browser'
+            assert data.get('agentId') == ''
             assert not data.get('token')

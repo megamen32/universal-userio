@@ -7,10 +7,24 @@ from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import pytest
+
 from universal_userio import agent_channel
 from universal_userio.http_api import handler
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
+
+
+@pytest.fixture(autouse=True)
+def _reset_agent_channel_state(monkeypatch):
+    """Keep module-level routing state isolated between tests."""
+    monkeypatch.setattr(agent_channel, "_PENDING", {})
+    monkeypatch.setattr(agent_channel, "_LAST_POLL", {})
+    monkeypatch.setattr(agent_channel, "_ACTIVE_POLLERS", {})
+    monkeypatch.setattr(agent_channel, "_ACTIVE_CONNECTIONS", {})
+    monkeypatch.setattr(agent_channel, "_RESULTS", {})
+    monkeypatch.setattr(agent_channel, "_WAITING", set())
+    monkeypatch.setattr(agent_channel, "_COMMANDS", {})
 
 
 def test_results_poll_reads_only_needed_tail_of_large_journal(tmp_path, monkeypatch):
@@ -616,6 +630,73 @@ def test_old_client_first_poll_pending_and_restart_keep_serving(tmp_path, monkey
     body = agent_channel.poll('legacy', 0, user='owner')
     assert body['command']['action'] == 'second'
     assert body['identity_conflict'] is False
+
+
+def test_connection_scoped_queues_and_results_stay_on_their_connection(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_channel, 'COMMANDS_FILE', tmp_path / 'commands.jsonl')
+    monkeypatch.setattr(agent_channel, 'RESULTS_FILE', tmp_path / 'results.jsonl')
+    monkeypatch.setattr(agent_channel, 'IDENTITY_DIR', tmp_path / 'identity')
+    instance = 'browser-11111111-1111-4111-8111-111111111111'
+    first = agent_channel.enqueue({
+        'agent_id': 'airlock-agent', 'agent_instance_id': instance,
+        'connection_id': 'airlock', 'action': 'dot_snapshot',
+    }, user='owner', principal_id='principal-airlock')
+    second = agent_channel.enqueue({
+        'agent_id': 'airlock-agent', 'agent_instance_id': instance,
+        'connection_id': 'legacy-default', 'action': 'ping',
+    }, user='owner', principal_id='principal-legacy')
+
+    assert agent_channel.poll(
+        'airlock-agent', 0, user='owner', instance_id=instance,
+        connection_id='airlock')['command']['id'] == first['id']
+    assert agent_channel.poll(
+        'airlock-agent', 0, user='owner', instance_id=instance,
+        connection_id='legacy-default')['command']['id'] == second['id']
+
+    with pytest.raises(ValueError, match='connection_id mismatch'):
+        agent_channel.push_result({
+            'id': first['id'], 'agent_id': 'airlock-agent',
+            'agent_instance_id': instance, 'connection_id': 'legacy-default',
+            'action': 'dot_snapshot', 'result': {'ok': True},
+        }, user='owner', principal_id='principal-airlock')
+
+    agent_channel.push_result({
+        'id': first['id'], 'agent_id': 'airlock-agent',
+        'agent_instance_id': instance, 'connection_id': 'airlock',
+        'principal_id': 'principal-airlock', 'action': 'dot_snapshot',
+        'result': {'ok': True},
+    }, user='owner', principal_id='principal-airlock')
+    status = agent_channel.status(user='owner')
+    entry = next(item for item in status['agents'] if item['agent_id'] == 'airlock-agent')
+    contexts = {(item['instance_id'], item['connection_id']) for item in entry['instance_contexts']}
+    assert (instance, 'airlock') in contexts
+    assert (instance, 'legacy-default') in contexts
+
+
+def test_http_connection_context_is_required_for_the_matching_result(tmp_path, monkeypatch):
+    base = _server(tmp_path, monkeypatch)
+    instance = 'browser-22222222-2222-4222-8222-222222222222'
+    principal = _HTTP_SERVICES[-1]._store.owner().user_id
+    _, queued = _post(base, '/v1/agent/commands', {
+        'agent_id': 'airlock-agent', 'agent_instance_id': instance,
+        'connection_id': 'airlock', 'action': 'dot_snapshot',
+    })
+    _, polled = _get(
+        base, f'/v1/agent/poll?agent_id=airlock-agent&wait=0&instance_id={instance}&connection_id=airlock')
+    assert polled['command']['id'] == queued['id']
+    with pytest.raises(HTTPError) as failure:
+        _post(base, '/v1/agent/results', {
+            'id': queued['id'], 'agent_id': 'airlock-agent',
+            'agent_instance_id': instance, 'connection_id': 'legacy-default',
+            'action': 'dot_snapshot', 'result': {'ok': True},
+        })
+    assert failure.value.code == 400
+    assert _post(base, '/v1/agent/results', {
+        'id': queued['id'], 'agent_id': 'airlock-agent',
+        'agent_instance_id': instance, 'connection_id': 'airlock',
+        'principal_id': principal,
+        'action': 'dot_snapshot', 'result': {'ok': True},
+    })[0] == 202
 
 
 def test_ledger_with_invalid_instance_entries_is_corrupt(tmp_path, monkeypatch):

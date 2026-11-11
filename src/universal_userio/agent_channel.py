@@ -48,11 +48,14 @@ IDENTITY_SCHEMA = "universal.agent.identity.v1"
 
 _LOCK = threading.Lock()
 # (user, agent_id) -> deque of queued commands not yet delivered.
-_PENDING: dict[tuple[str, str], deque] = {}
+_PENDING: dict[tuple[str, str, str], deque] = {}
 _COND = threading.Condition(_LOCK)
 _LAST_POLL: dict[tuple[str, str], float] = {}
 # Different extension profiles must not compete for one legacy agent ID.
 _ACTIVE_POLLERS: dict[tuple[str, str], dict[str, float]] = {}
+# The same browser instance can poll several UserIO connections. Keep their
+# heartbeats separate so command delivery can be bound to one connection.
+_ACTIVE_CONNECTIONS: dict[tuple[str, str], dict[str, dict[str, float]]] = {}
 # command id -> result object, kept so internal callers can block on one.
 _RESULTS: dict[str, dict] = {}
 _WAITING: set[str] = set()
@@ -242,7 +245,7 @@ def enqueue(payload: dict, *, user: str, principal_id: str = "") -> dict:
     record = dict(command)
     COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        key = (user, target_instance or agent_id)
+        key = (user, target_instance or agent_id, connection_id)
         queue = _PENDING.setdefault(key, deque())
         if len(queue) >= MAX_PENDING_PER_AGENT:
             raise ValueError(f"pending queue full for {agent_id}")
@@ -295,13 +298,17 @@ def _route_view(user: str, agent_id: str) -> dict:
     }
 
 
-def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") -> dict:
+def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "",
+         connection_id: str = "") -> dict:
     agent_id = str(agent_id or "").strip()
     if not agent_id:
         raise ValueError("agent_id required")
     instance_id = str(instance_id or "").strip()
     if instance_id and not INSTANCE_RE.fullmatch(instance_id):
         raise ValueError("invalid instance_id")
+    connection_id = str(connection_id or "").strip()
+    if len(connection_id) > 256:
+        raise ValueError("connection_id is too long")
     try:
         wait_sec = min(max(float(wait), 0.0), float(MAX_WAIT_SEC))
     except (TypeError, ValueError):
@@ -317,7 +324,9 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") ->
     with _COND:
         _LAST_POLL[key] = _now()
         peers = _ACTIVE_POLLERS.setdefault(key, {})
+        contexts = _ACTIVE_CONNECTIONS.setdefault(key, {})
         peers[peer] = _now()
+        contexts.setdefault(peer, {})[connection_id] = _now()
         _COND.notify_all()
         _record_identity(user, agent_id, instance_id=instance_id,
                          legacy_seen=not instance_id)
@@ -326,6 +335,15 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") ->
             for name, seen in list(peers.items()):
                 if now - seen > ACTIVE_POLLER_TTL:
                     del peers[name]
+            for name, values in list(contexts.items()):
+                for context, seen in list(values.items()):
+                    if now - seen > ACTIVE_POLLER_TTL:
+                        del values[context]
+                if not values:
+                    contexts.pop(name, None)
+                    peers.pop(name, None)
+                else:
+                    peers[name] = max(values.values())
             # Re-derive the routing decision on every wakeup: a profile that
             # appears mid-wait must immediately make the shared queue
             # contested instead of losing a race.
@@ -338,7 +356,7 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") ->
             # 1. Commands addressed to this profile's own browser UUID are
             #    always deliverable: that is the profile's private address.
             if own_key is not None:
-                own_queue = _PENDING.get(own_key)
+                own_queue = _PENDING.get((user, instance_id, connection_id))
                 if own_queue:
                     command = own_queue.popleft()
                     break
@@ -347,7 +365,7 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") ->
                 if peer != owner:
                     conflict = True
                     break
-                queue = _PENDING.get(key)
+                queue = _PENDING.get((user, agent_id, connection_id))
                 if queue:
                     command = queue.popleft()
                     break
@@ -361,7 +379,7 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "") ->
                 if ambiguous:
                     conflict = True
                     break
-                queue = _PENDING.get(key)
+                queue = _PENDING.get((user, agent_id, connection_id))
                 if queue:
                     command = queue.popleft()
                     break
@@ -398,9 +416,12 @@ def push_result(payload: dict, *, user: str, principal_id: str = "") -> dict:
         raise ValueError("result user mismatch")
     if principal_id and payload.get("principal_id") and str(payload.get("principal_id")) != str(principal_id):
         raise ValueError("result principal_id mismatch")
+    scoped = bool(command and (command.get("connection_id") or command.get("agent_instance_id")))
     for key in ("agent_id", "action", "connection_id", "principal_id", "agent_instance_id"):
         expected = str(command.get(key) or "") if command else ""
         supplied = str(payload.get(key) or "")
+        if expected and scoped and not supplied:
+            raise ValueError(f"result {key} required")
         if expected and supplied and expected != supplied:
             raise ValueError(f"result {key} mismatch")
     record = {
@@ -430,13 +451,16 @@ def push_result(payload: dict, *, user: str, principal_id: str = "") -> dict:
 
 
 def call(agent_id: str, action: str, args: dict | None = None, *, user: str,
-         timeout_sec: float = 60.0) -> dict:
+         timeout_sec: float = 60.0, connection_id: str = "",
+         agent_instance_id: str = "") -> dict:
     """Enqueue a command and block until the extension posts its result.
 
     Server-side transport for flows that must run inside the real browser
     (for example ChatGPT delivery when Cloudflare rejects datacenter POSTs).
     """
-    queued = enqueue({"agent_id": agent_id, "action": action, "args": args or {}}, user=user)
+    queued = enqueue({"agent_id": agent_id, "agent_instance_id": agent_instance_id,
+                      "connection_id": connection_id, "action": action,
+                      "args": args or {}}, user=user)
     command_id = queued["id"]
     deadline = _now() + max(1.0, min(timeout_sec, 120.0))
     with _COND:
@@ -480,7 +504,8 @@ def _reverse_journal_lines(stream):
         yield b"".join(reversed(fragments))
 
 
-def read_results(*, user: str, agent_id: str = "", limit: str = "20") -> dict:
+def read_results(*, user: str, agent_id: str = "", connection_id: str = "",
+                 limit: str = "20") -> dict:
     try:
         count = int(limit)
     except (TypeError, ValueError):
@@ -497,6 +522,8 @@ def read_results(*, user: str, agent_id: str = "", limit: str = "20") -> dict:
                 if record.get("user") != user:
                     continue
                 if agent_id and record.get("agent_id") != agent_id:
+                    continue
+                if connection_id and record.get("connection_id") != connection_id:
                     continue
                 results.append(record)
                 if len(results) == count:
@@ -547,11 +574,13 @@ def identity_report(*, user: str) -> dict:
 def status(*, user: str) -> dict:
     agents: dict[str, dict] = {}
     with _LOCK:
-        for (owner, agent_id), queue in _PENDING.items():
+        for (owner, agent_id, connection_id), queue in _PENDING.items():
             if owner != user:
                 continue
             entry = agents.setdefault(agent_id, {"agent_id": agent_id, "pending": 0})
             entry["pending"] = len(queue)
+            if connection_id:
+                entry.setdefault("pending_connections", {})[connection_id] = len(queue)
         for (owner, agent_id), at in _LAST_POLL.items():
             if owner != user:
                 continue
@@ -570,6 +599,13 @@ def status(*, user: str) -> dict:
             entry["legacy_unaddressable"] = bool(view["legacy_unaddressable"])
             entry["legacy_seen"] = bool(view["legacy_seen"])
             entry["owner_instance"] = view["owner_instance"]
+            contexts = _ACTIVE_CONNECTIONS.get((user, agent_id), {})
+            entry["instance_contexts"] = [
+                {"instance_id": instance, "connection_id": connection,
+                 "last_poll_at": seen}
+                for instance, values in sorted(contexts.items())
+                for connection, seen in sorted(values.items())
+            ]
             if view["identity_error"]:
                 entry["identity_error"] = view["identity_error"]
     return {"agents": sorted(agents.values(), key=lambda a: a["agent_id"])}

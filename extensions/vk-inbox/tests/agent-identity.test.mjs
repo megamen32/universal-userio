@@ -27,10 +27,13 @@ test('fresh profiles create distinct persistent automatic agent identities', asy
 test('existing explicit binding remains stable', async () => {
   assert.equal((await profile({ agentId: 'vk-browser-intel' }).settings()).agentId, 'vk-browser-intel');
 });
-test('an existing legacy installation keeps its bound agent identity on upgrade', async () => {
+test('an existing legacy installation migrates once to its instance route', async () => {
   const existing = profile({ agentState: { lastOkAt: 100, ts: 101 } });
-  assert.equal((await existing.settings()).agentId, 'vk-browser');
-  assert.equal(existing.data.agentId, 'vk-browser');
+  const first = await existing.settings();
+  assert.equal(first.agentId, first.agentInstanceId);
+  assert.equal(existing.data.agentId, first.agentInstanceId);
+  assert.equal(existing.data.agentIdentityMigration, 'agent-identity-v1');
+  assert.equal((await existing.settings()).agentId, first.agentId);
 });
 test('two legacy profiles have distinct persistent instance identities', async () => {
   const a = profile({agentId:'vk-browser'}), b = profile({agentId:'vk-browser'});
@@ -38,5 +41,6 @@ test('two legacy profiles have distinct persistent instance identities', async (
   assert.match(left.agentInstanceId, /^browser-[0-9a-f-]{36}$/);
   assert.notEqual(left.agentInstanceId,right.agentInstanceId);
   assert.equal((await a.settings()).agentInstanceId,left.agentInstanceId);
-  assert.equal(left.agentId,'vk-browser');
+  assert.equal(left.agentId,left.agentInstanceId);
+  assert.equal(a.data.agentIdentityMigration,'agent-identity-v1');
 });

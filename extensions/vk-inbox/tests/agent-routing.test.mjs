@@ -50,6 +50,19 @@ test('scoped first send is fenced and never replayed',async()=>{
 test('command with mismatched connection or principal never executes or posts',async()=>{
   const f=fixture(); await assert.rejects(()=>f.self.Agent.processCommand({id:'1',action:'gpt_read',connection_id:'personal'},{connectionId:'work',principalId:'alice',agentInstanceId:'i'}),/command_context_mismatch/); assert.equal(f.calls.length,0);
 });
+test('Dots commands require the selected ChatGPT scope and return the full receipt context',async()=>{
+  const scope='a'.repeat(64),calls=[],data={},tab={id:7,url:'https://chatgpt.com/dots/a~b'};
+  const chrome={storage:{local:{async get(k){return {[k]:data[k]}},async set(p){Object.assign(data,p)}}},tabs:{query:async()=>[tab]},scripting:{executeScript:async({func,args})=>{
+    if(args?.length===1&&args[0]===scope)return [{result:{ok:true,account_scope:scope}}];
+    return [{result:{ok:true,room:'r',cursor:'c'}}];
+  }}};
+  const self={UserIOConnections:{subscriptionsForScope:async(provider,value)=>provider==='chatgpt'&&value===scope?[{id:'work'}]:[]},UserIO:{call:async(...args)=>(calls.push(args),{accepted:true})},UserIODot:{pageAction:()=>({ok:true,room:'r',cursor:'c'})}};
+  vm.runInNewContext(fs.readFileSync(new URL('../lib/agent.js',import.meta.url),'utf8'),{self,chrome,URL,setTimeout,console,fetch:async()=>({ok:true}),crypto:webcrypto,TextEncoder});
+  const ctx={connectionId:'work',principalId:'alice',agentInstanceId:'instance'};
+  assert.equal((await self.Agent.processCommand({id:'dot-no',agent_id:'agent',action:'dot_profile_probe',args:{url:tab.url,room:'r',expected_account_scope:'b'.repeat(64)}},ctx)).error,'account_not_authorized');
+  const result=await self.Agent.processCommand({id:'dot-yes',agent_id:'agent',action:'dot_profile_probe',args:{url:tab.url,room:'r',expected_account_scope:scope}},ctx);
+  assert.equal(result.matches,true);assert.equal(calls.at(-1)[2].principal_id,'alice');assert.equal(calls.at(-1)[2].connection_id,'work');
+});
 test('Z.ai lifecycle commands require a bound destination and dispatch to exact handlers',async()=>{
   const f=fixture(),ctx={connectionId:'work',principalId:'alice',agentInstanceId:'instance'}, seen=[];
   f.self.UserIOZai={raw:async args=>{seen.push(['raw',args]);return {ok:true}},archive:async args=>{seen.push(['archive',args]);return {ok:true}}};

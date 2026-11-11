@@ -36,7 +36,7 @@ cp -r lib content "${PKG}/"
 
 # Bake public configuration into the package only. The shared ZIP must never
 # contain a deployment token; users connect their account through OAuth after installation.
-python3 - "${PKG}/lib/config.js" "${USERIO_PUBLIC_ENDPOINT:-https://msg.bezrabotnyi.com}" "${USERIO_AGENT_ID:-vk-browser}" <<'PY'
+python3 - "${PKG}/lib/config.js" "${USERIO_PUBLIC_ENDPOINT:-https://msg.bezrabotnyi.com}" "${USERIO_AGENT_ID:-}" <<'PY'
 import json, sys
 path, endpoint, legacy_agent_id = sys.argv[1:4]
 cfg = {"endpoint": endpoint, "token": "", "agentId": legacy_agent_id}

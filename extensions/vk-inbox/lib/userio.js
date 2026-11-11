@@ -18,22 +18,22 @@
   };
 
   let settingsPromise;
+  const AGENT_IDENTITY_MIGRATION = "agent-identity-v1";
   lib.settings = async (connectionId) => {
     if (!settingsPromise) settingsPromise = (async () => {
-      const s = await chrome.storage.local.get({ ...DEFAULTS, agentState: null });
+      const s = await chrome.storage.local.get({ ...DEFAULTS, agentState: null, agentIdentityMigration: "" });
       const changed = {};
       if (!s.agentInstanceId) {
         s.agentInstanceId = `browser-${crypto.randomUUID()}`;
         changed.agentInstanceId = s.agentInstanceId;
       }
-      if (!s.agentId) {
-        // An older installation has already polled under its baked identity.
-        // Keep that route until its existing bindings can be migrated; a
-        // fresh profile has no previous poll state and gets its own ID.
-        s.agentId = s.agentState && typeof s.agentState === 'object'
-          ? (CFG.agentId || 'vk-browser')
-          : s.agentInstanceId;
+      if (!s.agentId || s.agentId === "vk-browser") {
+        // One-time migration from the old shared baked route. Explicit custom
+        // identities remain untouched; fresh profiles derive their route from
+        // the persistent browser instance UUID.
+        s.agentId = s.agentInstanceId;
         changed.agentId = s.agentId;
+        changed.agentIdentityMigration = AGENT_IDENTITY_MIGRATION;
       }
       if (Object.keys(changed).length) await chrome.storage.local.set(changed);
       return { agentId: s.agentId, agentInstanceId: s.agentInstanceId };

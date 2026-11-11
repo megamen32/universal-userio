@@ -9,7 +9,7 @@ export function readDotBinding(path=BINDING_PATH,includeDisabled=false){
   if(!DOT_POLICY||b.owner!==OWNER||b.room!==ROOM||!/^telegram:\d+$/.test(b.botAccountId)||RESERVED_ACCOUNTS.includes(b.botAccountId))throw Error('invalid_dot_binding');
   if(b.enabled!==true)return includeDisabled ? b : null;
   if(b.transport!==undefined&&!['cdp','extension'].includes(b.transport))throw Error('invalid_dot_transport');
-  if(b.transport==='extension'&&(typeof b.agentId!=='string'||! /^[A-Za-z0-9_-]{1,100}$/.test(b.agentId)))throw Error('invalid_dot_extension_binding');
+  if(b.transport==='extension'&&(typeof b.agentId!=='string'||! /^[A-Za-z0-9_-]{1,100}$/.test(b.agentId)||! /^[A-Za-z0-9._:-]{1,128}$/.test(b.connectionId||'')||! /^[a-f0-9]{64}$/.test(b.accountScope||'')))throw Error('invalid_dot_extension_binding');
   if(!Number.isSafeInteger(b.pageId)||b.pageId<=0)throw Error('invalid_dot_browser_binding');
   return b;
 }

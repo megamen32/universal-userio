@@ -25,7 +25,7 @@ def sanitize(path: Path) -> None:
         data = json.loads(match.group(2))
         if not isinstance(data, dict):
             raise ValueError("extension configuration is invalid")
-        data.update(endpoint=_PUBLIC_ENDPOINT, token="", agentId="vk-browser")
+        data.update(endpoint=_PUBLIC_ENDPOINT, token="", agentId="")
         config = config[:match.start(2)] + json.dumps(data, ensure_ascii=False) + config[match.end(2):]
         existing["lib/config.js"] = config.encode()
         options = existing["options.js"].decode()

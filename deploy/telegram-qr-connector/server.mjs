@@ -922,7 +922,7 @@ function getDotRelay(accountId,binding) {
         if(!info.isFile()||(info.mode&0o777)!==0o600||info.uid!==process.getuid())throw Error('unsafe_private_agent_credential');
         const dec=spawnSync('age',['--decrypt','-i',keyPath,path],{encoding:'utf8',maxBuffer:16384});
         if(dec.status!==0||!dec.stdout.trim())throw Error('private_agent_credential_unavailable');
-        return createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:DOT_POLICY.browserUrl,room:binding.room,token:dec.stdout.trim()});
+        return createExtensionCaller({base:userIoUrl,agentId:binding.agentId,connectionId:binding.connectionId,accountScope:binding.accountScope,url:DOT_POLICY.browserUrl,room:binding.room,token:dec.stdout.trim()});
       }}),
       send:async(owner,text,replyReceipt=null,entities=[])=>{
         if(owner!==DOT_OWNER)throw new Error("wrong_dot_owner");
@@ -980,7 +980,7 @@ async function initializeGroupRelay(binding,identity){
  const token=dec.stdout.trim();
  const check=await fetch(new URL('/v1/connection-principal',userIoUrl),{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(5000)});
  if(!check.ok||(await check.json()).user_id!==binding.owner)throw Error('group_agent_owner_mismatch');
- const browserCall=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:binding.url,room:binding.room,token});
+ const browserCall=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,connectionId:binding.connectionId,accountScope:binding.accountScope,url:binding.url,room:binding.room,token});
  const boundLive=()=>{
   const current=readGroupBinding(groupBindingPath);
   if(JSON.stringify(current)!==identity)throw Error('group_binding_changed');
@@ -1068,7 +1068,7 @@ const extraDots=new AdditionalPrivateDots({read:readExtraDots,create:async(bindi
   const pair=[...liveSlots.entries()].find(([slot,item])=>item.accountId===binding.botAccountId&&item.self?.bot===true&&enrollmentOwners.allowed(slot,binding.owner));
   if(!pair)throw Error('additional_bot_disconnected');return pair[1];
  };
- const transport=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,url:binding.url,room:binding.room,token,assertAllowed:()=>{boundLive();}});
+ const transport=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,connectionId:binding.connectionId,accountScope:binding.accountScope,url:binding.url,room:binding.room,token,assertAllowed:()=>{boundLive();}});
  const browserCall=(action,args)=>{boundLive();return transport(action,args);};
  const relay=new DotRelay({statePath:stateDir+'/dot-relay-'+binding.botAccountId.split(':')[1]+'.json',
   botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,browserCall,
