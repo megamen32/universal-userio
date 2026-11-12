@@ -5,6 +5,27 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
     const rows = allRows.filter(e=>!e.closest?.('.reply-chain-panel[role="dialog"]'));
     const prefix = room + '~' + room + '~CalpicoMessage~';
     if (!rows.length || rows.some(e => !e.dataset.messageId.startsWith(prefix))) return {ok:false,error:'wrong_or_unloaded_room'};
+    // Dots carries replyTo/replyRootMessageId on the rendered message record.
+    // The quote preview may be hidden for assistant replies, so DOM quotes alone
+    // are not sufficient. Read only the record matching this exact row/room.
+    const nativeReply=e=>{
+      const id=e.dataset.messageId;
+      const valid=value=>typeof value==='string'&&value.startsWith(prefix)&&value!==id;
+      const quote=e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId;
+      if(valid(quote))return {known:true,parent:quote};
+      const key=Object.getOwnPropertyNames(e).find(k=>k.startsWith('__reactFiber'));
+      let fiber=key&&e[key];
+      for(let depth=0;fiber&&depth<8;depth++,fiber=fiber.return){
+        const props=fiber.memoizedProps||{},record=props.message||props.connectedMessage;
+        if(!record||record.id!==id||(!Object.hasOwn(record,'replyTo')&&!Object.hasOwn(record,'replyRootMessageId')))continue;
+        const direct=typeof record.replyTo==='string'?record.replyTo:record.replyTo?.id||record.replyTo?.messageId;
+        if(valid(direct))return {known:true,parent:direct};
+        if(valid(record.replyRootMessageId))return {known:true,parent:record.replyRootMessageId};
+        if((direct&&direct!==id)||(record.replyRootMessageId&&record.replyRootMessageId!==id))return {known:false,parent:null};
+        return {known:true,parent:null};
+      }
+      return {known:false,parent:null};
+    };
     const messages=[];
     for(const e of rows){
       const content=e.querySelector('.message-text');
@@ -74,64 +95,18 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
         const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('document\0'+e.dataset.messageId+'\0'+index+'\0'+name));
         attachment_fingerprints.push(Array.from(new Uint8Array(digest)).map(x=>x.toString(16).padStart(2,'0')).join(''));
       }
+      const relation=nativeReply(e);
       messages.push({id:e.dataset.messageId,role:e.classList.contains('self')?'user':'assistant',
         text,entities:formatIncomplete?[]:mapped,format_incomplete:formatIncomplete,
         attachment_names:[...images.map(i=>i.alt).filter(Boolean),...documents.filter(validName)],
         attachment_count:images.length+documents.length,attachment_fingerprints,attachment_incomplete:attachmentIncomplete,
-        reply_to:e.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||null});
+        reply_to:relation.parent,...(relation.known?{reply_resolution:'native_message'}:nativeAfter?{reply_resolution:'pending'}:{})});
     }
     let editors = [...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e => e.getClientRects().length);
     if (text === null) {
-      // The native reply dialog exposes the actual thread even when the main
-      // transcript omits a quoted-reply button. Read that UI relation, never
-      // infer a private destination from chronological adjacency.
-      if(nativeAfter){
-        const cacheKey='__userioDotNativeReplies',prior=globalThis[cacheKey];
-        const cache=prior?.url===url&&prior?.room===room?prior:{url,room,links:{}};
-        globalThis[cacheKey]=cache;
-        const panelSelector='.reply-chain-panel[role="dialog"]';
-        const readPanel=panel=>{
-          const items=[...panel.querySelectorAll('article.message-row[data-message-id]')];
-          if(!items.length||items.some(r=>!r.dataset.messageId.startsWith(prefix)))return null;
-          const rootId=items[0].dataset.messageId;
-          cache.links[rootId]=null;
-          for(const row of items.slice(1))cache.links[row.dataset.messageId]=row.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||rootId;
-          return items.map(r=>r.dataset.messageId);
-        };
-        for(const panel of document.querySelectorAll(panelSelector))readPanel(panel);
-        const startIndex=messages.findIndex(m=>m.id===nativeAfter);
-        for(const message of startIndex<0?[]:messages.slice(startIndex+1)){
-          if(message.role!=='assistant'||message.reply_to)continue;
-          if(!Object.hasOwn(cache.links,message.id)&&!document.querySelector(panelSelector)){
-            const node=rows.find(row=>row.dataset.messageId===message.id),button=node?.querySelector('[data-action="reply"]');
-            if(button){
-              let ownedPanel=null;
-              try{
-                button.click();
-                for(let attempt=0;attempt<10;attempt++){
-                  await new Promise(resolve=>setTimeout(resolve,50));
-                  const panels=[...document.querySelectorAll(panelSelector)];
-                  if(panels.length!==1)continue;
-                  ownedPanel=panels[0];
-                  const ids=[...ownedPanel.querySelectorAll('article.message-row[data-message-id]')].map(row=>row.dataset.messageId);
-                  if(!ids.includes(message.id))continue;
-                  readPanel(ownedPanel);break;
-                }
-              }finally{
-                const close=ownedPanel&&[...ownedPanel.querySelectorAll('button')].find(b=>['Закрыть ветку ответов','Close reply thread','Close replies'].includes(b.getAttribute('aria-label')));
-                close?.click();
-                for(let attempt=0;ownedPanel?.isConnected&&attempt<10;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
-              }
-            }
-          }
-          if(Object.hasOwn(cache.links,message.id)){message.reply_to=cache.links[message.id];message.reply_resolution='native_thread';}
-          else message.reply_resolution='pending';
-        }
-      }
-
       const index = after ? messages.findIndex(m=>m.id===after) : -1;
       if(after && index<0) return {ok:false,error:'cursor_not_visible',resync_required:true};
-      return {ok:true,room,messages:messages.slice(index+1),cursor:messages.at(-1)?.id};
+      return {ok:true,room,native_reply_reader:'message-v1',messages:messages.slice(index+1),cursor:messages.at(-1)?.id};
     }
     if(editors.length!==1) return {ok:false,error:'ambiguous_composer'};
     if((editors[0].innerText||editors[0].textContent||'').trim()) return {ok:false,error:'existing_draft'};
@@ -190,7 +165,8 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       if(location.href!==url)return {ok:false,error:'navigation_requires_review'};
       const currentEditors=[...scope.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
       if(editor.isConnected===false || currentEditors.length!==1 || currentEditors[0]!==editor)return {ok:false,error:'draft_requires_review',draft_issue:'composer_changed'};
-      if((editor.innerText||editor.textContent||'').trim()!==text.trim())return {ok:false,error:'draft_requires_review',draft_issue:'text_changed'};
+      const comparable=value=>String(value).split(String.fromCharCode(13)).join('').split(String.fromCharCode(10)).join('').trim();
+      if(comparable(editor.innerText||editor.textContent||'')!==comparable(text))return {ok:false,error:'draft_requires_review',draft_issue:'text_changed'};
       if(entities.some(e=>e.type==='text_url'&&![...(editor.querySelectorAll?.('a')||[])].some(a=>{try{return new URL(a.getAttribute('href'),location.href).href===e.url}catch{return false}})))return {ok:false,error:'draft_requires_review',draft_issue:'link_missing'};
       ready=[...scope.querySelectorAll('button')].filter(e=>e.getClientRects().length && ['Отправить','Send'].includes(e.getAttribute('aria-label')));
       if(ready.length===1 && !ready[0].disabled)break;

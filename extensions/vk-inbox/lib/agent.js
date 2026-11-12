@@ -18,7 +18,6 @@
   let handled = 0;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
   function watchdog(alarm) {
     if (alarm.name === POLL_ALARM) lib.kick();
   }
