@@ -7,6 +7,7 @@ import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding,groupJournalPath} from "./dot-group-binding.mjs";
 import {createGroupBotSender,createGroupBotMediaSender} from "./dot-group-send.mjs";
 import {installGroupMemberPrivate} from './dot-group-private.mjs';
+import {DotTyping} from './dot-typing.mjs';
 import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
 import {routeGroupDotEvent} from "./dot-group-receive.mjs";
 import {readGroupSettings,accessGroupSettings,groupTopicId,observeGroupMessage,resolveGroupTopicTitle} from "./dot-group-settings.mjs";
@@ -1004,6 +1005,13 @@ async function initializeGroupRelay(binding,identity){
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
  groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);
  if(binding.privateMembers===true)installGroupMemberPrivate({relay,mirror:groupMirror,binding,token:decryptedBot.stdout.trim(),boundLive});
+ relay.typing=new DotTyping({relay,report:event=>console.log('dot typing',JSON.stringify(event)),send:async(peerId,topicId,active)=>{
+  const live=boundLive();
+  if(peerId!==binding.peerId&&(!relay.memberPrivateEnabled||!/^[0-9]+$/.test(peerId)))throw Error('typing_peer_not_allowed');
+  const peer=live.labelPeers.idPeers.get(peerId)||await live.client.getInputEntity(peerId);
+  const action=active?new Api.SendMessageTypingAction():new Api.SendMessageCancelAction();
+  return live.client.invoke(new Api.messages.SetTyping({peer,...(topicId?{topMsgId:Number(topicId)}:{}),action}));
+ }});
  return relay;
 }
 function relayGroupMessage(client,accountId,self,message,chatKey,isEdit,chatEntity){
