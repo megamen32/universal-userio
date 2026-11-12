@@ -152,6 +152,9 @@ export class DotMirror{
     const origin=this.relay.mirrorOrigin(m);
     if(origin==='uncertain'){state.status='incoming_origin_uncertain';this.relay.save();return {status:state.status};}
     if(origin==='telegram'){state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
+    const route=this.relay.routeMessage?.(m,rows)||{peerId:this.relay.peerId||OWNER,private:false};
+    if(route.hold){state.held[m.id]={reason:route.hold};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
+    const destination=route.peerId;
     const c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)break;
     if(m.attachment_incomplete){state.held[m.id]={reason:'media_identity_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     if(m.format_incomplete){state.held[m.id]={reason:'format_requires_review',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
@@ -159,12 +162,12 @@ export class DotMirror{
     if(sensitiveText(m.text)||(!m.text.trim()&&!imageCount)){
      state.held[m.id]={reason:sensitiveText(m.text)?'sensitive_content':'no_visible_text',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
-    let reply=resolveMirrorReply(this.relay,m.reply_to);
+    let reply=route.private?{status:route.replyTo?'resolved':'none',receipt:route.replyTo||null}:resolveMirrorReply(this.relay,m.reply_to);
     if(reply.status==='unresolved'){
      state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
-    const topic=mirrorTopic(this.relay,m);let autoChain=false;
-    if(reply.status==='none'&&this.relay.group&&typeof this.relay.groupOptions==='function'){
+    const topic=route.private?{known:false}:mirrorTopic(this.relay,m);let autoChain=false;
+    if(!route.private&&reply.status==='none'&&this.relay.group&&typeof this.relay.groupOptions==='function'){
      const context=this.relay.state.groupContext,topicId=context?.currentTopic??null;
      const previous=context?.lastByTopic?.[topicId??'direct'];
      autoChain=this.relay.groupOptions().chainPrevious===true;
@@ -191,7 +194,7 @@ export class DotMirror{
      caption=inline?parts[0]:mirrorParts({...m,text:attachmentLabel},this.relay.labels)[0];
      if(inline){captionEntities=formatted[0];parts=[];}
     }
-    const pub={hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),
+    const pub={peer_id:destination,request_id:route.requestId||null,hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),
      receipts:[],media_receipts:[],media_count:imageCount,
      media_sha256:media?.map(f=>f.sha256)||[],partHashes:parts.map(textHash),partFormats:formatted,status:'sending'};
     state.published[m.id]=pub;this.relay.save();
@@ -203,7 +206,7 @@ export class DotMirror{
      try{
       // No competing claim: propagate the immutable original source identity.
       // Native claim fence integration belongs to the existing UserIO owner.
-      const receipts=await this.relay.sendMedia(this.relay.peerId||OWNER,media,caption,reply.receipt,{source_message_id:m.id},captionEntities);
+      const receipts=await this.relay.sendMedia(destination,media,caption,reply.receipt,{source_message_id:m.id},captionEntities);
       if(!Array.isArray(receipts)||!receipts.length||receipts.some(id=>!/^[1-9][0-9]*$/.test(String(id))))throw Error('media_provider_receipt_unknown');
       pub.media_receipts=receipts.map(String);pub.receipts.push(...pub.media_receipts);
       if(topic.known)for(const receipt of pub.media_receipts)observeGroupMessage(this.relay.state,{messageId:receipt,topicId:topic.topicId});
@@ -216,10 +219,10 @@ export class DotMirror{
      if(this.relay.state.outgoing[key]){state.blocked='delivery_requires_review';this.relay.save();return {status:state.blocked};}
      this.relay.state.outgoing[key]={status:'send_uncertain',source_id:m.id,part:n};this.relay.save();
      const target=autoChain&&pub.receipts.length?pub.receipts.at(-1):reply.receipt;
-     try{const receipt=await this.relay.send(this.relay.peerId||OWNER,parts[n],target,formatted[n]);pub.receipts.push(String(receipt));if(topic.known)observeGroupMessage(this.relay.state,{messageId:String(receipt),topicId:topic.topicId});this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
+     try{const receipt=await this.relay.send(destination,parts[n],target,formatted[n]);pub.receipts.push(String(receipt));if(topic.known)observeGroupMessage(this.relay.state,{messageId:String(receipt),topicId:topic.topicId});this.relay.state.outgoing[key]={status:'accepted',source_id:m.id,part:n,receipt:String(receipt)};this.relay.save();}
      catch{state.blocked='delivery_unknown';this.relay.save();return {status:state.blocked};}
     }
-    pub.status='accepted';state.cursor=m.id;delete state.candidates[m.id];changed=true;this.relay.save();
+    pub.status='accepted';if(m.role==='assistant'&&route.requestId===this.relay.state.activeTurn)delete this.relay.state.activeTurn;state.cursor=m.id;delete state.candidates[m.id];changed=true;this.relay.save();
    }
    for(const m of edits){
     const pub=state.published[m.id],c=state.candidates[m.id];if(!c||this.now()-c.since<this.stableMs)continue;
@@ -233,7 +236,7 @@ export class DotMirror{
     if(!Array.isArray(pub.partFormats)||pub.partFormats.length!==parts.length){state.held[m.id]={reason:'edit_original_format_unknown',hash:c.hash};this.relay.save();continue;}
     if(typeof this.relay.edit!=='function'){state.blocked='edit_unavailable';this.relay.save();return {status:state.blocked};}
     pub.status='edit_uncertain';this.relay.save();
-    try{for(let n=0;n<parts.length;n++)await this.relay.edit(this.relay.peerId||OWNER,pub.receipts[n],parts[n],pub.partHashes?.[n],formatted[n],pub.partFormats[n]);}
+    try{for(let n=0;n<parts.length;n++)await this.relay.edit(pub.peer_id||this.relay.peerId||OWNER,pub.receipts[n],parts[n],pub.partHashes?.[n],formatted[n],pub.partFormats[n]);}
     catch{state.blocked='edit_unknown';this.relay.save();return {status:state.blocked};}
     pub.hash=c.hash;pub.format_hash=c.format_hash;pub.partHashes=parts.map(textHash);pub.partFormats=formatted;pub.status='accepted';delete state.held[m.id];delete state.candidates[m.id];changed=true;this.relay.save();
    }

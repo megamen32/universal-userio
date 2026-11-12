@@ -10,8 +10,8 @@ function formatEntities(text,entities){
 }
 const hasEntities=(expected,actual)=>expected.every(e=>Array.isArray(actual)&&actual.some(a=>a.type===e.type&&a.offset===e.offset&&a.length===e.length&&(e.type!=='text_link'||a.url===e.url)));
 // One Bot API request per already journalled relay delivery; never retry here.
-export function createGroupBotSender({token,peerId,botId,fetcher=fetch}){
- if(!/^[0-9]{5,20}:[A-Za-z0-9_-]{30,80}$/.test(token)||token.split(':')[0]!==botId||!/^\-100[1-9][0-9]+$/.test(peerId))throw Error('invalid_group_sender');
+export function createGroupBotSender({token,peerId,botId,fetcher=fetch,allowPrivate=false}){
+ if(!/^[0-9]{5,20}:[A-Za-z0-9_-]{30,80}$/.test(token)||token.split(':')[0]!==botId||!(/^\-100[1-9][0-9]+$/.test(peerId)||(allowPrivate&&/^[1-9][0-9]{0,19}$/.test(peerId))))throw Error('invalid_group_sender');
  return async(peer,text,replyTo,entities=[])=>{
   if(peer!==peerId||typeof text!=='string'||!text.trim()||text.length>4096)throw Error('invalid_group_send');
   const args={chat_id:peerId,text,link_preview_options:{is_disabled:true}};
@@ -25,8 +25,8 @@ export function createGroupBotSender({token,peerId,botId,fetcher=fetch}){
   return d.result.message_id;
  };
 }
-export function createGroupBotMediaSender({token,peerId,botId,fetcher=fetch}){
- if(!/^[0-9]{5,20}:[A-Za-z0-9_-]{30,80}$/.test(token)||token.split(':')[0]!==botId||!/^\-100[1-9][0-9]+$/.test(peerId))throw Error('invalid_group_sender');
+export function createGroupBotMediaSender({token,peerId,botId,fetcher=fetch,allowPrivate=false}){
+ if(!/^[0-9]{5,20}:[A-Za-z0-9_-]{30,80}$/.test(token)||token.split(':')[0]!==botId||!(/^\-100[1-9][0-9]+$/.test(peerId)||(allowPrivate&&/^[1-9][0-9]{0,19}$/.test(peerId))))throw Error('invalid_group_sender');
  return async(peer,media,caption,replyTo=null,entities=[])=>{
   if(peer!==peerId||typeof caption!=='string'||!caption.trim()||caption.length>900)throw Error('invalid_group_media');
   if(replyTo!=null&&(!/^[1-9][0-9]*$/.test(String(replyTo))||!Number.isSafeInteger(Number(replyTo))))throw Error('invalid_group_reply');

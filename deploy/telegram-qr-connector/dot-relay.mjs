@@ -36,29 +36,29 @@ export class DotRelay {
   this.busy=false;this.tail=Promise.resolve();
  }
  save(){mkdirSync(dirname(this.statePath),{recursive:true,mode:0o700});writeFileSync(this.statePath+'.tmp',JSON.stringify(this.state),{mode:0o600});renameSync(this.statePath+'.tmp',this.statePath);}
- allowed(e){return e.accountId===this.botAccountId&&e.peerId===(this.peerId||OWNER)&&(this.group?(e.private===false&&e.senderIsBot===false&&/^[1-9][0-9]*$/.test(e.senderId)):e.senderId===OWNER&&e.private===true)&&!e.out&&!e.isEdit&&!e.reconciliation&&typeof e.text==='string'&&(e.text.trim()||(Array.isArray(e.media)&&e.media.length>0&&e.media.length<=10))&&e.text.length<=16000&&/^\d+$/.test(e.messageId);}
+ allowed(e){return e.accountId===this.botAccountId&&((this.memberPrivateEnabled&&e.membershipVerified===true&&e.private===true&&e.senderIsBot===false&&e.senderId===e.peerId&&/^[1-9][0-9]*$/.test(e.peerId))||(e.peerId===(this.peerId||OWNER)&&(this.group?(e.private===false&&e.senderIsBot===false&&/^[1-9][0-9]*$/.test(e.senderId)):e.senderId===OWNER&&e.private===true)))&&!e.out&&!e.isEdit&&!e.reconciliation&&typeof e.text==='string'&&(e.text.trim()||(Array.isArray(e.media)&&e.media.length>0&&e.media.length<=10))&&e.text.length<=16000&&/^\d+$/.test(e.messageId);}
  holdIncoming(e,reason){
   if(!this.allowed(e)||!['media_requires_review','format_requires_review'].includes(reason))return {status:'ignored'};
-  const id=this.botAccountId+':'+(this.peerId||OWNER)+':'+e.messageId;
+  const id=this.botAccountId+':'+e.peerId+':'+e.messageId;
   if(this.state.incoming[id])return {...this.state.incoming[id],duplicate:true};
   const record={status:reason,source:'telegram',text_hash:textHash(e.text),created:Date.now(),source_message_ids:e.source_message_ids||[e.messageId]};
   this.state.incoming[id]=record;this.save();return record;
  }
- replyTarget(replyTo){
+ replyTarget(replyTo,peerId=this.peerId||OWNER){
   if(!/^[1-9][0-9]*$/.test(String(replyTo||'')))return null;
   const ids=new Set();
   for(const [id,p] of Object.entries(this.state.mirror?.published||{}))
-   if(p.status==='accepted'&&p.receipts?.includes(String(replyTo)))ids.add(id);
-  const incoming=this.state.incoming[this.botAccountId+':'+(this.peerId||OWNER)+':'+replyTo];
+   if((p.peer_id||this.peerId||OWNER)===peerId&&p.status==='accepted'&&p.receipts?.includes(String(replyTo)))ids.add(id);
+  const incoming=this.state.incoming[this.botAccountId+':'+peerId+':'+replyTo];
   if(incoming?.status==='accepted'&&incoming.echo)ids.add(incoming.echo);
-  for(const r of Object.values(this.state.incoming))if(r.source==='telegram'&&r.status==='accepted'&&r.echo&&r.source_message_ids?.includes(String(replyTo)))ids.add(r.echo);
+  for(const r of Object.values(this.state.incoming))if((r.delivery_peer_id||this.peerId||OWNER)===peerId&&r.source==='telegram'&&r.status==='accepted'&&r.echo&&r.source_message_ids?.includes(String(replyTo)))ids.add(r.echo);
   const room=this.room||ROOM;const prefix=room+'~'+room+'~CalpicoMessage~';
   return ids.size===1&&[...ids][0].startsWith(prefix)?[...ids][0]:null;
  }
  async prepareReceive(e,resolveContext){
   const prepared=(this.prepareTail||Promise.resolve()).then(async()=>{
    if(!this.allowed(e))return {result:{status:'ignored'}};
-   if(e.replyTo&&!this.replyTarget(e.replyTo))e.replyContext=await resolveContext(e.replyTo);
+   if(e.replyTo&&!this.replyTarget(e.replyTo,e.peerId))e.replyContext=await resolveContext(e.replyTo);
    // Do not await delivery here: the durable admission queue owns that order.
    return {result:this.receive(e)};
   });
@@ -67,7 +67,7 @@ export class DotRelay {
  }
  async receive(e){
   if(!this.allowed(e))return {status:'ignored'};
-  const id=this.botAccountId+':'+(this.peerId||OWNER)+':'+e.messageId;
+  const id=this.botAccountId+':'+e.peerId+':'+e.messageId;
   if(e.entities?.some(entity=>entity.type==='unsupported')){
    if(this.state.incoming[id])return {...this.state.incoming[id],duplicate:true};
    const record={status:'format_requires_review',source:'telegram',text_hash:textHash(e.text),format_hash:textHash(JSON.stringify(e.entities)),created:Date.now(),source_message_ids:e.source_message_ids||[e.messageId]};
@@ -75,7 +75,7 @@ export class DotRelay {
   }
   const providerReplyTo=e.replyTo?String(e.replyTo):null;
   if(providerReplyTo&&!/^[1-9][0-9]*$/.test(providerReplyTo))return {status:'invalid_reply'};
-  const target=providerReplyTo?this.replyTarget(providerReplyTo):null;
+  const target=providerReplyTo?this.replyTarget(providerReplyTo,e.peerId):null;
   let text=e.text;
   if(providerReplyTo&&!target){
    const quote=typeof e.replyContext==='string'&&e.replyContext.length<=1600?e.replyContext:'[Контекст недоступен или скрыт]';
@@ -84,7 +84,7 @@ export class DotRelay {
   }
   const entities=(e.entities||[]).map(entity=>({...entity,offset:entity.offset+text.length-e.text.length}));
   return this.admit(id,text,'telegram',
-   {provider_reply_to:providerReplyTo,reply_to_main:target,original_text_hash:textHash(e.text),media:e.media||[],source_message_ids:e.source_message_ids||[e.messageId],grouped_id:e.grouped_id||null,
+   {delivery_peer_id:e.peerId,private_member:this.memberPrivateEnabled===true&&e.private===true,provider_reply_to:providerReplyTo,reply_to_main:target,original_text_hash:textHash(e.text),media:e.media||[],source_message_ids:e.source_message_ids||[e.messageId],grouped_id:e.grouped_id||null,
     ...(Object.hasOwn(e,'topicId')?{topic_id:e.topicId}:{}),
     ...(entities.length?{format_hash:textHash(JSON.stringify(entities))}:{}),
     ...(providerReplyTo&&!target?{reply_context_hash:textHash(e.replyContext||''),reply_mode:'quoted_context'}:target?{reply_mode:'native'}:{})},entities);
@@ -113,14 +113,14 @@ export class DotRelay {
   if(this.state.incoming[id])return {...this.state.incoming[id],duplicate:true};
   if(Object.values(this.state.incoming).filter(r=>r.status==='queued').length>=32)return {status:'queue_full_not_accepted'};
   this.state.incoming[id]={status:'queued',source,text_hash:textHash(text),echo_normalized_hash:textHash(echoText(text)),created:Date.now(),...metadata};this.save();
-  const run=()=>this.deliver(id,text,entities);this.tail=this.tail.then(run,run);return this.tail;
+  const run=async()=>{if(this.beforeDeliver&&!await this.beforeDeliver()){const r=this.state.incoming[id];r.status='not_accepted';r.reason='previous_reply_pending';this.save();return r;}return this.deliver(id,text,entities);};this.tail=this.tail.then(run,run);return this.tail;
  }
  async deliver(id,text,entities=[]){
   this.busy=true;const record=this.state.incoming[id];
   try{
    let baseline;try{baseline=await this.browserCall('dot_snapshot',{tab_id:this.tabId});}catch{record.status='not_accepted';record.reason='snapshot_unavailable';this.save();return record;}
    if(!baseline.ok||baseline.room!==(this.room||ROOM)||!baseline.cursor){record.status='not_accepted';record.reason='wrong_or_unloaded_room';this.save();return record;}
-   Object.assign(record,{status:'send_uncertain',cursor:baseline.cursor});this.save();
+   Object.assign(record,{status:'send_uncertain',cursor:baseline.cursor});if(this.memberPrivateEnabled)this.state.activeTurn=id;this.save();
    let submitted;try{submitted=await this.browserCall('dot_send',{tab_id:this.tabId,request_id:id,text,entities,reply_to:record.reply_to_main||null,media:record.media||[]});}catch{return record;}
    if(!submitted.ok){record.status='requires_review';record.reason=String(submitted.error||'browser_preflight_failed').replace(/[^a-z0-9_]/gi,'').slice(0,100);this.save();return record;}
    if(record.reply_to_main&&submitted.verified_reply_to===record.reply_to_main)record.verified_reply_to=record.reply_to_main;

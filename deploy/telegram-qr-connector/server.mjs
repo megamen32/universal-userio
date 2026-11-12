@@ -6,6 +6,7 @@ import { DotMirror, mirrorSendOptions, safeReplyContext, sensitiveText } from ".
 import {createExtensionCaller} from "./dot-extension-agent.mjs";
 import {readGroupBinding,groupJournalPath} from "./dot-group-binding.mjs";
 import {createGroupBotSender,createGroupBotMediaSender} from "./dot-group-send.mjs";
+import {installGroupMemberPrivate} from './dot-group-private.mjs';
 import {groupDotText,groupDotEntities,groupMediaKind} from "./dot-group-message.mjs";
 import {routeGroupDotEvent} from "./dot-group-receive.mjs";
 import {readGroupSettings,accessGroupSettings,groupTopicId,observeGroupMessage,resolveGroupTopicTitle} from "./dot-group-settings.mjs";
@@ -995,18 +996,21 @@ async function initializeGroupRelay(binding,identity){
  if(decryptedBot.status!==0)throw Error('group_bot_credential_unavailable');
  const providerSend=createGroupBotSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
  const providerSendMedia=createGroupBotMediaSender({token:decryptedBot.stdout.trim(),peerId:binding.peerId,botId});
- const send=async(peer,text,replyTo,entities)=>{boundLive();return providerSend(peer,text,replyTo,entities);};
- const sendMedia=async(peer,media,caption,replyTo,origin,entities)=>{boundLive();if(typeof origin?.source_message_id!=='string'||!origin.source_message_id.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_group_media_source');return providerSendMedia(peer,media,caption,replyTo,entities);};
- const edit=async(peer,receipt,text,expectedHash,entities,previousEntities)=>{if(peer!==binding.peerId)throw Error('wrong_group_edit_peer');const live=boundLive();const target=await live.client.getInputEntity(peer);return editDotText({client:live.client,api:Api,peer:target,messageId:Number(receipt),expectedHash,text,entities,previousEntities});};
+ const send=async(peer,text,replyTo,entities)=>{boundLive();if(peer!==binding.peerId&&relay.memberPrivateEnabled)return relay.sendPrivate(peer,text,replyTo,entities);return providerSend(peer,text,replyTo,entities);};
+ const sendMedia=async(peer,media,caption,replyTo,origin,entities)=>{boundLive();if(typeof origin?.source_message_id!=='string'||!origin.source_message_id.startsWith(binding.room+'~'+binding.room+'~CalpicoMessage~'))throw Error('wrong_group_media_source');if(peer!==binding.peerId&&relay.memberPrivateEnabled)return relay.sendPrivateMedia(peer,media,caption,replyTo,origin,entities);return providerSendMedia(peer,media,caption,replyTo,entities);};
+ const edit=async(peer,receipt,text,expectedHash,entities,previousEntities)=>{if(peer!==binding.peerId&&(!relay.memberPrivateEnabled||!await relay.checkPrivateMember(peer)))throw Error('wrong_group_edit_peer');const live=boundLive();const target=await live.client.getInputEntity(peer);return editDotText({client:live.client,api:Api,peer:target,messageId:Number(receipt),expectedHash,text,entities,previousEntities});};
  const relay=new DotRelay({statePath:groupJournalPath(stateDir,binding),botAccountId:binding.botAccountId,agentId:binding.agentId,tabId:binding.pageId,room:binding.room,peerId:binding.peerId,group:true,browserCall,send,sendMedia,edit});
  relay.groupOptions=()=>readGroupSettings(groupSettingsPath,binding);
  relay.labels={ownerLabel:'Пользователь',assistantLabel:'Dot'};
- groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);return relay;
+ groupIdentity=identity;groupRelay=relay;groupMirror=new DotMirror(relay);
+ if(binding.privateMembers===true)installGroupMemberPrivate({relay,mirror:groupMirror,binding,token:decryptedBot.stdout.trim(),boundLive});
+ return relay;
 }
 function relayGroupMessage(client,accountId,self,message,chatKey,isEdit,chatEntity){
  let binding;try{binding=readGroupBinding(groupBindingPath)}catch{return false}
  if(!binding||accountId!==binding.botAccountId)return false;
- if(chatKey!==binding.peerId||!self.bot||isEdit)return true;
+ if(!self.bot||isEdit)return true;
+ if(chatKey!==binding.peerId){if(binding.privateMembers===true&&String(message.peerId?.userId||'')===chatKey)void relayGroupMemberPrivate(client,binding,message,chatKey).catch(error=>console.error('group private relay',String(error?.message||'failed').replace(/[^a-z_]/g,'').slice(0,80)));return true;}
  void (async()=>{
   const relay=await getGroupRelay(binding);
   const topicId=groupTopicId(message,chatEntity?.forum===true);
@@ -1036,6 +1040,28 @@ function relayGroupMessage(client,accountId,self,message,chatKey,isEdit,chatEnti
  })().catch(()=>console.error('group dot relay requires review'));
  return true;
 }
+async function relayGroupMemberPrivate(client,binding,message,chatKey){
+ if(message.out)return;
+ const sender=await message.getSender();
+ if(!sender||sender.className!=='User'||sender.bot===true||String(sender.id)!==chatKey)return;
+ const relay=await getGroupRelay(binding);
+ if(!await relay.checkPrivateMember(chatKey))return;
+ const text=String(message.message||''),kind=groupMediaKind(message);
+ if((!text.trim()&&kind==='text')||sensitiveText(text))return;
+ const prefix='[Личное сообщение участника группы. Ответ предназначен только этому участнику.]\n';
+ const event={accountId:binding.botAccountId,peerId:chatKey,senderId:chatKey,senderIsBot:false,private:true,membershipVerified:true,out:false,isEdit:false,messageId:String(message.id),
+  text:prefix+groupDotText(sender,message),entities:groupDotEntities(sender,message).map(e=>({...e,offset:e.offset+prefix.length})),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
+ const key=binding.botAccountId+':private:'+chatKey;
+ if(['image','document'].includes(kind)&&!dotMediaIngresses.has(key)){
+  dotMediaIngresses.set(key,new DotMediaIngress({stateDir,botAccountId:binding.botAccountId,journalId:(binding.journalId||'group-'+binding.peerId.replace(/^-100/,''))+'-private-'+chatKey,allowDocuments:true,
+   allowEvent:e=>e.peerId===chatKey&&e.senderId===chatKey&&e.private===true&&e.membershipVerified===true,
+   download:source=>client.downloadMedia(source,{progressCallback:(received,total)=>{if(Number(received)>MAX_IMAGE_BYTES||Number(total)>MAX_IMAGE_BYTES)throw Error('image_size_refused');}}),
+   deliver:prepared=>relay.prepareReceive(prepared,async()=> '[Контекст недоступен]')}));
+ }
+ const result=await routeGroupDotEvent({event,message,relay,ingress:dotMediaIngresses.get(key)||{waitForPending:async()=>{}}});
+ console.log('group private relay',result?.status||'queued');
+}
+
 let groupMirrorRunning=false,groupMirrorNext=0;
 async function tickGroupMirror(){
  if(groupMirrorRunning||Date.now()<groupMirrorNext)return;

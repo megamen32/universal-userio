@@ -19,7 +19,7 @@ export function hasSupportedDocument(message){
 export class DotMediaIngress{
  constructor({stateDir,botAccountId,download,deliver,journalId=null,allowDocuments=false,allowEvent=e=>e.peerId===OWNER&&e.senderId===OWNER&&e.private===true,schedule=(f,ms)=>setTimeout(f,ms),now=()=>Date.now()}){
   if(!/^telegram:\d+$/.test(botAccountId))throw Error('invalid_bot');
-  if(journalId!==null&&!/^group-[1-9][0-9]{0,19}$/.test(journalId))throw Error('invalid_media_journal');
+  if(journalId!==null&&!/^group-[1-9][0-9]{0,19}(?:-private-[1-9][0-9]{0,19})?$/.test(journalId))throw Error('invalid_media_journal');
   this.routeSuffix=journalId?'-'+createHash('sha256').update(botAccountId+':'+journalId).digest('hex').slice(0,16):'';
   Object.assign(this,{stateDir,botAccountId,download,deliver,allowDocuments,allowEvent,schedule,now});
   this.file=join(stateDir,'dot-media-'+botAccountId.split(':')[1]+(journalId?'-'+journalId:'')+'.json');
