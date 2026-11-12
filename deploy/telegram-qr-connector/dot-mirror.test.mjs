@@ -308,15 +308,16 @@ test('long caption is preserved in subsequent scoped text chunks, no silent trun
  assert.equal(x.sends.map(x=>x.text.slice(x.text.indexOf('\n')+1)).join(''),txt);
  assert.equal(x.relay.state.mirror.published[id].receipts.length,3);
 });
-test('failed browser media read blocks BEFORE any durable send attempt, preserves cursor',async()=>{
+test('failed browser media read is held without blocking later messages',async()=>{
  const id=ROOM+'~'+ROOM+'~CalpicoMessage~noBrowserData';
  const x=fixture({mediaReadError:true});
  await x.mirror.tick();
  x.rows([msg('baseline','user','old'),withImages(id,'assistant','caption')]);
- assert.equal((await settle(x)).status,'media_source_requires_review');
+ assert.equal((await settle(x)).status,'updated');
  assert.equal(x.mediaSends.length,0);
  assert.equal(x.sends.length,0);
- assert.equal(x.relay.state.mirror.cursor,'baseline');
+ assert.equal(x.relay.state.mirror.cursor,id);
+ assert.equal(x.relay.state.mirror.held[id].reason,'media_source_requires_review');
  assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'],undefined);
 });
 test('unknown provider photo send is journaled before call and never replayed',async()=>{
@@ -377,11 +378,12 @@ test('corrupted image hash cannot create an uncertain provider send record',asyn
  const x=fixture({media:[damaged]});
  await x.mirror.tick();
  x.rows([msg('baseline','user','old'),withImages(id,'assistant','photo')]);
- assert.equal((await settle(x)).status,'media_source_requires_review');
- assert.equal(x.relay.state.mirror.blocked,'media_source_requires_review');
+ assert.equal((await settle(x)).status,'updated');
+ assert.equal(x.relay.state.mirror.held[id].reason,'media_source_requires_review');
+ assert.equal(x.relay.state.mirror.cursor,id);
  assert.equal(x.mediaSends.length,0);
  assert.equal(x.relay.state.outgoing['mirror:'+id+':media:0'],undefined);
- x.restart();assert.equal((await x.mirror.tick()).status,'media_source_requires_review');
+ x.restart();assert.equal((await x.mirror.tick()).status,'idle');
  assert.equal(x.mediaSends.length,0);
 });
 

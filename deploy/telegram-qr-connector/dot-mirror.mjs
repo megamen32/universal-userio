@@ -181,9 +181,8 @@ export class DotMirror{
       media=await this.relay.browserCall('dot_media_read',{tab_id:this.relay.tabId,source_id:m.id,expected_fingerprints:m.attachment_fingerprints});
       if(verifyDotTelegramMedia(media)!==imageCount)throw Error('media_count_changed');
      }catch{
-      state.status='media_source_requires_review';state.blocked=state.status;
-      state.held[m.id]={reason:state.status,hash:c.hash};
-      this.relay.save();return {status:state.status};
+      state.held[m.id]={reason:'media_source_requires_review',hash:c.hash};
+      state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
      }
      const inline=parts.length===1&&parts[0].length<=900;
      const allDocuments=media.every(file=>file.kind==='document');

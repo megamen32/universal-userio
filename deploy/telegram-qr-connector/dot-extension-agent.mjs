@@ -4,7 +4,7 @@ import {readDotMediaUsing} from './dot-browser-egress.mjs';
 // Scoped caller for the existing UserIO extension command channel. Delivery
 // requests are admitted once: timeout means UNKNOWN and is never retried.
 const BROWSER_INSTANCE=/^browser-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
-export function createExtensionCaller({base,agentId,connectionId,accountScope,url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true,assertAllowed=()=>{},getAgentStatus=null}){
+export function createExtensionCaller({base,agentId,connectionId,accountScope,agentInstanceId='',url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true,assertAllowed=()=>{},getAgentStatus=null}){
  if(!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(url)||!room||!agentId||!connectionId||!/^[A-Za-z0-9._:-]{1,128}$/.test(connectionId)||!/^[a-f0-9]{64}$/.test(accountScope||'')||!token)throw Error('invalid_extension_binding');
  const request=async(path,body)=>{
   const r=await fetcher(new URL(path,base),{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
@@ -13,13 +13,14 @@ export function createExtensionCaller({base,agentId,connectionId,accountScope,ur
  };
  const command=async(target,action,args)=>{
   const queuedAt=now()/1000;
-  const payload={agent_id:target,connection_id:connectionId,...(BROWSER_INSTANCE.test(target)?{agent_instance_id:target}:{}),action,args:{url,room,...args,expected_account_scope:accountScope}};
+  const payload={agent_id:target,connection_id:connectionId,...(agentInstanceId?{agent_instance_id:agentInstanceId}:(BROWSER_INSTANCE.test(target)?{agent_instance_id:target}:{})),action,args:{url,room,...args,expected_account_scope:accountScope}};
   assertAllowed();
   const q=await request('/v1/agent/commands',payload);
   if(!q.queued||typeof q.id!=='string')throw Error('extension_enqueue_unknown');
   for(let i=0;i<45;i++){
    const d=await request('/v1/agent/results?agent_id='+encodeURIComponent(target)+'&connection_id='+encodeURIComponent(connectionId)+'&limit=100');
-   const x=(d.results||[]).find(r=>r.id===q.id&&r.action===action&&r.connection_id===connectionId&&(!BROWSER_INSTANCE.test(target)||r.agent_instance_id===target)&&r.received_at>=queuedAt);
+   const expectedInstance=agentInstanceId||(target!==agentId&&BROWSER_INSTANCE.test(target)?target:'');
+   const x=(d.results||[]).find(r=>r.id===q.id&&r.action===action&&r.connection_id===connectionId&&(!expectedInstance||r.agent_instance_id===expectedInstance)&&r.received_at>=queuedAt);
    if(x)return x.result;
    await wait(1000);
   }
@@ -27,6 +28,7 @@ export function createExtensionCaller({base,agentId,connectionId,accountScope,ur
  };
  const targetForRoom=async()=>{
   assertAllowed();
+  if(agentInstanceId)return agentId;
   const status=getAgentStatus?await getAgentStatus():await request('/v1/agent/status');
   if(!status||!Array.isArray(status.agents))throw Error('extension_agent_status_unavailable');
   const entry=status.agents.find(item=>item.agent_id===agentId);

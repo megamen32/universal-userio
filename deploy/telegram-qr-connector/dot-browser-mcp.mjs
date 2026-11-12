@@ -39,7 +39,7 @@ export function discoverDotPage(output){
  const response=JSON.parse(line||'null');
  if(!response||response.error||response.result?.isError)throw Error('dot_discovery_unavailable');
  const text=(response.result?.content||[]).filter(c=>c.type==='text').map(c=>c.text||'').join('\n');
- const matches=text.split('\n').map(line=>line.match(/^(\d+): .*\((https:\/\/[^\s)]+)\)(?: \[selected\])?$/)).filter(m=>m&&m[2]===URL);
+ const matches=text.split('\n').map(line=>{const legacy=line.match(/^(\d+): .*\((https:\/\/[^\s)]+)\)(?: \[selected\])?$/);if(legacy)return legacy;const modern=line.match(/^Page (\d+)(?: \[[^\]]+\])?: .* - (https:\/\/\S+)$/);return modern&&[modern[0],modern[1],modern[2]];}).filter(m=>m&&m[2]===URL);
  if(matches.length!==1)throw Error('dot_discovery_not_unique');
  return Number(matches[0][1]);
 }

@@ -360,6 +360,13 @@ def poll(agent_id: str, wait: str | int, *, user: str, instance_id: str = "",
                 if own_queue:
                     command = own_queue.popleft()
                     break
+                # Compatibility for extensions that omit connection_id.
+                if not connection_id:
+                    candidates = [(queue_key, queue) for queue_key, queue in _PENDING.items()
+                                  if queue_key[0] == user and queue_key[1] == instance_id and queue]
+                    if len(candidates) == 1:
+                        command = candidates[0][1].popleft()
+                        break
             # 2. A migrated route has exactly one addressee.
             if owner:
                 if peer != owner:
@@ -421,7 +428,8 @@ def push_result(payload: dict, *, user: str, principal_id: str = "") -> dict:
         expected = str(command.get(key) or "") if command else ""
         supplied = str(payload.get(key) or "")
         if expected and scoped and not supplied:
-            raise ValueError(f"result {key} required")
+            if key not in ("connection_id", "agent_instance_id", "principal_id"):
+                raise ValueError(f"result {key} required")
         if expected and supplied and expected != supplied:
             raise ValueError(f"result {key} mismatch")
     record = {

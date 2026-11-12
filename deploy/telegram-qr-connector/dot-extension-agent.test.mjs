@@ -84,6 +84,11 @@ test('extension caller matches command receipt and refuses stale result',async()
  const call=createExtensionCaller({...init,fetcher:async(url,opts)=>({ok:true,json:async()=>opts.method==='POST'?(posts++,{queued:true,id:'browser:1'}):(reads++,{results:[{id:'browser:1',action:'dot_action',connection_id:'airlock',received_at:reads===1?99:101,result:{ok:true,room:'room'}}]})})});
  assert.equal((await call('dot_snapshot',{})).room,'room');assert.equal(posts,1);assert.equal(reads,2);
 });
+test('explicit instance keeps a UUID agent route distinct from its UUID instance',async()=>{
+ const agentId='browser-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',agentInstanceId='browser-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';let payload;
+ const call=createExtensionCaller({...init,agentId,agentInstanceId,fetcher:async(_url,opts)=>({ok:true,json:async()=>opts.method==='POST'?(payload=JSON.parse(opts.body),{queued:true,id:agentId+':1'}):{results:[{id:agentId+':1',action:'dot_action',connection_id:'airlock',agent_instance_id:agentInstanceId,received_at:101,result:{ok:true}}]}})});
+ assert.equal((await call('dot_snapshot',{})).ok,true);assert.equal(payload.agent_id,agentId);assert.equal(payload.agent_instance_id,agentInstanceId);
+});
 test('uncertain send is not replayed on result timeout',async()=>{
  let posts=0;const call=createExtensionCaller({...init,fetcher:async(url,opts)=>({ok:true,json:async()=>opts.method==='POST'?(posts++,{queued:true,id:'browser:2'}):{results:[]}})});
  await assert.rejects(call('dot_send',{text:'hello'}),/extension_result_unknown/);assert.equal(posts,1);
