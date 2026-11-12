@@ -1,7 +1,7 @@
 import './dot-test-policy.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtempSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
-import {memberAllowed,createGroupMemberAccess,privateReplyRoute} from './dot-group-private.mjs';
+import {memberAllowed,createGroupMemberAccess,privateReplyRoute,installGroupMemberPrivate} from './dot-group-private.mjs';
 import {DotRelay,ROOM} from './dot-relay.mjs';import {DotMirror} from './dot-mirror.mjs';
 import {createGroupBotSender} from './dot-group-send.mjs';
 const group='-100123456',room=ROOM;
@@ -33,7 +33,7 @@ function fixture(){
 }
 test('private answer goes only to its sender, then group replies still go to the group',async()=>{
  const x=fixture();await x.mirror.tick();
- const u=row('private','user','private question'),a=row('answer','assistant','private answer');
+ const u=row('private','user','private question'),a={...row('answer','assistant','private answer'),reply_to:u.id};
  x.record('dm1','111',u.id,'5');x.rows([row('base','user','baseline'),u,a]);await x.mirror.tick();
  assert.deepEqual(x.sends,[{peer:'111',text:'dots:\nprivate answer',reply:'5'}]);
  assert.equal(x.sends.length,1);assert.equal(x.sends[0].peer,'111');assert.match(x.sends[0].text,/private answer/);
@@ -45,16 +45,16 @@ test('two participants with the same Telegram message id cannot share reply rout
  const x=fixture();const a=row('a','user','a'),b=row('b','user','b');
  x.record('dm1','111',a.id,'7');x.record('dm2','222',b.id,'7');
  assert.equal(x.relay.replyTarget('7','111'),a.id);assert.equal(x.relay.replyTarget('7','222'),b.id);assert.equal(x.relay.replyTarget('7',group),null);
- const answer=row('reply','assistant','b reply');assert.equal(privateReplyRoute(x.relay,answer,[a,b,answer]).peerId,'222');
+ const answer=row('reply','assistant','b reply');assert.equal(privateReplyRoute(x.relay,{...answer,reply_to:b.id},[a,b,answer]).peerId,'222');
 });
 test('private edits remain on their original peer',async()=>{
- const x=fixture();await x.mirror.tick();const u=row('u','user','private'),a=row('a','assistant','first');
+ const x=fixture();await x.mirror.tick();const u=row('u','user','private'),a={...row('a','assistant','first'),reply_to:u.id};
  x.record('dm','111',u.id,'4');x.rows([row('base','user','baseline'),u,a]);await x.mirror.tick();
  x.rows([u,{...a,text:'edited'}]);await x.mirror.tick();assert.equal(x.edits[0].peer,'111');
 });
-test('interrupted private response cannot fall through to the public group',()=>{
+test('unthreaded posts go to the group even while a private turn was active',()=>{
  const x=fixture(),u=row('u','user','private'),g=row('g','user','manual'),a=row('a','assistant','uncertain');x.record('dm','111',u.id,'1');x.relay.state.activeTurn='dm';
- assert.equal(privateReplyRoute(x.relay,a,[u,g,a]).hold,'private_turn_interrupted');
+ assert.equal(privateReplyRoute(x.relay,a,[u,g,a]).peerId,group);
  assert.equal(privateReplyRoute(x.relay,{...a,reply_to:u.id},[u,g,a]).peerId,'111');
 });
 test('DM sender must be the verified private peer, and group ingress stays intact',()=>{
@@ -65,4 +65,44 @@ test('DM sender must be the verified private peer, and group ingress stays intac
 test('peer-locked private sender cannot publish to a different user or group',async()=>{
  let sent=0;const token='999999:'+ 'a'.repeat(35);const sender=createGroupBotSender({token,botId:'999999',peerId:'111',allowPrivate:true,fetcher:async(url,options)=>{sent++;const b=JSON.parse(options.body);return {ok:true,json:async()=>({ok:true,result:{chat:{id:Number(b.chat_id)},from:{id:999999},message_id:1}})};}});
  assert.equal(await sender('111','hello'),1);await assert.rejects(sender('222','hello'),/invalid_group_send/);await assert.rejects(sender(group,'hello'),/invalid_group_send/);assert.equal(sent,1);
+});
+
+test('an unthreaded answer immediately after a DM is public, not the latest sender',async()=>{
+ const x=fixture();await x.mirror.tick();const u=row('u','user','DM'),a=row('a','assistant','Public update');
+ x.record('dm','111',u.id,'4');x.relay.state.activeTurn='dm';x.rows([row('base','user','baseline'),u,a]);await x.mirror.tick();
+ assert.equal(x.sends.length,1);assert.equal(x.sends[0].peer,group);assert.equal(x.sends[0].reply,null);
+});
+test('explicit reply to an older participant wins over the most recent participant',()=>{
+ const x=fixture(),a=row('a','user','first'),b=row('b','user','second'),reply={...row('r','assistant','reply'),reply_to:a.id};
+ x.record('dm1','111',a.id,'7');x.record('dm2','222',b.id,'7');
+ assert.equal(privateReplyRoute(x.relay,reply,[a,b,reply]).peerId,'111');
+ assert.equal(privateReplyRoute(x.relay,{...reply,reply_to:null},[a,b,reply]).peerId,group);
+});
+test('native reply chains survive snapshot scrolling and use the private answer receipt',async()=>{
+ const x=fixture();await x.mirror.tick();const u=row('u','user','DM'),a={...row('a','assistant','reply'),reply_to:u.id};
+ x.record('dm','111',u.id,'4');x.rows([row('base','user','baseline'),u,a]);await x.mirror.tick();
+ const b={...row('b','assistant','followup'),reply_to:a.id};const route=privateReplyRoute(x.relay,b,[b]);
+ assert.equal(route.peerId,'111');assert.equal(route.replyTo,'101');
+});
+test('legacy guessed private destinations cannot redirect a new reply',()=>{
+ const x=fixture(),a=row('a','assistant','old public update'),b={...row('b','assistant','reply'),reply_to:a.id};
+ x.relay.state.mirror={published:{[a.id]:{peer_id:'111',reply_to:null,status:'accepted',receipts:['10']}}};
+ assert.equal(privateReplyRoute(x.relay,b,[b]).peerId,group);
+});
+test('unknown native group reply is sent without a Telegram reply target and warns',async()=>{
+ const x=fixture();await x.mirror.tick();const a={...row('a','assistant','public update'),reply_to:row('unseen','user','').id};
+ x.rows([row('base','user','baseline'),a]);await x.mirror.tick();
+ assert.equal(x.sends[0].peer,group);assert.equal(x.sends[0].reply,null);
+ assert.equal(x.relay.state.mirror.published[a.id].warning,'telegram_reply_target_unavailable');
+});
+test('conflicting private origins are never guessed',()=>{
+ const x=fixture(),u=row('u','user','DM'),a={...row('a','assistant','reply'),reply_to:u.id};
+ x.record('dm1','111',u.id,'1');x.record('dm2','222',u.id,'1');
+ assert.equal(privateReplyRoute(x.relay,a,[u,a]).hold,'ambiguous_native_reply_origin');
+});
+
+test('native routing does not wait for previous generation before accepting ingress',()=>{
+ const x=fixture();x.relay.state.activeTurn='old unfinished request';
+ installGroupMemberPrivate({relay:x.relay,mirror:x.mirror,binding:{peerId:group,botAccountId:'telegram:999999'},token:'fixture',boundLive:()=>{}});
+ assert.equal(x.relay.beforeDeliver,undefined);assert.equal(x.relay.state.activeTurn,undefined);
 });

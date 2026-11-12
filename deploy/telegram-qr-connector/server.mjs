@@ -1048,7 +1048,7 @@ async function relayGroupMemberPrivate(client,binding,message,chatKey){
  if(!await relay.checkPrivateMember(chatKey))return;
  const text=String(message.message||''),kind=groupMediaKind(message);
  if((!text.trim()&&kind==='text')||sensitiveText(text))return;
- const prefix='[Личное сообщение участника группы. Ответ предназначен только этому участнику.]\n';
+ const prefix='[Личное сообщение участника группы. Ответь встроенным reply на это сообщение: только такой ответ вернётся участнику в личку. Сообщения без reply публикуются в группе.]\n';
  const event={accountId:binding.botAccountId,peerId:chatKey,senderId:chatKey,senderIsBot:false,private:true,membershipVerified:true,out:false,isEdit:false,messageId:String(message.id),
   text:prefix+groupDotText(sender,message),entities:groupDotEntities(sender,message).map(e=>({...e,offset:e.offset+prefix.length})),replyTo:message.replyTo?.replyToMsgId?String(message.replyTo.replyToMsgId):null};
  const key=binding.botAccountId+':private:'+chatKey;

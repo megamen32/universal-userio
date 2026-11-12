@@ -14,27 +14,33 @@ export function createGroupMemberAccess({token,groupId,fetcher=fetch}){
   return memberAllowed(result.result,id);
  };
 }
-// Recipient selection is derived from persisted ingress identity, never model text.
-export function privateReplyRoute(relay,message,rows){
- const group=relay.peerId, incoming=Object.entries(relay.state.incoming||{});
- const byEcho=id=>{const found=incoming.filter(([,r])=>r.echo===id);return found.length===1?found[0]:null;};
- const fromRecord=([key,r])=>({peerId:r.delivery_peer_id||group,private:r.private_member===true,requestId:key,replyTo:r.private_member?String(r.source_message_ids?.[0]||''):null});
- const previous=relay.state.mirror?.published?.[message.id];
- if(previous?.peer_id)return {peerId:previous.peer_id,private:previous.peer_id!==group,requestId:previous.request_id||null,replyTo:previous.reply_receipt||null};
- if(message.reply_to){
-  const direct=byEcho(message.reply_to);if(direct)return fromRecord(direct);
-  const pub=relay.state.mirror?.published?.[message.reply_to];
-  if(pub?.peer_id)return {peerId:pub.peer_id,private:pub.peer_id!==group,requestId:pub.request_id||null,replyTo:pub.receipts?.[0]||null};
+// Only native Dot reply links choose a private recipient. Chronology, active
+// turns and text labels never establish a destination. Unthreaded posts are public.
+export function privateReplyRoute(relay,message,rows=[]){
+ const group=relay.peerId, fallback={peerId:group,private:false,requestId:null,replyTo:null};
+ if(!message.reply_to)return fallback;
+ const incoming=Object.entries(relay.state.incoming||{}),published=relay.state.mirror?.published||{};
+ const seen=new Set([message.id]);let target=message.reply_to;
+ const immediate=published[target];
+ for(let depth=0;depth<64&&target;depth++){
+  if(typeof target!=='string'||seen.has(target))return {hold:'invalid_native_reply_chain'};
+  seen.add(target);
+  const matches=incoming.filter(([,r])=>r.status==='accepted'&&r.echo===target);
+  if(matches.length>1)return {hold:'ambiguous_native_reply_origin'};
+  if(matches.length===1){
+   const [key,record]=matches[0],peer=record.delivery_peer_id||group;
+   if(record.private_member!==true)return {...fallback,requestId:key};
+   if(!userId(peer))return {hold:'invalid_private_reply_peer'};
+   const receipt=immediate?.status==='accepted'&&immediate.peer_id===peer?immediate.receipts?.[0]:record.source_message_ids?.[0];
+   return {peerId:peer,private:true,requestId:key,replyTo:receipt&&/^[1-9][0-9]*$/.test(String(receipt))?String(receipt):null};
+  }
+  const visible=rows.find(row=>row.id===target),stored=published[target];
+  // Follow the parent's actual reply link, not a legacy guessed peer_id.
+  if(visible){target=visible.reply_to||null;if(!target)return fallback;}
+  else if(stored){target=stored.reply_to||null;if(!target)return fallback;}
+  else return {...fallback,warning:'native_reply_origin_unavailable'};
  }
- const index=rows.findIndex(r=>r.id===message.id);
- const users=rows.slice(0,index+1).filter(r=>r.role==='user');
- const nearest=users.at(-1),match=nearest&&byEcho(nearest.id);
- const active=relay.state.activeTurn,activeRecord=active&&relay.state.incoming[active];
- if(activeRecord?.private_member&&activeRecord.echo&&nearest&&nearest.id!==activeRecord.echo&&!message.reply_to)
-  return {hold:'private_turn_interrupted'};
- if(match)return fromRecord(match);
- if(!nearest&&activeRecord?.private_member)return {hold:'private_anchor_not_visible'};
- return {peerId:group,private:false,requestId:null,replyTo:null};
+ return {hold:'invalid_native_reply_chain'};
 }
 export function installGroupMemberPrivate({relay,mirror,binding,token,boundLive}){
  const isMember=createGroupMemberAccess({token,groupId:binding.peerId});
@@ -54,19 +60,7 @@ export function installGroupMemberPrivate({relay,mirror,binding,token,boundLive}
   if(!mediaSenders.has(peer))mediaSenders.set(peer,createGroupBotMediaSender({token,peerId:peer,botId,allowPrivate:true}));
   return mediaSenders.get(peer)(peer,media,caption,replyTo,entities);
  };
- // Do not change the destination while a preceding response is pending.
- relay.beforeDeliver=async()=>{
-  for(let attempt=0;attempt<150;attempt++){
-   const active=relay.state.activeTurn;if(!active)return true;
-   const record=relay.state.incoming[active];
-   if(!record||['not_accepted','ignored','requires_review'].includes(record.status)){
-    delete relay.state.activeTurn;relay.save();return true;
-   }
-   const complete=Object.values(relay.state.mirror?.published||{}).some(p=>p.request_id===active&&p.role==='assistant'&&p.status==='accepted');
-   if(complete){delete relay.state.activeTurn;relay.save();return true;}
-   await mirror.tick();await relay.wait(2000);
-  }
-  return false;
- };
+ // Replies carry their own destination; generation must not block later ingress.
+ if(Object.hasOwn(relay.state,'activeTurn')){delete relay.state.activeTurn;relay.save();}
  return relay;
 }

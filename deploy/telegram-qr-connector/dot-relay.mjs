@@ -121,7 +121,7 @@ export class DotRelay {
    let baseline;try{baseline=await this.browserCall('dot_snapshot',{tab_id:this.tabId});}catch{record.status='not_accepted';record.reason='snapshot_unavailable';this.save();return record;}
    if(!baseline.ok||baseline.room!==(this.room||ROOM)||!baseline.cursor){record.status='not_accepted';record.reason='wrong_or_unloaded_room';this.save();return record;}
    if(this.state.mirror){this.state.mirror.readFailures=0;delete this.state.mirror.nextReadAttemptAt;delete this.state.mirror.lastError;}
-   Object.assign(record,{status:'send_uncertain',cursor:baseline.cursor});if(this.memberPrivateEnabled)this.state.activeTurn=id;this.save();
+   Object.assign(record,{status:'send_uncertain',cursor:baseline.cursor});this.save();
    let submitted;try{submitted=await this.browserCall('dot_send',{tab_id:this.tabId,request_id:id,text,entities,reply_to:record.reply_to_main||null,media:record.media||[]});}catch{return record;}
    if(!submitted.ok){record.status='requires_review';record.reason=String(submitted.error||'browser_preflight_failed').replace(/[^a-z0-9_]/gi,'').slice(0,100);this.save();return record;}
    if(record.reply_to_main&&submitted.verified_reply_to===record.reply_to_main)record.verified_reply_to=record.reply_to_main;

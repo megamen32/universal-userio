@@ -25,7 +25,7 @@ export function resolveMirrorReply(relay,replyTo){
  if(typeof replyTo!=='string'||!replyTo)return {status:'unresolved',receipt:null};
  const matches=new Set();
  const published=relay.state.mirror?.published?.[replyTo];
- if(published?.status==='accepted'&&Array.isArray(published.receipts)&&published.receipts.length>0&&published.receipts.every(nativeTelegramMessageId))matches.add(published.receipts[0]);
+ if((published?.peer_id||relay.peerId||OWNER)===(relay.peerId||OWNER)&&published?.status==='accepted'&&Array.isArray(published.receipts)&&published.receipts.length>0&&published.receipts.every(nativeTelegramMessageId))matches.add(published.receipts[0]);
  const prefix=relay.botAccountId+':'+(relay.peerId||OWNER)+':';
  for(const [key,record] of Object.entries(relay.state.incoming||{})){
   if(!key.startsWith(prefix)||record.source!=='telegram'||record.status!=='accepted'||record.echo!==replyTo)continue;
@@ -164,8 +164,13 @@ export class DotMirror{
      state.held[m.id]={reason:sensitiveText(m.text)?'sensitive_content':'no_visible_text',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
     }
     let reply=route.private?{status:route.replyTo?'resolved':'none',receipt:route.replyTo||null}:resolveMirrorReply(this.relay,m.reply_to);
+    let routingWarning=route.warning||null;
     if(reply.status==='unresolved'){
-     state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
+     if(this.relay.group&&typeof this.relay.routeMessage==='function'&&!route.private){
+      routingWarning='telegram_reply_target_unavailable';reply={status:'none',receipt:null};
+     }else{
+      state.held[m.id]={reason:'reply_target_unresolved',hash:c.hash};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;
+     }
     }
     const topic=route.private?{known:false}:mirrorTopic(this.relay,m);let autoChain=false;
     if(!route.private&&reply.status==='none'&&this.relay.group&&typeof this.relay.groupOptions==='function'){
@@ -195,7 +200,7 @@ export class DotMirror{
      caption=inline?parts[0]:mirrorParts({...m,text:attachmentLabel},this.relay.labels)[0];
      if(inline){captionEntities=formatted[0];parts=[];}
     }
-    const pub={peer_id:destination,request_id:route.requestId||null,hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),
+    const pub={peer_id:destination,request_id:route.requestId||null,...(routingWarning?{warning:routingWarning}:{}),hash:c.hash,format_hash:c.format_hash,role:m.role,reply_to:m.reply_to||null,reply_receipt:reply.receipt,...(topic.known?{topic_id:topic.topicId}:{}),
      receipts:[],media_receipts:[],media_count:imageCount,
      media_sha256:media?.map(f=>f.sha256)||[],partHashes:parts.map(textHash),partFormats:formatted,status:'sending'};
     state.published[m.id]=pub;this.relay.save();
