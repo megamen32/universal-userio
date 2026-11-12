@@ -45,8 +45,27 @@
       .finally(() => { running = false; });
   };
 
+  // Delivered results already live on the server. Keep replay fences, not
+  // repeated full chat snapshots, in Chrome's bounded local settings store.
+  async function compactReceipts() {
+    const all=await chrome.storage.local.get(null);
+    const entries=Object.entries(all).filter(([k,v])=>k.startsWith('userioCommandReceipt:')&&v?.phase==='delivered');
+    const patch={};let compacted=0;
+    for(const [key,value] of entries)if(Object.hasOwn(value,'result')){
+      patch[key]={phase:'delivered',...(value.readOnly?{readOnly:true,completedAt:value.completedAt||0}:{})};compacted++;
+    }
+    if(compacted)await chrome.storage.local.set(patch);
+    const reads=entries.filter(([,v])=>v.readOnly===true).sort((a,b)=>(b[1].completedAt||0)-(a[1].completedAt||0));
+    const remove=reads.slice(512).map(([key])=>key);
+    if(remove.length)await chrome.storage.local.remove(remove);
+    await chrome.storage.local.set({agentReceiptMaintenance:{compacted,pruned:remove.length,at:Date.now()}});
+    return {compacted,pruned:remove.length};
+  }
+
   const loops = new Map();
+  const connectionStates = new Map();
   async function runLoop() {
+    await compactReceipts();
     for (;;) {
       try {
         chrome.runtime.getPlatformInfo(() => {});
@@ -66,10 +85,31 @@
   }
 
   async function connectionLoop(connectionId) {
-    while ((await root.UserIOConnections.get(connectionId))?.enabled) {
-      try { const context=await root.UserIO.settings(connectionId); const principal=await root.UserIO.call('GET','/v1/connection-principal',null,connectionId); if(!principal?.user_id)throw new Error('principal_unavailable');
-        const command=await pollOnce(connectionId); if(command)await processCommand(command,{connectionId,agentInstanceId:context.agentInstanceId,principalId:principal.user_id});
-      } catch(e) { lastError=String(e?.message||e); await sleep(5000); }
+    const state={stage:'starting',lastOkAt:0,lastError:''};
+    connectionStates.set(connectionId,state);
+    for (;;) {
+      const connection=await root.UserIOConnections.get(connectionId);
+      if(!connection || connection.enabled===false){state.stage='disabled';return;}
+      try {
+        state.stage='principal';state.startedAt=Date.now();
+        const context=await root.UserIO.settings(connectionId);
+        state.agentId=context.agentId;state.instanceId=context.agentInstanceId;
+        const principal=await root.UserIO.call('GET','/v1/connection-principal',null,connectionId);
+        if(!principal?.user_id)throw new Error('principal_unavailable');
+        state.stage='poll';state.principalId=principal.user_id;
+        if(!state.serverCheckedAt || Date.now()-state.serverCheckedAt>60000){
+          const report=await root.UserIO.call('GET','/v1/agent/status',null,connectionId);
+          state.server=report.agents?.find(a=>a.agent_id===context.agentId)||null;
+          state.serverCheckedAt=Date.now();
+        }
+        const command=await pollOnce(connectionId);
+        state.stage=command?'command':'idle';
+        if(command)await processCommand(command,{connectionId,agentInstanceId:context.agentInstanceId,principalId:principal.user_id});
+        state.lastOkAt=Date.now();state.lastError='';
+      } catch(e) {
+        state.stage='retry';state.lastError=String(e?.message||e).slice(0,250);state.lastFailure={error:state.lastError,at:Date.now()};
+        lastError=state.lastError;await saveState();await sleep(5000);
+      }
     }
   }
 
@@ -89,7 +129,10 @@
     if(!result) result=await execute(command).catch(e=>({ok:false,error:String(e?.message||e)}));
     const receipt={phase:'executed',result}; await chrome.storage.local.set({[key]:receipt}); handled++;
     await root.UserIO.call('POST','/v1/agent/results',{id:command.id,agent_id:command.agent_id,action:command.action,connection_id:context.connectionId,agent_instance_id:context.agentInstanceId,principal_id:context.principalId,result},context.connectionId);
-    await chrome.storage.local.set({[key]:{...receipt,phase:'delivered'}}); return result;
+    const readOnly=new Set(['ping','gpt_identity','gpt_scope','zai_scope','gpt_session_proof','gpt_read','gpt_list','zai_read','zai_list','dot_profile_probe','dot_composer_inspect','dot_inspect','dot_draft_inspect']).has(command.action)||(command.action==='dot_action'&&command.args?.operation==='snapshot');
+    await chrome.storage.local.set({[key]:{phase:'delivered',...(readOnly?{readOnly:true,completedAt:Date.now()}:{})}});
+    if(handled%128===0)await compactReceipts();
+    return result;
   }
   lib.processCommand=processCommand;
 
@@ -100,7 +143,7 @@
     const headers = {};
     const token = await root.UserIO.accessToken(connectionId);
     if (token) headers["Authorization"] = "Bearer " + token;
-    const res = await fetch(url, { headers });
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout((POLL_WAIT_SEC+10)*1000) });
     if (!res.ok) throw new Error(`poll HTTP ${res.status}`);
     const data = await res.json().catch(() => ({}));
     if (data && data.identity_conflict) throw new Error('agent_identity_conflict');
@@ -112,7 +155,7 @@
   async function saveState() {
     try {
       await chrome.storage.local.set({
-        agentState: { lastOkAt, lastError, handled, ts: Date.now() },
+        agentState: { lastOkAt, lastError, handled, ts: Date.now(), connections:Object.fromEntries(connectionStates) },
       });
     } catch (_) {}
   }

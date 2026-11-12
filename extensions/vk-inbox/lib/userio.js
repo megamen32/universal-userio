@@ -56,6 +56,7 @@
     const res = await fetch(url, {
       method,
       headers,
+      signal: AbortSignal.timeout(15000),
       body: body ? JSON.stringify(body) : undefined,
     });
     let data = null;

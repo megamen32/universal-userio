@@ -123,8 +123,9 @@ export class DotMirror{
    if(state?.nextReadAttemptAt>this.now())return {status:'read_backoff'};
    let snap;
    try{snap=await this.relay.browserCall('dot_snapshot',{tab_id:this.relay.tabId});}
-   catch{
+   catch(error){
     if(state){state.status='snapshot_read_failed';state.lastReadErrorAt=this.now();
+     state.lastError=/^[a-z0-9_]{1,120}$/.test(String(error?.message||''))?error.message:'snapshot_transport_error';
      state.readFailures=(state.readFailures||0)+1;
      state.nextReadAttemptAt=this.now()+Math.min(300000,30000*2**Math.min(state.readFailures-1,4));
      this.relay.save();}
