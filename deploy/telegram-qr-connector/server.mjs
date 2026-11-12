@@ -1201,7 +1201,7 @@ async function ingestLive(slot, client, accountId, dialogLabels, self, event, is
   }
   // An edit rewrites an existing mirror message; it is not a new arrival and
   // must not reschedule agent delivery for the chat.
-  const isDotBot = relayAdditionalDotMessage(accountId,self,message,chatKey,isEdit) || relayGroupMessage(client, accountId, self, message, chatKey, isEdit, chatEntity) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
+  const isDotBot = relayGroupMessage(client, accountId, self, message, chatKey, isEdit, chatEntity) || relayAdditionalDotMessage(accountId,self,message,chatKey,isEdit) || relayDotMessage(client, accountId, self, message, chatKey, isEdit);
   if (!isDotBot && !isEdit && !message.out) debounceAgentDeliver(chatKey, label, inboxMessage, accountId, posted.conversation_id);
   setSync(slot, { lastSyncAt: Date.now() });
   console.log(`sync ${slot}: ${isEdit ? "live edit" : "live"} ${label} msg ${message.id}`);
