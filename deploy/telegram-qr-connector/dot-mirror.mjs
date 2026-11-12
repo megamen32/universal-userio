@@ -122,7 +122,7 @@ export class DotMirror{
    if(state&&Object.values(state.published).some(p=>['sending','edit_uncertain'].includes(p.status))){state.blocked='previous_operation_unknown';this.relay.save();return {status:state.blocked};}
    if(state?.nextReadAttemptAt>this.now())return {status:'read_backoff'};
    let snap;
-   try{snap=await this.relay.browserCall('dot_snapshot',{tab_id:this.relay.tabId});}
+   try{snap=await this.relay.browserCall('dot_snapshot',{tab_id:this.relay.tabId,...(this.relay.memberPrivateEnabled&&state?.cursor?{native_after:state.cursor}:{})});}
    catch(error){
     if(state){state.status='snapshot_read_failed';state.lastReadErrorAt=this.now();
      state.lastError=/^[a-z0-9_]{1,120}$/.test(String(error?.message||''))?error.message:'snapshot_transport_error';
@@ -153,6 +153,7 @@ export class DotMirror{
     const origin=this.relay.mirrorOrigin(m);
     if(origin==='uncertain'){state.status='incoming_origin_uncertain';this.relay.save();return {status:state.status};}
     if(origin==='telegram'){state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
+    if(m.reply_resolution==='pending'){state.status='native_reply_pending';this.relay.save();return {status:state.status};}
     const route=this.relay.routeMessage?.(m,rows)||{peerId:this.relay.peerId||OWNER,private:false};
     if(route.hold){state.held[m.id]={reason:route.hold};state.cursor=m.id;delete state.candidates[m.id];changed=true;continue;}
     const destination=route.peerId;

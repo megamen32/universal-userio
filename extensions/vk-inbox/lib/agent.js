@@ -781,7 +781,7 @@
         if (!scopeCheck.ok) return scopeCheck;
         const text=args.operation==="snapshot"?null:args.text;
         if(args.operation==="send"&&(typeof text!=="string"||!text.trim()||text.length>16000))return {ok:false,error:"invalid_dot_text"};
-        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.pageAction,args:[args.url,args.room,text,args.after||null,args.reply_to||null,args.entities||[]]});
+        const [r]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:"MAIN",func:root.UserIODot.pageAction,args:[args.url,args.room,text,args.after||null,args.reply_to||null,args.entities||[],args.native_after||null]});
         return r?.result || {ok:false,error:"dot_result_unknown"};
       }
       case "dot_media": {

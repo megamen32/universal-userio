@@ -77,7 +77,7 @@ export function createExtensionCaller({base,agentId,connectionId,accountScope,ag
    }finally{if(started)try{await call('finish')}catch{}}
   }
   if(action==='dot_send'&&(typeof args.text!=='string'||!args.text.trim()))throw Error('invalid_message');
-  return command(target,'dot_action',{operation:action==='dot_snapshot'?'snapshot':'send',after:args.after||null,reply_to:args.reply_to||null,...(action==='dot_send'?{text:args.text,...(args.entities?.length?{entities:args.entities}:{})}:{})});
+  return command(target,'dot_action',{operation:action==='dot_snapshot'?'snapshot':'send',...(action==='dot_snapshot'&&args.native_after?{native_after:args.native_after}:{}),after:args.after||null,reply_to:args.reply_to||null,...(action==='dot_send'?{text:args.text,...(args.entities?.length?{entities:args.entities}:{})}:{})});
  };
  return async(action,args)=>{
   if(!['dot_snapshot','dot_send','dot_media_read'].includes(action))throw Error('unsupported_extension_dot_action');

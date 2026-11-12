@@ -373,3 +373,30 @@ test('owner-authorized draft discard is room-scoped and metadata failures only w
   else{assert.equal(result.discarded,1);assert.equal(saved['dot_draft_backup:old'],undefined);}
  }
 });
+
+function nativeThreadFixture({threaded=true,preexisting=false}={}){
+ const room='native',prefix=room+'~'+room+'~CalpicoMessage~';let panel=null,opened=0,closed=0;
+ const make=(id,role,text)=>({dataset:{messageId:prefix+id},classList:{contains:n=>n==='self'&&role==='user'},closest:()=>null,
+  querySelectorAll:()=>[],querySelector:selector=>selector==='.message-text'?{innerText:text,textContent:text,childNodes:[]}:selector==='[data-action="reply"]'?{click(){opened++;panel=createPanel(threaded?[u,a]:[a]);}}:null});
+ const base=make('base','user','baseline'),u=make('dm','user','private message'),a=make('answer','assistant','answer');
+ const createPanel=items=>({isConnected:true,querySelectorAll:selector=>selector.startsWith('article')?items:selector==='button'?[{getAttribute:()=> 'Закрыть ветку ответов',click(){closed++;panel.isConnected=false;panel=null;}}]:[]});
+ if(preexisting)panel=createPanel([base]);
+ const doc={querySelectorAll:selector=>selector.startsWith('article')?[base,u,a]:selector.startsWith('.reply-chain-panel')?(panel?[panel]:[]):[],querySelector:selector=>selector.startsWith('.reply-chain-panel')?panel:null};
+ const self={};vm.runInNewContext(fs.readFileSync(path.join(root,'lib/dot.js'),'utf8'),{self,document:doc,location:{href:url},setTimeout:fn=>fn(),Promise});
+ return {self,u,a,counts:()=>({opened,closed})};
+}
+test('snapshot reads an assistant native reply from its actual thread without a quoted button',async()=>{
+ const f=nativeThreadFixture(),r=await f.self.UserIODot.pageAction(url,'native',null,null,null,[],f.u.dataset.messageId);
+ assert.equal(r.messages.at(-1).reply_to,f.u.dataset.messageId);assert.equal(r.messages.at(-1).reply_resolution,'native_thread');
+ assert.deepEqual(f.counts(),{opened:1,closed:1});
+ await f.self.UserIODot.pageAction(url,'native',null,null,null,[],f.u.dataset.messageId);
+ assert.deepEqual(f.counts(),{opened:1,closed:1});
+});
+test('a standalone native thread remains unthreaded rather than inheriting the prior DM',async()=>{
+ const f=nativeThreadFixture({threaded:false}),r=await f.self.UserIODot.pageAction(url,'native',null,null,null,[],f.u.dataset.messageId);
+ assert.equal(r.messages.at(-1).reply_to,null);assert.equal(r.messages.at(-1).reply_resolution,'native_thread');
+});
+test('snapshot does not close an unrelated user reply panel or guess an unresolved parent',async()=>{
+ const f=nativeThreadFixture({preexisting:true}),r=await f.self.UserIODot.pageAction(url,'native',null,null,null,[],f.u.dataset.messageId);
+ assert.equal(r.messages.at(-1).reply_resolution,'pending');assert.deepEqual(f.counts(),{opened:0,closed:0});
+});

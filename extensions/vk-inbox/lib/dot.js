@@ -1,5 +1,5 @@
 (function(root){
-async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]) {
+async function pageAction(url, room, text, after, replyTo=null, inputEntities=[], nativeAfter=null) {
     if (location.href !== url) return {ok:false,error:'wrong_dot_route'};
     const allRows = [...document.querySelectorAll('article.message-row[data-message-id]')];
     const rows = allRows.filter(e=>!e.closest?.('.reply-chain-panel[role="dialog"]'));
@@ -82,6 +82,53 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
     }
     let editors = [...document.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e => e.getClientRects().length);
     if (text === null) {
+      // The native reply dialog exposes the actual thread even when the main
+      // transcript omits a quoted-reply button. Read that UI relation, never
+      // infer a private destination from chronological adjacency.
+      if(nativeAfter){
+        const cacheKey='__userioDotNativeReplies',prior=globalThis[cacheKey];
+        const cache=prior?.url===url&&prior?.room===room?prior:{url,room,links:{}};
+        globalThis[cacheKey]=cache;
+        const panelSelector='.reply-chain-panel[role="dialog"]';
+        const readPanel=panel=>{
+          const items=[...panel.querySelectorAll('article.message-row[data-message-id]')];
+          if(!items.length||items.some(r=>!r.dataset.messageId.startsWith(prefix)))return null;
+          const rootId=items[0].dataset.messageId;
+          cache.links[rootId]=null;
+          for(const row of items.slice(1))cache.links[row.dataset.messageId]=row.querySelector('[data-action="jump-reply"][data-message-id]')?.dataset?.messageId||rootId;
+          return items.map(r=>r.dataset.messageId);
+        };
+        for(const panel of document.querySelectorAll(panelSelector))readPanel(panel);
+        const startIndex=messages.findIndex(m=>m.id===nativeAfter);
+        for(const message of startIndex<0?[]:messages.slice(startIndex+1)){
+          if(message.role!=='assistant'||message.reply_to)continue;
+          if(!Object.hasOwn(cache.links,message.id)&&!document.querySelector(panelSelector)){
+            const node=rows.find(row=>row.dataset.messageId===message.id),button=node?.querySelector('[data-action="reply"]');
+            if(button){
+              let ownedPanel=null;
+              try{
+                button.click();
+                for(let attempt=0;attempt<10;attempt++){
+                  await new Promise(resolve=>setTimeout(resolve,50));
+                  const panels=[...document.querySelectorAll(panelSelector)];
+                  if(panels.length!==1)continue;
+                  ownedPanel=panels[0];
+                  const ids=[...ownedPanel.querySelectorAll('article.message-row[data-message-id]')].map(row=>row.dataset.messageId);
+                  if(!ids.includes(message.id))continue;
+                  readPanel(ownedPanel);break;
+                }
+              }finally{
+                const close=ownedPanel&&[...ownedPanel.querySelectorAll('button')].find(b=>['Закрыть ветку ответов','Close reply thread','Close replies'].includes(b.getAttribute('aria-label')));
+                close?.click();
+                for(let attempt=0;ownedPanel?.isConnected&&attempt<10;attempt++)await new Promise(resolve=>setTimeout(resolve,50));
+              }
+            }
+          }
+          if(Object.hasOwn(cache.links,message.id)){message.reply_to=cache.links[message.id];message.reply_resolution='native_thread';}
+          else message.reply_resolution='pending';
+        }
+      }
+
       const index = after ? messages.findIndex(m=>m.id===after) : -1;
       if(after && index<0) return {ok:false,error:'cursor_not_visible',resync_required:true};
       return {ok:true,room,messages:messages.slice(index+1),cursor:messages.at(-1)?.id};
@@ -103,7 +150,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
       if(panels.length!==1)return {ok:false,error:'reply_panel_unverified'};
       ownedPanel=panels[0];
       const targetRows=[...ownedPanel.querySelectorAll('article.message-row[data-message-id]')];
-      if(targetRows.length!==1||targetRows[0].dataset.messageId!==replyTo)return {ok:false,error:'reply_chain_target_ambiguous'};
+      if(targetRows.filter(r=>r.dataset.messageId===replyTo).length!==1||targetRows[0]?.dataset.messageId!==replyTo)return {ok:false,error:'reply_chain_target_ambiguous'};
       scope=ownedPanel;
       editors=[...scope.querySelectorAll('[contenteditable="true"][data-composer-markdown]')].filter(e=>e.getClientRects().length);
       if(editors.length!==1||(editors[0].innerText||editors[0].textContent||'').trim())return {ok:false,error:'reply_composer_unverified'};
@@ -154,7 +201,7 @@ async function pageAction(url, room, text, after, replyTo=null, inputEntities=[]
     if([...document.querySelectorAll('article.message-row[data-message-id]')].some(e=>!e.dataset.messageId.startsWith(prefix))) return {ok:false,error:'room_changed_requires_review'};
     if(ownedPanel){
       const targetRows=[...ownedPanel.querySelectorAll('article.message-row[data-message-id]')];
-      if(targetRows.length!==1||targetRows[0].dataset.messageId!==replyTo)return {ok:false,error:'reply_target_changed'};
+      if(targetRows.filter(r=>r.dataset.messageId===replyTo).length!==1||targetRows[0]?.dataset.messageId!==replyTo)return {ok:false,error:'reply_target_changed'};
     }
     ready[0].click();
     await new Promise(resolve=>setTimeout(resolve,100));
