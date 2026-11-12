@@ -159,8 +159,49 @@ def handler(
         "verified": supplied_identity.get("verified", False),
     }
     service.add_inbound_listener(lambda user_id, _conversation_id, _message: subscriptions.publish(user_id, "userio://inbox/unread"))
+    auto_account_hosts = frozenset(
+        value.strip().lower().rstrip(".")
+        for value in os.environ.get("USERIO_AUTO_ACCOUNT_HOSTS", "").split(",")
+        if value.strip()
+    )
+    auto_account_cookie_name = "userio_visitor"
+    auto_account_cookie_lifetime = 365 * 24 * 60 * 60
 
     class UserIOHandler(BaseHTTPRequestHandler):
+        def _request_hostname(self) -> str:
+            raw_host = self.headers.get("Host", "")
+            try:
+                hostname = urlparse("//" + raw_host).hostname or ""
+            except ValueError:
+                hostname = ""
+            return hostname.rstrip(".").lower()
+
+        def _auto_account_enabled(self) -> bool:
+            return self._request_hostname() in auto_account_hosts
+
+        def _auto_account_principal(self) -> UserPrincipal | None:
+            if not self._auto_account_enabled():
+                return None
+            cached = getattr(self, "_auto_account_principal_value", None)
+            if cached is not None:
+                return cached
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except (CookieError, ValueError):
+                cookie = SimpleCookie()
+            morsel = cookie.get(auto_account_cookie_name)
+            visitor_token = morsel.value if morsel is not None else ""
+            if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", visitor_token):
+                visitor_token = secrets.token_urlsafe(32)
+                self._auto_account_cookie = self._session_cookie(
+                    auto_account_cookie_name, visitor_token,
+                    max_age=auto_account_cookie_lifetime, path="/",
+                )
+            principal, _created = service._store.create_anonymous_visitor(visitor_token)
+            self._auto_account_principal_value = principal
+            return principal
+
         def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
             presented = self.headers.get("Authorization", "")
             if token and hmac.compare_digest(presented, f"Bearer {token}"):
@@ -170,6 +211,9 @@ def handler(
                 if principal is not None:
                     return principal
             principal = self._cookie_principal("userio_web_session")
+            if principal is not None:
+                return principal
+            principal = self._auto_account_principal()
             if principal is not None:
                 return principal
             if (
@@ -183,6 +227,11 @@ def handler(
                 return UserPrincipal(owner.user_id, owner.username, owner.role)
             return None
 
+        def _send_auto_account_cookie(self) -> None:
+            cookie = getattr(self, "_auto_account_cookie", None)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+
         def _reply(self, status: int, payload: dict, headers: dict[str, str] | None = None) -> None:
             encoded = json.dumps(payload, ensure_ascii=False).encode()
             self.send_response(status)
@@ -190,6 +239,7 @@ def handler(
             self.send_header("Content-Length", str(len(encoded)))
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -201,6 +251,7 @@ def handler(
             self.send_header("Connection", "close")
             self.send_header("X-Accel-Buffering", "no")
             self.send_header("Content-Length", str(len(encoded)))
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -210,6 +261,7 @@ def handler(
             self.send_header("Content-Length", str(len(body)))
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(body)
 
@@ -225,6 +277,7 @@ def handler(
             self.send_header("Content-Disposition", disposition)
             self.send_header("X-Content-SHA256", hashlib.sha256(body).hexdigest())
             self.send_header("Cache-Control", "private, max-age=0")
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(body)
 
@@ -239,6 +292,7 @@ def handler(
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(str(candidate))[0] or "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(body)
             return True
@@ -367,11 +421,15 @@ def handler(
                 {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'},
             )
 
-        def _redirect(self, location: str, *, cookie: str | None = None) -> None:
+        def _redirect(self, location: str, *, cookie: str | None = None,
+                      cookies: tuple[str, ...] = ()) -> None:
             self.send_response(302)
             self.send_header("Location", location)
             if cookie is not None:
                 self.send_header("Set-Cookie", cookie)
+            for extra_cookie in cookies:
+                self.send_header("Set-Cookie", extra_cookie)
+            self._send_auto_account_cookie()
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -520,9 +578,12 @@ def handler(
                 ))
                 return
             if path == "/auth/logout":
-                self._redirect("/login", cookie=self._session_cookie(
-                    "userio_web_session", "", max_age=0, path="/",
-                ))
+                self._redirect(
+                    "/" if self._auto_account_enabled() else "/login",
+                    cookie=self._session_cookie(
+                        "userio_web_session", "", max_age=0, path="/",
+                    ),
+                )
                 return
             if path == "/register":
                 try:
@@ -1781,6 +1842,7 @@ def handler(
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.send_header("X-Accel-Buffering", "no")
+                self._send_auto_account_cookie()
                 self.end_headers()
                 ready = {"jsonrpc": "2.0", "method": "userio/ready", "params": {"endpoint": "/mcp", "username": principal.username}}
                 self.wfile.write(sse_message(ready)); self.wfile.flush()
@@ -1789,7 +1851,7 @@ def handler(
                     self.wfile.write(sse_message(event)); self.wfile.flush()
                 return
             if requested_path == "/login":
-                if self._cookie_principal("userio_web_session") is not None:
+                if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
                     return
                 self._html(200, _dashboard_login_page(
@@ -1797,7 +1859,7 @@ def handler(
                     notice=self._query_value("code_sent")).encode())
                 return
             if requested_path == "/signup":
-                if self._cookie_principal("userio_web_session") is not None:
+                if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
                     return
                 self._html(200, _dashboard_signup_page().encode())
