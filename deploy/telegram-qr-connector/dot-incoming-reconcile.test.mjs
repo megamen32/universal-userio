@@ -21,3 +21,14 @@ test('caption recovery requires a matching preflight, one-time intent, and submi
   assert.throws(()=>verifiedCaptionRecoveryAudit({proof,intent,result,record:original,id,requestId,echo,hash,messageId:213,...change}));
  }
 });
+
+import {echoText} from './dot-relay.mjs';
+test('line-break-only echo normalization keeps exact source hash and unique room match',()=>{
+ const nl=String.fromCharCode(10),original='Name:'+nl+'message',h=textHash(original),r={status:'submitted_unconfirmed',text_hash:h,echo_normalized_hash:textHash(echoText(original)),cursor:'baseline'};
+ const row={role:'user',text:'Name:message',id:'room~room~CalpicoMessage~normalized'},snap={ok:true,room:'room',messages:[row]};
+ assert.equal(verifiedIncomingEcho(r,snap,'room',h),row.id);
+ assert.throws(()=>verifiedIncomingEcho(r,{...snap,messages:[{...row,text:'Name:different message'}]},'room',h));
+ assert.throws(()=>verifiedIncomingEcho(r,{...snap,messages:[row,row]},'room',h));
+ assert.throws(()=>verifiedIncomingEcho(r,snap,'wrong-room',h));
+ assert.equal(echoText('a'+nl+'b'),'ab');assert.notEqual(echoText('a b'),echoText('ab'));
+});

@@ -652,13 +652,32 @@
         return result?.result||{ok:false,error:'inspection_failed'};
       }
       case "dot_draft_recover": {
-        if(!root.UserIODot?.recoverDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.backup_id||"")||!['clear','restore'].includes(args.operation))return {ok:false,error:'invalid_dot_request'};
-        if(args.confirm!==(args.operation==='clear'?'preserve_then_clear':'restore_preserved_draft'))return {ok:false,error:'confirmation_required'};
+        const discard=args.operation==='discard';
+        if(!root.UserIODot?.recoverDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||(!discard&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.backup_id||""))||!['clear','restore','discard'].includes(args.operation))return {ok:false,error:'invalid_dot_request'};
+        if(args.confirm!==(discard?'discard_room_drafts':args.operation==='clear'?'preserve_then_clear':'restore_preserved_draft'))return {ok:false,error:'confirmation_required'};
         const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
         await root.UserIOTabGroups?.assign("dots",tabs[0].id);
+        if(discard){
+          // The owner selected delivery-first handling for this exact room.
+          const [captured]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:'MAIN',func:root.UserIODot.captureDraft,args:[args.url,args.room]});
+          const draft=captured?.result;
+          if(!draft?.ok&&draft?.error!=='empty_draft')return {ok:false,error:draft?.error||'draft_inspection_unknown'};
+          if(draft.ok){
+            const [cleared]=await chrome.scripting.executeScript({target:{tabId:tabs[0].id},world:'MAIN',func:root.UserIODot.recoverDraft,args:[args.url,args.room,'clear',draft.text,draft.html]});
+            if(!cleared?.result?.ok)return {ok:false,error:cleared?.result?.error||'draft_clear_unknown'};
+          }
+          const warnings=[];let discarded=0;
+          try{
+            const all=await chrome.storage.local.get(null);
+            const keys=Object.entries(all).filter(([k,v])=>k.startsWith('dot_draft_backup:')&&v?.url===args.url&&v?.room===args.room).map(([k])=>k);
+            if(keys.length){await chrome.storage.local.remove(keys);discarded=keys.length;}
+          }catch{warnings.push('draft_metadata_cleanup_failed');}
+          if(discarded||draft.ok)warnings.push('drafts_discarded');
+          return {ok:true,phase:'discarded',discarded,composer_cleared:!!draft.ok,warnings};
+        }
         const key='dot_draft_backup:'+args.backup_id, saved=(await chrome.storage.local.get(key))[key];
         if(!saved||saved.url!==args.url||saved.room!==args.room||typeof saved.text!=='string'||typeof saved.html!=='string')return {ok:false,error:'backup_not_found'};
         if((args.operation==='clear'&&!['saved','restored',undefined].includes(saved.phase))||(args.operation==='restore'&&saved.phase!=='cleared'))return {ok:false,error:'recovery_requires_review'};

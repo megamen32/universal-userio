@@ -1,10 +1,10 @@
-import {textHash} from './dot-relay.mjs';
+import {textHash,echoText} from './dot-relay.mjs';
 // Read-only proof selection; callers fence writers and durably back up state.
 export function verifiedIncomingEcho(record,snapshot,room,expectedHash,{captionRecovery=false}={}){
  const recoverable=captionRecovery&&record?.status==='requires_review'&&record?.reason==='caption_unverified'&&Array.isArray(record?.media)&&record.media.length>0;
  if(!record||(!recoverable&&!['send_uncertain','submitted_unconfirmed','echo_unknown','echo_timeout_requires_review','echo_requires_review'].includes(record.status))||record.text_hash!==expectedHash||!record.cursor||!snapshot?.ok||snapshot.room!==room||!Array.isArray(snapshot.messages))throw Error('incoming_reconcile_invalid');
  const expectedNames=(record.media||[]).map(item=>item.filename).sort();
- const matches=snapshot.messages.filter(m=>m.role==='user'&&typeof m.text==='string'&&textHash(m.text.trim())===expectedHash&&typeof m.id==='string'&&m.id.startsWith(room+'~'+room+'~CalpicoMessage~')&&
+ const matches=snapshot.messages.filter(m=>m.role==='user'&&typeof m.text==='string'&&(textHash(m.text.trim())===expectedHash||(record.echo_normalized_hash&&textHash(echoText(m.text))===record.echo_normalized_hash))&&typeof m.id==='string'&&m.id.startsWith(room+'~'+room+'~CalpicoMessage~')&&
   (!expectedNames.length||(m.attachment_count===expectedNames.length&&Array.isArray(m.attachment_names)&&JSON.stringify([...m.attachment_names].sort())===JSON.stringify(expectedNames))));
  if(matches.length!==1)throw Error('incoming_reconcile_not_unique');
  return matches[0].id;

@@ -4,7 +4,7 @@ import {readDotMediaUsing} from './dot-browser-egress.mjs';
 // Scoped caller for the existing UserIO extension command channel. Delivery
 // requests are admitted once: timeout means UNKNOWN and is never retried.
 const BROWSER_INSTANCE=/^browser-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
-export function createExtensionCaller({base,agentId,connectionId,accountScope,agentInstanceId='',url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true,assertAllowed=()=>{},getAgentStatus=null}){
+export function createExtensionCaller({base,agentId,connectionId,accountScope,agentInstanceId='',url,room,token,fetcher=fetch,wait=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>Date.now(),loadMedia=validateMediaFiles,transferId=randomUUID,preserveDraft=true,discardDrafts=false,assertAllowed=()=>{},getAgentStatus=null}){
  if(!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(url)||!room||!agentId||!connectionId||!/^[A-Za-z0-9._:-]{1,128}$/.test(connectionId)||!/^[a-f0-9]{64}$/.test(accountScope||'')||!token)throw Error('invalid_extension_binding');
  const request=async(path,body)=>{
   const r=await fetcher(new URL(path,base),{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'content-type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(10000)});
@@ -82,6 +82,13 @@ export function createExtensionCaller({base,agentId,connectionId,accountScope,ag
  return async(action,args)=>{
   if(!['dot_snapshot','dot_send','dot_media_read'].includes(action))throw Error('unsupported_extension_dot_action');
   const target=await targetForRoom();
+  if(action==='dot_send'&&discardDrafts){
+   if(!args.media?.length&&(typeof args.text!=='string'||!args.text.trim()))throw Error('invalid_message');
+   const cleared=await command(target,'dot_draft_recover',{operation:'discard',confirm:'discard_room_drafts'});
+   if(!cleared.ok)return cleared;
+   const result=await run(action,args,target);
+   return {...result,warnings:[...(cleared.warnings||[]),...(result.warnings||[])]};
+  }
   if(action!=='dot_send'||!preserveDraft)return run(action,args,target);
   if(!args.media?.length&&(typeof args.text!=='string'||!args.text.trim()))throw Error('invalid_message');
   const backup_id=transferId();

@@ -359,3 +359,17 @@ test('an unreadable resource card does not make the whole room unreadable',async
  assert.equal(result.ok,true);assert.equal(result.messages[0].attachment_incomplete,true);
  assert.equal(result.messages[0].attachment_count,1);assert.equal(result.messages[0].attachment_names.length,0);
 });
+
+test('owner-authorized draft discard is room-scoped and metadata failures only warn',async()=>{
+ for(const failCleanup of [false,true]){
+  const saved={'dot_draft_backup:old':{url,room:'r',text:'old'},'dot_draft_backup:other':{url,room:'other',text:'keep'}};
+  const self={UserIODot:{captureDraft:()=>{},recoverDraft:()=>{}}};
+  const chrome={tabs:{query:async()=>[{id:7,url}]},scripting:{executeScript:async()=>[{result:{ok:false,error:'empty_draft'}}]},storage:{local:{get:async()=>{if(failCleanup)throw Error('storage unavailable');return {...saved}},remove:async keys=>{for(const key of keys)delete saved[key]}}}};
+  const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');
+  vm.runInNewContext(src,{self,chrome,setTimeout,Promise,JSON});
+  const result=await self.Agent.testExecute({action:'dot_draft_recover',args:{url,room:'r',operation:'discard',confirm:'discard_room_drafts'}});
+  assert.equal(result.ok,true);assert.ok(saved['dot_draft_backup:other']);
+  if(failCleanup)assert.ok(result.warnings.includes('draft_metadata_cleanup_failed'));
+  else{assert.equal(result.discarded,1);assert.equal(saved['dot_draft_backup:old'],undefined);}
+ }
+});

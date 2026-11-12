@@ -6,6 +6,8 @@ import {createHash} from 'node:crypto';
 
 
 export const textHash=text=>createHash('sha256').update(String(text)).digest('hex');
+// Dot may omit rendered line breaks; retain every other character for echo matching.
+export const echoText=text=>String(text).replace(/\r\n?/g,'\n').replace(/\n/g,'').trim();
 function normalizedFormat(entities){
  if(!Array.isArray(entities))return null;
  const entries=entities.map(e=>({type:e.type,offset:e.offset,length:e.length,...(e.url?{url:e.url}:{})})).sort((a,b)=>a.type.localeCompare(b.type)||String(a.url||'').localeCompare(String(b.url||''))||a.offset-b.offset);
@@ -110,7 +112,7 @@ export class DotRelay {
  async admit(id,text,source,metadata={},entities=[]){
   if(this.state.incoming[id])return {...this.state.incoming[id],duplicate:true};
   if(Object.values(this.state.incoming).filter(r=>r.status==='queued').length>=32)return {status:'queue_full_not_accepted'};
-  this.state.incoming[id]={status:'queued',source,text_hash:textHash(text),created:Date.now(),...metadata};this.save();
+  this.state.incoming[id]={status:'queued',source,text_hash:textHash(text),echo_normalized_hash:textHash(echoText(text)),created:Date.now(),...metadata};this.save();
   const run=()=>this.deliver(id,text,entities);this.tail=this.tail.then(run,run);return this.tail;
  }
  async deliver(id,text,entities=[]){
@@ -127,10 +129,11 @@ export class DotRelay {
     await this.wait(Math.min(5000+n*1000,15000));
     let snapshot;try{snapshot=await this.browserCall('dot_snapshot',{tab_id:this.tabId,after:record.cursor});}catch{record.status='echo_unknown';this.save();return record;}
     if(!snapshot.ok||snapshot.room!==(this.room||ROOM)){record.status='echo_requires_review';this.save();return record;}
-    const matches=(snapshot.messages||[]).filter(m=>m.role==='user'&&m.text.trim()===text.trim()&&(!record.reply_to_main||m.reply_to===record.reply_to_main||(!m.reply_to&&record.verified_reply_to===record.reply_to_main))&&(!(record.media?.length)||(m.attachment_names?.length===record.media.length&&record.media.every(f=>m.attachment_names.includes(f.filename)))));
+    const matches=(snapshot.messages||[]).filter(m=>m.role==='user'&&echoText(m.text)===echoText(text)&&(!record.reply_to_main||m.reply_to===record.reply_to_main||(!m.reply_to&&record.verified_reply_to===record.reply_to_main))&&(!(record.media?.length)||(m.attachment_names?.length===record.media.length&&record.media.every(f=>m.attachment_names.includes(f.filename)))));
     if(matches.length>1){record.status='ambiguous_echo_requires_review';this.save();return record;}
     if(matches.length===1){
      record.echo=matches[0].id;
+     if(matches[0].text.trim()!==text.trim())record.warning='line_breaks_normalized';
      if(entities.length&&(matches[0].format_incomplete||!formatEchoMatches(normalizedFormat(entities),normalizedFormat(matches[0].entities)))){record.status='echo_format_requires_review';this.save();return record;}
      record.status='accepted';this.save();return record;
     }
@@ -142,7 +145,7 @@ export class DotRelay {
   for(const [id,r] of Object.entries(this.state.incoming)){
    if(r.source!=='telegram'&&!id.startsWith('telegram:'))continue;
    if(r.echo===message.id)return 'telegram';
-   if(message.role==='user'&&!r.echo&&r.text_hash===textHash(message.text)&&!['not_accepted','ignored'].includes(r.status))return 'uncertain';
+   if(message.role==='user'&&!r.echo&&(r.text_hash===textHash(message.text)||(r.echo_normalized_hash&&r.echo_normalized_hash===textHash(echoText(message.text))))&&!['not_accepted','ignored'].includes(r.status))return 'uncertain';
    // Older editors expanded each inserted newline into a paragraph break.
    // Until that failed media attempt is reconciled, an otherwise identical
    // visible draft must not be sent back to its own Telegram source.

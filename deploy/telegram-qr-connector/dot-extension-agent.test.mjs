@@ -127,3 +127,12 @@ test('media reply carries its exact target and formatted caption through staging
  assert.equal((await call('dot_send',{text:'тест',reply_to:reply,entities,media:[{filename:'test.png',mime:'image/png',size:4,sha256:'a'.repeat(64)}]})).ok,true);
  assert.equal(posts.find(x=>x.args.operation==='start').args.reply_to,reply);assert.deepEqual(posts.find(x=>x.args.operation==='start').args.entities,entities);
 });
+
+test('owner-disabled draft preservation sends directly without backup bookkeeping',async()=>{
+ const actions=[];let last;
+ const caller=createExtensionCaller({...init,preserveDraft:false,fetcher:async(_url,opts)=>({ok:true,json:async()=>{
+  if(opts.method==='POST'){last=JSON.parse(opts.body);actions.push(last.action);return {queued:true,id:'browser:direct'};}
+  return {results:[{id:'browser:direct',action:last.action,connection_id:'airlock',received_at:101,result:{ok:true}}]};
+ }})});
+ assert.equal((await caller('dot_send',{text:'hello'})).ok,true);assert.deepEqual(actions,['dot_action']);
+});

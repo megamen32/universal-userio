@@ -980,7 +980,7 @@ async function initializeGroupRelay(binding,identity){
  const token=dec.stdout.trim();
  const check=await fetch(new URL('/v1/connection-principal',userIoUrl),{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(5000)});
  if(!check.ok||(await check.json()).user_id!==binding.owner)throw Error('group_agent_owner_mismatch');
- const browserCall=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,connectionId:binding.connectionId,accountScope:binding.accountScope,agentInstanceId:binding.instanceId||'',url:binding.url,room:binding.room,token});
+ const browserCall=createExtensionCaller({base:userIoUrl,agentId:binding.agentId,connectionId:binding.connectionId,accountScope:binding.accountScope,agentInstanceId:binding.instanceId||'',url:binding.url,room:binding.room,token,discardDrafts:binding.discardDrafts===true,preserveDraft:binding.preserveDraft!==false});
  const boundLive=()=>{
   const current=readGroupBinding(groupBindingPath);
   if(JSON.stringify(current)!==identity)throw Error('group_binding_changed');
