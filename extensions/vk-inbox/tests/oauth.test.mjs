@@ -48,7 +48,7 @@ test('UserIO OAuth uses the Chrome callback, PKCE, account confirmation and REST
     if (String(url).endsWith('/v1/connection-principal')) return response(200, { username: 'test-user' });
     throw new Error(`unexpected URL ${url}`);
   };
-  const ctx = { self: {}, chrome, fetch, URL, URLSearchParams, crypto: globalThis.crypto, TextEncoder, Headers, btoa, console };
+  const ctx = { self: { UserIOConnections: { get: async (id) => id === 'work' ? { id, endpoint: 'https://userio.example' } : null } }, chrome, fetch, URL, URLSearchParams, crypto: globalThis.crypto, TextEncoder, Headers, btoa, console, setTimeout, clearTimeout };
   load('lib/oauth.js', ctx);
   const connected = await ctx.self.UserIOOAuth.connect();
   assert.equal(connected.ok, true);
@@ -67,6 +67,54 @@ test('UserIO OAuth uses the Chrome callback, PKCE, account confirmation and REST
   values.endpoint = 'https://another-userio.example';
   assert.equal(await ctx.self.UserIOOAuth.accessToken(), '');
   assert.equal(values.oauthAccessToken, undefined);
+});
+
+test('UserIO OAuth falls back to an ordinary tab when Chrome rejects the auth flow page', async () => {
+  const values = { endpoint: 'https://userio.example' };
+  const listeners = new Set();
+  const chrome = {
+    identity: {
+      getRedirectURL: (path) => 'https://extension-id.chromiumapp.org/' + path,
+      launchWebAuthFlow: async () => { throw new Error('Authorization page could not be loaded.'); },
+    },
+    tabs: {
+      onUpdated: {
+        addListener: (listener) => listeners.add(listener),
+        removeListener: (listener) => listeners.delete(listener),
+      },
+      create: async ({ url }) => {
+        const tab = { id: 77, url };
+        setTimeout(() => {
+          const query = new URL(url).searchParams;
+          const callback = query.get('redirect_uri') + '?code=tab-code&state=' + query.get('state');
+          for (const listener of listeners) listener(77, { url: callback }, { ...tab, url: callback });
+        }, 0);
+        return tab;
+      },
+      remove: async () => {},
+    },
+    storage: { local: {
+      get: async (defaults) => Array.isArray(defaults) ? Object.fromEntries(defaults.filter(k => k in values).map(k => [k, values[k]])) : ({ ...defaults, ...values }),
+      set: async (next) => Object.assign(values, next),
+      remove: async (keys) => { for (const key of keys) delete values[key]; },
+    } },
+  };
+  const fetch = async (url) => {
+    if (String(url).endsWith('/register')) return response(201, { client_id: 'public-client' });
+    if (String(url).endsWith('/token')) return response(200, {
+      access_token: 'access-tab', refresh_token: 'refresh-tab', expires_in: 3600, token_type: 'Bearer', scope: 'userio',
+    });
+    if (String(url).endsWith('/v1/inbox')) return response(200, { items: [] });
+    if (String(url).endsWith('/v1/connection-principal')) return response(200, { username: 'tab-user' });
+    throw new Error('unexpected URL ' + url);
+  };
+  const ctx = { self: { UserIOConnections: { get: async (id) => id === 'work' ? { id, endpoint: 'https://userio.example' } : null } }, chrome, fetch, URL, URLSearchParams, crypto: globalThis.crypto, TextEncoder, Headers, btoa, console, setTimeout, clearTimeout };
+  load('lib/oauth.js', ctx);
+  const connected = await ctx.self.UserIOOAuth.connect('work');
+  assert.equal(connected.accountLabel, 'tab-user');
+  assert.equal(values['oauthAccessToken:work'], 'access-tab');
+  assert.equal(values['oauthRefreshToken:work'], 'refresh-tab');
+  assert.equal(listeners.size, 0);
 });
 
 test('ChatGPT cookies are never posted by the remote action without an explicit local choice', async () => {

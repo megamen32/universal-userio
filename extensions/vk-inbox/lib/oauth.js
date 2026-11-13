@@ -114,6 +114,62 @@
     return String(info.username || "");
   }
 
+  async function tabAuthFlow(url, redirectUri) {
+    if (!chrome?.tabs?.create || !chrome?.tabs?.onUpdated) {
+      throw new Error("Authorization page could not be loaded.");
+    }
+    let tab;
+    let timer;
+    let settled = false;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      if (tab?.id !== undefined) void chrome.tabs.remove(tab.id).catch(() => {});
+    };
+    const onUpdated = (tabId, changeInfo, updatedTab) => {
+      if (!tab || tabId !== tab.id) return;
+      const candidate = String(changeInfo?.url || updatedTab?.url || "");
+      if (!candidate.startsWith(redirectUri)) return;
+      settled = true;
+      cleanup();
+      resolveFlow(candidate);
+    };
+    let resolveFlow;
+    let rejectFlow;
+    const result = new Promise((resolve, reject) => {
+      resolveFlow = resolve;
+      rejectFlow = reject;
+    });
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      rejectFlow(new Error("Ожидание входа UserIO истекло."));
+    }, 5 * 60 * 1000);
+    try {
+      tab = await chrome.tabs.create({ url, active: true });
+      if (tab?.url?.startsWith(redirectUri)) onUpdated(tab.id, { url: tab.url }, tab);
+    } catch (error) {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        rejectFlow(error);
+      }
+    }
+    return result;
+  }
+
+  async function authorizationCallback(url, redirectUri) {
+    try {
+      return await chrome.identity.launchWebAuthFlow({ url, interactive: true });
+    } catch (error) {
+      const message = String(error?.message || error || "");
+      if (!message.toLowerCase().includes("authorization page could not be loaded")) throw error;
+      return tabAuthFlow(url, redirectUri);
+    }
+  }
+
   async function connect(connectionId) {
     const base = await endpoint(connectionId);
     const { clientId, redirectUri } = await clientFor(base, connectionId);
@@ -123,10 +179,8 @@
       response_type: "code", client_id: clientId, redirect_uri: redirectUri,
       scope: "userio", state, code_challenge: await challenge(verifier), code_challenge_method: "S256",
     });
-    const callback = await chrome.identity.launchWebAuthFlow({
-      url: `${base}/authorize?${params}`,
-      interactive: true,
-    });
+    const authorizationUrl = base + "/authorize?" + params;
+    const callback = await authorizationCallback(authorizationUrl, redirectUri);
     const result = new URL(callback);
     if (result.origin + result.pathname !== redirectUri || result.searchParams.get("state") !== state) {
       throw new Error("Ответ входа UserIO не совпал с этим запросом. Повторите подключение.");
