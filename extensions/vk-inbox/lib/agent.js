@@ -600,8 +600,15 @@
     try {
       // Query by match pattern first. On Chrome profiles with restricted tab
       // URL exposure, query({}) can return the tab id without a usable url.
-      candidates = await chrome.tabs.query({ url: "https://chatgpt.com/dots/*" });
+      candidates = await chrome.tabs.query({ url: "https://chatgpt.com/*" });
     } catch (_) {}
+    if (!candidates.length) {
+      try {
+        // A restricted URL can also be omitted from a pattern query entirely.
+        // Only tabs with no exposed URL reach the script-level exact check.
+        candidates = await chrome.tabs.query({});
+      } catch (_) {}
+    }
     const matches = [];
     for (const tab of candidates) {
       if (!tab || tab.id == null) continue;
