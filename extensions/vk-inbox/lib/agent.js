@@ -595,6 +595,34 @@
     }
   }
 
+  async function exactDotTabs(url) {
+    let candidates = [];
+    try {
+      // Query by match pattern first. On Chrome profiles with restricted tab
+      // URL exposure, query({}) can return the tab id without a usable url.
+      candidates = await chrome.tabs.query({ url: "https://chatgpt.com/dots/*" });
+    } catch (_) {}
+    const matches = [];
+    for (const tab of candidates) {
+      if (!tab || tab.id == null) continue;
+      if (tab.url === url) {
+        matches.push(tab);
+        continue;
+      }
+      if (typeof tab.url === "string" && tab.url) continue;
+      try {
+        const [entry] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: "MAIN",
+          func: expected => location.href === expected,
+          args: [url],
+        });
+        if (entry?.result === true) matches.push(tab);
+      } catch (_) {}
+    }
+    return matches;
+  }
+
   async function execute(command) {
     const args = command.args || {};
     switch (command.action) {
@@ -675,7 +703,7 @@
         return root.Vault.del(String(args.name || ""));
       }
       case "dot_inspect": {
-        const tabs = (await chrome.tabs.query({})).filter(t => t.url === args.url);
+        const tabs = await exactDotTabs(args.url);
         if (!args.url || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url) || tabs.length !== 1)
           return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
@@ -685,7 +713,7 @@
       }
       case "dot_composer_inspect": {
         if(!root.UserIODot?.inspectComposer||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:'invalid_dot_request'};
-        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs=await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
@@ -697,7 +725,7 @@
         const discard=args.operation==='discard';
         if(!root.UserIODot?.recoverDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||(!discard&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.backup_id||""))||!['clear','restore','discard'].includes(args.operation))return {ok:false,error:'invalid_dot_request'};
         if(args.confirm!==(discard?'discard_room_drafts':args.operation==='clear'?'preserve_then_clear':'restore_preserved_draft'))return {ok:false,error:'confirmation_required'};
-        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs=await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:'dot_tab_not_unique'};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
@@ -731,7 +759,7 @@
       }
       case "dot_draft_backup": {
         if(!root.UserIODot?.captureDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(args.backup_id||""))return {ok:false,error:"invalid_dot_request"};
-        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs=await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
@@ -753,7 +781,7 @@
       }
       case "dot_draft_inspect": {
         if(!root.UserIODot?.inspectDraft||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)||!/^[a-f0-9]{64}$/.test(args.expected_hash||""))return {ok:false,error:"invalid_dot_request"};
-        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs=await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
@@ -762,7 +790,7 @@
       }
       case "dot_profile_probe": {
         if (!root.UserIODot || typeof args.room!=="string" || !args.room || typeof args.url!=="string" || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)) return {ok:false,error:"invalid_dot_request"};
-        const tabs = (await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs = await exactDotTabs(args.url);
         if (!tabs.length) return {ok:true,matches:false};
         if (tabs.length!==1) return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
@@ -774,7 +802,7 @@
       }
       case "dot_action": {
         if (!root.UserIODot || !["snapshot","send"].includes(args.operation) || typeof args.room!=="string" || !args.room || typeof args.url!=="string" || !/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url)) return {ok:false,error:"invalid_dot_request"};
-        const tabs = (await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs = await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
@@ -785,7 +813,7 @@
       }
       case "dot_media": {
         if(!root.UserIODot?.mediaAction||!["start","chunk","finish","upload","inspect","send"].includes(args.operation)||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:"invalid_dot_request"};
-        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs=await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;
@@ -794,7 +822,7 @@
       }
       case "dot_media_read": {
         if(!root.UserIODotRead?.pageAction||!["start","chunk","finish"].includes(args.operation)||typeof args.room!=="string"||!args.room||typeof args.url!=="string"||!/^https:\/\/chatgpt\.com\/dots\/[A-Za-z0-9~_-]+$/.test(args.url))return {ok:false,error:"invalid_dot_request"};
-        const tabs=(await chrome.tabs.query({})).filter(t=>t.url===args.url);
+        const tabs=await exactDotTabs(args.url);
         if(tabs.length!==1)return {ok:false,error:"dot_tab_not_unique"};
         const scopeCheck = await verifyDotTabScope(tabs[0].id, args.expected_account_scope);
         if (!scopeCheck.ok) return scopeCheck;

@@ -25,6 +25,20 @@ test('profile probe confirms the exact Dot room without exposing its messages',a
  const wrong=setup([{id:1,url}],{ok:true,room:'other',cursor:'verified'});
  assert.equal((await wrong.execute({action:'dot_profile_probe',args:{url,room:'r'}})).error,'dot_probe_unverified');
 });
+test('profile probe resolves a Dot tab when Chrome withholds its URL in query results',async()=>{
+ const tab={id:7};let calls=[];
+ const self={UserIODot:{pageAction:()=>{}}};
+ const chrome={tabs:{query:async details=>details.url==='https://chatgpt.com/dots/*'?[tab]:[]},scripting:{executeScript:async input=>{
+   calls.push(input);
+   if(input.args?.length===1&&input.args[0]===url)return [{result:true}];
+   return [{result:{ok:true,room:'r',cursor:'verified'}}];
+ }}};
+ const src=fs.readFileSync(path.join(root,'lib/agent.js'),'utf8').replace('  root.Agent = lib;','  lib.testExecute = execute; root.Agent = lib;');
+ vm.runInNewContext(src,{self,chrome,setTimeout,Promise});
+ const result=await self.Agent.testExecute({action:'dot_profile_probe',args:{url,room:'r'}});
+ assert.equal(result.ok,true);assert.equal(result.matches,true);
+ assert.equal(calls.length,2);assert.equal(calls[0].target.tabId,7);
+});
 test('draft backup stores sensitive content locally and returns only verification metadata',async()=>{
  const draft='private draft text',saved={};
  const self={UserIODot:{captureDraft:()=>{}}};
