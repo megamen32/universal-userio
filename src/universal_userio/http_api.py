@@ -587,7 +587,7 @@ def handler(
                 values = self._form()
                 password = values.get("password", "")
                 if not hmac.compare_digest(password, values.get("password_confirm", "")):
-                    self._html(400, _dashboard_signup_page("Пароли не совпадают.").encode())
+                    self._html(400, _dashboard_signup_page("Пароли не совпадают.", values.get("next", "/")).encode())
                     return
                 try:
                     principal = service._store.register_user(values.get("username", ""), password)
@@ -598,12 +598,12 @@ def handler(
                         else "Логин должен содержать 3–64 безопасных символа, а пароль — минимум 8."
                     )
                     self._html(409 if "already exists" in str(error) else 400,
-                               _dashboard_signup_page(message).encode())
+                               _dashboard_signup_page(message, values.get("next", "/")).encode())
                     return
                 session = service._store.create_oauth_session(
                     principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
                 )
-                self._redirect("/", cookie=self._session_cookie(
+                self._redirect(_safe_next(values.get("next") or "/"), cookie=self._session_cookie(
                     "userio_web_session", session,
                     max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
                 ))
@@ -1893,7 +1893,7 @@ def handler(
                 if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
                     return
-                self._html(200, _dashboard_signup_page().encode())
+                self._html(200, _dashboard_signup_page(next_path=self._query_value("next")).encode())
                 return
             if requested_path == '/telemost':
                 self._static('/telemost.html');return
@@ -2984,7 +2984,7 @@ def _dashboard_login_page(*, invalid: bool = False, code: bool = False,
 </body>
 </html>"""
 
-def _dashboard_signup_page(error: str = "") -> str:
+def _dashboard_signup_page(error: str = "", next_path: str = "/") -> str:
     error_html = f'<p class="userio-error" role="alert">{error}</p>' if error else ""
     return f"""<!doctype html>
 <html lang="ru">
@@ -3006,7 +3006,7 @@ def _dashboard_signup_page(error: str = "") -> str:
         <h1 class="userio-setup-title">Создать аккаунт</h1>
         <p class="userio-setup-lead">Ваши каналы и сообщения будут изолированы от других пользователей.</p>
         {error_html}
-        <form method="post" action="/auth/signup">
+        <form method="post" action="/auth/signup"><input type="hidden" name="next" value="{html.escape(_safe_next(next_path))}">
           <label>Логин<input name="username" autocomplete="username" minlength="3" maxlength="64" required autofocus></label>
           <label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
           <label>Повторите пароль<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required></label>

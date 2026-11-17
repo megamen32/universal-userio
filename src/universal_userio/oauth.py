@@ -7,7 +7,7 @@ import hashlib
 import html
 import time
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from .contracts import UserPrincipal
 from .store import SQLiteUserIOStore
@@ -116,12 +116,22 @@ class OAuthProvider:
             '<label>Пароль <input type="password" name="password" autocomplete="current-password" required></label>'
         )
         extra = "" if principal else login_html
+        auth_next = "/authorize?" + urlencode({
+            key: str(value or "") for key, value in request.items()
+            if key in {"response_type", "client_id", "redirect_uri",
+                       "scope", "state", "code_challenge", "code_challenge_method"}
+        })
+        signup = "" if principal else (
+            '<p>Нет аккаунта? <a href="/signup?next='
+            + html.escape(quote(auth_next, safe="")) + '">Зарегистрироваться</a></p>'
+        )
         return f"""<!doctype html><html lang="ru"><meta charset="utf-8">
 <title>Разрешить доступ UserIO</title>
 <style>body{{font:16px system-ui;max-width:420px;margin:8vh auto;padding:20px}}label,input,button{{display:block;width:100%;box-sizing:border-box;margin:10px 0;padding:9px}}</style>
 <h1>Подключение UserIO</h1><p>Приложение получит полный доступ к вашим каналам UserIO (<code>userio</code>).</p>
 <form method="post" action="/authorize">{hidden}{who}<button name="consent" value="allow">Войти и разрешить</button></form>
 {extra}
+{signup}
 </html>""".encode()
 
     def authorize(self, values: dict[str, str], session_user: UserPrincipal | None) -> tuple[str, UserPrincipal | None]:
