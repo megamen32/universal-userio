@@ -477,6 +477,37 @@ def handler(
             if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
                 self._reply(403, {"error": "read_only_token"})
                 return
+            if path == "/auth/bridge/redeem":
+                # The proxy redeems a one-use PKCE ticket server-to-server.
+                # No OAuth access token or website password is sent to the browser.
+                try:
+                    payload = self._json()
+                    audience = str(payload.get("audience") or "")
+                    if audience != "https://userio.dmo.airlockrun.ru":
+                        self._reply(403, {"error": "web_session_audience_not_allowed"})
+                        return
+                    user_id = service._store.redeem_web_session_ticket(
+                        ticket=str(payload.get("ticket") or ""),
+                        code_verifier=str(payload.get("code_verifier") or ""),
+                        audience=audience,
+                    )
+                except (ValueError, TypeError, json.JSONDecodeError, AttributeError):
+                    self._reply(400, {"error": "invalid_request"})
+                    return
+                if user_id is None:
+                    self._reply(401, {"error": "invalid_or_expired_ticket"})
+                    return
+                session = service._store.create_oauth_session(
+                    user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
+                )
+                self._reply(200, {"ok": True}, {
+                    "Set-Cookie": self._session_cookie(
+                        "userio_web_session", session,
+                        max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
+                    ),
+                    "Cache-Control": "private, no-store",
+                })
+                return
             if path == "/auth/session":
                 values = self._form()
                 principal = service._store.authenticate_credentials(

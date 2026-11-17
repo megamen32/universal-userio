@@ -206,6 +206,13 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,
                 expires_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS web_session_tickets (
+                ticket_hash BLOB PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                audience TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS visitor_sessions (
                 visitor_hash BLOB PRIMARY KEY,
                 user_id TEXT UNIQUE NOT NULL,
@@ -1437,6 +1444,43 @@ class SQLiteUserIOStore:
                 (self._token_hash(session), user_id, time.time() + lifetime),
             )
         return session
+
+    def issue_web_session_ticket(self, *, user_id: str, audience: str, code_challenge: str) -> str:
+        if audience != "https://userio.dmo.airlockrun.ru":
+            raise ValueError("web_session_audience_not_allowed")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+            raise ValueError("web_session_challenge_invalid")
+        ticket = secrets.token_urlsafe(40)
+        with self._lock, self._connection:
+            self._connection.execute("DELETE FROM web_session_tickets WHERE expires_at<=?", (time.time(),))
+            self._connection.execute(
+                "INSERT INTO web_session_tickets VALUES (?,?,?,?,?)",
+                (self._token_hash(ticket), user_id, audience, code_challenge, time.time() + 45),
+            )
+        return ticket
+
+    def redeem_web_session_ticket(self, *, ticket: str, code_verifier: str, audience: str) -> str | None:
+        import base64
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{40,128}", ticket)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", code_verifier)):
+            return None
+        proof = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode("ascii")).digest()
+        ).decode("ascii").rstrip("=")
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT user_id,code_challenge FROM web_session_tickets "
+                "WHERE ticket_hash=? AND audience=? AND expires_at>?",
+                (self._token_hash(ticket), audience, time.time()),
+            ).fetchone()
+            if row is None or not hmac.compare_digest(str(row["code_challenge"]), proof):
+                return None
+            if self._connection.execute(
+                "DELETE FROM web_session_tickets WHERE ticket_hash=?",
+                (self._token_hash(ticket),),
+            ).rowcount != 1:
+                return None
+            return str(row["user_id"])
 
     def oauth_session_user(self, session: str) -> UserPrincipal | None:
         with self._lock:
