@@ -206,6 +206,21 @@ class SQLiteUserIOStore:
                 user_id TEXT NOT NULL,
                 expires_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS web_session_tickets (
+                ticket_hash BLOB PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                audience TEXT NOT NULL,
+                code_challenge TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS visitor_sessions (
+                visitor_hash BLOB PRIMARY KEY,
+                user_id TEXT UNIQUE NOT NULL,
+                created_at REAL NOT NULL,
+                last_seen REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS visitor_sessions_user_idx
+                ON visitor_sessions(user_id);
             CREATE TABLE IF NOT EXISTS login_challenges (
                 id TEXT PRIMARY KEY,
                 channel TEXT NOT NULL,
@@ -1376,6 +1391,51 @@ class SQLiteUserIOStore:
             "token_endpoint_auth_method": method,
         }
 
+    def create_anonymous_visitor(self, visitor_token: str) -> tuple[UserPrincipal, bool]:
+        """Return the durable personal principal bound to one opaque visitor token.
+
+        Anonymous users deliberately have no usable password or API token. The
+        mapping is only enabled by the HTTP layer for an explicitly allowlisted
+        host, and the token itself is stored only as a SHA-256 digest.
+        """
+        token = str(visitor_token or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+            raise ValueError("invalid visitor token")
+        visitor_hash = self._token_hash(token)
+        now = time.time()
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT u.id,u.username,u.role FROM visitor_sessions v "
+                "JOIN users u ON u.id=v.user_id WHERE v.visitor_hash=?",
+                (visitor_hash,),
+            ).fetchone()
+            if row is not None:
+                self._connection.execute(
+                    "UPDATE visitor_sessions SET last_seen=? WHERE visitor_hash=?",
+                    (now, visitor_hash),
+                )
+                return UserPrincipal(str(row["id"]), str(row["username"]), str(row["role"])), False
+
+            user_id = "user_" + uuid.uuid4().hex
+            username = "guest_" + uuid.uuid4().hex
+            salt = secrets.token_bytes(16)
+            # The random digest is intentionally not derived from a password.
+            # authenticate_credentials() rejects auth_kind=anonymous first.
+            digest = secrets.token_bytes(32)
+            self._connection.execute(
+                """
+                INSERT INTO users
+                (id,username,password_salt,password_hash,password_iterations,role,created_at,updated_at,auth_kind)
+                VALUES (?,?,?,?,?,?,?,?,'anonymous')
+                """,
+                (user_id, username, salt, digest, _ITERATIONS, "user", now, now),
+            )
+            self._connection.execute(
+                "INSERT INTO visitor_sessions(visitor_hash,user_id,created_at,last_seen) VALUES (?,?,?,?)",
+                (visitor_hash, user_id, now, now),
+            )
+        return UserPrincipal(user_id, username, "user"), True
+
     def create_oauth_session(self, user_id: str, *, lifetime: int = 600) -> str:
         session = secrets.token_urlsafe(32)
         with self._lock, self._connection:
@@ -1384,6 +1444,43 @@ class SQLiteUserIOStore:
                 (self._token_hash(session), user_id, time.time() + lifetime),
             )
         return session
+
+    def issue_web_session_ticket(self, *, user_id: str, audience: str, code_challenge: str) -> str:
+        if audience != "https://userio.dmo.airlockrun.ru":
+            raise ValueError("web_session_audience_not_allowed")
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}", code_challenge):
+            raise ValueError("web_session_challenge_invalid")
+        ticket = secrets.token_urlsafe(40)
+        with self._lock, self._connection:
+            self._connection.execute("DELETE FROM web_session_tickets WHERE expires_at<=?", (time.time(),))
+            self._connection.execute(
+                "INSERT INTO web_session_tickets VALUES (?,?,?,?,?)",
+                (self._token_hash(ticket), user_id, audience, code_challenge, time.time() + 45),
+            )
+        return ticket
+
+    def redeem_web_session_ticket(self, *, ticket: str, code_verifier: str, audience: str) -> str | None:
+        import base64
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{40,128}", ticket)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", code_verifier)):
+            return None
+        proof = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode("ascii")).digest()
+        ).decode("ascii").rstrip("=")
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT user_id,code_challenge FROM web_session_tickets "
+                "WHERE ticket_hash=? AND audience=? AND expires_at>?",
+                (self._token_hash(ticket), audience, time.time()),
+            ).fetchone()
+            if row is None or not hmac.compare_digest(str(row["code_challenge"]), proof):
+                return None
+            if self._connection.execute(
+                "DELETE FROM web_session_tickets WHERE ticket_hash=?",
+                (self._token_hash(ticket),),
+            ).rowcount != 1:
+                return None
+            return str(row["user_id"])
 
     def oauth_session_user(self, session: str) -> UserPrincipal | None:
         with self._lock:

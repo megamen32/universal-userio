@@ -218,6 +218,10 @@ TOOL_SPECS = (
     ToolSpec("userio.conversation.delete_local", "Delete only the local conversation copy.", _schema({
         "conversation_id": {"type": "string"}, "confirm": {"type": "boolean"},
     }, ["conversation_id", "confirm"])),
+    ToolSpec("userio.web_session.issue", "Issue a one-use PKCE-bound browser login ticket for the authenticated OAuth principal.", _schema({
+        "audience": {"type": "string", "enum": ["https://userio.dmo.airlockrun.ru"]},
+        "code_challenge": {"type": "string", "minLength": 43, "maxLength": 43},
+    }, ["audience", "code_challenge"])),
     ToolSpec("userio.accounts.list", "List this user's connected accounts.", _schema({})),
     ToolSpec("userio.ai.propose", "Opt-in: create AI draft variants.", _schema({
         "conversation_id": {"type": "string"}, "source": {"type": "string"},
@@ -292,6 +296,7 @@ TOOL_CAPABILITIES = {
     "userio.messages.send": "send",
     "userio.draft.reconcile_delivery": "send",
     "userio.conversation.delete_local": "read",
+    "userio.web_session.issue": "read",
     "userio.accounts.list": "read",
     "userio.ai.propose": "send",
 }
@@ -565,6 +570,22 @@ class UserIOMcpSurface:
         self, name: str, arguments: dict[str, Any], *, principal: UserPrincipal | None = None
     ) -> dict[str, Any]:
         principal = self._principal if principal is None else principal
+        if name == "userio.web_session.issue":
+            if (principal.read_only or principal.service_account
+                    or principal.messenger_accounts is not None
+                    or principal.messenger_grants is not None
+                    or principal.meeting_recorder
+                    or not self._store.capability_enabled("read", user_id=principal.user_id)):
+                return {"ok": False, "error": "web_session_scope_denied"}
+            try:
+                return {"ok": True, "expires_in": 45,
+                        "ticket": self._store.issue_web_session_ticket(
+                            user_id=principal.user_id,
+                            audience=str(arguments.get("audience") or ""),
+                            code_challenge=str(arguments.get("code_challenge") or ""),
+                        )}
+            except ValueError as error:
+                return {"ok": False, "error": str(error)}
         if name.startswith("userio.profile_share."):
             from .profile_sharing import ProfileSharing
             try:

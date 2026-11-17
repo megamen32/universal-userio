@@ -159,8 +159,49 @@ def handler(
         "verified": supplied_identity.get("verified", False),
     }
     service.add_inbound_listener(lambda user_id, _conversation_id, _message: subscriptions.publish(user_id, "userio://inbox/unread"))
+    auto_account_hosts = frozenset(
+        value.strip().lower().rstrip(".")
+        for value in os.environ.get("USERIO_AUTO_ACCOUNT_HOSTS", "").split(",")
+        if value.strip()
+    )
+    auto_account_cookie_name = "userio_visitor"
+    auto_account_cookie_lifetime = 365 * 24 * 60 * 60
 
     class UserIOHandler(BaseHTTPRequestHandler):
+        def _request_hostname(self) -> str:
+            raw_host = self.headers.get("Host", "")
+            try:
+                hostname = urlparse("//" + raw_host).hostname or ""
+            except ValueError:
+                hostname = ""
+            return hostname.rstrip(".").lower()
+
+        def _auto_account_enabled(self) -> bool:
+            return self._request_hostname() in auto_account_hosts
+
+        def _auto_account_principal(self) -> UserPrincipal | None:
+            if not self._auto_account_enabled():
+                return None
+            cached = getattr(self, "_auto_account_principal_value", None)
+            if cached is not None:
+                return cached
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except (CookieError, ValueError):
+                cookie = SimpleCookie()
+            morsel = cookie.get(auto_account_cookie_name)
+            visitor_token = morsel.value if morsel is not None else ""
+            if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", visitor_token):
+                visitor_token = secrets.token_urlsafe(32)
+                self._auto_account_cookie = self._session_cookie(
+                    auto_account_cookie_name, visitor_token,
+                    max_age=auto_account_cookie_lifetime, path="/",
+                )
+            principal, _created = service._store.create_anonymous_visitor(visitor_token)
+            self._auto_account_principal_value = principal
+            return principal
+
         def _principal(self, *, allow_proxy: bool = False) -> UserPrincipal | None:
             presented = self.headers.get("Authorization", "")
             if token and hmac.compare_digest(presented, f"Bearer {token}"):
@@ -170,6 +211,9 @@ def handler(
                 if principal is not None:
                     return principal
             principal = self._cookie_principal("userio_web_session")
+            if principal is not None:
+                return principal
+            principal = self._auto_account_principal()
             if principal is not None:
                 return principal
             if (
@@ -183,6 +227,11 @@ def handler(
                 return UserPrincipal(owner.user_id, owner.username, owner.role)
             return None
 
+        def _send_auto_account_cookie(self) -> None:
+            cookie = getattr(self, "_auto_account_cookie", None)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+
         def _reply(self, status: int, payload: dict, headers: dict[str, str] | None = None) -> None:
             encoded = json.dumps(payload, ensure_ascii=False).encode()
             self.send_response(status)
@@ -190,6 +239,7 @@ def handler(
             self.send_header("Content-Length", str(len(encoded)))
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -201,6 +251,7 @@ def handler(
             self.send_header("Connection", "close")
             self.send_header("X-Accel-Buffering", "no")
             self.send_header("Content-Length", str(len(encoded)))
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -210,6 +261,7 @@ def handler(
             self.send_header("Content-Length", str(len(body)))
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(body)
 
@@ -225,6 +277,7 @@ def handler(
             self.send_header("Content-Disposition", disposition)
             self.send_header("X-Content-SHA256", hashlib.sha256(body).hexdigest())
             self.send_header("Cache-Control", "private, max-age=0")
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(body)
 
@@ -239,6 +292,7 @@ def handler(
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(str(candidate))[0] or "application/octet-stream")
             self.send_header("Content-Length", str(len(body)))
+            self._send_auto_account_cookie()
             self.end_headers()
             self.wfile.write(body)
             return True
@@ -367,11 +421,15 @@ def handler(
                 {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'},
             )
 
-        def _redirect(self, location: str, *, cookie: str | None = None) -> None:
+        def _redirect(self, location: str, *, cookie: str | None = None,
+                      cookies: tuple[str, ...] = ()) -> None:
             self.send_response(302)
             self.send_header("Location", location)
             if cookie is not None:
                 self.send_header("Set-Cookie", cookie)
+            for extra_cookie in cookies:
+                self.send_header("Set-Cookie", extra_cookie)
+            self._send_auto_account_cookie()
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -418,6 +476,37 @@ def handler(
                 return
             if restricted is not None and restricted.read_only and not read_only_http_allowed(self.command, path):
                 self._reply(403, {"error": "read_only_token"})
+                return
+            if path == "/auth/bridge/redeem":
+                # The proxy redeems a one-use PKCE ticket server-to-server.
+                # No OAuth access token or website password is sent to the browser.
+                try:
+                    payload = self._json()
+                    audience = str(payload.get("audience") or "")
+                    if audience != "https://userio.dmo.airlockrun.ru":
+                        self._reply(403, {"error": "web_session_audience_not_allowed"})
+                        return
+                    user_id = service._store.redeem_web_session_ticket(
+                        ticket=str(payload.get("ticket") or ""),
+                        code_verifier=str(payload.get("code_verifier") or ""),
+                        audience=audience,
+                    )
+                except (ValueError, TypeError, json.JSONDecodeError, AttributeError):
+                    self._reply(400, {"error": "invalid_request"})
+                    return
+                if user_id is None:
+                    self._reply(401, {"error": "invalid_or_expired_ticket"})
+                    return
+                session = service._store.create_oauth_session(
+                    user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
+                )
+                self._reply(200, {"ok": True}, {
+                    "Set-Cookie": self._session_cookie(
+                        "userio_web_session", session,
+                        max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
+                    ),
+                    "Cache-Control": "private, no-store",
+                })
                 return
             if path == "/auth/session":
                 values = self._form()
@@ -498,7 +587,7 @@ def handler(
                 values = self._form()
                 password = values.get("password", "")
                 if not hmac.compare_digest(password, values.get("password_confirm", "")):
-                    self._html(400, _dashboard_signup_page("Пароли не совпадают.").encode())
+                    self._html(400, _dashboard_signup_page("Пароли не совпадают.", values.get("next", "/")).encode())
                     return
                 try:
                     principal = service._store.register_user(values.get("username", ""), password)
@@ -509,20 +598,23 @@ def handler(
                         else "Логин должен содержать 3–64 безопасных символа, а пароль — минимум 8."
                     )
                     self._html(409 if "already exists" in str(error) else 400,
-                               _dashboard_signup_page(message).encode())
+                               _dashboard_signup_page(message, values.get("next", "/")).encode())
                     return
                 session = service._store.create_oauth_session(
                     principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
                 )
-                self._redirect("/", cookie=self._session_cookie(
+                self._redirect(_safe_next(values.get("next") or "/"), cookie=self._session_cookie(
                     "userio_web_session", session,
                     max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
                 ))
                 return
             if path == "/auth/logout":
-                self._redirect("/login", cookie=self._session_cookie(
-                    "userio_web_session", "", max_age=0, path="/",
-                ))
+                self._redirect(
+                    "/" if self._auto_account_enabled() else "/login",
+                    cookie=self._session_cookie(
+                        "userio_web_session", "", max_age=0, path="/",
+                    ),
+                )
                 return
             if path == "/register":
                 try:
@@ -1781,6 +1873,7 @@ def handler(
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "close")
                 self.send_header("X-Accel-Buffering", "no")
+                self._send_auto_account_cookie()
                 self.end_headers()
                 ready = {"jsonrpc": "2.0", "method": "userio/ready", "params": {"endpoint": "/mcp", "username": principal.username}}
                 self.wfile.write(sse_message(ready)); self.wfile.flush()
@@ -1789,7 +1882,7 @@ def handler(
                     self.wfile.write(sse_message(event)); self.wfile.flush()
                 return
             if requested_path == "/login":
-                if self._cookie_principal("userio_web_session") is not None:
+                if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
                     return
                 self._html(200, _dashboard_login_page(
@@ -1797,10 +1890,10 @@ def handler(
                     notice=self._query_value("code_sent")).encode())
                 return
             if requested_path == "/signup":
-                if self._cookie_principal("userio_web_session") is not None:
+                if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
                     return
-                self._html(200, _dashboard_signup_page().encode())
+                self._html(200, _dashboard_signup_page(next_path=self._query_value("next")).encode())
                 return
             if requested_path == '/telemost':
                 self._static('/telemost.html');return
@@ -2891,7 +2984,7 @@ def _dashboard_login_page(*, invalid: bool = False, code: bool = False,
 </body>
 </html>"""
 
-def _dashboard_signup_page(error: str = "") -> str:
+def _dashboard_signup_page(error: str = "", next_path: str = "/") -> str:
     error_html = f'<p class="userio-error" role="alert">{error}</p>' if error else ""
     return f"""<!doctype html>
 <html lang="ru">
@@ -2913,7 +3006,7 @@ def _dashboard_signup_page(error: str = "") -> str:
         <h1 class="userio-setup-title">Создать аккаунт</h1>
         <p class="userio-setup-lead">Ваши каналы и сообщения будут изолированы от других пользователей.</p>
         {error_html}
-        <form method="post" action="/auth/signup">
+        <form method="post" action="/auth/signup"><input type="hidden" name="next" value="{html.escape(_safe_next(next_path))}">
           <label>Логин<input name="username" autocomplete="username" minlength="3" maxlength="64" required autofocus></label>
           <label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
           <label>Повторите пароль<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required></label>
