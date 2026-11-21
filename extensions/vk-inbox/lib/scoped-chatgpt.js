@@ -42,8 +42,10 @@
         const getSend=()=>{
           const exact=document.querySelector('[data-testid="send-button"]');
           if(exact)return exact;
-          const matches=[...document.querySelectorAll('button[aria-label="Send"]')]
-            .filter(node=>node.getClientRects().length>0);
+          const form = getEditor()?.closest?.('form');
+          const localized = form?.querySelectorAll('button[type="submit"][aria-label="Отправить"]') ?? [];
+          const matches = [...document.querySelectorAll('button[aria-label="Send"]'), ...localized]
+            .filter(button => (!form || button.form === form) && button.getClientRects().length > 0);
           return matches.length===1?matches[0]:null;
         };
         // Return only bounded structural metadata, never page text or HTML.

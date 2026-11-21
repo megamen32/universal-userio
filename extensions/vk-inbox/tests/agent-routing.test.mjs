@@ -22,13 +22,23 @@ test('real agent code blocks wrong account and arbitrary eval, and fences replay
   assert.equal((await f.self.Agent.processCommand(allowed,ctx)).error,'command_already_seen'); assert.equal(f.executed.length,1);
   assert.ok(f.calls.every(c=>c[3]==='work'));
 });
-test('existing chat UI send returns the new native user receipt only',async()=>{
+for (const label of ['Send', 'Отправить']) test(`existing chat UI send returns the new native user receipt only (${label})`, async () => {
   const ref='11111111-1111-4111-8111-111111111111',id='22222222-2222-4222-8222-222222222222';
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   let clicked=false,reads=0; const editor={textContent:'',getClientRects:()=>[1],focus(){}};
   const button={get disabled(){return !editor.textContent},getClientRects:()=>[1],click(){clicked=true}};
+  const form = {
+    querySelectorAll(selector) {
+      if (label !== 'Отправить' || !editor.textContent ||
+          selector !== 'button[type="submit"][aria-label="Отправить"]') return [];
+      return [button, {...button, form: {}, click() { assert.fail('foreign submit'); }},
+        {...button, getClientRects: () => [], click() { assert.fail('hidden submit'); }}];
+    }
+  };
+  editor.closest = selector => selector === 'form' ? form : null;
+  button.form = form;
   const document={querySelector(){return null},
-    querySelectorAll(s){return s==='[contenteditable="true"].ProseMirror'?[editor]:s==='button[aria-label="Send"]'&&editor.textContent?[button]:[]},execCommand(_c,_s,t){editor.textContent=t}};
+    querySelectorAll(s){return s==='[contenteditable="true"].ProseMirror'?[editor]:label==='Send'&&s==='button[aria-label="Send"]'&&editor.textContent?[button]:[]},execCommand(_c,_s,t){editor.textContent=t}};
   const tab={id:1,url:'https://chatgpt.com/c/'+ref,status:'complete'},data={};
   const chrome={storage:{local:{async get(k){return {[k]:data[k]}},async set(p){Object.assign(data,p)}}},tabs:{get:async()=>tab},
     scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
