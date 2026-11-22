@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 ARCHIVE = Path('/var/lib/agentcall/recordings')
 TRACKS = {'caller': 'Собеседник', 'assistant': 'Телефон'}
+MAX_RECORDING_PCM_BYTES = 48000 * 2 * 7200
 
 
 def archive_for(conversation):
@@ -26,7 +27,7 @@ def recorded_track_bytes(call_id, track='caller', root=None):
         if folder.is_symlink() or path.is_symlink():
             return 0
         metadata = path.stat()
-        if not stat.S_ISREG(metadata.st_mode) or not 44 <= metadata.st_size <= 44 + 48000 * 2 * 7200:
+        if not stat.S_ISREG(metadata.st_mode) or not 44 <= metadata.st_size <= 44 + MAX_RECORDING_PCM_BYTES:
             return 0
         with wave.open(str(path)) as audio:
             rate = audio.getframerate()

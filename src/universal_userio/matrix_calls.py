@@ -218,6 +218,9 @@ class MatrixCalls:
     async def _call(self, record, secret, identity, stop, voice_ai=None):
         # The existing voice service launches the fixed worker in its own
         # finite budget and effective environment. No voice settings live here.
+        from .call_audio import ARCHIVE, MAX_RECORDING_PCM_BYTES, recorded_track_bytes
+
+        route = record.get('control_route')
         try:
             reader, writer = await asyncio.open_unix_connection(record.get('control_route',{}).get('socket_path','/run/agentcall/control.sock'), limit=65536)
         except ConnectionRefusedError:
@@ -230,6 +233,8 @@ class MatrixCalls:
             request['voice_ai'] = voice_ai
         writer.write(json.dumps(request,ensure_ascii=False).encode()+b'\n')
         await writer.drain()
+        if route:
+            record['recording_host'] = route['execution_host']
         try:
             transcripts = {'caller':[], 'assistant':[]}
             async def consume():
@@ -238,8 +243,10 @@ class MatrixCalls:
                     if not line: break
                     event = json.loads(line)
                     if event.get('ok') is False: raise RuntimeError('voice service refused Matrix transport')
-                    if event.get('callId'): record['voice_call_id'] = str(uuid.UUID(event['callId']))
                     kind = event.get('event')
+                    voice_id = str(uuid.UUID(event['callId'])) if event.get('callId') else None
+                    if voice_id and (not route or kind != 'ended' or not record.get('voice_call_id')):
+                        record['voice_call_id'] = voice_id
                     if kind == 'matrix_crypto':
                         from .matrix_rtc_crypto import CryptoControl
                         try:
@@ -264,6 +271,11 @@ class MatrixCalls:
                                 'incoming' if remote else 'outgoing',suffix='turn-'+str(sum(map(len,transcripts.values()))))
                     elif kind == 'acknowledged': record['acknowledged'] = True
                     elif kind == 'ended':
+                        received = event.get('received_audio_bytes')
+                        if (route and voice_id and voice_id == record.get('voice_call_id')
+                                and type(received) is int and 0 <= received <= MAX_RECORDING_PCM_BYTES
+                                and received % 2 == 0):
+                            record['received_audio_bytes'] = received
                         record['status'] = 'completed' if record['answered'] else 'unanswered'
                     elif kind == 'error':
                         reason = str(event.get('reason') or '')
@@ -279,12 +291,7 @@ class MatrixCalls:
                 except asyncio.TimeoutError: consumer.cancel(); await asyncio.gather(consumer,return_exceptions=True)
             else: await consumer
             settle_disconnected_call(record)
-            if record.get('control_route'):
-                # Media remains on the execution host; never infer remote audio from a local archive.
-                record['recording_host']=record['control_route']['execution_host']
-            elif record.get('voice_call_id'):
-                from .call_audio import recorded_track_bytes
-                from .call_audio import ARCHIVE
+            if not route and record.get('voice_call_id'):
                 folder = ARCHIVE/record['voice_call_id']
                 record['received_audio_bytes'] = recorded_track_bytes(record['voice_call_id'], 'caller')
                 path = folder/'live-transcript.json'
