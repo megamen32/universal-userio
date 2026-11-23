@@ -67,7 +67,8 @@ class Writer:
         pass
 
 
-async def run_prepared_call(transcribe, utterances, *, on_event=None, timeout=30):
+async def run_prepared_call(transcribe, utterances, *, on_event=None, timeout=30,
+                            agent_context=None, reply=lambda text: ANSWER_TEXT):
     """One prepared call through the real turn loop and the real recognizer."""
     sent: list = []
     events: list = []
@@ -95,7 +96,7 @@ async def run_prepared_call(transcribe, utterances, *, on_event=None, timeout=30
             return transcribe(pcm)
 
         def reply(self, text):
-            return ANSWER_TEXT
+            return reply(text)
 
         def synthesize(self, text):
             return ANSWER_PCM
@@ -107,8 +108,12 @@ async def run_prepared_call(transcribe, utterances, *, on_event=None, timeout=30
                 on_event(event)
 
     async def capture(audio_queue, utterance_queue, detector, **_kwargs):
-        for item in utterances:
-            await utterance_queue.put(item)
+        if hasattr(utterances, "__aiter__"):
+            async for item in utterances:
+                await utterance_queue.put(item)
+        else:
+            for item in utterances:
+                await utterance_queue.put(item)
         await utterance_queue.put(None)
 
     async def send(writer, chunks, hung_up, *args, **kwargs):
@@ -130,7 +135,7 @@ async def run_prepared_call(transcribe, utterances, *, on_event=None, timeout=30
         attention_text=ATTENTION_TEXT,
         attention_pcm=ATTENTION_PCM,
         context="Проверка голоса",
-        agent_context={},
+        agent_context=agent_context or {},
         created_at=0,
     )
     config = bridge.BackendConfig.from_environment()
