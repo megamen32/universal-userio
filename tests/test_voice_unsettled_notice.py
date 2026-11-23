@@ -30,7 +30,10 @@ def test_unsettled_turn_keeps_the_same_call_open_for_a_new_question(voice_env):
             try:
                 raise HTTPError('http://localhost/internal/voice/turn', 404, 'Not Found', {}, None)
             except HTTPError:
-                raise bridge.NativeTurnUnsettled('Secretary voice outcome is unknown') from None
+                raise bridge.NativeTurnUnsettled(
+                    'Secretary voice outcome is unknown',
+                    details={'kind': 'http', 'code': 404, 'status': 'Not Found'},
+                ) from None
 
     def local_reply(text):
         local_questions.append(text)
@@ -72,12 +75,33 @@ def test_unsettled_turn_keeps_the_same_call_open_for_a_new_question(voice_env):
         sent, events = asyncio.run(scenario())
     spoken = fixtures.agent_turns(events)
     assert fixtures.ANSWER_TEXT in spoken, spoken
+    assert any('четыре ноль четыре' in text and 'нот фоунд' in text for text in spoken), spoken
     assert spoken[-1] == goodbye
     assert events[-1]['event'] == 'ended'
     assert len({event['callId'] for event in events if event.get('event') == 'transcript_final'}) == 1
     assert len(sent) >= 4  # Greeting, warning, follow-up and explicit goodbye all have PCM.
     assert admitted == [first]
     assert local_questions == [second]
+
+
+def test_native_failure_answer_reads_received_fields_without_inference():
+    bridge = fixtures.bridge
+    http_error = bridge.NativeTurnUnsettled(
+        'transport response failed',
+        details={'kind': 'http', 'code': 404, 'status': 'Not Found'},
+    )
+    sdk_error = bridge.NativeTurnUnsettled(
+        'sdk response failed',
+        details={'kind': 'sdk', 'state': 'unknown', 'status': 'failed',
+                 'message': 'Результат не подтверждён'},
+    )
+    assert bridge.native_failure_answer(http_error) == (
+        'Вернулась ошибка HTTP 404. Статус: Not Found.'
+    )
+    assert bridge.native_failure_answer(sdk_error) == (
+        'Сервис вернул ошибку. состояние: unknown. статус: failed. '
+        'сообщение: Результат не подтверждён.'
+    )
 
 
 def test_noticeplace_call_reports_bound_investigation_without_the_sdk(voice_env):

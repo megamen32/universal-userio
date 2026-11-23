@@ -3572,7 +3572,9 @@ async def recognize_remote_audio(utterances, recognized, pipeline, broker, call_
 
 
 class NativeTurnUnsettled(RuntimeError):
-    pass
+    def __init__(self, message, *, details=None):
+        super().__init__(message)
+        self.details = dict(details or {})
 
 
 def call_error_detail(error):
@@ -3585,6 +3587,45 @@ def call_error_detail(error):
         # implicit exception chain, so it is written out here.
         detail += f"; cause={type(cause).__name__}: {str(cause)[:200]}"
     return detail
+
+
+def _bounded_voice_field(value, limit):
+    return ' '.join(str(value or '').split())[:limit]
+
+
+def native_failure_answer(error):
+    """Speak the received transport fields without inventing an outcome."""
+    details = getattr(error, 'details', {}) or {}
+    kind = details.get('kind')
+    if kind == 'http':
+        code = details.get('code')
+        status = details.get('status')
+        parts = [f'Вернулась ошибка HTTP {code}' if code else 'Вернулась HTTP-ошибка']
+        if status:
+            parts.append(f'Статус: {_bounded_voice_field(status, 120)}')
+        message = details.get('message')
+        if message:
+            parts.append(f'Сообщение: {_bounded_voice_field(message, 240)}')
+        return '. '.join(parts) + '.'
+    if kind == 'sdk':
+        state = details.get('state')
+        parts = ['Сервис вернул ошибку']
+        if state:
+            parts.append(f'состояние: {_bounded_voice_field(state, 80)}')
+        status = details.get('status')
+        if status:
+            parts.append(f'статус: {_bounded_voice_field(status, 120)}')
+        message = details.get('message') or details.get('text')
+        if message:
+            parts.append(f'сообщение: {_bounded_voice_field(message, 240)}')
+        return '. '.join(parts) + '.'
+    cause = getattr(error, '__context__', None)
+    if isinstance(cause, TimeoutError):
+        return 'Ответ от сервиса не пришёл вовремя. Тип ошибки: таймаут.'
+    if cause is not None:
+        return (f'Сервис вернул ошибку типа {type(cause).__name__}. '
+                f'Сообщение: {_bounded_voice_field(cause, 240)}.')
+    return f'Сервис вернул ошибку. Сообщение: {_bounded_voice_field(error, 240)}.'
 
 
 class SpeechChunkBudget:
@@ -4182,6 +4223,7 @@ async def handle_call(
             )
         pipeline = LocalSpeechPipeline(call_config)
         speech = CallController(call_config, {}, synthesize=pipeline.synthesize)
+        native_secretary = False
         fast_agent = (
             FastAgentIncidentBrain(
                 call_config, prepared.agent_context, prepared.context
@@ -4201,6 +4243,7 @@ async def handle_call(
             secretary = brain_for_call(voice_config, prepared, call_id, incoming=incoming, guest=guest)
             if secretary is not None:
                 fast_agent = secretary
+                native_secretary = True
         turn_brain = fast_agent or pipeline
         # No LLM generation here: initialize call-owned SDK/MCP and the phone
         # engine while the caller hears the existing cached opening.
@@ -4371,7 +4414,10 @@ async def handle_call(
             try:
                 await stream_voice_turn(writer, broker, call_id, text, turn_brain, speech,
                     hung_up, stop_playback, peer_fields=peer_fields,
-                    fixed_answer=fixed, acknowledgement=None if fixed else acknowledgements.next(),caller_timing=caller_timing)
+                    fixed_answer=fixed,
+                    acknowledgement=(None if fixed or native_secretary and turn_brain is fast_agent
+                                     else acknowledgements.next()),
+                    caller_timing=caller_timing)
             except NativeTurnUnsettled as error:
                 _log(f'call={call_id} native turn unsettled; no replay: {call_error_detail(error)}')
                 # The outstanding action may still finish. The rest of the
@@ -4381,8 +4427,9 @@ async def handle_call(
                     '\nДо конца этого звонка инструменты недоступны. Отвечай по известным данным. '
                     'Не обещай выполнять действия и не утверждай, что поручение выполнено.'
                 )
-                failure_answer = ('Результат поручения пока неизвестен. Я его не повторяю. '
-                                  'Разговор продолжается, можете задать другой вопрос.')
+                failure_answer = (native_failure_answer(error)
+                                  + ' Результат поручения не подтверждён. '
+                                  'Я его не повторяю.')
                 await broker.emit(safe_event('error', call_id, reason=failure_answer,
                                               recoverable=True, nativeTurnOutcome='unknown', **peer_fields))
                 if hung_up.is_set():

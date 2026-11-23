@@ -21,9 +21,9 @@ import tarfile
 import time
 from urllib.parse import quote
 
-ADAPTER_REVISION = 'fd16a908c123b00337385e64b261cd52fcceaa39'
+ADAPTER_REVISION = 'af1fc1f31503f0677fe1e6c989b41691bf6a78bb'
 ADAPTER_PATH = 'integrations/agentcall/agentcall_secretary_voice.py'
-ADAPTER_SHA = '8e994540d7461911e0b9d1b453edeb86ecabe2b1d0bf746525a05dc382b0aa66'
+ADAPTER_SHA = '690911ff4bd5bac3e138bd3d1a8e28216e65d5218fbf6946d94c1685d3311a67'
 IMAGE = re.compile(r'ghcr\.io/megamen32/universal-userio-voice@sha256:[a-f0-9]{64}\Z')
 COMPONENT_NAME = re.compile(r'userio-voice(?:-[a-z0-9-]+)?\Z')
 LABEL = 'com.userio.portable-voice'
