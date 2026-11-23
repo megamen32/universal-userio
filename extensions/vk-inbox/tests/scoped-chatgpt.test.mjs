@@ -103,17 +103,27 @@ test('first send never overwrites a foreign draft or existing conversation',asyn
     assert.equal(result.ok,false);assert.equal(writes,0);assert.equal(clicks,0);
   }
 });
-test('first send uses unique visible ProseMirror without an id',async()=>{
+for (const label of ['Send', 'Отправить']) test(`first send uses unique visible ProseMirror without an id (${label})`, async () => {
   const scope=createHash('sha256').update(JSON.stringify({provider:'chatgpt',user_id:'user',account_id:'account'})).digest('hex');
   const location={origin:'https://chatgpt.com',pathname:'/'};
   const editor={tagName:'DIV',id:'',isContentEditable:true,textContent:'',getClientRects:()=>[1],focus(){}};
   let clicks=0,writes=0;
   const button={disabled:false,getClientRects:()=>[1],click(){clicks++;location.pathname='/c/'+REF}};
+  const form = {
+    querySelectorAll(selector) {
+      if (label !== 'Отправить' || !editor.textContent ||
+          selector !== 'button[type="submit"][aria-label="Отправить"]') return [];
+      return [button, {...button, form: {}, click() { assert.fail('foreign submit'); }},
+        {...button, getClientRects: () => [], click() { assert.fail('hidden submit'); }}];
+    }
+  };
+  editor.closest = selector => selector === 'form' ? form : null;
+  button.form = form;
   const document={querySelector(){return null},
-    querySelectorAll(s){if(s==='[contenteditable="true"].ProseMirror')return [editor];if(s==='button[aria-label="Send"]')return editor.textContent?[button]:[];return []},
+    querySelectorAll(s){if(s==='[contenteditable="true"].ProseMirror')return [editor];if(label==='Send'&&s==='button[aria-label="Send"]')return editor.textContent?[button]:[];return []},
     execCommand(_c,_s,t){writes++;editor.textContent=t;return true}};
   const chrome={tabs:{create:async()=>({id:1,status:'complete'}),get:async()=>({id:1,status:'complete',url:'https://chatgpt.com'+location.pathname})},scripting:{executeScript:async({func,args})=>[{result:await func(...args)}]}};
-  let clock=Date.now();class Clock extends Date {static now(){if(clicks)clock+=20000;return clock}}
+  let clock=Date.now();class Clock extends Date {static now(){clock+=clicks?20000:200;return clock}}
   const context={self:{},chrome,URL,Date:Clock,location,document,crypto:webcrypto,TextEncoder,AbortController,setTimeout,clearTimeout,fetch:async()=>ok({user:{id:'user'},account:{id:'account'}})};
   vm.createContext(context);vm.runInContext(readFileSync(SRC,'utf8'),context);
   let reads=0;context.self.UserIOScopedChatGPT.read=async args=>{reads++;assert.equal(args.chat_ref,REF);assert.equal(args.expected_account_scope,scope);return {ok:true,chat_ref:REF,account_scope:scope,messages:[{id:USER,role:'user',text:'hello',create_time:Date.now()/1000}]}};
