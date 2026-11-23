@@ -4461,9 +4461,11 @@ def set_incoming_socket_permissions(path: Path, configured_gid: int | None) -> N
     os.chown(path,-1,gid)
 
 
-async def run(host: str, port: int, socket_path: Path, control_socket_path: Path) -> None:
+async def run(host: str, port: int, socket_path: Path, control_socket_path: Path,
+              *, cleanup_stale_calls: bool = True) -> None:
     config = BackendConfig.from_environment()
-    await asyncio.to_thread(_cleanup_stale_call_channels)
+    if cleanup_stale_calls:
+        await asyncio.to_thread(_cleanup_stale_call_channels)
     await asyncio.to_thread(LocalSpeechPipeline(config).warm)
     broker = EventBroker(socket_path)
     socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4512,9 +4514,11 @@ def main() -> None:
         type=Path,
         default=Path("/run/agentcall/control.sock"),
     )
+    parser.add_argument("--skip-stale-call-cleanup", action="store_true")
     args = parser.parse_args()
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-    asyncio.run(run(args.host, args.port, args.event_socket, args.control_socket))
+    asyncio.run(run(args.host, args.port, args.event_socket, args.control_socket,
+                    cleanup_stale_calls=not args.skip_stale_call_cleanup))
 
 
 if __name__ == "__main__":

@@ -323,6 +323,9 @@ Calls-primary также публикует существующий typed contr
 эти sockets в private tmpfs. Это runtime IPC, не code mount. Native owner
 останавливает старый gateway до primary-перехода, чтобы не было двух владельцев
 одних sockets/9092. Входящий AudioSocket и Matrix control используют тот же image.
+Для исходящих GSM-вызовов calls-primary использует упакованный клиент Asterisk
+и управляющий сокет хоста через монтирование `/run/asterisk`. При запуске
+portable-образ пропускает очистку старых каналов Asterisk.
 
 ## Проверенная portable версия
 

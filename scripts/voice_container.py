@@ -45,6 +45,21 @@ RUNTIME_DIR = Path('/run/agentcall')
 ADMISSION_SOCKETS = ('control.sock', 'incoming.sock')
 
 
+def asterisk_client_inputs():
+    """Reuse the installed PBX CLI and its library closure in the image."""
+    binary = Path('/usr/sbin/asterisk')
+    external = 'deploy/containers/external/'
+    files = {external+'asterisk': binary.read_bytes()}
+    dependencies = subprocess.check_output(['ldd', str(binary)], text=True)
+    for row in dependencies.splitlines():
+        parts = row.split()
+        if len(parts) > 2 and parts[1] == '=>' and parts[2].startswith('/'):
+            library = Path(parts[2])
+            if library.name.split('.so')[0] not in {'libc', 'libm', 'libpthread', 'librt', 'libdl'}:
+                files[external+'asterisk-libs/'+library.name] = library.read_bytes()
+    return files
+
+
 def build_context(root, revision, archive, destination):
     # A worktree has no independent copy of the external project.
     foreign = Path('/home/roomhacker/agents-projects/exmanager')
@@ -53,6 +68,7 @@ def build_context(root, revision, archive, destination):
         raise RuntimeError('published SDK adapter digest differs')
     modules = {}
     dependency_inputs = {}
+    asterisk_client = asterisk_client_inputs()
     with tarfile.open(fileobj=io.BytesIO(archive)) as source, tarfile.open(destination, 'w') as target:
         for member in source:
             if member.name.startswith(('src/', 'scripts/', 'deploy/containers/')) or member.name in ('Dockerfile', 'pyproject.toml'):
@@ -63,9 +79,13 @@ def build_context(root, revision, archive, destination):
                 if member.isfile() and member.name.startswith('src/universal_userio/voice/') and member.name.endswith('.py'):
                     modules[member.name] = hashlib.sha256(data).hexdigest()
         release = {'revision':revision, 'adapter_revision':ADAPTER_REVISION, 'adapter_sha256':ADAPTER_SHA,
-                   'modules': modules, 'dependency_inputs':dependency_inputs, 'external_services':['Secretary SDK', 'STT', 'TTS', 'UserIO API/MCP']}
+                   'modules': modules, 'dependency_inputs': dependency_inputs,
+                   'asterisk_client': {name: hashlib.sha256(data).hexdigest()
+                                       for name, data in asterisk_client.items()},
+                   'external_services':['Secretary SDK', 'STT', 'TTS', 'UserIO API/MCP']}
         for name, data in {'deploy/containers/external/agentcall_secretary_voice.py':payload,
-                           'deploy/containers/portable-release.json':json.dumps(release, sort_keys=True).encode()}.items():
+                           'deploy/containers/portable-release.json':json.dumps(release, sort_keys=True).encode(),
+                           **asterisk_client}.items():
             info=tarfile.TarInfo(name);info.size=len(data);info.mode=0o644
             target.addfile(info,io.BytesIO(data))
     print(json.dumps({'context':str(destination),'revision':revision,'adapter_revision':ADAPTER_REVISION,
@@ -111,6 +131,7 @@ def create_spec(image, role, config, data, port):
     if role == 'calls-primary':
         # The existing backend reaches the typed gateway over this runtime IPC.
         spec['HostConfig']['Binds'].append('/run/agentcall:/run/agentcall')
+        spec['HostConfig']['Binds'].append('/run/asterisk:/run/asterisk:ro')
         del spec['HostConfig']['Tmpfs']['/run/agentcall']
         # The supervised Secretary transport owns the native app credential and
         # republishes it on every app-token rotation. A static copy of that
@@ -376,13 +397,14 @@ def serve():
     os.environ.update(AGENTCALL_FAST_AGENT_HOME='/var/lib/agentcall/fast-agent-home',
                       AGENTCALL_TTS_PHONE_FALLBACK='0')
     # A standby starts the same gateway, isolated from provider/account ingress.
-    # No PBX control socket is mounted, so startup cleanup cannot affect native calls.
+    # The installer drains calls before replacement; the portable process never
+    # hangs up host AudioSocket channels during startup.
     if role=='standby':os.environ['AGENTCALL_LLM_PROVIDER']='openai-compatible'
     elif settings.get('AGENTCALL_LLM_PROVIDER')!='openai-compatible' or any(not settings.get(key) for key in ('AGENTCALL_STT_URL','AGENTCALL_TTS_URL')):
         raise ValueError('primary requires explicit external STT/TTS and openai-compatible SDK configuration')
     return supervise_gateway([sys.executable,'/usr/local/lib/agentcall/agentcall_realtime_bridge.py',
              '--host','127.0.0.1','--port',port,'--event-socket','/run/agentcall/gatewayd.sock',
-             '--control-socket','/run/agentcall/control.sock'])
+             '--control-socket','/run/agentcall/control.sock','--skip-stale-call-cleanup'])
 
 
 def maintenance_request(action, runtime_dir):
