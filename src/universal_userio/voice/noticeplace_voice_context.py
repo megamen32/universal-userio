@@ -119,6 +119,28 @@ def asks_recent_repair(question):
                           str(question or '').casefold()))
 
 
+def bound_investigation_answer(binding, question):
+    """Answer a status question about a trusted outgoing Notice Place card."""
+    incident_id = binding.get('incident_id', '')
+    if (binding.get('event_type') != 'noticeplace.call' or binding.get('call_mode')
+            or not re.fullmatch(r'inc_[a-f0-9]{32}', incident_id)):
+        return ''
+    text = question.casefold()
+    if not (re.search(r'\b(?:сесси\w*|расследовани\w*)\b', text)
+            and re.search(r'\b(?:запустил\w*|запущен\w*|стартовал\w*|'
+                          r'создал\w*|создан\w*|появил\w*|начал\w*|начат\w*|есть ли)\b', text)):
+        return ''
+    try:
+        card = NoticePlaceVoiceStore().incident(incident_id)
+        if card['id'] != incident_id:
+            raise NoticePlaceContextError('Incident response does not match the call')
+    except NoticePlaceContextError:
+        return 'Сейчас не могу проверить, привязана ли к инциденту сессия расследования.'
+    if card['has_session']:
+        return 'К этому инциденту уже привязана сессия расследования.'
+    return 'В карточке этого инцидента пока нет привязанной сессии расследования.'
+
+
 def safe_text(value, limit=1200):
     text = str(value or "")
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)

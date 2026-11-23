@@ -3613,6 +3613,7 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
     audio = asyncio.Queue(maxsize=3)
     content_ready=asyncio.Event()
     loop = asyncio.get_running_loop()
+    reply_stream = getattr(brain, 'reply_stream', None)
     speed = getattr(getattr(speech, 'config', None), 'speech_speed', None)
     speech_open = True
     timing = {}
@@ -3657,9 +3658,8 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
                 timing.setdefault('first_phrase', time.monotonic())
                 await bounded_put(phrases, phrase_ready_async, 'assistant phrase')
                 return fixed_answer
-            stream = getattr(brain, 'reply_stream', None)
-            if callable(stream):
-                return await asyncio.to_thread(stream, text, phrase_ready)
+            if callable(reply_stream):
+                return await asyncio.to_thread(reply_stream, text, phrase_ready)
             answer = await asyncio.to_thread(brain.reply, text)
             timing.setdefault('first_phrase', time.monotonic())
             for phrase in SpeechPhrases().push(answer, final=True):
@@ -3672,6 +3672,10 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
         wait = getattr(stop_playback, 'wait_for_resolution', None)
         if wait is not None:
             await wait(hung_up)
+
+    def report_late_model_error(task):
+        if not task.cancelled() and (error := task.exception()) is not None:
+            _log(f'call={call_id} detached voice turn failed: {call_error_detail(error)}')
 
     async def tts():
         nonlocal queued_audio_seconds
@@ -3778,13 +3782,16 @@ async def stream_voice_turn(writer, broker, call_id, text, brain, speech, hung_u
         await asyncio.gather(tts_task, return_exceptions=True)
         if not model_task.done():
             deadline = max(35, getattr(getattr(brain, 'config', None), 'fast_agent_timeout', 25) + 5) + 2
-            try:
-                await asyncio.wait_for(asyncio.shield(model_task), timeout=deadline)
-            except asyncio.TimeoutError:
-                hung_up.set()
-                raise NativeTurnUnsettled('Native turn did not settle; closing call without another tool turn') from None
-            except Exception:
-                pass  # The caller receives the original turn error; no replay.
+            await asyncio.wait((model_task,), timeout=deadline)
+        if not model_task.done():
+            model_task.add_done_callback(report_late_model_error)
+            if callable(reply_stream):
+                raise NativeTurnUnsettled('Native turn did not settle before cleanup deadline') from None
+            raise asyncio.TimeoutError('Voice reply did not settle before cleanup deadline') from None
+        if not model_task.cancelled():
+            model_error = model_task.exception()
+            if isinstance(model_error, NativeTurnUnsettled):
+                raise model_error
 
 
 async def wait_for_utterance(
@@ -4194,6 +4201,7 @@ async def handle_call(
             secretary = brain_for_call(voice_config, prepared, call_id, incoming=incoming, guest=guest)
             if secretary is not None:
                 fast_agent = secretary
+        turn_brain = fast_agent or pipeline
         # No LLM generation here: initialize call-owned SDK/MCP and the phone
         # engine while the caller hears the existing cached opening.
         for target,method in ((fast_agent,'prewarm'),(pipeline,'warm_voice')):
@@ -4301,10 +4309,10 @@ async def handle_call(
                     idleTimeoutSeconds=config.idle_timeout_seconds,retryOffered=not idle_reprompted,
                     recoverable=True,**peer_fields))
                 _log(f'call={call_id} no recognized speech; reprompt={not idle_reprompted}')
-                await stream_voice_turn(writer,broker,call_id,'',fast_agent or pipeline,speech,
+                await stream_voice_turn(writer,broker,call_id,'',turn_brain,speech,
                     hung_up,stop_playback,peer_fields=peer_fields,fixed_answer=prompt)
                 pipeline.history.append({'role':'assistant','content':prompt})
-                if fast_agent is not None:
+                if turn_brain is fast_agent:
                     fast_agent.history.append(('ассистент',prompt))
                     if fast_agent.messages:
                         fast_agent.messages.append({'role':'assistant','content':[{'type':'text','text':prompt}]})
@@ -4341,7 +4349,7 @@ async def handle_call(
                 call_config = replace(call_config, llm_reasoning_effort=effort)
                 pipeline.config = call_config
                 speech.config = call_config
-                if fast_agent is not None:
+                if turn_brain is fast_agent:
                     fast_agent.config = call_config
                 mode_answer = "Включил глубокий режим." if mode == "deep" else "Переключил на быстрый режим."
                 _log(f"call={call_id} reasoning effort={effort} mode={mode}")
@@ -4349,36 +4357,45 @@ async def handle_call(
                 mode_answer = reasoning_status_answer(text, call_config.llm_reasoning_effort)
             if mode_answer:
                 pipeline.history.extend(({"role": "user", "content": text}, {"role": "assistant", "content": mode_answer}))
-                if fast_agent is not None:
+                if turn_brain is fast_agent:
                     fast_agent.history.extend((("пользователь", text), ("ассистент", mode_answer)))
 
             stop_playback.clear()
             fixed = 'Хорошо, завершаю звонок.' if end_requested else mode_answer
+            if not fixed and prepared is not None and not (incoming or guest or qa):
+                from noticeplace_voice_context import bound_investigation_answer
+                fixed = await asyncio.to_thread(bound_investigation_answer, prepared.agent_context, text)
+                if fixed:
+                    pipeline.history.extend(({'role': 'user', 'content': text},
+                                             {'role': 'assistant', 'content': fixed}))
             try:
-                await stream_voice_turn(writer, broker, call_id, text, fast_agent or pipeline, speech,
+                await stream_voice_turn(writer, broker, call_id, text, turn_brain, speech,
                     hung_up, stop_playback, peer_fields=peer_fields,
                     fixed_answer=fixed, acknowledgement=None if fixed else acknowledgements.next(),caller_timing=caller_timing)
-            except Exception as error:
-                if isinstance(error, NativeTurnUnsettled):
-                    _log(f'call={call_id} native turn unsettled; no replay: {call_error_detail(error)}')
-                    failure_answer = ('Нет подтверждения результата вашего поручения. '
-                                      'Автоматически его не повторяю. Пожалуйста, проверьте результат позже.')
-                    await broker.emit(safe_event('error', call_id, reason=failure_answer,
-                                                  recoverable=False, **peer_fields))
-                    stop_playback.clear()
-                    await stream_voice_turn(writer, broker, call_id, '', fast_agent or pipeline, speech,
-                        hung_up, stop_playback, peer_fields=peer_fields, fixed_answer=failure_answer)
-                    termination_reason = 'native_turn_unknown'
-                    hung_up.set()
+            except NativeTurnUnsettled as error:
+                _log(f'call={call_id} native turn unsettled; no replay: {call_error_detail(error)}')
+                # The outstanding action may still finish. The rest of the
+                # call can speak, but must never submit another native action.
+                turn_brain = pipeline
+                failure_answer = ('Результат поручения пока неизвестен. Я его не повторяю. '
+                                  'Разговор продолжается, можете задать другой вопрос.')
+                await broker.emit(safe_event('error', call_id, reason=failure_answer,
+                                              recoverable=True, nativeTurnOutcome='unknown', **peer_fields))
+                if hung_up.is_set():
                     break
-                if fast_agent is None and not isinstance(error,VoiceModelRefused):
+                stop_playback.clear()
+                await stream_voice_turn(writer, broker, call_id, '', turn_brain, speech,
+                    hung_up, stop_playback, peer_fields=peer_fields, fixed_answer=failure_answer)
+                pipeline.history.append({'role': 'assistant', 'content': failure_answer})
+            except Exception as error:
+                if turn_brain is pipeline and not isinstance(error,VoiceModelRefused):
                     raise
                 _log(f'call={call_id} native turn failed; no replay: {type(error).__name__}: {str(error)[:160]}')
                 refusal=isinstance(error,VoiceModelRefused)
                 failure_answer=(('Сервис ограничил ответы помощника.' if error.status==429 else 'Сервис ответов помощника сейчас недоступен.')+
                                 ' Сейчас не могу получить ответ; можно продолжить позже.' if refusal else
                                 'Сейчас не удалось закончить ответ помощника. Выполненные действия не повторяю.')
-                await stream_voice_turn(writer, broker, call_id, '', fast_agent or pipeline, speech,
+                await stream_voice_turn(writer, broker, call_id, '', turn_brain, speech,
                     hung_up, stop_playback, peer_fields=peer_fields,
                     fixed_answer=failure_answer)
                 if refusal:pipeline.history.append({'role':'assistant','content':failure_answer})
