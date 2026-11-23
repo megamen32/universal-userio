@@ -304,8 +304,25 @@ def serve():
              '--control-socket','/run/agentcall/control.sock'])
 
 
+def maintenance(action):
+    if action not in {'drain', 'status', 'open'}:
+        raise ValueError('unsupported maintenance action')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(5)
+        connection.connect('/run/agentcall/maintenance.sock')
+        connection.sendall((json.dumps({'action': action}) + '\n').encode())
+        with connection.makefile('rb') as response:
+            result = json.loads(response.readline(4096))
+    if result.get('ok') is not True:
+        raise RuntimeError('voice maintenance request failed')
+    print(json.dumps(result, sort_keys=True))
+
+
 if __name__=='__main__':
     if sys.argv[1:] == ['payload']:sys.exit(verify_payload())
     if sys.argv[1:] == ['health']:sys.exit(health())
     if sys.argv[1:] == ['serve']:sys.exit(serve())
+    if len(sys.argv) == 3 and sys.argv[1] == 'maintenance':
+        maintenance(sys.argv[2])
+        sys.exit(0)
     else:raise SystemExit('use existing container_release.py install-voice')

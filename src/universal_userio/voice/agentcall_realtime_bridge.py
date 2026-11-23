@@ -2339,6 +2339,54 @@ class CallController:
         self.originate = originate or self._originate
         self.audio_port = audio_port
         self.event_broker = event_broker or EventBroker(Path('/run/agentcall/gatewayd.sock'))
+        self.draining = False
+        self.active_admissions = 0
+        self.active_audio = 0
+
+    def maintenance(self, action):
+        if action == 'drain':
+            self.draining = True
+        elif action == 'open':
+            self.draining = False
+        elif action != 'status':
+            raise ValueError('unsupported maintenance action')
+        prepared = len(self.prepared_calls)
+        return {'draining': self.draining, 'admissions': self.active_admissions,
+                'audio': self.active_audio, 'prepared': prepared,
+                'safe': self.draining and not (self.active_admissions or self.active_audio or prepared)}
+
+    async def accept_maintenance(self, reader, writer):
+        try:
+            request = json.loads(await reader.readline())
+            response = {'ok': True, **self.maintenance(request.get('action'))}
+        except (ValueError, TypeError, AttributeError):
+            response = {'ok': False, 'error': 'invalid_maintenance_request'}
+        try:
+            writer.write((json.dumps(response) + '\n').encode())
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def accept_audio(self, reader, writer):
+        self.active_audio += 1
+        handed_off = False
+        try:
+            first_frame = await read_audiosocket_frame(reader)
+            kind, payload = first_frame
+            if kind != UUID_KIND or len(payload) != 16:
+                raise ValueError('AudioSocket did not send a UUID first')
+            call_id = str(uuid.UUID(bytes=payload))
+            if self.draining and call_id not in self.prepared_calls:
+                return
+            handed_off = True
+            await handle_call(reader, writer, self.event_broker, self.config,
+                              self.prepared_calls, first_frame=first_frame)
+        finally:
+            self.active_audio -= 1
+            if not handed_off:
+                writer.close()
+                await writer.wait_closed()
 
     def _prune(self) -> None:
         # 2026-09-27: 300s -- a prepared entry must survive the 120s S21
@@ -2744,6 +2792,23 @@ class CallController:
         return {"ok": True, "receipt_id": call_id, "call_id": call_id}
 
     async def accept(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, incoming_only=False
+    ) -> None:
+        if self.draining:
+            try:
+                writer.write(b'{"ok":false,"error":"voice_admission_draining"}\n')
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+            return
+        self.active_admissions += 1
+        try:
+            await self._accept_admitted(reader, writer, incoming_only=incoming_only)
+        finally:
+            self.active_admissions -= 1
+
+    async def _accept_admitted(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, incoming_only=False
     ) -> None:
         try:
@@ -4011,6 +4076,7 @@ async def handle_call(
     *,
     hangup=None,
     answer_gate=None,
+    first_frame=None,
 ) -> None:
     call_id = uuid.uuid4().hex
     reader_task: asyncio.Task | None = None
@@ -4024,7 +4090,7 @@ async def handle_call(
     host_answered_incoming = False
     peer_fields: dict[str, str] = {}
     try:
-        kind, payload = await read_audiosocket_frame(reader)
+        kind, payload = first_frame if first_frame is not None else await read_audiosocket_frame(reader)
         if kind != UUID_KIND or len(payload) != 16:
             raise ValueError("AudioSocket did not send a UUID first")
         call_id = str(uuid.UUID(bytes=payload))
@@ -4417,18 +4483,21 @@ async def run(host: str, port: int, socket_path: Path, control_socket_path: Path
     incoming_path.unlink(missing_ok=True)
     incoming_server = await asyncio.start_unix_server(controller.accept_incoming, path=str(incoming_path))
     set_incoming_socket_permissions(incoming_path,config.incoming_socket_gid)
+    maintenance_path = control_socket_path.with_name('maintenance.sock')
+    maintenance_path.unlink(missing_ok=True)
+    maintenance_server = await asyncio.start_unix_server(controller.accept_maintenance, path=str(maintenance_path))
+    os.chmod(maintenance_path, 0o600)
     audio_server = await asyncio.start_server(
-        lambda reader, writer: handle_call(
-            reader, writer, broker, config, prepared_calls
-        ),
+        controller.accept_audio,
         host,
         port,
     )
-    async with event_server, control_server, incoming_server, audio_server:
+    async with event_server, control_server, incoming_server, maintenance_server, audio_server:
         await asyncio.gather(
             event_server.serve_forever(),
             control_server.serve_forever(),
             incoming_server.serve_forever(),
+            maintenance_server.serve_forever(),
             audio_server.serve_forever(),
         )
 
