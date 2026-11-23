@@ -102,7 +102,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak c
     && useradd -u 1000 -m roomhacker
 WORKDIR /opt/universal-userio
 COPY deploy/containers/requirements.txt deploy/containers/requirements-portable-voice.txt /tmp/
-RUN pip install --no-cache-dir -r /tmp/requirements-portable-voice.txt
+RUN sed -i 's/^matrix-nio\[e2e\]==/matrix-nio==/' /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-portable-voice.txt
 RUN pip freeze > /opt/userio-voice-dependencies.txt
 COPY pyproject.toml /opt/universal-userio/
 COPY src /opt/universal-userio/src

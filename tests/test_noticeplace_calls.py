@@ -292,21 +292,47 @@ def test_scoped_call_requires_private_remote_control_configuration(tmp_path,monk
     with pytest.raises(PermissionError):matrix_calls.control_route(required=False)
 
 
-def test_primary_control_stream_keeps_backend_receipt_and_transfers_account_snapshot(tmp_path,monkeypatch):
-    import asyncio
+@pytest.mark.parametrize(('measurement','match_voice_id','expected'),[
+    (1249684,True,1249684),
+    (None,True,0),  # Old worker has no archive measurement.
+    (True,True,0),
+    (1249684,False,0),
+])
+def test_primary_control_stream_keeps_backend_receipt_and_transfers_account_snapshot(
+    tmp_path,monkeypatch,measurement,match_voice_id,expected
+):
+    from universal_userio.http_api import handler
+    from universal_userio.service import UserIOService
+    from universal_userio.store import SQLiteUserIOStore
+
+    service = UserIOService(SQLiteUserIOStore(tmp_path/'store.sqlite3'), Mock(), Mock())
     control={'socket_path':'/run/agentcall/primary88/control.sock','execution_host':'roomhacker-server-88'}
     call_id=str(uuid.uuid4());voice_id=str(uuid.uuid4())
-    record={'call_id':call_id,'user_id':'qa-user','account_ref':'matrix:qa-a','history_account_ref':'matrix:qa-a',
+    record={'call_id':call_id,'user_id':service._store.default_user_id,'account_ref':'matrix:qa-a','history_account_ref':'matrix:qa-a',
             'room_id':'!qa:hs','target':'@b:hs','purpose':'QA','greeting':'QA','max_seconds':30,
-            'status':'accepted','answered':False,'control_route':control}
+            'status':'accepted','answered':False,'control_route':control,'received_audio_bytes':0}
     account={'homeserver':'https://hs','access_token':'fixture-only','matrix_user_id':'@a:hs'}
     identity={'user_id':'@a:hs'}
-    calls=matrix_calls.MatrixCalls(Mock(),tmp_path/'receipts');(calls.root/call_id).mkdir(parents=True)
+    calls=matrix_calls.MatrixCalls(service,tmp_path/'receipts');(calls.root/call_id).mkdir(parents=True)
+    monkeypatch.setattr(matrix_calls,'calls_for',lambda _:calls)
+    from universal_userio import call_audio
+    local_archive = Mock(side_effect=AssertionError('remote archive must not be read locally'))
+    monkeypatch.setattr(call_audio,'recorded_track_bytes',local_archive)
     monkeypatch.setattr(calls,'_emit',Mock())
     monkeypatch.setenv('USERIO_MATRIX_RTC_AUTH_URL','https://rtc.example.org')
     sent=[]
+    terminal_writes=[]
+    original_save=calls._save
+    def save(value):
+        if value['status']=='completed':
+            terminal_writes.append(value.copy())
+        original_save(value)
+    monkeypatch.setattr(calls,'_save',save)
+    terminal_event={'event':'ended','callId':voice_id if match_voice_id else str(uuid.uuid4())}
+    if measurement is not None:
+        terminal_event['received_audio_bytes']=measurement
     class Reader:
-        events=[{'event':'active','callId':voice_id},{'event':'ended'},None]
+        events=[{'event':'active','callId':voice_id},terminal_event,None]
         async def readline(self):
             event=self.events.pop(0)
             return (json.dumps(event)+'\n').encode() if event else b''
@@ -321,10 +347,47 @@ def test_primary_control_stream_keeps_backend_receipt_and_transfers_account_snap
     monkeypatch.setattr(matrix_calls.asyncio,'open_unix_connection',connect)
     calls._run(record,account,identity,threading.Event())
     assert sent[0]['call']['room_id']=='!qa:hs' and sent[0]['account']==account and sent[0]['identity']==identity
-    receipt=calls.get(call_id,'qa-user')
+    with ThreadingHTTPServer(('127.0.0.1',0),handler(service,token='owner-test-token')) as server:
+        thread=threading.Thread(target=server.serve_forever,daemon=True)
+        thread.start()
+        try:
+            req=Request(f'http://127.0.0.1:{server.server_port}/v1/calls/matrix/{call_id}',
+                        headers={'Authorization':'Bearer owner-test-token'})
+            with urlopen(req,timeout=2) as response:
+                assert response.status==200
+                receipt=json.load(response)['call']
+        finally:
+            server.shutdown()
+            thread.join()
     assert receipt['status']=='completed' and receipt['answered'] is True
     assert receipt['recording_host']=='roomhacker-server-88'
-    assert 'received_audio_bytes' not in receipt  # Remote archive was not measured locally.
+    assert receipt['voice_call_id']==voice_id
+    assert receipt['received_audio_bytes']==expected
+    assert terminal_writes[0]['received_audio_bytes']==expected
+    assert terminal_writes[0]['recording_host']=='roomhacker-server-88'
+    local_archive.assert_not_called()
+
+
+def test_matrix_worker_reports_archive_bytes_in_the_terminal_event(tmp_path,monkeypatch,capsys):
+    import asyncio
+    import wave
+    from universal_userio import call_audio
+    from universal_userio.matrix_call_worker import MatrixEventBroker
+
+    voice_id=str(uuid.uuid4())
+    archive=tmp_path/voice_id
+    archive.mkdir()
+    monkeypatch.setattr(call_audio,'ARCHIVE',tmp_path)
+    pcm=b'\x00\x01'*960
+    with wave.open(str(archive/'caller.wav'),'wb') as audio:
+        audio.setparams((1,2,48000,0,'NONE','not compressed'))
+        audio.writeframes(pcm)
+    broker=MatrixEventBroker()
+    asyncio.run(broker.emit({'event':'active','callId':voice_id}))
+    asyncio.run(broker.emit({'event':'ended','callId':voice_id}))
+    active,ended=map(json.loads,capsys.readouterr().out.splitlines())
+    assert 'received_audio_bytes' not in active
+    assert ended=={'event':'ended','callId':voice_id,'received_audio_bytes':len(pcm)}
 
 
 @pytest.mark.parametrize('dangling',[False,True])

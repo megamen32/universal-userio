@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -248,6 +249,35 @@ def _modes_seen(log_text: str) -> list[str]:
     return sorted(set(re.findall(r"voice_mode .*?mode=(secretary|incidents)", log_text)))
 
 
+def fixture_stt_config(config, proc_root=Path("/proc")):
+    """Use the in-container gateway's STT URL and authorization as one pair."""
+    if config.stt_api_key:
+        return config
+    gateway = b"/usr/local/lib/agentcall/agentcall_realtime_bridge.py"
+    control_arg = b"\0--control-socket\0/run/agentcall/control.sock\0"
+    settings = []
+    for process in proc_root.glob("[0-9]*"):
+        try:
+            command = (process / "cmdline").read_bytes()
+            if (command.split(b"\0")[1:2] != [gateway] or control_arg not in command
+                    or process.stat().st_uid != os.geteuid()):
+                continue
+            raw = (process / "environ").read_bytes()
+            env = dict(field.split(b"=", 1) for field in raw.split(b"\0") if b"=" in field)
+            url = env.get(b"AGENTCALL_STT_URL", b"").decode()
+            key = env.get(b"AGENTCALL_STT_API_KEY", b"").decode()
+        except (OSError, UnicodeError):
+            continue
+        if url:
+            settings.append((url, key))
+    if len(settings) != 1:
+        raise RuntimeError("fixture_stt_gateway_configuration_unavailable")
+    url, key = settings[0]
+    if os.environ.get("AGENTCALL_STT_URL") and config.stt_url != url:
+        raise ValueError("fixture_stt_url_differs_from_gateway")
+    return replace(config, stt_url=url, stt_api_key=key)
+
+
 async def run():
     import hashlib as _hashlib
     import importlib as _importlib
@@ -320,6 +350,7 @@ async def run():
     config = voice_config_for_request(
         server_voice_config(BackendConfig.from_environment()), voice_ai,
     )
+    config = fixture_stt_config(config)
     os.environ["AGENTCALL_TTS_PHONE_FALLBACK"] = "0"
     greeting = "Здравствуйте. Проверим, что Matrix-звук работает в обе стороны."
     pipeline = LocalSpeechPipeline(config)

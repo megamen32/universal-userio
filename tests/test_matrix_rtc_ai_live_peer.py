@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from dataclasses import dataclass
 import pytest
 
 
@@ -9,6 +10,31 @@ SPEC = importlib.util.spec_from_file_location("matrix_rtc_ai_live_peer", SCRIPT)
 PEER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = PEER
 SPEC.loader.exec_module(PEER)
+
+
+def test_qa_receiver_inherits_protected_stt_pair_from_the_gateway(tmp_path, monkeypatch):
+    @dataclass
+    class SpeechConfig:
+        stt_url: str = "http://default.invalid/v1/audio/transcriptions"
+        stt_api_key: str = ""
+
+    monkeypatch.delenv("AGENTCALL_STT_URL", raising=False)
+    for pid, path in ((1, "/unrelated.py"), (2, "/usr/local/lib/agentcall/agentcall_realtime_bridge.py")):
+        process = tmp_path / str(pid)
+        process.mkdir()
+        (process / "cmdline").write_bytes(
+            f"python\0{path}\0--control-socket\0/run/agentcall/control.sock\0".encode()
+        )
+        (process / "environ").write_bytes(
+            f"AGENTCALL_STT_URL=https://stt-{pid}.invalid/transcribe\0AGENTCALL_STT_API_KEY=test-{pid}\0".encode()
+        )
+    config = SpeechConfig()
+    assert PEER.fixture_stt_config(config, tmp_path) == SpeechConfig("https://stt-2.invalid/transcribe", "test-2")
+    monkeypatch.setenv("AGENTCALL_STT_URL", config.stt_url)
+    with pytest.raises(ValueError, match="fixture_stt_url_differs_from_gateway"):
+        PEER.fixture_stt_config(config, tmp_path)
+    explicit = SpeechConfig(stt_api_key="explicit")
+    assert PEER.fixture_stt_config(explicit, tmp_path) is explicit
 
 
 def test_secretary_identity_gate_requires_exact_fixture_caller(tmp_path, monkeypatch):

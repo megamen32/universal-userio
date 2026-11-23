@@ -18,7 +18,17 @@ import time
 from urllib.parse import quote, urlsplit
 import uuid
 
+from .call_audio import recorded_track_bytes
 from .matrix_calls import MEMBER, RING, fresh_answer, request_json
+
+
+class MatrixEventBroker:
+    async def emit(self, event):
+        # The engine finalizes the archive before emitting its terminal event.
+        if event.get('event') == 'ended' and event.get('callId'):
+            received = await asyncio.to_thread(recorded_track_bytes, event['callId'], 'caller')
+            event = {**event, 'received_audio_bytes': received}
+        print(json.dumps(event, ensure_ascii=False), flush=True)
 
 
 def bind_prepared(entry, record):
@@ -171,11 +181,7 @@ async def run(request):
         async def wait_closed(self):pass
         def get_extra_info(self,name,default=None):return default
 
-    class Broker:
-        async def emit(self,event):
-            # Preserve the engine's exact event/transcript semantics.
-            print(json.dumps(event,ensure_ascii=False),flush=True)
-    broker=Broker(); prepared={};writer=Writer()
+    broker=MatrixEventBroker(); prepared={};writer=Writer()
     async def matrix_answer(call_id,hung_up):return not ended.is_set()
     async def matrix_hangup(call_id):terminate()
     state_key='_'+account['matrix_user_id']+'_'+device+'_m.call'
