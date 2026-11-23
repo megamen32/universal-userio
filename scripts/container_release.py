@@ -420,18 +420,12 @@ def _dispatcher_input():
 
 def _host_additions():
     """Host binaries the image carries next to the published source."""
-    additions = {
+    from voice_container import asterisk_client_inputs
+
+    return {
         'deploy/containers/external/himalaya': Path('/home/roomhacker/.cargo/bin/himalaya').read_bytes(),
-        'deploy/containers/external/asterisk': Path('/usr/sbin/asterisk').read_bytes(),
+        **asterisk_client_inputs(),
     }
-    # Preserve only the installed host PBX CLI, not another PBX daemon.
-    for row in output(['ldd', '/usr/sbin/asterisk']).splitlines():
-        parts = row.split()
-        if len(parts) > 2 and parts[1] == '=>' and parts[2].startswith('/'):
-            path = Path(parts[2])
-            if path.name.split('.so')[0] not in {'libc', 'libm', 'libpthread', 'librt', 'libdl'}:
-                additions['deploy/containers/external/asterisk-libs/' + path.name] = path.read_bytes()
-    return additions
 
 
 def build_context(destination: Path, *, portable_voice=False, revision=None):

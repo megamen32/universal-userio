@@ -83,7 +83,8 @@ def test_same_healthy_digest_is_a_noop_for_primary(monkeypatch,tmp_path):
         return {'Id':'existing','Image':image_id,
                 'Config':{'Labels':{module.LABEL:'1','com.userio.role':'calls-primary'},
                           'Env':['USERIO_VOICE_ROLE=calls-primary','USERIO_VOICE_PORT=9092']},
-                'HostConfig':{'Binds':['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']},
+                'HostConfig':{'Binds':['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall',
+                                       '/run/agentcall:/run/agentcall','/run/asterisk:/run/asterisk:ro']},
                 'State':{'Running':True,'Health':{'Status':'healthy'}}}
     monkeypatch.setattr(module,'api',api)
     assert module.install(IMAGE,'calls-primary','userio-voice','/etc/config','/var/lib/data',9092)['status']=='unchanged'
@@ -155,6 +156,19 @@ def test_primary_exports_existing_typed_gateway_ipc_but_standby_does_not():
     assert '/run/agentcall:/run/agentcall' not in standby['HostConfig']['Binds']
 
 
+def test_portable_gsm_primary_has_native_cli_and_standby_has_no_pbx_access():
+    module = load()
+    primary = module.create_spec(IMAGE, 'calls-primary', '/etc/config', '/var/lib/data', 9092)
+    standby = module.create_spec(IMAGE, 'standby', '/etc/config', '/var/lib/data', 19095)
+    pbx = '/run/asterisk:/run/asterisk:ro'
+    assert pbx in primary['HostConfig']['Binds']
+    assert pbx not in standby['HostConfig']['Binds']
+    dockerfile = (Path(__file__).resolve().parents[1] / 'Dockerfile').read_text()
+    portable = dockerfile.split('AS portable-voice\n', 1)[1].split('\nFROM ', 1)[0]
+    assert 'COPY deploy/containers/external/asterisk ' in portable
+    assert '/usr/sbin/asterisk' in portable
+
+
 def test_incoming_health_checks_actual_host_gid_and_mode():
     from types import SimpleNamespace
     module=load()
@@ -197,7 +211,9 @@ def test_primary_keeps_its_binds_when_no_supervised_state_exists(monkeypatch,tmp
     missing=tmp_path/'absent'
     _isolate_host_paths(monkeypatch, tmp_path)
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
-    assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
+    assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro',
+                                          '/var/lib/data:/var/lib/agentcall',
+                                          '/run/agentcall:/run/agentcall','/run/asterisk:/run/asterisk:ro']
 
 
 def test_primary_mounts_the_fast_agent_home_of_the_incident_brain(monkeypatch,tmp_path):
@@ -223,7 +239,9 @@ def test_primary_keeps_its_binds_without_a_fast_agent_home(monkeypatch,tmp_path)
     module=load()
     _isolate_host_paths(monkeypatch, tmp_path)
     primary=module.create_spec(IMAGE,'calls-primary','/etc/config','/var/lib/data',9092)
-    assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro','/var/lib/data:/var/lib/agentcall','/run/agentcall:/run/agentcall']
+    assert primary['HostConfig']['Binds']==['/etc/config:/etc/userio-voice:ro',
+                                          '/var/lib/data:/var/lib/agentcall',
+                                          '/run/agentcall:/run/agentcall','/run/asterisk:/run/asterisk:ro']
 
 
 def test_primary_mounts_the_fast_agent_tool_and_its_interpreter(monkeypatch,tmp_path):

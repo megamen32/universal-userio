@@ -93,8 +93,6 @@ RUN chmod -R a=rX /usr/share/nginx/html
 
 # Portable UserIO Voice: external STT/TTS/SDK endpoints, no host code mounts.
 FROM python:3.12-slim AS portable-voice
-ARG USERIO_REVISION
-LABEL com.userio.portable-voice="1" org.opencontainers.image.revision=$USERIO_REVISION
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/usr/local/lib/agentcall:/opt/universal-userio/src
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg espeak ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -105,12 +103,19 @@ COPY deploy/containers/requirements.txt deploy/containers/requirements-portable-
 RUN sed -i 's/^matrix-nio\[e2e\]==/matrix-nio==/' /tmp/requirements.txt \
     && pip install --no-cache-dir -r /tmp/requirements-portable-voice.txt
 RUN pip freeze > /opt/userio-voice-dependencies.txt
+ARG USERIO_REVISION
+LABEL com.userio.portable-voice="1" org.opencontainers.image.revision=$USERIO_REVISION
 COPY pyproject.toml /opt/universal-userio/
 COPY src /opt/universal-userio/src
 COPY scripts /opt/universal-userio/scripts
 COPY deploy/containers/external/agentcall_secretary_voice.py /usr/local/lib/agentcall/agentcall_secretary_voice.py
+COPY deploy/containers/external/asterisk /opt/userio-migration-deps/asterisk
+COPY deploy/containers/external/asterisk-libs /opt/userio-migration-deps/asterisk-libs
 COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
-RUN pip install --no-deps --no-cache-dir . \
+RUN printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/userio-migration-deps/asterisk-libs exec /opt/userio-migration-deps/asterisk "$@"\n' > /usr/sbin/asterisk \
+    && chmod 755 /usr/sbin/asterisk /opt/userio-migration-deps/asterisk \
+    && /usr/sbin/asterisk -V \
+    && pip install --no-deps --no-cache-dir . \
     && ln -s /usr/local /opt/universal-userio/.venv \
     && find /opt/universal-userio/src/universal_userio/voice -maxdepth 1 -name '*.py' \
         -exec ln -s '{}' /usr/local/lib/agentcall/ \; \
