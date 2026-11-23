@@ -4223,6 +4223,7 @@ async def handle_call(
             )
         pipeline = LocalSpeechPipeline(call_config)
         speech = CallController(call_config, {}, synthesize=pipeline.synthesize)
+        native_secretary = False
         fast_agent = (
             FastAgentIncidentBrain(
                 call_config, prepared.agent_context, prepared.context
@@ -4242,6 +4243,7 @@ async def handle_call(
             secretary = brain_for_call(voice_config, prepared, call_id, incoming=incoming, guest=guest)
             if secretary is not None:
                 fast_agent = secretary
+                native_secretary = True
         turn_brain = fast_agent or pipeline
         # No LLM generation here: initialize call-owned SDK/MCP and the phone
         # engine while the caller hears the existing cached opening.
@@ -4413,7 +4415,7 @@ async def handle_call(
                 await stream_voice_turn(writer, broker, call_id, text, turn_brain, speech,
                     hung_up, stop_playback, peer_fields=peer_fields,
                     fixed_answer=fixed,
-                    acknowledgement=(None if fixed or turn_brain is fast_agent
+                    acknowledgement=(None if fixed or native_secretary and turn_brain is fast_agent
                                      else acknowledgements.next()),
                     caller_timing=caller_timing)
             except NativeTurnUnsettled as error:
