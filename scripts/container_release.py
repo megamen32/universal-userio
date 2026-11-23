@@ -1691,9 +1691,16 @@ def main():
     parser.add_argument('--image')
     parser.add_argument('--revision')
     parser.add_argument('--expected-container')
+    parser.add_argument('--check-primary-handoff', action='store_true')
     parser.add_argument('--receipt-directory', type=Path)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    if args.check_primary_handoff:
+        if args.action != 'install-voice' or args.role != 'calls-primary' or not args.expected_container or args.dry_run:
+            parser.error('--check-primary-handoff requires install-voice --role calls-primary --expected-container')
+        from voice_container import check_primary_handoff
+        print(json.dumps(check_primary_handoff(args.name, args.expected_container), sort_keys=True))
+        return
     if args.dry_run and args.action != 'reconcile-backend':
         parser.error('--dry-run is supported only for reconcile-backend')
     if args.action == 'install-voice':

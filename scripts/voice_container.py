@@ -3,6 +3,7 @@
 No dialer, poller or scheduler. Configuration and delivery journals stay external.
 """
 from __future__ import annotations
+from contextlib import contextmanager
 import hashlib
 import grp
 import http.client
@@ -13,6 +14,7 @@ from pathlib import Path
 import re
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tarfile
@@ -23,6 +25,7 @@ ADAPTER_REVISION = 'fd16a908c123b00337385e64b261cd52fcceaa39'
 ADAPTER_PATH = 'integrations/agentcall/agentcall_secretary_voice.py'
 ADAPTER_SHA = '8e994540d7461911e0b9d1b453edeb86ecabe2b1d0bf746525a05dc382b0aa66'
 IMAGE = re.compile(r'ghcr\.io/megamen32/universal-userio-voice@sha256:[a-f0-9]{64}\Z')
+COMPONENT_NAME = re.compile(r'userio-voice(?:-[a-z0-9-]+)?\Z')
 LABEL = 'com.userio.portable-voice'
 STOP_TIMEOUT = 20
 SECRETARY_STATE = '/etc/agentcall-secretary'
@@ -38,6 +41,8 @@ NOTICEPLACE_MESH = '/run/noticeplace-mesh'
 NOTICEPLACE_MCP_ENV = '/etc/noticeplace-voice-mcp.env'
 DOCKER_TIMEOUT = 40
 TRANSCRIPTION_PID = Path('/tmp/userio-voice-transcription.pid')
+RUNTIME_DIR = Path('/run/agentcall')
+ADMISSION_SOCKETS = ('control.sock', 'incoming.sock')
 
 
 def build_context(root, revision, archive, destination):
@@ -139,8 +144,84 @@ def create_spec(image, role, config, data, port):
     return spec
 
 
+@contextmanager
+def fence_primary_admission(runtime_dir):
+    """Hide both listener names without closing any accepted connection."""
+    directory = runtime_dir.lstat()
+    if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid() or directory.st_mode & 0o022:
+        raise RuntimeError('primary admission directory is not owned by installer')
+    sockets = [runtime_dir / name for name in ADMISSION_SOCKETS]
+    for path in sockets:
+        metadata = path.lstat()
+        if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != directory.st_uid or metadata.st_nlink != 1:
+            raise RuntimeError(f'primary admission listener is not exclusively owned: {path.name}')
+
+    saved = runtime_dir / '.primary-handoff'
+    saved.mkdir(mode=0o700)
+    moved = []
+    try:
+        for path in sockets:
+            backup = saved / path.name
+            path.rename(backup)
+            moved.append((path, backup))
+        # Both names are now closed. A connect racing either rename may
+        # already be queued on the old listener and must be treated as admitted.
+        yield
+    finally:
+        conflicts = []
+        for path, backup in reversed(moved):
+            try:
+                os.link(backup, path, follow_symlinks=False)
+            except FileExistsError:
+                conflicts.append(path.name)
+                continue
+            backup.unlink()
+        if conflicts:
+            raise RuntimeError(f'primary admission changed during handoff: {", ".join(conflicts)}; saved listeners retained')
+        saved.rmdir()
+
+
+def read_handoff_status(runtime_dir):
+    try:
+        return maintenance_request('status', runtime_dir)
+    except FileNotFoundError:
+        raise RuntimeError(
+            'legacy voice cannot prove drained: no maintenance socket for admitted requests, prepared UUIDs or AudioSocket'
+        ) from None
+
+
+def check_primary_handoff(name, expected_container):
+    """Exercise the barrier for one owned runtime and reopen it on exit."""
+    if not COMPONENT_NAME.fullmatch(name):
+        raise ValueError('UserIO voice component name required')
+
+    def inspect():
+        return api('GET', '/containers/'+name+'/json')
+
+    old = inspect()
+    if (old['Id'] != expected_container or not old['State']['Running']
+            or old['Config'].get('Labels', {}).get(LABEL) != '1'
+            or old['Config']['Labels'].get('com.userio.role') != 'calls-primary'):
+        raise RuntimeError('expected running UserIO primary identity is required')
+    # The ordinary installer mounts only the Docker API. A barrier check must
+    # run on the receiver with the same runtime directory as the primary.
+    mount = next((entry for entry in old['Mounts'] if entry['Destination'] == str(RUNTIME_DIR)), None)
+    if not mount or mount['Source'] != str(RUNTIME_DIR) or not mount['RW']:
+        raise RuntimeError('primary does not own the receiver admission directory')
+    epoch = old['State']['StartedAt']
+    with fence_primary_admission(RUNTIME_DIR):
+        result = read_handoff_status(RUNTIME_DIR)
+        current = inspect()
+        if (current['Id'] != expected_container or not current['State']['Running']
+                or current['State']['StartedAt'] != epoch):
+            raise RuntimeError('primary changed during admission check')
+        if result.get('safe') is not True:
+            raise RuntimeError('primary admission check found outstanding work')
+    return {'status': 'admission_check_passed', 'container_id': expected_container}
+
+
 def install(image,role,name,config,data,port, *, timeout=75):
-    if not re.fullmatch(r'userio-voice(?:-[a-z0-9-]+)?',name):raise ValueError('UserIO voice component name required')
+    if not COMPONENT_NAME.fullmatch(name):raise ValueError('UserIO voice component name required')
     spec=create_spec(image,role,config,data,port)
     # Pull is an explicit normal Docker operation before this call; never embed registry credentials.
     info=api('GET','/images/'+quote(image,safe='')+'/json')
@@ -155,7 +236,7 @@ def install(image,role,name,config,data,port, *, timeout=75):
         return {'status':'unchanged','name':name,'role':role,'image':image,
                 'container_id':old['Id'],'calls_tested':False}
     if old and old['State'].get('Running') and role=='calls-primary':
-        raise RuntimeError('running primary needs native idle handoff before replacement; reconcile receipts then stop the exact component')
+        raise RuntimeError('running primary needs a verified admission handoff before replacement')
     previous=name+'-previous'
     prior=api('GET','/containers/'+previous+'/json',missing=True) if old else None
     archive=None
@@ -304,8 +385,25 @@ def serve():
              '--control-socket','/run/agentcall/control.sock'])
 
 
+def maintenance_request(action, runtime_dir):
+    if action not in {'drain', 'status', 'open'}:
+        raise ValueError('unsupported maintenance action')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(5)
+        connection.connect(str(runtime_dir / 'maintenance.sock'))
+        connection.sendall((json.dumps({'action': action}) + '\n').encode())
+        with connection.makefile('rb') as response:
+            result = json.loads(response.readline(4096))
+    if result.get('ok') is not True:
+        raise RuntimeError('voice maintenance request failed')
+    return result
+
+
 if __name__=='__main__':
     if sys.argv[1:] == ['payload']:sys.exit(verify_payload())
     if sys.argv[1:] == ['health']:sys.exit(health())
     if sys.argv[1:] == ['serve']:sys.exit(serve())
+    if len(sys.argv) == 3 and sys.argv[1] == 'maintenance':
+        print(json.dumps(maintenance_request(sys.argv[2], RUNTIME_DIR), sort_keys=True))
+        sys.exit(0)
     else:raise SystemExit('use existing container_release.py install-voice')
