@@ -4377,6 +4377,10 @@ async def handle_call(
                 # The outstanding action may still finish. The rest of the
                 # call can speak, but must never submit another native action.
                 turn_brain = pipeline
+                pipeline.history[0]['content'] += (
+                    '\nДо конца этого звонка инструменты недоступны. Отвечай по известным данным. '
+                    'Не обещай выполнять действия и не утверждай, что поручение выполнено.'
+                )
                 failure_answer = ('Результат поручения пока неизвестен. Я его не повторяю. '
                                   'Разговор продолжается, можете задать другой вопрос.')
                 await broker.emit(safe_event('error', call_id, reason=failure_answer,
