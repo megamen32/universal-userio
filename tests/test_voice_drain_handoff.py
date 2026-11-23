@@ -47,11 +47,19 @@ async def exercise_drain():
         audio = asyncio.StreamReader()
         audio.feed_data(bridge.pack_audiosocket_frame(bridge.UUID_KIND, uuid.UUID(prepared_id).bytes))
         output = writer()
+        audio_started, audio_finish = asyncio.Event(), asyncio.Event()
         async def consume(reader, writer, broker, config, prepared, **kwargs):
             assert kwargs['first_frame'][1] == uuid.UUID(prepared_id).bytes
             prepared.pop(prepared_id)
+            audio_started.set()
+            await audio_finish.wait()
         with patch.object(bridge, 'handle_call', side_effect=consume):
-            await controller.accept_audio(audio, output)
+            task = asyncio.create_task(controller.accept_audio(audio, output))
+            await audio_started.wait()
+            assert controller.maintenance('status')['audio'] == 1
+            assert controller.maintenance('status')['safe'] is False
+            audio_finish.set()
+            await task
         assert controller.maintenance('status')['safe'] is True
         unknown = asyncio.StreamReader()
         unknown.feed_data(bridge.pack_audiosocket_frame(bridge.UUID_KIND, uuid.uuid4().bytes))
