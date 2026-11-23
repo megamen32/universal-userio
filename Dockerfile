@@ -122,6 +122,9 @@ RUN printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/userio-migration-deps/asterisk-libs 
     && python -c 'import aiohttp,websockets,pydantic; from livekit import rtc; import agentcall_secretary_voice, agentcall_realtime_bridge' \
     && /opt/universal-userio/.venv/bin/python -c 'from livekit import rtc; from fast_agent.core.fastagent import FastAgent' \
     && pip check
+# Package installation may restore an older release manifest from its data set.
+# The release context is authoritative for the installed image identity.
+COPY deploy/containers/portable-release.json /opt/universal-userio/.userio-portable-release.json
 ENTRYPOINT ["python", "/opt/universal-userio/scripts/voice_container.py"]
 CMD ["serve"]
 
