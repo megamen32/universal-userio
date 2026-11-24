@@ -74,7 +74,7 @@ RUN if [ -n "$PIP_PROXY" ]; then export https_proxy="$PIP_PROXY" http_proxy="$PI
     /opt/voice-legacy-sdk/bin/pip install --no-cache-dir -r /tmp/userio-voice-requirements.txt \
     && /opt/tts/bin/pip install --no-cache-dir numpy==2.2.6 omegaconf==2.3.1 \
     && /opt/tts/bin/pip install --no-cache-dir torch==2.14.0+cpu --index-url https://download.pytorch.org/whl/cpu \
-    && /opt/universal-userio/telegram-call-runtime/bin/pip install --no-cache-dir ntgcalls==3.0.3 \
+    && /opt/universal-userio/telegram-call-runtime/bin/pip install --no-cache-dir ntgcalls==3.0.6 \
     && mkdir -p /home/roomhacker/.local/bin /home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin \
     && ln -s /usr/local/bin/fast-agent /home/roomhacker/.local/bin/fast-agent \
     && ln -s /opt/voice-legacy-sdk/bin/python /home/roomhacker/.local/share/uv/tools/fast-agent-mcp/bin/python
