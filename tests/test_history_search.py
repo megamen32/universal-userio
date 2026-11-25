@@ -52,7 +52,7 @@ def test_message_hits_are_not_collapsed_per_conversation(tmp_path):
         store, "индексацию", limit=50)
     assert len(found["results"]) == 3
     assert {row["match_type"] for row in found["results"]} == {"exact"}
-    assert all(row["deep_link"].startswith("https://msg.bezrabotnyi.com/#/chat/") for row in found["results"])
+    assert all(row["deep_link"].startswith("https://msg.bezrabotnyi.com/app/chat/") for row in found["results"])
     assert all(row["message_id"] for row in found["results"])
 
 
@@ -283,7 +283,7 @@ def test_semantic_search_returns_real_message_hits(tmp_path, monkeypatch):
         assert row["match_type"] == "semantic"
         assert row["account_ref"] == "telegram:540308572"
         assert row["peer_id"] in {"8810909089", "700000001"}
-        assert row["deep_link"].startswith("https://msg.bezrabotnyi.com/#/chat/")
+    assert row["deep_link"].startswith("https://msg.bezrabotnyi.com/app/chat/")
         assert row["snippet"]
 
 
