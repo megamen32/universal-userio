@@ -648,4 +648,4 @@ dialog.addEventListener('click', event => {
   if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) closeDialog();
 });
 })();
-</script></body></html>
+</script><script>if (location.hash.startsWith('#/chat/')) location.replace('/app/' + location.hash.slice(2))</script></body></html>

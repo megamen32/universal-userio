@@ -144,7 +144,7 @@ def conversation_filter(conversation_ids: Sequence[str]) -> tuple[str, list[obje
 
 def deep_link(conversation_id: str, message_id: str = '', base_url: str = '') -> str:
     """Working link to the exact source message inside UserIO."""
-    link = f"{(base_url or 'https://msg.bezrabotnyi.com').rstrip('/')}/#/chat/{quote(str(conversation_id))}"
+    link = f"{(base_url or 'https://msg.bezrabotnyi.com').rstrip('/')}/app/chat/{quote(str(conversation_id))}"
     return f"{link}?m={quote(str(message_id))}" if message_id else link
 
 

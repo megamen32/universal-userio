@@ -514,12 +514,12 @@ def handler(
                     values.get("username", ""), values.get("password", "")
                 )
                 if principal is None:
-                    self._html(401, _dashboard_login_page(invalid=True).encode())
+                    self._html(401, _dashboard_login_page(invalid=True, next_path=values.get("next", "")).encode())
                     return
                 session = service._store.create_oauth_session(
                     principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME
                 )
-                self._redirect("/", cookie=self._session_cookie(
+                self._redirect(_safe_next(values.get("next", "")), cookie=self._session_cookie(
                     "userio_web_session", session,
                     max_age=_DASHBOARD_SESSION_LIFETIME, path="/",
                 ))
@@ -534,8 +534,8 @@ def handler(
                     # endpoint cannot be used to discover who has an account.
                     self._reply(202, {"status": "accepted"})
                     return
-                self._redirect(_with_notice(
-                    _safe_next(values.get("next") or self._query_value("next")), "code_sent=1"))
+                target = _safe_next(values.get("next") or self._query_value("next"))
+                self._redirect(_with_notice("/login?" + urlencode({"next": target}), "code_sent=1"))
                 return
             if path == "/auth/session/code":
                 values = self._values()
@@ -544,7 +544,7 @@ def handler(
                     str(values.get("code") or ""))
                 if principal is None:
                     self._html(401, _dashboard_login_page(
-                        invalid=True, code=True, login_options=self._login_options("/login")).encode())
+                        invalid=True, code=True, login_options=self._login_options(values.get("next") or "/"), next_path=values.get("next", "")).encode())
                     return
                 session = service._store.create_oauth_session(
                     principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME)
@@ -573,7 +573,7 @@ def handler(
                 principal = login_codes.verify_telegram_login(values)
                 if principal is None:
                     self._html(401, _dashboard_login_page(
-                        invalid=True, code=True, login_options=self._login_options("/login")).encode())
+                        invalid=True, code=True, login_options=self._login_options(values.get("next") or self._query_value("next") or "/"), next_path=values.get("next") or self._query_value("next")).encode())
                     return
                 session = service._store.create_oauth_session(
                     principal.user_id, lifetime=_DASHBOARD_SESSION_LIFETIME)
@@ -1883,12 +1883,19 @@ def handler(
                 return
             if requested_path == "/login":
                 if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
-                    self._redirect("/")
+                    self._redirect(_safe_next(self._query_value("next")))
                     return
                 self._html(200, _dashboard_login_page(
-                    login_options=self._login_options("/login"),
-                    notice=self._query_value("code_sent")).encode())
+                    login_options=self._login_options(self._query_value("next") or "/"),
+                    notice=self._query_value("code_sent"), next_path=self._query_value("next")).encode())
                 return
+            if requested_path == "/app" or requested_path.startswith("/app/"):
+                target = requested_path + (f"?{urlparse(self.path).query}" if urlparse(self.path).query else "")
+                if self._principal(allow_proxy=True) is None:
+                    self._redirect("/login?" + urlencode({"next": target}))
+                    return
+                if self._static("/"):
+                    return
             if requested_path == "/signup":
                 if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
@@ -2895,7 +2902,7 @@ def _safe_next(value: str) -> str:
     """Only same-site relative paths survive as a redirect target."""
 
     candidate = str(value or "").strip()
-    if not candidate.startswith("/") or candidate.startswith("//") or "\\" in candidate:
+    if not candidate.startswith("/") or candidate.startswith("//") or "\\" in candidate or any(ord(c) < 32 or ord(c) == 127 for c in candidate):
         return "/"
     parsed = urlparse(candidate)
     if parsed.scheme or parsed.netloc:
@@ -2940,7 +2947,7 @@ def _login_code_html(options: Mapping[str, object] | None) -> str:
 
 def _dashboard_login_page(*, invalid: bool = False, code: bool = False,
                            login_options: Mapping[str, object] | None = None,
-                           notice: str = "") -> str:
+                           notice: str = "", next_path: str = "") -> str:
     error = (
         '<p class="userio-error" role="alert">Неверный логин или пароль.</p>' if invalid and not code else
         ('<p class="userio-error" role="alert">Код не подошёл. Запросите новый и попробуйте снова.</p>'
@@ -2963,7 +2970,7 @@ def _dashboard_login_page(*, invalid: bool = False, code: bool = False,
   <main class="userio-setup-shell">
     <header class="userio-setup-header">
       <a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a>
-      <nav class="userio-setup-nav"><a href="/signup">Регистрация</a></nav>
+      <nav class="userio-setup-nav"><a href="/signup?{html.escape(urlencode({'next': _safe_next(next_path)}), quote=True)}">Регистрация</a></nav>
     </header>
     <div class="userio-setup-main">
       <section class="userio-setup-panel">
@@ -2971,13 +2978,13 @@ def _dashboard_login_page(*, invalid: bool = False, code: bool = False,
         <p class="userio-setup-lead">Войдите, чтобы открыть свои каналы и аккаунты.</p>
         {error}
         {sent}
-        <form method="post" action="/auth/session">
+        <form method="post" action="/auth/session"><input type="hidden" name="next" value="{html.escape(_safe_next(next_path), quote=True)}">
           <label>Логин<input name="username" autocomplete="username" required autofocus></label>
           <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
           <button type="submit">Войти</button>
         </form>
         {_login_code_html(login_options)}
-        <p>Нет аккаунта? <a href="/signup">Зарегистрироваться</a></p>
+        <p>Нет аккаунта? <a href="/signup?{html.escape(urlencode({'next': _safe_next(next_path)}), quote=True)}">Зарегистрироваться</a></p>
       </section>
     </div>
   </main>
@@ -2999,7 +3006,7 @@ def _dashboard_signup_page(error: str = "", next_path: str = "/") -> str:
   <main class="userio-setup-shell">
     <header class="userio-setup-header">
       <a class="userio-brand" href="/"><span class="userio-brand-mark" aria-hidden="true">U</span>UserIO</a>
-      <nav class="userio-setup-nav"><a href="/login">Войти</a></nav>
+      <nav class="userio-setup-nav"><a href="/login?{html.escape(urlencode({'next': _safe_next(next_path)}), quote=True)}">Войти</a></nav>
     </header>
     <div class="userio-setup-main">
       <section class="userio-setup-panel">
@@ -3012,7 +3019,7 @@ def _dashboard_signup_page(error: str = "", next_path: str = "/") -> str:
           <label>Повторите пароль<input name="password_confirm" type="password" autocomplete="new-password" minlength="8" required></label>
           <button type="submit">Зарегистрироваться</button>
         </form>
-        <p>Уже есть аккаунт? <a href="/login">Войти</a></p>
+        <p>Уже есть аккаунт? <a href="/login?{html.escape(urlencode({'next': _safe_next(next_path)}), quote=True)}">Войти</a></p>
       </section>
     </div>
   </main>
