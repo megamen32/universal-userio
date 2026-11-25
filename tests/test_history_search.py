@@ -283,7 +283,7 @@ def test_semantic_search_returns_real_message_hits(tmp_path, monkeypatch):
         assert row["match_type"] == "semantic"
         assert row["account_ref"] == "telegram:540308572"
         assert row["peer_id"] in {"8810909089", "700000001"}
-    assert row["deep_link"].startswith("https://msg.bezrabotnyi.com/app/chat/")
+        assert row["deep_link"].startswith("https://msg.bezrabotnyi.com/app/chat/")
         assert row["snippet"]
 
 
