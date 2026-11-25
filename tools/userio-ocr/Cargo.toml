@@ -1,0 +1,9 @@
+[package]
+name = "userio-ocr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oar-ocr = "=0.9.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+rayon = "1"

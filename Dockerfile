@@ -1,6 +1,12 @@
 FROM node:22-slim AS node
 
-FROM python:3.12-slim AS backend
+FROM rust:1.95-trixie AS ocr-build
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY tools/userio-ocr /build
+RUN cargo build --release --locked && sh download-models.sh /models
+
+FROM python:3.12-slim-trixie AS backend
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/opt/universal-userio/src \
     OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
@@ -14,6 +20,8 @@ RUN ln -s /usr/local/bin/node /usr/bin/node \
     && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && git config --global url.https://github.com/.insteadOf ssh://git@github.com/
 WORKDIR /opt/universal-userio
+COPY --from=ocr-build /build/target/release/userio-ocr /opt/userio-ocr/userio-ocr
+COPY --from=ocr-build /models /opt/userio-ocr/models
 COPY deploy/containers/requirements.txt /tmp/userio-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/userio-requirements.txt
 COPY pyproject.toml /opt/universal-userio/
