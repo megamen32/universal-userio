@@ -133,6 +133,30 @@ def test_scoped_token_only_sees_its_own_chats(tmp_path):
     assert [row['id'] for row in text['results']] == ['chat1']
 
 
+def test_scoped_token_cannot_search_other_chat_attachment(tmp_path, monkeypatch):
+    from universal_userio.adapters import TelegramChannelAdapter
+    from universal_userio.contracts import ChannelFile
+    import universal_userio.mcp_files as files
+
+    store, service, principal = scoped_fixture(tmp_path)
+    for peer in ('101', '102'):
+        mid = 'telegram:1|' + peer + ':1'
+        store.upsert_attachment(source='telegram', message_id=mid, attachment={'idx': 0, 'kind': 'doc'})
+    monkeypatch.setattr(TelegramChannelAdapter, 'download_for_ai', lambda self, **kwargs: ChannelFile('test.png', 'image/png', b'fake'))
+    monkeypatch.setattr(files, 'mcp_attachment', lambda *a, **kw: ({'text': 'attachmentneedle', 'extraction': 'oar-ocr'}, []))
+    surface = UserIOMcpSurface(store, service)
+    for peer in ('101', '102'):
+        result = surface.dispatch('userio.channels.download', {'file_ref': 'telegram:telegram:1|' + peer + ':1', 'mode': 'mcp_resource'})
+        assert result['ok']
+    result = search(store, service, principal, {'query': 'attachmentneedle', 'scope': 'message', 'mode': 'text'})
+    assert result['ok'] and [r['conversation_id'] for r in result['results']] == ['chat1']
+    denied = surface.dispatch('userio.channels.download', {'file_ref': 'telegram:telegram:1|102:1', 'mode': 'mcp_resource'}, principal=principal)
+    assert not denied['ok']
+    allowed = surface.dispatch('userio.channels.download', {'file_ref': 'telegram:telegram:1|101:1', 'mode': 'mcp_resource'}, principal=principal)
+    assert allowed['ok']
+    assert [r['conversation_id'] for r in search(store, service, principal, {'query': 'attachmentneedle', 'scope': 'message', 'mode': 'text'})['results']] == ['chat1']
+
+
 @pytest.mark.parametrize('arguments', [
     {'scope': 'chat'}, {'mode': 'magic'}, {'match_type': 'vibes'},
     {'conversation_ids': 'not-a-list'}, {'conversation_id': 'x' * 129},

@@ -81,6 +81,61 @@ def test_deleted_and_edited_messages_never_come_from_the_index(tmp_path):
     assert search_messages(store, "секретную", limit=10)["results"] == []
 
 
+@pytest.mark.parametrize("content_type,extraction", [("image/png", "oar-ocr"), ("application/pdf", "firecrawl-anydoc")])
+def test_downloaded_attachment_text_is_searchable_only_by_owner(tmp_path, monkeypatch, content_type, extraction):
+    from universal_userio.adapters import TelegramChannelAdapter
+    from universal_userio.contracts import ChannelFile
+    from universal_userio.mcp_surface import UserIOMcpSurface
+    import universal_userio.mcp_files as files
+
+    service, store = _service(tmp_path)
+    conversation = _receive(service, "Test", "attachment only")
+    message_id = store._connection.execute("SELECT message_id FROM messages WHERE conversation_id=?", (conversation,)).fetchone()[0]
+    store.upsert_attachment(source="telegram", message_id=message_id, attachment={"idx": 0, "kind": "doc", "content_type": content_type})
+    data = b"%PDF-synthetic" if content_type == "application/pdf" else b"synthetic"
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", lambda self, **kw: ChannelFile("fixture.pdf" if content_type == "application/pdf" else "fixture.png", content_type, data))
+    monkeypatch.setattr(files, "mcp_attachment", lambda *a, **kw: ({"text": "uniqueneedle 48917", "extraction": extraction}, []))
+    result = UserIOMcpSurface(store, service).dispatch("userio.channels.download", {"file_ref": "telegram:" + message_id, "mode": "mcp_resource"})
+    assert result["ok"]
+    assert search_messages(store, "uniqueneedle", match_type="exact")["results"]
+    from universal_userio.search import search_conversations
+    assert [r['id'] for r in search_conversations(store, "uniqueneedle", match_type="exact")] == [conversation]
+    assert not search_messages(store, "uniqueneedle", user_id="different-user", match_type="exact")["results"]
+    assert not search_messages(store, "uniqueneedle", conversation_ids=["conv_other"], match_type="exact")["results"]
+    store.set_user_capability('download', False)
+    assert not search_messages(store, "uniqueneedle", match_type="exact")["results"]
+    assert not search_conversations(store, "uniqueneedle", match_type="exact")
+    store.set_user_capability('download', True)
+    store.upsert_attachment(source="telegram", message_id=message_id, attachment={"idx": 0, "kind": "doc", "filename": "replacement"})
+    assert not search_messages(store, "uniqueneedle", match_type="exact")["results"]
+    result = UserIOMcpSurface(store, service).dispatch("userio.channels.download", {"file_ref": "telegram:" + message_id, "mode": "mcp_resource"})
+    assert result["ok"] and search_messages(store, "uniqueneedle", match_type="exact")["results"]
+    store._connection.execute("UPDATE messages SET deleted_at=1 WHERE conversation_id=?", (conversation,))
+    store._connection.commit()
+    assert not search_messages(store, "uniqueneedle", match_type="exact")["results"]
+
+
+def test_attachment_replaced_during_download_is_not_indexed(tmp_path, monkeypatch):
+    from universal_userio.adapters import TelegramChannelAdapter
+    from universal_userio.contracts import ChannelFile
+    from universal_userio.mcp_surface import UserIOMcpSurface
+    import universal_userio.mcp_files as files
+
+    service, store = _service(tmp_path)
+    conversation = _receive(service, "Test", "attachment only")
+    mid = store._connection.execute("SELECT message_id FROM messages WHERE conversation_id=?", (conversation,)).fetchone()[0]
+    attachment = {"idx": 0, "kind": "doc"}
+    store.upsert_attachment(source="telegram", message_id=mid, attachment=attachment)
+    def download(*args, **kwargs):
+        store.upsert_attachment(source="telegram", message_id=mid, attachment=attachment)
+        return ChannelFile("fixture.png", "image/png", b"old")
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", download)
+    monkeypatch.setattr(files, "mcp_attachment", lambda *a, **kw: ({"text": "staleneedle", "extraction": "oar-ocr"}, []))
+    result = UserIOMcpSurface(store, service).dispatch("userio.channels.download", {"file_ref": "telegram:" + mid, "mode": "mcp_resource"})
+    assert result["ok"] and result['file']['search_index'] == 'skipped_concurrent_change'
+    assert not search_messages(store, "staleneedle", match_type="exact")["results"]
+
+
 def test_text_search_works_without_any_vector_configuration(tmp_path):
     service, store = _service(tmp_path)
     _receive(service, "Менеджер", "без вектора всё равно ищется")

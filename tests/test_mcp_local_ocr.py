@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from universal_userio.adapters import TelegramChannelAdapter
-from universal_userio.contracts import ChannelFile
+from universal_userio.contracts import ChannelFile, InboxMessage
 from universal_userio.mcp_surface import UserIOMcpSurface
 from universal_userio.mcp_transport import json_rpc_response
 from universal_userio.service import UserIOService
@@ -24,3 +24,17 @@ def test_synthetic_png_ocr_via_mcp(tmp_path, monkeypatch):
     result = response["result"]
     assert result["structuredContent"]["file"]["extraction"] == "oar-ocr"
     assert "USERIO OCR TEST 123" in " ".join(block.get("text", "") for block in result["content"] if block["type"] == "text")
+
+
+@pytest.mark.skipif(not Path(os.environ.get("USERIO_OCR_BINARY", "/opt/userio-ocr/userio-ocr")).is_file(), reason="local OCR runtime not installed")
+def test_real_ocr_is_searchable(tmp_path, monkeypatch):
+    from universal_userio.search import search_messages
+    png = (Path(__file__).parent / "fixtures" / "userio-ocr.png").read_bytes()
+    monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", lambda self, **kwargs: ChannelFile("synthetic.png", "image/png", png))
+    store = SQLiteUserIOStore(tmp_path / "store.sqlite3")
+    service = UserIOService(store, None, None)
+    service.receive(InboxMessage("telegram", "ocr-fixture", "test", "attachment", 1), route_id="telegram")
+    store.upsert_attachment(source="telegram", message_id="ocr-fixture", attachment={"kind": "image"})
+    result = UserIOMcpSurface(store, service).dispatch("userio.channels.download", {"file_ref": "telegram:ocr-fixture", "mode": "mcp_resource"})
+    assert result["ok"] and result["file"]["extraction"] == "oar-ocr"
+    assert search_messages(store, "USERIO OCR TEST 123", match_type="exact")["results"]
