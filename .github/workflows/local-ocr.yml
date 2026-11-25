@@ -1,0 +1,24 @@
+name: Local attachment OCR
+on:
+  pull_request:
+    paths:
+      - 'tools/userio-ocr/**'
+      - 'src/universal_userio/mcp_files.py'
+      - 'src/universal_userio/mcp_surface.py'
+      - 'tests/test_mcp_local_ocr.py'
+      - 'tests/fixtures/userio-ocr.png'
+      - 'Dockerfile'
+      - '.github/workflows/local-ocr.yml'
+  workflow_dispatch:
+jobs:
+  mcp-ocr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Build OCR and verified models
+        run: docker build --target ocr-build -t userio-ocr-ci .
+      - name: Smoke-test the bounded OCR runtime
+        run: |
+          docker run --rm -i userio-ocr-ci /build/target/release/userio-ocr /models \
+            < tests/fixtures/userio-ocr.png | grep -Fx 'USERIO OCR TEST 123'

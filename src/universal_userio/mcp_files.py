@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from pathlib import PurePath
 import subprocess
+import threading
 
 from .contracts import ChannelFile
 
 MAX_MCP_FILE_BYTES = 4 * 1024 * 1024
 MAX_MCP_TEXT_CHARS = 64_000
+_OCR_SLOT = threading.BoundedSemaphore(1)
 _TEXT_TYPES = {"text/plain", "text/markdown", "text/html", "text/xml", "application/json", "application/xml"}
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".rst", ".json", ".xml", ".html", ".htm",
                   ".log", ".srt", ".vtt", ".ass", ".yaml", ".yml", ".ini", ".conf",
@@ -136,6 +139,27 @@ def mcp_attachment(file: ChannelFile, *, include_images: bool = True) -> tuple[d
         extracted = extracted[:MAX_MCP_TEXT_CHARS]
         metadata.update(text=extracted, text_truncated=truncated, extraction="utf8")
         blocks.append({"type": "text", "text": f"Содержимое {filename} (SHA-256 {sha256}):\n{extracted}"})
+    elif is_image:
+        try:
+            if not _OCR_SLOT.acquire(blocking=False):
+                raise OSError("ocr_busy")
+            try:
+                result = subprocess.run(
+                    [os.environ.get("USERIO_OCR_BINARY", "/opt/userio-ocr/userio-ocr"),
+                     os.environ.get("USERIO_OCR_MODELS", "/opt/userio-ocr/models")],
+                    input=data, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    timeout=60, check=True,
+                )
+            finally:
+                _OCR_SLOT.release()
+            extracted = result.stdout.decode("utf-8", errors="replace")
+            metadata.update(text=extracted[:MAX_MCP_TEXT_CHARS],
+                            text_truncated=len(extracted) > MAX_MCP_TEXT_CHARS,
+                            extraction="oar-ocr")
+            if extracted:
+                blocks.append({"type": "text", "text": f"Текст изображения {filename} (SHA-256 {sha256}):\n{extracted[:MAX_MCP_TEXT_CHARS]}"})
+        except (OSError, subprocess.SubprocessError):
+            metadata.update(extraction="unavailable", extraction_error="ocr_unavailable")
     elif is_video:
         video, video_blocks = _video_blocks(data, include_images=include_images)
         metadata.update(extraction="ffmpeg+userio-whisper", **video)

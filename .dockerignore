@@ -6,5 +6,6 @@ graphify-out
 node_modules
 **/node_modules
 **/__pycache__
+tools/userio-ocr/target
 **/*.session*
 **/*.sqlite3*
