@@ -13,6 +13,59 @@ from .contracts import ChannelFile
 MAX_MCP_FILE_BYTES = 4 * 1024 * 1024
 MAX_MCP_TEXT_CHARS = 64_000
 _OCR_SLOT = threading.BoundedSemaphore(1)
+
+
+def indexed_download(store, principal, channel, provider_ref, attachment_index, download, include_images):
+    """Index only an unchanged, locally owned attachment after its authorized download."""
+    from .search import normalize
+    user_id = principal.user_id
+
+    refs = list(dict.fromkeys((provider_ref, channel + ':' + provider_ref)))
+    def lookup():
+        for ref in refs:
+            row = store._connection.execute('''SELECT a.*, m.rowid AS message_rowid, a.rowid AS attachment_rowid,
+                m.conversation_id, c.account_ref
+                FROM message_attachments a JOIN messages m ON m.user_id=a.user_id
+                AND m.source=a.source AND m.message_id=a.message_id
+                JOIN conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id
+                WHERE a.user_id=? AND a.source=? AND a.message_id=? AND a.idx=?
+                AND m.deleted_at IS NULL''', (user_id, channel, ref, attachment_index)).fetchone()
+            if row is not None:
+                return tuple(row)
+        return None
+
+    with store._lock, store._connection:
+        before = lookup()
+        if before:
+            key = (user_id, channel, before[2], attachment_index)
+            store._connection.execute('INSERT OR IGNORE INTO attachment_search_revision(user_id,source,message_id,idx) VALUES(?,?,?,?)', key)
+            version = store._connection.execute('SELECT revision FROM attachment_search_revision WHERE user_id=? AND source=? AND message_id=? AND idx=?', key).fetchone()[0]
+    file = download()
+    metadata, blocks = mcp_attachment(file, include_images=include_images)
+    if before and metadata.get('extraction') in {'oar-ocr', 'firecrawl-anydoc', 'utf8'} and metadata.get('text'):
+        metadata['search_index'] = 'skipped_concurrent_change'
+        with store._lock, store._connection:
+            # Acquire SQLite's write lock before rechecking to close the download/update race.
+            store._connection.execute('UPDATE attachment_search_text SET text=text WHERE 0')
+            current = store._connection.execute('SELECT revision FROM attachment_search_revision WHERE user_id=? AND source=? AND message_id=? AND idx=?', key).fetchone()[0]
+            authorized = (store.capability_enabled('read', user_id=user_id)
+                          and store.capability_enabled('download', user_id=user_id)
+                          and (principal.token_id is None or store.authenticate_token_id(principal.token_id) == principal))
+            if authorized and before[-1]:
+                account = store._connection.execute('SELECT enabled,can_read FROM provider_accounts WHERE user_id=? AND id=?', (user_id, before[-1])).fetchone()
+                authorized = bool(account and account['enabled'] and account['can_read'])
+            if authorized and principal.messenger_grants is not None:
+                from .scoped_permissions import enforce
+                try:
+                    enforce(store, principal, 'userio.channels.download', {'file_ref': channel + ':' + before[2]})
+                except (PermissionError, ValueError, KeyError):
+                    authorized = False
+            if current == version and lookup() == before and authorized:
+                ref = before[2]
+                store._connection.execute('DELETE FROM attachment_search_text WHERE user_id=? AND source=? AND message_id=? AND idx=?', (user_id, channel, ref, attachment_index))
+                store._connection.execute('INSERT INTO attachment_search_text(user_id,source,message_id,idx,text) VALUES(?,?,?,?,?)', (user_id, channel, ref, attachment_index, normalize(metadata['text'])))
+                metadata['search_index'] = 'indexed'
+    return metadata, blocks
 _TEXT_TYPES = {"text/plain", "text/markdown", "text/html", "text/xml", "application/json", "application/xml"}
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".rst", ".json", ".xml", ".html", ".htm",
                   ".log", ".srt", ".vtt", ".ass", ".yaml", ".yml", ".ini", ".conf",

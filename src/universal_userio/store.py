@@ -1322,15 +1322,21 @@ class SQLiteUserIOStore:
         return token
 
     def authenticate_token(self, token: str) -> UserPrincipal | None:
+        return self._authenticate_token('t.token_hash', self._token_hash(token))
+
+    def authenticate_token_id(self, token_id: str) -> UserPrincipal | None:
+        return self._authenticate_token('t.id', token_id)
+
+    def _authenticate_token(self, field: str, value: str) -> UserPrincipal | None:
         with self._lock:
             row = self._connection.execute(
-                """
-                SELECT u.id,u.username,u.role,t.kind,t.scope,t.account_refs FROM api_tokens t JOIN users u ON u.id=t.user_id
-                WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.token_type='access'
+                f"""
+                SELECT u.id,u.username,u.role,t.id AS token_id,t.kind,t.scope,t.account_refs FROM api_tokens t JOIN users u ON u.id=t.user_id
+                WHERE {field}=? AND t.revoked_at IS NULL AND t.token_type='access'
                   AND t.kind<>'task_mandate'
                   AND (t.expires_at IS NULL OR t.expires_at>?)
                 """,
-                (self._token_hash(token), time.time()),
+                (value, time.time()),
             ).fetchone()
         return None if row is None else UserPrincipal(
             str(row["id"]), str(row["username"]), str(row["role"]),
@@ -1341,6 +1347,7 @@ class SQLiteUserIOStore:
                                 if row['scope'] in {'messenger_actions','telegram_admin'} else tuple(g['account_ref'] for g in json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None),
             meeting_recorder=row['kind']=='personal' and row['scope']=='meeting_recording',
             messenger_grants=tuple(json.loads(row['account_refs'] or '[]')) if row['scope']=='scoped_messenger' else None,
+            token_id=str(row['token_id']),
         )
 
     def register_oauth_client(

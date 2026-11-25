@@ -114,6 +114,7 @@ class UserPrincipal:
     messenger_accounts: tuple[str, ...] | None = None
     meeting_recorder: bool = False
     messenger_grants: tuple[dict[str, Any], ...] | None = None
+    token_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

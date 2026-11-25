@@ -261,16 +261,16 @@ class UserIOToolDispatcher:
                     channel,separator,provider_ref=file_ref.partition(':')
                     if not separator or channel not in {'telegram','max'}:
                         raise ValueError('mcp_resource_mode_requires_telegram_or_max')
-                    from .mcp_files import MAX_MCP_FILE_BYTES, mcp_attachment
+                    from .mcp_files import MAX_MCP_FILE_BYTES, indexed_download
                     if channel=='telegram':
                         download_args={'file_ref':provider_ref,'max_bytes':MAX_MCP_FILE_BYTES}
                         if attachment_index:
                             download_args['attachment_index']=attachment_index
-                        file=channels.adapter('telegram').download_for_ai(**download_args)
+                        download=lambda: channels.adapter('telegram').download_for_ai(**download_args)
                     else:
-                        file=channels.download(file_ref=file_ref,attachment_index=attachment_index,
-                                               max_bytes=MAX_MCP_FILE_BYTES)
-                    metadata,blocks=mcp_attachment(file,include_images=include_images)
+                        download=lambda: channels.download(file_ref=file_ref,attachment_index=attachment_index,
+                                                          max_bytes=MAX_MCP_FILE_BYTES)
+                    metadata,blocks=indexed_download(self._store,principal,channel,provider_ref,attachment_index,download,include_images)
                     return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
                 if mode!='base64': raise ValueError('invalid_download_mode')
                 from .mcp_files import MAX_MCP_FILE_BYTES

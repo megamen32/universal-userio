@@ -34,6 +34,40 @@ def initialize_search(store: Any) -> None:
     db.execute("SAVEPOINT userio_search_init")
     try:
         _initialize_search(store)
+        _execute_schema(db, '''
+          CREATE TABLE IF NOT EXISTS attachment_search_text (
+            user_id TEXT NOT NULL, source TEXT NOT NULL, message_id TEXT NOT NULL,
+            idx INTEGER NOT NULL, text TEXT NOT NULL,
+            PRIMARY KEY(user_id,source,message_id,idx));
+          CREATE TABLE IF NOT EXISTS attachment_search_revision (
+            user_id TEXT NOT NULL, source TEXT NOT NULL, message_id TEXT NOT NULL,
+            idx INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(user_id,source,message_id,idx));
+          CREATE VIRTUAL TABLE IF NOT EXISTS attachment_search_fts USING fts5(
+            text, content='attachment_search_text', content_rowid='rowid', tokenize='trigram');
+          CREATE TRIGGER IF NOT EXISTS attachment_text_insert AFTER INSERT ON attachment_search_text BEGIN
+            INSERT INTO attachment_search_fts(rowid,text) VALUES(new.rowid,new.text); END;
+          CREATE TRIGGER IF NOT EXISTS attachment_text_delete AFTER DELETE ON attachment_search_text BEGIN
+            INSERT INTO attachment_search_fts(attachment_search_fts,rowid,text) VALUES('delete',old.rowid,old.text); END;
+          CREATE TRIGGER IF NOT EXISTS attachment_text_replace BEFORE INSERT ON message_attachments BEGIN
+            DELETE FROM attachment_search_text WHERE user_id=new.user_id AND source=new.source AND message_id=new.message_id AND idx=new.idx; END;
+          CREATE TRIGGER IF NOT EXISTS attachment_text_remove AFTER DELETE ON message_attachments BEGIN
+            DELETE FROM attachment_search_text WHERE user_id=old.user_id AND source=old.source AND message_id=old.message_id AND idx=old.idx; END;
+          CREATE TRIGGER IF NOT EXISTS attachment_text_change AFTER UPDATE ON message_attachments BEGIN
+            DELETE FROM attachment_search_text WHERE user_id=old.user_id AND source=old.source AND message_id=old.message_id AND idx=old.idx; END;
+          CREATE TRIGGER IF NOT EXISTS attachment_text_message_delete AFTER DELETE ON messages BEGIN
+            DELETE FROM attachment_search_text WHERE user_id=old.user_id AND source=old.source AND message_id=old.message_id; END;
+          CREATE TRIGGER IF NOT EXISTS attachment_text_message_update AFTER UPDATE OF deleted_at,source,message_id ON messages BEGIN
+            DELETE FROM attachment_search_text WHERE user_id=old.user_id AND source=old.source AND message_id=old.message_id; END;
+        ''')
+        for table in ('messages', 'message_attachments'):
+            for event, ref in (('INSERT', 'new'), ('UPDATE', 'old'), ('DELETE', 'old')):
+                key = f'user_id={ref}.user_id AND source={ref}.source AND message_id={ref}.message_id'
+                if table == 'message_attachments':
+                    key += f' AND idx={ref}.idx'
+                _execute_schema(db, f'''CREATE TRIGGER IF NOT EXISTS attachment_revision_{table}_{event.lower()}
+                  BEFORE {event} ON {table} BEGIN
+                  UPDATE attachment_search_revision SET revision=revision+1 WHERE {key}; END;''')
     except BaseException:
         db.execute("ROLLBACK TO userio_search_init")
         db.execute("RELEASE userio_search_init")
@@ -262,19 +296,28 @@ def _message_scope(store: Any, *, user_id: str, source: str | None, account_ref:
 
 
 def _exact_message_rows(store: Any, where: list[str], args: list[object],
-                        tokens: Sequence[str], *, offset: int, limit: int) -> list[Any]:
+                         tokens: Sequence[str], *, offset: int, limit: int, include_attachments: bool = False) -> list[Any]:
     """Trigram-indexed exact pass. Paged in SQL, so no hit is silently dropped."""
     quoted = lambda token: '"' + token.replace('"', '""') + '"'
     indexed = [token for token in tokens if len(token) >= 3]
     clause = 'd.id IN (SELECT rowid FROM search_fts WHERE search_fts MATCH ?)' if indexed else '1=1'
-    clause_args = [*args, *([' AND '.join(map(quoted, indexed))] if indexed else [])]
+    text_args = [*([' AND '.join(map(quoted, indexed))] if indexed else [])]
     for token in tokens:
         clause += ' AND instr(d.text,?)>0'
-        clause_args.append(token)
+        text_args.append(token)
+    if include_attachments:
+        attach_clause = 'a.rowid IN (SELECT rowid FROM attachment_search_fts WHERE attachment_search_fts MATCH ?)' if indexed else '1=1'
+        attach_args = [*([' AND '.join(map(quoted, indexed))] if indexed else [])]
+        for token in tokens:
+            attach_clause += ' AND instr(a.text,?)>0'
+            attach_args.append(token)
+        clause = '(' + clause + ''' OR EXISTS (SELECT 1 FROM attachment_search_text a
+          WHERE a.user_id=m.user_id AND a.source=m.source AND a.message_id=m.message_id AND ''' + attach_clause + '))'
+        text_args += attach_args
     return store._connection.execute(
         MESSAGE_SELECT + ' WHERE ' + ' AND '.join(where) + ' AND ' + clause
         + ' ORDER BY m.received_at DESC,d.id DESC LIMIT ? OFFSET ?',
-        [*clause_args, limit, offset]).fetchall()
+        [*args, *text_args, limit, offset]).fetchall()
 
 
 def _fuzzy_message_rows(store: Any, where: list[str], args: list[object], tokens: Sequence[str],
@@ -377,7 +420,8 @@ def search_messages(store: Any, query: str, *, source: str | None = None, accoun
     seen: set[int] = set()
     if mode in {'text', 'hybrid'}:
         with store._lock:
-            rows = _exact_message_rows(store, where, args, tokens, offset=offset, limit=limit)
+            rows = _exact_message_rows(store, where, args, tokens, offset=offset, limit=limit,
+                                       include_attachments=store.capability_enabled('download', user_id=uid))
             selected += [(dict(row), 'exact', 1.0) for row in rows]
             seen |= {int(row['message_rowid']) for row in rows}
             if match_type != 'exact':
@@ -598,6 +642,15 @@ def search_conversations(store: Any, query: str, *, source: str|None=None, accou
     exact_args=[*args,*([' AND '.join(map(quoted,indexed))] if indexed else [])]
     for token in tokens:
         exact_clause+=' AND instr(d.text,?)>0'; exact_args.append(token)
+    if store.capability_enabled('download', user_id=uid):
+        attach_clause = 'a.rowid IN (SELECT rowid FROM attachment_search_fts WHERE attachment_search_fts MATCH ?)' if indexed else '1=1'
+        attach_args = [*([' AND '.join(map(quoted,indexed))] if indexed else [])]
+        for token in tokens:
+            attach_clause += ' AND instr(a.text,?)>0'; attach_args.append(token)
+        exact_clause = '(' + exact_clause + ''' OR (m.deleted_at IS NULL AND EXISTS (
+          SELECT 1 FROM attachment_search_text a WHERE a.user_id=m.user_id AND a.source=m.source
+          AND a.message_id=m.message_id AND ''' + attach_clause + ')))'
+        exact_args += attach_args
     with store._lock:
         # Collapse in SQL, before LIMIT: each page contains distinct conversations.
         exact=store._connection.execute('''WITH hits AS ('''+base+' WHERE '+' AND '.join(where)+' AND '+exact_clause+'''), ranked AS (
