@@ -115,7 +115,8 @@ def test_downloaded_attachment_text_is_searchable_only_by_owner(tmp_path, monkey
     assert not search_messages(store, "uniqueneedle", match_type="exact")["results"]
 
 
-def test_attachment_replaced_during_download_is_not_indexed(tmp_path, monkeypatch):
+@pytest.mark.parametrize('change', ['replace', 'update', 'delete_attachment', 'delete_message', 'capability'])
+def test_attachment_replaced_during_download_is_not_indexed(tmp_path, monkeypatch, change):
     from universal_userio.adapters import TelegramChannelAdapter
     from universal_userio.contracts import ChannelFile
     from universal_userio.mcp_surface import UserIOMcpSurface
@@ -126,8 +127,21 @@ def test_attachment_replaced_during_download_is_not_indexed(tmp_path, monkeypatc
     mid = store._connection.execute("SELECT message_id FROM messages WHERE conversation_id=?", (conversation,)).fetchone()[0]
     attachment = {"idx": 0, "kind": "doc"}
     store.upsert_attachment(source="telegram", message_id=mid, attachment=attachment)
+    other = SQLiteUserIOStore(tmp_path / 'userio.sqlite3')
     def download(*args, **kwargs):
-        store.upsert_attachment(source="telegram", message_id=mid, attachment=attachment)
+        if change == 'replace':
+            other.upsert_attachment(source="telegram", message_id=mid, attachment=attachment)
+        elif change == 'update':
+            with other._connection:
+                other._connection.execute("UPDATE message_attachments SET filename=filename WHERE message_id=?", (mid,))
+        elif change == 'delete_attachment':
+            with other._connection:
+                other._connection.execute("DELETE FROM message_attachments WHERE message_id=?", (mid,))
+        elif change == 'delete_message':
+            with other._connection:
+                other._connection.execute("UPDATE messages SET deleted_at=1 WHERE message_id=?", (mid,))
+        else:
+            other.set_user_capability('download', False)
         return ChannelFile("fixture.png", "image/png", b"old")
     monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", download)
     monkeypatch.setattr(files, "mcp_attachment", lambda *a, **kw: ({"text": "staleneedle", "extraction": "oar-ocr"}, []))

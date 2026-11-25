@@ -157,6 +157,34 @@ def test_scoped_token_cannot_search_other_chat_attachment(tmp_path, monkeypatch)
     assert [r['conversation_id'] for r in search(store, service, principal, {'query': 'attachmentneedle', 'scope': 'message', 'mode': 'text'})['results']] == ['chat1']
 
 
+@pytest.mark.parametrize('change', ['revoke', 'grant', 'account'])
+def test_scoped_token_revoked_during_download_is_not_indexed(tmp_path, monkeypatch, change):
+    from universal_userio.adapters import TelegramChannelAdapter
+    from universal_userio.contracts import ChannelFile
+    import universal_userio.mcp_files as files
+
+    store, service, principal = scoped_fixture(tmp_path)
+    mid = 'telegram:1|101:1'
+    store.upsert_attachment(source='telegram', message_id=mid, attachment={'idx': 0, 'kind': 'doc'})
+    def download(self, **kwargs):
+        if change == 'revoke':
+            PersonalTokens(store).revoke(principal.user_id, principal.token_id)
+        elif change == 'grant':
+            PersonalTokens(store).update_permissions(principal.user_id, principal.token_id, [
+                {'account_ref': 'telegram:1', 'access': 'read_only',
+                 'chats': [{'conversation_id': 'chat2', 'access': 'read_only'}]}])
+        else:
+            with store._connection:
+                store._connection.execute("UPDATE provider_accounts SET enabled=0 WHERE id='telegram:1'")
+        return ChannelFile('test.png', 'image/png', b'fake')
+    monkeypatch.setattr(TelegramChannelAdapter, 'download_for_ai', download)
+    monkeypatch.setattr(files, 'mcp_attachment', lambda *a, **kw: ({'text': 'revokedneedle', 'extraction': 'oar-ocr'}, []))
+    result = UserIOMcpSurface(store, service).dispatch('userio.channels.download',
+        {'file_ref': 'telegram:' + mid, 'mode': 'mcp_resource'}, principal=principal)
+    assert result['ok'] and result['file']['search_index'] == 'skipped_concurrent_change'
+    assert not search(store, service, store.owner(), {'query': 'revokedneedle', 'scope': 'message', 'mode': 'text'})['results']
+
+
 @pytest.mark.parametrize('arguments', [
     {'scope': 'chat'}, {'mode': 'magic'}, {'match_type': 'vibes'},
     {'conversation_ids': 'not-a-list'}, {'conversation_id': 'x' * 129},

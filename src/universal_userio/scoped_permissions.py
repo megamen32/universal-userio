@@ -348,7 +348,7 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
             else:
                 download=lambda: channels.download(file_ref=file_ref,attachment_index=attachment_index,
                                                    max_bytes=MAX_MCP_FILE_BYTES)
-            metadata, blocks = indexed_download(store,principal.user_id,channel_ref,provider_ref,attachment_index,download,include_images)
+            metadata, blocks = indexed_download(store,principal,channel_ref,provider_ref,attachment_index,download,include_images)
             return {'ok':True,'file':metadata,'_mcp_content_blocks':blocks}
         if mode != 'base64':
             raise ValueError('invalid_download_mode')

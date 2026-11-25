@@ -39,6 +39,10 @@ def initialize_search(store: Any) -> None:
             user_id TEXT NOT NULL, source TEXT NOT NULL, message_id TEXT NOT NULL,
             idx INTEGER NOT NULL, text TEXT NOT NULL,
             PRIMARY KEY(user_id,source,message_id,idx));
+          CREATE TABLE IF NOT EXISTS attachment_search_revision (
+            user_id TEXT NOT NULL, source TEXT NOT NULL, message_id TEXT NOT NULL,
+            idx INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(user_id,source,message_id,idx));
           CREATE VIRTUAL TABLE IF NOT EXISTS attachment_search_fts USING fts5(
             text, content='attachment_search_text', content_rowid='rowid', tokenize='trigram');
           CREATE TRIGGER IF NOT EXISTS attachment_text_insert AFTER INSERT ON attachment_search_text BEGIN
@@ -56,6 +60,14 @@ def initialize_search(store: Any) -> None:
           CREATE TRIGGER IF NOT EXISTS attachment_text_message_update AFTER UPDATE OF deleted_at,source,message_id ON messages BEGIN
             DELETE FROM attachment_search_text WHERE user_id=old.user_id AND source=old.source AND message_id=old.message_id; END;
         ''')
+        for table in ('messages', 'message_attachments'):
+            for event, ref in (('INSERT', 'new'), ('UPDATE', 'old'), ('DELETE', 'old')):
+                key = f'user_id={ref}.user_id AND source={ref}.source AND message_id={ref}.message_id'
+                if table == 'message_attachments':
+                    key += f' AND idx={ref}.idx'
+                _execute_schema(db, f'''CREATE TRIGGER IF NOT EXISTS attachment_revision_{table}_{event.lower()}
+                  BEFORE {event} ON {table} BEGIN
+                  UPDATE attachment_search_revision SET revision=revision+1 WHERE {key}; END;''')
     except BaseException:
         db.execute("ROLLBACK TO userio_search_init")
         db.execute("RELEASE userio_search_init")

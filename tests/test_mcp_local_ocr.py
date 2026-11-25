@@ -53,10 +53,12 @@ def test_network_mcp_ocr_and_search_with_isolated_provider(tmp_path, monkeypatch
     service = UserIOService(store, None, None)
     service.receive(InboxMessage("telegram", "fixture-only", "test", "attachment", 1), route_id="telegram")
     store.upsert_attachment(source="telegram", message_id="fixture-only", attachment={"kind": "image"})
+    other = SQLiteUserIOStore(tmp_path / "isolated.sqlite3")
+    other_service = UserIOService(other, None, None)
     def provider(self, **kwargs):
         if not getattr(provider, 'called', False):
             provider.called = True
-            service.receive(InboxMessage("telegram", "unrelated-write", "test", "other", 2), route_id="telegram")
+            other_service.receive(InboxMessage("telegram", "unrelated-write", "test", "other", 2), route_id="telegram")
         return ChannelFile("synthetic.png", "image/png", png)
     monkeypatch.setattr(TelegramChannelAdapter, "download_for_ai", provider)
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler(service, token="isolated-test-token"))
@@ -69,9 +71,6 @@ def test_network_mcp_ocr_and_search_with_isolated_provider(tmp_path, monkeypatch
         with urlopen(req) as response:
             return json.loads(response.read())["result"]
     try:
-        skipped = call("userio.channels.download", {"file_ref": "telegram:fixture-only", "mode": "mcp_resource"})
-        assert skipped["structuredContent"]["file"]["search_index"] == "skipped_concurrent_change"
-        assert not call("userio.channels.search", {"query": "USERIO OCR TEST 123", "scope": "message", "mode": "text"})["structuredContent"]["results"]
         downloaded = call("userio.channels.download", {"file_ref": "telegram:fixture-only", "mode": "mcp_resource"})
         assert downloaded["structuredContent"]["file"]["search_index"] == "indexed"
         assert "USERIO OCR TEST 123" in downloaded["structuredContent"]["file"]["text"]
