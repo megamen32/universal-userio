@@ -217,9 +217,12 @@ def _tokens_from_headers(headers: Mapping[str, str]) -> dict[str, str]:
     for value in values:
         cookie = SimpleCookie()
         cookie.load(value)
-        for name, key in (("vc-access-token", "access_token"), ("vc-refresh-token", "refresh_token")):
+        for name, key in (("vc-access-token", "access_token"), ("vc-authentication-token", "current_access_token"), ("vc-refresh-token", "refresh_token")):
             if name in cookie and cookie[name].value:
                 result[key] = cookie[name].value
+    current = result.pop("current_access_token", None)
+    if current:
+        result["access_token"] = current
     return result
 
 

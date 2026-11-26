@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import fs from 'node:fs';
 
-function fixture({postError = false, getError = false, state = null} = {}) {
+function fixture({postError = false, getError = false, state = null, accessName = "vc-access-token", legacy = false, ambiguous = false} = {}) {
   const events = [], saved = {};
   const claims = Buffer.from(JSON.stringify({user_id: 'user', org_id: 'org'})).toString('base64url');
-  const cookies = ['vc-access-token', 'vc-refresh-token'].map((name, i) => ({name, value: i ? 'private-refresh' : `header.${claims}.sig`, domain: '.dion.vc', path: '/', storeId: '0'}));
+  const cookies = [accessName, 'vc-refresh-token'].map((name, i) => ({name, value: i ? 'private-refresh' : `header.${claims}.sig`, domain: '.dion.vc', path: '/', storeId: '0'}));
+  if (legacy) cookies.push({...cookies[0], name: 'vc-access-token', value: 'old-fixture'});
+  if (ambiguous) cookies.push({...cookies[0], value: 'different-fixture'});
   const chrome = {
     storage: {local: {get: async defaults => ({...defaults, ...saved}), set: async values => Object.assign(saved, values)}},
     declarativeNetRequest: {updateDynamicRules: async rules => events.push(['rules', rules])},
@@ -21,6 +23,7 @@ function fixture({postError = false, getError = false, state = null} = {}) {
         return {accounts: state ? [{id: 'dion:org:user', state, generation: 4}] : []};
       }
       events.push(['import', body.expected_generation]);
+      assert.equal(body.access_token, cookies[0].value);
       assert.equal(body.refresh_token, 'private-refresh');
       if (postError) throw new Error('unknown');
       return {accepted: true, id: 'dion:org:user', state: 'connected', generation: body.expected_generation + 1};
@@ -72,4 +75,16 @@ test('old backend is explained before any credential access or browser mutation'
   await assert.rejects(f.api.importAccount('backend'), /обновление сервера/);
   assert.deepEqual(f.events, []);
   assert.deepEqual(f.saved, {});
+});
+
+test('accepts current cookie name and clears both current and legacy aliases after acknowledgement', async () => {
+  const f = fixture({accessName: 'vc-authentication-token', legacy: true});
+  assert.equal((await f.api.importAccount('backend')).ok, true);
+  assert.deepEqual(f.events.filter(e => e[0] === 'remove').map(e => e[1]), ['vc-authentication-token', 'vc-refresh-token', 'vc-access-token']);
+});
+
+test('does not fall back to legacy when the current cookie is ambiguous', async () => {
+  const f = fixture({accessName: 'vc-authentication-token', legacy: true, ambiguous: true});
+  await assert.rejects(f.api.importAccount('backend'), /dion_login_required_or_ambiguous/);
+  assert.equal(f.events.some(e => e[0] === 'import'), false);
 });
