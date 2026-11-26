@@ -36,6 +36,7 @@ func validate(r request) error {
 		if !r.TestFixture { return errors.New("only fixture calls are enabled") }
 	case "leave":
 		if r.RoomID == "" { return errors.New("room_id is required") }
+		if !r.TestFixture { return errors.New("only fixture calls are enabled") }
 	default:
 		return fmt.Errorf("unsupported action %q", r.Action)
 	}

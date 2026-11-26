@@ -10,7 +10,7 @@ func TestFixtureLifecycleBoundary(t *testing.T) {
 }
 
 func TestRealCallRejectedBeforeProvider(t *testing.T) {
-	got := handle(request{Action:"join", AccountRef:"dion:org:user", RoomID:"real-room", RequestID:"req-2"})
+	got := handle(request{Action:"leave", AccountRef:"dion:org:user", RoomID:"real-room", RequestID:"req-2"})
 	if got.Status != "rejected" || got.Error != "only fixture calls are enabled" { t.Fatalf("unexpected response: %#v", got) }
 }
 
