@@ -62,7 +62,7 @@
   }
   async function beginReauth(connectionId) {
     const status = await backend(connectionId);
-    if (pending || (status.accounts || []).some(a => ["connected", "identity_pending"].includes(a.state))) {
+    if (pending || (status.accounts || []).some(a => ["connected", "identity_pending", "refresh_pending"].includes(a.state))) {
       throw new Error("dion_already_owned_by_userio");
     }
     await chrome.declarativeNetRequest.updateDynamicRules({removeRuleIds: [RULE]});

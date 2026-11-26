@@ -57,3 +57,9 @@ test('reauth imports the current generation and enables fresh login only on expl
   await f.api.importAccount('backend');
   assert.equal(f.events.find(e => e[0] === 'import')[1], 4);
 });
+
+test('unreconciled refresh cannot return ownership to browser', async () => {
+  const f = fixture({state: 'refresh_pending'});
+  await assert.rejects(f.api.beginReauth('backend'), /already_owned/);
+  assert.deepEqual(f.events, []);
+});

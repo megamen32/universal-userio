@@ -59,6 +59,19 @@ DION/account-connection Python run passes 42 tests. HTTP/MCP regression tests
 pass 62 cases and reproduce three unrelated failures against clean committed
 HEAD as recorded in `bugs.md`.
 
+The candidate `bbac5b04` was pushed to the task branch. Extension 0.9.39 was
+installed through the M1 chrome-default native extension controller; live get
+confirmed its version, enabled state and declarativeNetRequest permission.
+Browser inspection of its popup failed with Chrome's cross-extension restriction;
+the same-tab screenshot failed for the same reason. HCU AX then failed with
+`state_unavailable`; its captured desktop screenshot was retrieved and inspected,
+but showed another foreground application, not the owned popup. It is not popup
+acceptance evidence. No handoff or token extraction has been performed.
+
+A subsequent focused RED/GREEN regression prevents `refresh_pending` accounts
+from returning refresh ownership to the browser. Five handoff tests now pass.
+This correction is versioned 0.9.40 and is not yet installed on M1.
+
 ## Public protocol evidence
 
 Downloaded only public web-client JavaScript to
