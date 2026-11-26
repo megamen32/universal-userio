@@ -160,8 +160,17 @@ function rememberProfile(slot, accountId, name) {
 }
 async function profileState(browserOwner) {
   const owner = browserOwner.principal.user_id;
-  const accounts = (await registeredAccounts(browserOwner.headers)).filter(a => a.provider === "telegram");
   const raw = enrollmentOwners.filter(publicState(), owner);
+  const pending = raw.filter(row => !row.accountId && !["connected", "connected-unregistered"].includes(row.status));
+  let accounts;
+  try {
+    accounts = (await registeredAccounts(browserOwner.headers)).filter(a => a.provider === "telegram");
+  } catch (error) {
+    // An already authenticated owner can finish an in-progress login even
+    // while account discovery is busy. Never return other owners' slots.
+    if (pending.length) return pending;
+    throw error;
+  }
   const rows = accounts.map(account => {
     const profile = profiles[profileKey(owner, account.id)];
     const current = raw.find(row => profile ? row.id === profile.slot : row.accountId === account.id);
@@ -170,7 +179,7 @@ async function profileState(browserOwner) {
       profileName: profile?.name || account.display_name || account.id };
   });
   // Pending login challenges are enrollments, never additional account identities.
-  rows.push(...raw.filter(row => !row.accountId && !["connected", "connected-unregistered"].includes(row.status)));
+  rows.push(...pending);
   return rows.sort((a, b) => (a.profileNumber || 999999) - (b.profileNumber || 999999));
 }
 for (const file of readdirSync(sessionsDir)) {
@@ -1535,7 +1544,14 @@ function render(list){
     if (!live.has(id)) { var el = document.getElementById("card-"+id); if (el) el.remove(); seen.delete(id); }
   });
 }
-async function poll(){ await refreshAccounts(false); fetch(prefix+"/state").then(function(r){if(!r.ok)throw Error('state unavailable');return r.json();}).then(render).catch(function(){}); }
+var statePolling=false;
+async function poll(){
+  if(statePolling)return;
+  statePolling=true;
+  void refreshAccounts(false);
+  try{const r=await fetch(prefix+"/state",{cache:"no-store",signal:AbortSignal.timeout(8000)});if(r.ok)render(await r.json());}
+  catch{}finally{statePolling=false;}
+}
 setInterval(poll, 1500);
 document.addEventListener("submit", function(e){
   var f = e.target;
