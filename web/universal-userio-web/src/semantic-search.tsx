@@ -215,9 +215,14 @@ export function SemanticSearchPanel({ session }: { session: ReturnType<typeof us
   )
 }
 
-// Deep links are plain hash routes, so a search hit opens the exact message.
-export function parseDeepLink(hash: string): { conversationId: string; messageId: string } | null {
-  const raw = hash.replace(/^#\/?/, "")
+// Canonical links use /app/chat; the hash form remains readable for old links.
+export function parseDeepLink(location: string): { conversationId: string; messageId: string } | null {
+  const raw = location.startsWith("#/" ) ? location.slice(2) : location.startsWith("#") ? location.slice(1) : location
+  const appMatch = raw.match(/^\/?app\/chat\/([^?]+)/)
+  if (appMatch) {
+    const query = raw.split("?", 2)[1] || ""
+    return { conversationId: decodeURIComponent(appMatch[1]), messageId: new URLSearchParams(query).get("m") || "" }
+  }
   if (!raw.startsWith("chat/")) return null
   const [path, query] = raw.slice("chat/".length).split("?")
   const conversationId = decodeURIComponent(path || "")
