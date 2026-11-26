@@ -334,10 +334,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse(await self.UserIOUpdate.check());
           break;
         case "dionImport":
-          if (sender.tab || sender.id !== chrome.runtime.id) throw new Error("extension_ui_required");
+          if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) throw new Error("extension_ui_required");
           sendResponse(await self.UserIODion.importAccount(msg.connectionId)); break;
         case "dionReauth":
-          if (sender.tab || sender.id !== chrome.runtime.id) throw new Error("extension_ui_required");
+          if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("popup.html")) throw new Error("extension_ui_required");
           sendResponse(await self.UserIODion.beginReauth(msg.connectionId)); break;
         case "connectionsList":
           sendResponse({ok:true,connections:await self.UserIOConnections.list()}); break;
