@@ -192,3 +192,30 @@ def test_imported_tokens_without_generation_are_refused(context):
         connect_dion(service, store.default_user_id, {
             "access_token": "access-one", "refresh_token": "refresh-one",
         }, vault=ConnectorSecrets(root), verifier=identity)
+
+
+@pytest.mark.parametrize("name", ["vc-authentication-token", "vc-access-token"])
+def test_dion_cookie_name_compatibility(name):
+    from email.message import Message
+    from universal_userio.dion_auth import _tokens_from_headers
+
+    headers = Message()
+    headers.add_header("Set-Cookie", name + "=fixture-current; Secure; HttpOnly; Path=/")
+    headers.add_header("Set-Cookie", "vc-refresh-token=fixture-next; Secure; HttpOnly; Path=/")
+    assert _tokens_from_headers(headers) == {
+        "access_token": "fixture-current", "refresh_token": "fixture-next"
+    }
+
+
+def test_current_dion_cookie_takes_precedence_over_legacy():
+    from email.message import Message
+    from universal_userio.dion_auth import _tokens_from_headers
+
+    for order in [("vc-authentication-token", "vc-access-token"),
+                  ("vc-access-token", "vc-authentication-token")]:
+        headers = Message()
+        for name in order:
+            headers.add_header("Set-Cookie", name + "=" + (
+                "fixture-current" if name == "vc-authentication-token" else "fixture-old"
+            ) + "; Secure; HttpOnly")
+        assert _tokens_from_headers(headers) == {"access_token": "fixture-current"}

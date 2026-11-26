@@ -41,7 +41,11 @@
         if (values.length !== 1 || !values[0]) throw new Error("dion_login_required_or_ambiguous");
         return values[0];
       };
-      const access = one("vc-access-token"), refresh = one("vc-refresh-token");
+      // Current DION web releases use the authentication cookie. Only fall
+      // back to the legacy name when the current name is absent.
+      const accessName = cookies.some(c => c.name === "vc-authentication-token")
+        ? "vc-authentication-token" : "vc-access-token";
+      const access = one(accessName), refresh = one("vc-refresh-token");
       let claims;
       try { claims = JSON.parse(atob(access.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); }
       catch (_) { throw new Error("dion_invalid_access_token"); }
@@ -60,7 +64,7 @@
       if (!account || account.id !== id || account.state !== "connected" ||
           account.generation !== (existing?.generation || 0) + 1) throw new Error("dion_handoff_not_confirmed");
       // Never persist a second credential chain in extension storage.
-      for (const cookie of cookies.filter(c => ["vc-access-token", "vc-refresh-token"].includes(c.name))) {
+      for (const cookie of cookies.filter(c => ["vc-authentication-token", "vc-access-token", "vc-refresh-token"].includes(c.name))) {
         await chrome.cookies.remove({url: `https://${cookie.domain.replace(/^\./, "")}${cookie.path}`, name: cookie.name, storeId: cookie.storeId});
       }
       return {ok: true, account};
