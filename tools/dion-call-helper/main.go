@@ -1,64 +1,59 @@
-// Command dion-call-helper is the narrow UserIO-owned process boundary for
-// DION calls. Provider authentication and room signaling stay outside this
-// protocol; the eventual upstream relay/dion implementation will be attached
-// behind these validated commands.
+// dion-call-helper accepts credentials only through its private stdin pipe.
 package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
+	"io"
 	"os"
 )
 
 type request struct {
-	Action       string `json:"action"`
-	AccountRef   string `json:"account_ref"`
-	RoomID       string `json:"room_id"`
-	RequestID    string `json:"request_id"`
-	TestFixture  bool   `json:"test_fixture"`
+	Action      string `json:"action"`
+	AccountRef  string `json:"account_ref"`
+	UserID      string `json:"user_id"`
+	OrgID       string `json:"org_id"`
+	AccessToken string `json:"access_token"`
+	RoomID      string `json:"room_id"`
+	RequestID   string `json:"request_id"`
 }
 
 type response struct {
 	RequestID string `json:"request_id"`
 	Status    string `json:"status"`
 	Error     string `json:"error,omitempty"`
+	RoomID    string `json:"room_id,omitempty"`
+	RoomSlug  string `json:"room_slug,omitempty"`
 }
 
-func validate(r request) error {
-	if r.RequestID == "" || r.AccountRef == "" {
-		return errors.New("request_id and account_ref are required")
+func run(in io.Reader, out io.Writer, h *helper) error {
+	defer h.close()
+	s := bufio.NewScanner(in)
+	s.Buffer(make([]byte, 4096), 1024*1024)
+	enc := json.NewEncoder(out)
+	for s.Scan() {
+		var r request
+		d := json.NewDecoder(bytes.NewReader(s.Bytes()))
+		d.DisallowUnknownFields()
+		err := d.Decode(&r)
+		var extra any
+		if err == nil && d.Decode(&extra) != io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+		result := response{Status: "rejected", Error: "invalid_request"}
+		if err == nil {
+			result = h.handle(r)
+		}
+		if err := enc.Encode(result); err != nil {
+			return err
+		}
 	}
-	switch r.Action {
-	case "create", "join":
-		if r.RoomID == "" { return errors.New("room_id is required") }
-		if !r.TestFixture { return errors.New("only fixture calls are enabled") }
-	case "leave":
-		if r.RoomID == "" { return errors.New("room_id is required") }
-		if !r.TestFixture { return errors.New("only fixture calls are enabled") }
-	default:
-		return fmt.Errorf("unsupported action %q", r.Action)
-	}
-	return nil
-}
-
-func handle(r request) response {
-	if err := validate(r); err != nil { return response{RequestID:r.RequestID, Status:"rejected", Error:err.Error()} }
-	// Deliberately no provider call yet: this makes the boundary testable without
-	// credentials or accidentally placing a real call during development.
-	return response{RequestID:r.RequestID, Status:"unavailable", Error:"upstream_core_not_connected"}
+	return s.Err()
 }
 
 func main() {
-	s := bufio.NewScanner(os.Stdin)
-	enc := json.NewEncoder(os.Stdout)
-	for s.Scan() {
-		var r request
-		if err := json.Unmarshal(s.Bytes(), &r); err != nil {
-			_ = enc.Encode(response{Status:"rejected", Error:"invalid json"})
-			continue
-		}
-		_ = enc.Encode(handle(r))
+	if run(os.Stdin, os.Stdout, newHelper(nil, nil)) != nil {
+		os.Exit(1)
 	}
 }

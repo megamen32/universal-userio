@@ -63,9 +63,10 @@ in an ordinary meeting. Reuse low-level signaling/Pion pieces instead. Also,
 `Session.DoAuthenticated` can refresh/retry internally: a helper must never
 receive the backend refresh chain or independently run this refresh path.
 
-`tools/dion-call-helper` is the initial UserIO-owned process boundary. It
-validates request identity and fixture-only create/join/leave actions, but does
-not contact DION yet. This prevents accidental real calls while the upstream
-dependency and UserIO call lifecycle are wired. The next implementation step
-is to replace the explicit unavailable result with a low-level upstream adapter and
-retain the fixture gate in tests.
+`tools/dion-call-helper` now calls pinned upstream room creation and low-level
+signaling. Python supplies an already-fresh access JWT over private stdin;
+an allowlisted HTTP transport prevents upstream login/refresh and intercepts
+401 before automatic retry. Creation returns a separate receipt before join,
+which waits for `server:you_joined`; leave closes signaling. No media bridge is
+implemented and no live DION operation has been tested. See the helper's
+[protocol and safety boundary](../tools/dion-call-helper/README.md).

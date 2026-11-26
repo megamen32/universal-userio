@@ -1,20 +1,15 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"strings"
+	"testing"
+)
 
-func TestFixtureLifecycleBoundary(t *testing.T) {
-	for _, action := range []string{"create", "join", "leave"} {
-		r := request{Action: action, AccountRef: "dion:org:user", RoomID: "fixture-room", RequestID: "req-1", TestFixture: true}
-		if got := handle(r); got.Status != "unavailable" { t.Fatalf("%s: %#v", action, got) }
+func TestStdinRejectsRefreshMaterialWithoutEcho(t *testing.T) {
+	var out bytes.Buffer
+	err := run(strings.NewReader(`{"action":"create","refresh_token":"private-sentinel"}`+"\n"), &out, newHelper(nil, nil))
+	if err != nil || strings.Contains(out.String(), "private-sentinel") || !strings.Contains(out.String(), "invalid_request") {
+		t.Fatalf("unsafe response: %s %v", out.String(), err)
 	}
-}
-
-func TestRealCallRejectedBeforeProvider(t *testing.T) {
-	got := handle(request{Action:"leave", AccountRef:"dion:org:user", RoomID:"real-room", RequestID:"req-2"})
-	if got.Status != "rejected" || got.Error != "only fixture calls are enabled" { t.Fatalf("unexpected response: %#v", got) }
-}
-
-func TestMalformedRequestRejected(t *testing.T) {
-	got := handle(request{Action:"join", RoomID:"fixture-room", RequestID:"req-3", TestFixture:true})
-	if got.Status != "rejected" { t.Fatalf("unexpected response: %#v", got) }
 }
