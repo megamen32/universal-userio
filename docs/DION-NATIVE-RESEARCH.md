@@ -59,14 +59,16 @@ does not refresh credentials. An auth owner supplies access credentials later.
 At inspected upstream revision `d1c48c06c0abe64ce30f404cddd54989edddaa70`,
 `Call` is a VP8 data tunnel, not a ready audio bridge. `handleSpeakerJoined`
 actively kicks previously known peers; do not use that high-level call wrapper
-in an ordinary meeting. Reuse low-level signaling/Pion pieces instead. Also,
+in an ordinary meeting. The owner explicitly selected this high-level core for
+the isolated headless tunnel helper; this does not authorize ordinary meeting use. Also,
 `Session.DoAuthenticated` can refresh/retry internally: a helper must never
 receive the backend refresh chain or independently run this refresh path.
 
-`tools/dion-call-helper` now calls pinned upstream room creation and low-level
-signaling. Python supplies an already-fresh access JWT over private stdin;
+`tools/dion-call-helper` now calls pinned upstream room creation and `dion.NewCall`
+with creator/joiner roles and an event-slug-derived obfuscator. Python supplies an already-fresh access JWT over private stdin;
 an allowlisted HTTP transport prevents upstream login/refresh and intercepts
-401 before automatic retry. Creation returns a separate receipt before join,
-which waits for `server:you_joined`; leave closes signaling. No media bridge is
+401 before automatic retry. Success requires Start plus `OnConnected(DataTunnel)`;
+creation identity is retained on later setup failure to prevent duplicate rooms.
+Leave closes Call and releases the tunnel. No UserIO audio bridge is
 implemented and no live DION operation has been tested. See the helper's
 [protocol and safety boundary](../tools/dion-call-helper/README.md).

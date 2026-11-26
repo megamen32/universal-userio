@@ -10,14 +10,14 @@ Each command requires `request_id`, `account_ref` (`dion:<org_id>:<user_id>`),
 Python broker; parsing a JWT expiry does not verify identity or its signature.
 
 - `create`: requires `access_token` (JWT with `exp` more than 60 seconds away).
-  Returns `created`, `room_id` and `room_slug`. This creates a room only; it
-  does not join. Persist the receipt before sending a separate `join` command.
+  Creates the room and starts upstream `dion.Call` with `RoleCreator`.
 - `join`: requires fresh `access_token` and `room_id` containing the room slug
-  (or upstream-supported DION event URL). Returns `signaling_joined` only after
-  the provider `server:you_joined` notification. The response `room_id` is the
-  provider event ID, not necessarily the input slug.
+  (or upstream-supported DION event URL). Starts `dion.Call` with `RoleJoiner`.
+  Both actions return `connected`, `room_id` and `room_slug` only after Start
+  succeeds and `OnConnected` supplies a non-nil DataTunnel (Pion/ICE/VP8 core).
+  The response `room_id` is the provider event ID, not necessarily the input slug.
 - `leave`: requires the same account and the returned event ID as `room_id`.
-  No token is needed to close the local signaling connection. Returns `closed`;
+  No token is needed to close the active Call and its tunnel. Returns `closed`;
   this is local teardown, not an independently observed remote departure.
 
 EOF also closes the current connection. Unknown fields, including refresh
@@ -27,11 +27,16 @@ login, refresh and registration before network I/O, intercepts HTTP 401 before
 upstream auto-refresh, disables redirects and enforces a request timeout.
 
 `auth_expired` means Python must obtain a fresh access token from DionAuthBroker
-before retrying setup. `unknown` means reconcile the original operation; do not
+before retrying setup. If the response includes a room ID/slug, creation already
+succeeded: retry `join` with that slug, never `create`. `unknown` means reconcile the original operation; do not
 blindly replay room creation. Provider errors are not printed or serialized.
 Request IDs correlate responses; they are not a persistent idempotency store.
 
-This helper currently joins **signaling only**: no SDP/audio/video bridge is
-implemented. It deliberately avoids upstream `Call` and its participant-kicking
-VP8 tunnel behavior. Tests exercise actual upstream HTTP methods through an
-in-memory transport and a fake signaling peer. No real participant is called.
+The helper retains Call and DataTunnel until leave/EOF; the obfuscation secret
+is derived from the returned event slug for both roles. There is no UserIO audio
+bridge or public tunnel data IPC: upstream provides a VP8 data tunnel, not speech.
+The selected upstream Call retains its participant-kicking behavior; only use
+authorized isolated tunnel rooms, not ordinary shared meetings. Tests exercise
+actual upstream HTTP methods with an in-memory transport and an injected Call
+core, including delayed/missing OnConnected and teardown. They do not prove live
+ICE connectivity. No real participant is called.

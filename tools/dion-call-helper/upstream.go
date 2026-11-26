@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	headless "github.com/kulikov0/headless-client"
 	"whitelist-bypass/relay/dion"
+	"whitelist-bypass/relay/tunnel"
 )
 
 var errAuthExpired = errors.New("auth_expired")
@@ -35,52 +35,41 @@ func (t accessOnlyTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 	return resp, err
 }
 
-type signaling interface {
-	WaitConnected(time.Duration) error
-	Subscribe(string, string) error
-	ReadLoop() error
-	Close() error
+type callCore interface {
+	Start() error
+	Close()
 }
-type dialFunc func(string, string, chan<- struct{}) (signaling, error)
+type callFactory func(dion.CallConfig, func(tunnel.DataTunnel)) callCore
 
-func dialUpstream(url, agent string, joined chan<- struct{}) (signaling, error) {
-	s, err := dion.DialSignaling(url, dion.SignalingDialOptions{UserAgent: agent, LogFn: func(string, ...any) {}})
-	if err != nil {
-		// Upstream exposes the HTTP handshake status only in its error string.
-		if strings.Contains(err.Error(), " status=401 url=") {
-			return nil, errAuthExpired
-		}
-		return nil, err
-	}
-	s.OnYouJoined = func(dion.YouJoinedParams) {
-		select {
-		case joined <- struct{}{}:
-		default:
-		}
-	}
-	return s, nil
+func upstreamCall(cfg dion.CallConfig, connected func(tunnel.DataTunnel)) callCore {
+	c := dion.NewCall(cfg)
+	c.OnConnected = connected
+	return c
 }
 
 type helper struct {
 	base          http.RoundTripper
-	dial          dialFunc
-	active        signaling
+	makeCall      callFactory
+	active        callCore
+	dataTunnel    tunnel.DataTunnel
+	connectWait   time.Duration
 	account, room string
 }
 
-func newHelper(base http.RoundTripper, dial dialFunc) *helper {
+func newHelper(base http.RoundTripper, factory callFactory) *helper {
 	if base == nil {
 		base = headless.ChromeWindows.HTTPClient().Transport
 	}
-	if dial == nil {
-		dial = dialUpstream
+	if factory == nil {
+		factory = upstreamCall
 	}
-	return &helper{base: base, dial: dial}
+	return &helper{base: base, makeCall: factory, connectWait: 30 * time.Second}
 }
 func (h *helper) close() {
 	if h.active != nil {
-		_ = h.active.Close()
+		h.active.Close()
 		h.active = nil
+		h.dataTunnel = nil
 	}
 }
 
@@ -133,53 +122,59 @@ func (h *helper) handle(r request) response {
 	if err != nil {
 		return failure(r, err)
 	}
-	// A created room is a delivered effect; do not proceed to another fallible
-	// stage and then tell Python to replay room creation.
-	if r.Action == "create" {
-		return response{RequestID: r.RequestID, Status: "created", RoomID: event.ID, RoomSlug: event.Slug}
-	}
 	if event.OrgID != r.OrgID {
-		return response{RequestID: r.RequestID, Status: "rejected", Error: "organization_mismatch"}
+		return response{RequestID: r.RequestID, Status: "rejected", Error: "organization_mismatch", RoomID: event.ID, RoomSlug: event.Slug}
 	}
-	id := uuid.New().String()
-	wss, err := s.ConnectWSS(id)
+	setupFailure := func(err error) response {
+		res := failure(r, err)
+		// Preserve the delivered create effect even when later setup expires.
+		res.RoomID, res.RoomSlug = event.ID, event.Slug
+		return res
+	}
+	if event.Slug == "" {
+		return setupFailure(errors.New("missing room slug"))
+	}
+	obfuscator, err := tunnel.NewTunnelObfuscator(tunnel.DeriveSecretFromJoinLink(event.Slug))
 	if err != nil {
-		return failure(r, err)
+		return setupFailure(err)
 	}
-	joined := make(chan struct{}, 1)
-	sig, err := h.dial(wss.URL, s.Device.UserAgent, joined)
-	if err != nil {
-		return failure(r, err)
+	role := dion.RoleJoiner
+	if r.Action == "create" {
+		role = dion.RoleCreator
 	}
+	connected := make(chan tunnel.DataTunnel, 1)
+	call := h.makeCall(dion.CallConfig{Auth: s, Event: event, Obfuscator: obfuscator, DisplayName: "UserIO", Role: role, LogFn: func(string, ...any) {}}, func(dt tunnel.DataTunnel) {
+		if dt != nil {
+			select {
+			case connected <- dt:
+			default:
+			}
+		}
+	})
 	ok := false
 	defer func() {
 		if !ok {
-			_ = sig.Close()
+			call.Close()
 		}
 	}()
-	if err = sig.WaitConnected(15 * time.Second); err != nil {
-		return failure(r, err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- sig.ReadLoop() }()
-	if err = sig.Subscribe(event.ID, id); err != nil {
-		return failure(r, err)
+	if err = call.Start(); err != nil {
+		return setupFailure(err)
 	}
 	select {
-	case <-joined:
-		h.active, h.account, h.room = sig, r.AccountRef, event.ID
+	case dt := <-connected:
+		h.active, h.dataTunnel, h.account, h.room = call, dt, r.AccountRef, event.ID
 		ok = true
-		return response{RequestID: r.RequestID, Status: "signaling_joined", RoomID: event.ID, RoomSlug: event.Slug}
-	case <-done:
-		return response{RequestID: r.RequestID, Status: "unknown", Error: "signaling_ended"}
-	case <-time.After(15 * time.Second):
-		return response{RequestID: r.RequestID, Status: "unknown", Error: "join_timeout"}
+		return response{RequestID: r.RequestID, Status: "connected", RoomID: event.ID, RoomSlug: event.Slug}
+	case <-time.After(h.connectWait):
+		res := setupFailure(errors.New("connection timeout"))
+		res.Error = "connect_timeout"
+		return res
 	}
 }
 
 func failure(r request, err error) response {
 	status, code := "unknown", "setup_failed"
-	if errors.Is(err, errAuthExpired) || errors.Is(err, dion.ErrSessionExpired) {
+	if errors.Is(err, errAuthExpired) || errors.Is(err, dion.ErrSessionExpired) || strings.Contains(err.Error(), " status=401 url=") {
 		status, code = "auth_expired", "auth_expired"
 	}
 	// Never serialize upstream errors: they may contain tokens, URLs or bodies.

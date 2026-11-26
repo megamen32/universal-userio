@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"whitelist-bypass/relay/dion"
+	"whitelist-bypass/relay/tunnel"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -74,56 +77,63 @@ func TestCreateUsesSeededUpstreamSession(t *testing.T) {
 			t.Fatalf("unexpected path %s", req.URL.Path)
 			return nil, nil
 		}
-	}), nil)
+	}), func(cfg dion.CallConfig, connected func(tunnel.DataTunnel)) callCore {
+		if cfg.Role != dion.RoleCreator || cfg.Obfuscator == nil || cfg.DisplayName != "UserIO" {
+			t.Fatal("invalid creator configuration")
+		}
+		return &fakeCall{start: func() error { connected(&fakeTunnel{}); return nil }}
+	})
+	defer h.close()
 	got := h.handle(r)
-	if count != 2 || got.Status != "created" || got.RoomID != "event" {
+	if count != 2 || got.Status != "connected" || got.RoomID != "event" {
 		t.Fatalf("%+v count=%d", got, count)
 	}
 }
 
-type fakeSignal struct {
-	joined chan<- struct{}
-	stop   chan struct{}
+type fakeTunnel struct{}
+
+func (*fakeTunnel) SendData([]byte)        {}
+func (*fakeTunnel) SetOnData(func([]byte)) {}
+func (*fakeTunnel) SetOnClose(func())      {}
+func (*fakeTunnel) Reconfigure(int, int)   {}
+
+type fakeCall struct {
+	start  func() error
 	closed bool
 }
 
-func (f *fakeSignal) WaitConnected(time.Duration) error { return nil }
-func (f *fakeSignal) Subscribe(string, string) error    { f.joined <- struct{}{}; return nil }
-func (f *fakeSignal) ReadLoop() error                   { <-f.stop; return nil }
-func (f *fakeSignal) Close() error {
-	if !f.closed {
-		f.closed = true
-		close(f.stop)
-	}
-	return nil
-}
+func (f *fakeCall) Start() error { return f.start() }
+func (f *fakeCall) Close()       { f.closed = true }
 
 func TestJoinLeaveBoundToAccountAndRoom(t *testing.T) {
-	var sig *fakeSignal
+	var call *fakeCall
 	h := newHelper(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/conference/v1/connect/wss" {
 			return reply(200, `{"url":"wss://fixture.invalid/socket"}`), nil
 		}
 		return reply(200, `{"id":"event","org_id":"org","slug":"fixture-slug"}`), nil
-	}), func(_, _ string, joined chan<- struct{}) (signaling, error) {
-		sig = &fakeSignal{joined: joined, stop: make(chan struct{})}
-		return sig, nil
+	}), func(cfg dion.CallConfig, connected func(tunnel.DataTunnel)) callCore {
+		if cfg.Role != dion.RoleJoiner || cfg.Obfuscator == nil {
+			t.Fatal("invalid joiner configuration")
+		}
+		call = &fakeCall{start: func() error { connected(&fakeTunnel{}); return nil }}
+		return call
 	})
 	r := fixtureRequest("join")
-	if got := h.handle(r); got.Status != "signaling_joined" {
+	if got := h.handle(r); got.Status != "connected" || h.dataTunnel == nil {
 		t.Fatalf("%+v", got)
 	}
 	r.Action = "leave"
 	r.RoomID = "event"
 	r.UserID = "other"
 	r.AccountRef = "dion:org:other"
-	if got := h.handle(r); got.Status != "rejected" || sig.closed {
+	if got := h.handle(r); got.Status != "rejected" || call.closed {
 		t.Fatal("foreign leave accepted")
 	}
 	r.UserID = "user"
 	r.AccountRef = "dion:org:user"
 	r.AccessToken = ""
-	if got := h.handle(r); got.Status != "closed" || !sig.closed {
+	if got := h.handle(r); got.Status != "closed" || !call.closed || h.dataTunnel != nil {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -155,5 +165,64 @@ func TestCreateFailureIsNotReplayed(t *testing.T) {
 				t.Fatalf("posts=%d result=%+v", posts, got)
 			}
 		})
+	}
+}
+
+func TestConnectedWaitsForDataTunnelCallback(t *testing.T) {
+	started := make(chan struct{})
+	var notify func(tunnel.DataTunnel)
+	h := newHelper(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return reply(200, `{"id":"event","slug":"fixture-slug","org_id":"org"}`), nil
+	}), func(_ dion.CallConfig, connected func(tunnel.DataTunnel)) callCore {
+		notify = connected
+		return &fakeCall{start: func() error { close(started); return nil }}
+	})
+	defer h.close()
+	result := make(chan response, 1)
+	go func() { result <- h.handle(fixtureRequest("join")) }()
+	<-started
+	notify(nil)
+	select {
+	case got := <-result:
+		t.Fatalf("returned before non-nil OnConnected: %+v", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+	dt := &fakeTunnel{}
+	notify(dt)
+	select {
+	case got := <-result:
+		if got.Status != "connected" || h.dataTunnel != dt {
+			t.Fatalf("%+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnConnected did not release response")
+	}
+}
+
+func TestMissingConnectionCallbackClosesCall(t *testing.T) {
+	call := &fakeCall{start: func() error { return nil }}
+	h := newHelper(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return reply(200, `{"id":"event","slug":"fixture-slug","org_id":"org"}`), nil
+	}), func(dion.CallConfig, func(tunnel.DataTunnel)) callCore { return call })
+	h.connectWait = time.Millisecond
+	got := h.handle(fixtureRequest("join"))
+	if got.Status != "unknown" || got.Error != "connect_timeout" || !call.closed || h.active != nil {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestCreateSetupExpiryPreservesRoomAndClosesCall(t *testing.T) {
+	call := &fakeCall{start: func() error { return errAuthExpired }}
+	posts := 0
+	h := newHelper(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method == "GET" {
+			return reply(200, `{"slug":"fixture-slug"}`), nil
+		}
+		posts++
+		return reply(201, `{"id":"event","slug":"fixture-slug","org_id":"org"}`), nil
+	}), func(dion.CallConfig, func(tunnel.DataTunnel)) callCore { return call })
+	got := h.handle(fixtureRequest("create"))
+	if got.Status != "auth_expired" || got.RoomID != "event" || got.RoomSlug != "fixture-slug" || posts != 1 || !call.closed {
+		t.Fatalf("%+v posts=%d", got, posts)
 	}
 }
