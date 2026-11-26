@@ -51,7 +51,7 @@ import { acknowledgeRead } from './read-receipt.mjs';
 import { readDialogFolders } from './dialog-folders.mjs';
 import { editOwnedTelegramText, TelegramEditRefused } from './message-edit.mjs';
 import { sendTelegramReply, TelegramReplyRefused } from './message-reply.mjs';
-import { authRetryDelaySeconds, probeAuthorization } from './session-auth.mjs';
+import { authRetryDelaySeconds, classifyAuthError, probeAuthorization } from './session-auth.mjs';
 import { PromisedNetSockets } from 'telegram/extensions/PromisedNetSockets.js';
 import { httpConnectOptions } from './http-connect-socket.mjs';
 import { ConnectionTCPObfuscated } from 'telegram/network/connection/TCPObfuscated.js';
@@ -1287,9 +1287,11 @@ async function syncAccount(slot) {
       }
     } catch (error) {
       if (disconnectedSlots.has(slot)) break;
+      const auth = classifyAuthError(error);
+      authTerminal = authTerminal || auth.terminal;
       setSync(slot, { status: authTerminal ? "relogin-required" : "retrying",
         lastError: String((error && error.message) || error),
-        authCode: (error && error.authCode) || "" });
+        authCode: (error && error.authCode) || (auth.terminal ? auth.code : "") });
       console.error(`sync ${slot} error:`, (error && error.message) || error);
       if (authTerminal) console.error(`sync ${slot}: saved session needs a fresh login; no send can use it`);
     } finally {
