@@ -30,6 +30,7 @@ from . import call_audio
 from .account_connections import (
     ConnectorSecrets, connect_matrix, connect_imap, connect_vk_community, connect_vk_personal,
 )
+from .dion_auth import DionGenerationConflict, connect_dion, dion_account_states
 from .adapters import inbox_message_from_envelope
 from .channels.core import AdapterNotSupported
 from .contracts import UserPrincipal
@@ -99,7 +100,7 @@ def _account_disconnect_reason(account: Mapping[str, object], credential_ref: st
         return ""
     if provider == "gmail" and credential_ref.startswith("himalaya:"):
         return ""
-    if provider in {"matrix", "email", "vk", "yandex", "max"} and credential_ref.startswith("connector:"):
+    if provider in {"matrix", "email", "vk", "yandex", "max", "dion"} and credential_ref.startswith("connector:"):
         return ""
     if provider == "whatsapp" and ":account-" in account_id:
         return ""
@@ -1126,7 +1127,7 @@ def handler(
                     payload = self._json()
                     source = str(payload.get("source") or "").strip().lower()
                     sender = str(payload.get("sender") or "").strip()
-                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "max", "email", "gmail", "yandex"} and not source.startswith("gmail:"):
+                    if source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "max", "email", "gmail", "yandex", "dion"} and not source.startswith("gmail:"):
                         raise ValueError("unsupported conversation source")
                     if not sender:
                         raise ValueError("sender is required")
@@ -1659,6 +1660,22 @@ def handler(
                         )
                         mode = "vkid_identity_only"
                     self._reply(202, {"accepted": True, "account_id": f"vk:{external_id}", "mode": mode})
+                    return
+                if path == "/v1/dion/accounts":
+                    if principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
+                        self._reply(403, {"error": "нужна авторизация пользователя с правом чтения"})
+                        return
+                    try:
+                        account = connect_dion(
+                            service, user_id, self._json(), vault=ConnectorSecrets(),
+                        )
+                    except DionGenerationConflict as error:
+                        self._reply(409, {
+                            "error": "stale_dion_auth_generation",
+                            "current_generation": error.current_generation,
+                        }, {"Cache-Control": "no-store"})
+                        return
+                    self._reply(201, {"accepted": True, **account}, {"Cache-Control": "no-store"})
                     return
                 if path in {"/v1/matrix/accounts", "/v1/imap/accounts"}:
                     if principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
@@ -2255,6 +2272,14 @@ def handler(
                     "last_error": str(settings.get("last_error") or "") if settings else "",
                 }, {"Cache-Control": "no-store"})
                 return
+            if path == "/v1/dion/accounts":
+                if principal.service_account or not service._store.capability_enabled("read", user_id=user_id):
+                    self._reply(403, {"error": "нужна авторизация пользователя с правом чтения"})
+                    return
+                self._reply(200, {"accounts": dion_account_states(
+                    service, user_id, vault=ConnectorSecrets(),
+                )}, {"Cache-Control": "no-store"})
+                return
             if path == "/v1/accounts":
                 accounts = service._store.accounts(user_id=user_id)
                 caps = service._store.user_capabilities(user_id=user_id)
@@ -2764,7 +2789,7 @@ def handler(
                     if service.whatsapp_outbox is not None:
                         try:service.whatsapp_outbox.disconnect(user_id=principal.user_id,account_ref=account_id)
                         except (OSError,ValueError):pass # Disabled account also refuses ingress after restart.
-                if deleted and existing and existing["provider"] in {"matrix", "email", "vk", "max", "yandex"}:
+                if deleted and existing and existing["provider"] in {"matrix", "email", "vk", "max", "yandex", "dion"}:
                     ref = str(existing.get("credential_ref") or "")
                     if ref.startswith("connector:"):
                         if existing['provider']=='max':

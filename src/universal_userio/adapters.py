@@ -48,7 +48,7 @@ def inbox_message_from_envelope(payload: Mapping[str, Any], *, received_at: floa
     sender = str(payload.get("sender") or "").strip()
     body = str(payload.get("body") or "").strip()
     if (
-        source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail", "chatgpt", "max", "yandex"}
+        source not in {"telegram", "matrix", "whatsapp", "vk", "phone", "sms", "email", "gmail", "chatgpt", "max", "yandex", "dion"}
         and not source.startswith("gmail:")
         and not source.startswith("email:")
         and not source.startswith("matrix:")
@@ -1004,6 +1004,10 @@ class StoredChannelAdapter:
         if self.channel == "matrix":
             return source == "matrix" or source.startswith("matrix:")
         return source == self.channel
+
+
+class DionChannelAdapter(StoredChannelAdapter):
+    channel = "dion"
 
 
 class YandexChannelAdapter(StoredChannelAdapter):
@@ -2397,6 +2401,7 @@ class UnifiedChannels(StoredChannelAdapter):
         "sms": AndroidSmsChannelAdapter,
         "max": MaxChannelAdapter,
         "yandex": YandexChannelAdapter,
+        "dion": DionChannelAdapter,
         "chatgpt": ChatGPTCDPChannelAdapter,
     }
 

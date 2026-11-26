@@ -1,5 +1,10 @@
 FROM node:22-slim AS node
 
+FROM golang:1.26.1-trixie AS dion-call-build
+WORKDIR /build
+COPY tools/dion-call-helper /build
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/userio-dion-call-helper .
+
 FROM rust:1.95-trixie AS ocr-build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
@@ -22,6 +27,7 @@ RUN ln -s /usr/local/bin/node /usr/bin/node \
 WORKDIR /opt/universal-userio
 COPY --from=ocr-build /build/target/release/userio-ocr /opt/userio-ocr/userio-ocr
 COPY --from=ocr-build /models /opt/userio-ocr/models
+COPY --from=dion-call-build /out/userio-dion-call-helper /opt/userio-dion-call-helper
 COPY deploy/containers/requirements.txt /tmp/userio-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/userio-requirements.txt
 COPY pyproject.toml /opt/universal-userio/
@@ -55,7 +61,7 @@ RUN chmod -R a+rX /opt/universal-userio/src /opt/userio-telegram-qr \
 RUN pip install --no-deps --no-cache-dir . \
     && mkdir -p /home/roomhacker/.cargo/bin \
     && ln -s /opt/userio-migration-deps/himalaya /home/roomhacker/.cargo/bin/himalaya \
-    && chmod 755 /usr/local/bin/universal-userio-gmail-password
+    && chmod 755 /usr/local/bin/universal-userio-gmail-password /opt/userio-dion-call-helper
 STOPSIGNAL SIGTERM
 CMD ["python", "-m", "universal_userio.container_runtime"]
 

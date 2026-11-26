@@ -5,9 +5,24 @@
   $("settings").onclick = settings;
   $("userioLogin").onclick = settings;
   $("chatgptSetup").onclick = settings;
+  for (const [id, kind] of [["dionImport", "dionImport"], ["dionReauth", "dionReauth"]]) {
+    $(id).onclick = async () => {
+      $(id).disabled = true;
+      try {
+        const result = await new Promise(resolve => chrome.runtime.sendMessage({kind, connectionId: $("dionConnection").value}, resolve));
+        $("dionStatus").textContent = result?.ok ? (kind === "dionImport" ? "Передача подтверждена. Авторизацией управляет UserIO." : "Войдите в DION, затем передайте авторизацию.") : "Не удалось выполнить действие: " + (result?.error || "нет ответа");
+      } finally { $(id).disabled = false; }
+    };
+  }
   async function refresh() {
     const connections = await send("connectionsList");
     const connectionItems = connections.ok && Array.isArray(connections.connections) ? connections.connections : [];
+    for (const connection of connectionItems.filter(c => c.enabled)) {
+      const option = document.createElement("option");
+      option.value = connection.id;
+      option.textContent = connection.label || connection.id;
+      $("dionConnection").append(option);
+    }
     $("connectionsBadge").textContent = connectionItems.length ? connectionItems.filter((item) => item.enabled).length + " включено" : "Нет подключений";
     $("connectionsSummary").textContent = connectionItems.length ? connectionItems.map((item) => (item.label || "Без названия") + " · " + (item.enabled ? "включено" : "ошибка/выкл.")).join("; ") : "VK Web · ChatGPT · Z.ai · настройте подключения";
     const user = await send("userioStatus");

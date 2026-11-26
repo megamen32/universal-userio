@@ -100,7 +100,7 @@ class UserIOToolDispatcher:
                 return payload
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
-        if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.')):
+        if principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.','userio.calls.dion.')):
             return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS:
             return {"ok": False, "error": "read_only_token"}
@@ -232,6 +232,23 @@ class UserIOToolDispatcher:
                 elif name == 'userio.calls.matrix.stop':
                     call = calls.stop(self._required(arguments,'call_id'),user_id)
                 else: raise KeyError('unknown call operation')
+                return {'ok':True,'call':call}
+            if name.startswith('userio.calls.dion.'):
+                from .dion_calls import calls_for
+                calls = calls_for(self._service)
+                if principal.messenger_accounts is not None:
+                    account_ref = (arguments.get('account_ref') if name == 'userio.calls.dion.start'
+                        else calls.get(self._required(arguments,'call_id'),user_id)['account_ref'])
+                    if account_ref not in principal.messenger_accounts:
+                        raise PermissionError('account_scope_denied')
+                if name == 'userio.calls.dion.start':
+                    call = calls.start(user_id=user_id, **arguments)
+                elif name == 'userio.calls.dion.get':
+                    call = calls.get(self._required(arguments,'call_id'),user_id)
+                elif name == 'userio.calls.dion.stop':
+                    call = calls.stop(self._required(arguments,'call_id'),user_id)
+                else:
+                    raise KeyError('unknown call operation')
                 return {'ok':True,'call':call}
             if name.startswith('userio.calls.telegram.'):
                 from .telegram_calls import calls_for

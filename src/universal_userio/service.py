@@ -1645,6 +1645,12 @@ class UserIOService:
                 reconcile_vk_receipt(self,conversation,receipt,user_id=user_id)
             except Exception as error:
                 _LOG.warning('Accepted VK receipt mirror is pending: %s',type(error).__name__)
+        if conversation and conversation['source']=='dion' and str(conversation.get('account_ref') or '').startswith('dion:'):
+            try:
+                from .dion_chat import reconcile_dion_receipt
+                reconcile_dion_receipt(self,conversation,receipt,user_id=user_id)
+            except Exception as error:
+                _LOG.warning('Accepted DION receipt mirror is pending: %s',type(error).__name__)
         if conversation and (str(conversation["source"]) == "gmail"
                              or str(conversation["source"]).startswith("gmail:")):
             try:
@@ -1975,6 +1981,9 @@ class UserIOService:
         if source=='vk' and str(conversation.get('account_ref') or '').startswith('vk:'):
             from .account_connections import prepare_vk_reply
             return prepare_vk_reply(self,conversation,draft,user_id=user_id)
+        if source=='dion' and str(conversation.get('account_ref') or '').startswith('dion:'):
+            from .dion_chat import prepare_dion_reply
+            return prepare_dion_reply(self,conversation,draft,user_id=user_id)
         if source == "gmail" or source.startswith("gmail:"):
             if self.gmail_outbox is None:
                 raise DeliveryUnavailableError("Gmail delivery is not configured")

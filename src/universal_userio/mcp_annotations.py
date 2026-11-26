@@ -40,6 +40,7 @@ PROVEN_READ_TOOLS = frozenset({
     "userio.accounts.list",
     "userio.calls.matrix.get",
     "userio.calls.telegram.get",
+    "userio.calls.dion.get",
     "userio.channels.list",
     "userio.channels.read",
     "userio.channels.search",

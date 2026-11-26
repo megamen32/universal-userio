@@ -31,6 +31,7 @@
 <h2 class="userio-setup-section-title">Подключить аккаунт</h2><nav class="userio-choice-grid" aria-label="Выберите сервис">
 <button class="userio-choice" type="button" data-open="telegram"><strong>Telegram</strong><small>QR или номер телефона</small></button>
 <button class="userio-choice" type="button" data-open="max"><strong>MAX</strong><small>Личные переписки</small></button>
+<button class="userio-choice" type="button" data-open="dion"><strong>DION</strong><small>Чаты и конференции</small></button>
 <button class="userio-choice" type="button" data-open="whatsapp"><strong>WhatsApp</strong><small>Связанное устройство</small></button>
 <button class="userio-choice" type="button" data-open="vk-personal"><strong>ВКонтакте</strong><small>Личный Мессенджер</small></button>
 <button class="userio-choice" type="button" data-open="gmail"><strong>Gmail</strong><small>Пароль приложения Google</small></button>
@@ -41,6 +42,13 @@
 <button class="userio-choice" type="button" data-open="calls"><strong>Звонки</strong><small>SIM-шлюз и SIP</small></button>
 </nav></section>
 <div id="setup-head" hidden><button id="back-accounts" type="button" class="back">← Все аккаунты</button><p class="step-label">Выберите сервис → Подключите → Проверьте</p></div>
+<form id="dion" class="userio-setup-panel" autocomplete="off">
+<h2>DION</h2><p class="hint">UserIO входит в DION напрямую и дальше сам поддерживает сессию. Браузер после подключения не нужен.</p>
+<p class="hint">Уже вошли в DION в Chrome? В расширении Universal UserIO Agent выберите это подключение UserIO и нажмите «Передать авторизацию DION». После подтверждения сессию обновляет только UserIO. Повторный вход через расширение нужен при запросе повторной авторизации.</p>
+<label>Email DION<input name="email" type="email" autocomplete="username" maxlength="320" required></label>
+<label>Пароль DION<input name="password" type="password" autocomplete="current-password" maxlength="4096" required></label>
+<button class="submit" type="submit">Подключить DION</button>
+</form>
 <form id="matrix" class="userio-setup-panel">
 <h2>Matrix</h2><ol><li>Укажите адрес своего Matrix-сервера.</li><li>Нажмите «Войти через SSO» или введите Matrix ID и пароль.</li><li>Проверьте подключённый профиль и откройте сообщения.</li></ol>
 <label>Адрес Matrix-сервера<input name="homeserver" type="url" value="https://chat.bezrabotnyi.com" required autocomplete="url"></label>
@@ -102,7 +110,7 @@ const vkPersonalLogin = document.getElementById('vk-personal-login');
 const vkAuthorizationUrl = new URL(vkPersonalLogin.href);
 vkAuthorizationUrl.searchParams.set('uuid', crypto.randomUUID());
 vkPersonalLogin.href = vkAuthorizationUrl.href;
-const forms={matrix:document.getElementById('matrix'),imap:document.getElementById('imap'),'vk-community':document.getElementById('vk-community'),'vk-personal':document.getElementById('vk-personal')};
+const forms={dion:document.getElementById('dion'),matrix:document.getElementById('matrix'),imap:document.getElementById('imap'),'vk-community':document.getElementById('vk-community'),'vk-personal':document.getElementById('vk-personal')};
 async function connectedAccounts(){
  const container=document.getElementById('connected-list');
  try{
@@ -215,7 +223,7 @@ document.getElementById('max-begin').onclick=async()=>{
 window.addEventListener('pagehide',()=>{if(waSlot)fetch('/whatsapp-qr/cancel?slot='+encodeURIComponent(waSlot),{keepalive:true}).catch(()=>{});if(maxLogin)fetch('/v1/max/connections/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({login_id:maxLogin}),keepalive:true}).catch(()=>{});});
 let currentService='';
 function show(key,push=true){
- const known=['','matrix','imap','gmail','yandex','vk-personal','vk-community','telegram','whatsapp','max','sms','calls'];if(!known.includes(key))key='';
+ const known=['','dion','matrix','imap','gmail','yandex','vk-personal','vk-community','telegram','whatsapp','max','sms','calls'];if(!known.includes(key))key='';
  if(key!==currentService){document.querySelectorAll('input[type=password]').forEach(input=>input.value='');document.getElementById('sip-password').value='';document.getElementById('sip-password').type='password';document.getElementById('sip-settings').hidden=true;}
  if(currentService==='max' && key!=='max')void cancelMax();
  if(currentService==='whatsapp' && key!=='whatsapp')void cancelWa();
@@ -244,7 +252,7 @@ document.getElementById('back-accounts').onclick=()=>show('');
 document.getElementById('connect-another').onclick=()=>show('');
 const originalPath=location.pathname;
 const originalParams=new URLSearchParams(location.search);
-const initialService=originalParams.get('service')||(originalPath.startsWith('/matrix')?'matrix':originalPath.startsWith('/vk/community')?'vk-community':originalPath.startsWith('/vk')?'vk-personal':originalPath.startsWith('/gmail')?'gmail':originalPath.startsWith('/mail')?'imap':'');
+const initialService=originalParams.get('service')||(originalPath.startsWith('/dion')?'dion':originalPath.startsWith('/matrix')?'matrix':originalPath.startsWith('/vk/community')?'vk-community':originalPath.startsWith('/vk')?'vk-personal':originalPath.startsWith('/gmail')?'gmail':originalPath.startsWith('/mail')?'imap':'');
 show(initialService,false);
 window.addEventListener('popstate',()=>show(new URLSearchParams(location.search).get('service')||'',false));
 function connectedSuccess(name){
@@ -317,7 +325,7 @@ for(const [kind,form] of Object.entries(forms)){
          throw new Error('Невозможно прочитать пользовательский токен из адреса.');
        data.authorization=raw;
      }
-     const response=await fetch(kind==='matrix'?'/v1/matrix/accounts':kind==='vk-community'?'/v1/vk/community/accounts':kind==='vk-personal'?'/v1/vk/personal/accounts':'/v1/imap/accounts',{
+     const response=await fetch(kind==='dion'?'/v1/dion/accounts':kind==='matrix'?'/v1/matrix/accounts':kind==='vk-community'?'/v1/vk/community/accounts':kind==='vk-personal'?'/v1/vk/personal/accounts':'/v1/imap/accounts',{
        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
      const result=await response.json();
      if(!response.ok)throw new Error(result.error||'Не удалось подключить аккаунт');

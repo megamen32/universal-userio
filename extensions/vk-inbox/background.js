@@ -7,6 +7,8 @@
 
 importScripts("lib/config.js", "lib/update.js", "lib/db.js", "lib/connections.js", "lib/oauth.js", "lib/tab-groups.js", "lib/userio.js", "lib/collect.js", "lib/vault.js", "lib/chatgpt.js", "lib/chatgpt-core.js", "lib/chatgpt-state.js", "lib/scoped-chatgpt.js", "lib/zai.js", "lib/zai-lifecycle.js", "lib/zai-judge-page.js", "lib/zai-judge.js", "lib/zai-send.js", "lib/dot.js", "lib/dot-media-read.js", "lib/agent.js");
 
+importScripts("lib/dion.js");
+
 const DB = self.UserIODB;
 const USERIO = self.UserIO;
 const COLLECT = self.Collect;
@@ -331,6 +333,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "extensionVersion":
           sendResponse(await self.UserIOUpdate.check());
           break;
+        case "dionImport":
+          if (sender.tab || sender.id !== chrome.runtime.id) throw new Error("extension_ui_required");
+          sendResponse(await self.UserIODion.importAccount(msg.connectionId)); break;
+        case "dionReauth":
+          if (sender.tab || sender.id !== chrome.runtime.id) throw new Error("extension_ui_required");
+          sendResponse(await self.UserIODion.beginReauth(msg.connectionId)); break;
         case "connectionsList":
           sendResponse({ok:true,connections:await self.UserIOConnections.list()}); break;
         case "connectionsSave":
