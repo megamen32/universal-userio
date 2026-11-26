@@ -1,0 +1,4 @@
+# Bugs discovered during Telegram reconnect repair
+
+- `tests/test_multi_user.py::test_dashboard_requires_login_and_uses_user_scoped_session` expects anonymous `GET /` to redirect to `/login`, but the current handler serves the public welcome page with HTTP 200. Reproduce with `PYTHONPATH=src python3 -m pytest -q tests/test_multi_user.py::test_dashboard_requires_login_and_uses_user_scoped_session`. Observed on 2026-11-26 while verifying the account freshness index; unrelated to Telegram reconnect.
+- `tests/test_multi_user.py::test_users_with_same_provider_ids_are_isolated_and_approval_is_scoped` reaches `userio.channels.send_draft` and fails with `KeyError: 'draft'`. Reproduce with `PYTHONPATH=src python3 -m pytest -q tests/test_multi_user.py::test_users_with_same_provider_ids_are_isolated_and_approval_is_scoped`. Observed on 2026-11-26 after the isolation read assertions passed; unrelated to the index change.

@@ -401,6 +401,8 @@ class SQLiteUserIOStore:
             );
             CREATE INDEX IF NOT EXISTS messages_conversation_idx
                 ON messages(user_id,conversation_id,received_at);
+            CREATE INDEX IF NOT EXISTS messages_source_freshness_idx
+                ON messages(user_id,source,received_at DESC,conversation_id);
             CREATE TABLE IF NOT EXISTS workspace_events (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,source TEXT NOT NULL,
