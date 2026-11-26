@@ -6,6 +6,7 @@ export class EnrollmentOwners {
     this.owners=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};
     if(!this.owners||typeof this.owners!=='object'||Array.isArray(this.owners))throw Error('Invalid enrollment ownership');
   }
+  hasReservation(slot){return Object.hasOwn(this.owners,slot);}
   owner(slot){return this.owners[slot]||this.legacyUser;}
   allowed(slot,user){return this.owner(slot)===user;}
   bind(slot,principal,headers){

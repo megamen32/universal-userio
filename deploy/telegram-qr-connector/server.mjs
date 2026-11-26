@@ -97,6 +97,13 @@ const liveSlots = new Map();
 const botEnrollments = new Set();
 const disconnectedSlots = new Set();
 let nextSlot = 1;
+function allocateEnrollmentSlot() {
+  let candidate;
+  do {
+    candidate = `account-${nextSlot++}`;
+  } while (slots.has(candidate) || enrollmentOwners.hasReservation(candidate));
+  return candidate;
+}
 let promptSeq = 0;
 const accountRegistrations = new Map();
 const agentDeliverUrl = String(process.env.USERIO_AGENT_DELIVER_URL || "").trim();
@@ -1763,7 +1770,7 @@ http.createServer(async (req, res) => {
           const fd=openSync(dir+'/'+id+'.json','wx',0o600);try{writeFileSync(fd,JSON.stringify({owner,account_id:'telegram:'+id,created_at:Date.now()}));fsyncSync(fd);}finally{closeSync(fd);}
           const d=openSync(dir,'r');try{fsyncSync(d);}finally{closeSync(d);}},
         saveToken:(owner,expected)=>saveEncryptedBotToken(root,keyPath,owner,expected),
-        allocateSlot:()=>"account-"+nextSlot++,finishLogin});
+        allocateSlot:()=>allocateEnrollmentSlot(),finishLogin});
       res.writeHead(result.ok?200:202,{'content-type':'application/json','cache-control':'no-store'});
       return res.end(JSON.stringify(result));
     }catch(_){res.writeHead(400,{'content-type':'application/json','cache-control':'no-store'});return res.end(JSON.stringify({error:'bot_enrollment_failed',token_returned:false}));}
@@ -1802,7 +1809,7 @@ http.createServer(async (req, res) => {
         assertBotIdentity(user, expected);
         saveEncryptedBotToken(stateDir + "/credentials/bots", keyPath, owner, expected);
         reserveDotBotBinding(botAccountId);
-        const newSlot = "account-" + nextSlot++;
+        const newSlot = allocateEnrollmentSlot();
         enrollmentOwners.bind(newSlot, browserOwner.principal, browserOwner.headers);
         slots.set(newSlot, {status:"connecting", mode:"bot"});
         await finishLogin(newSlot, botClient, user);
@@ -1851,7 +1858,7 @@ http.createServer(async (req, res) => {
         && readFileSync(`${sessionsDir}/${file}`,"utf8").trim()===savedSession);
       if (sameSession) throw new Error("Telegram account or session is already connected in UserIO");
       await importedClient.disconnect();
-      const slotId=`account-${nextSlot++}`;
+      const slotId=allocateEnrollmentSlot();
       enrollmentOwners.bind(slotId,browserOwner.principal,browserOwner.headers);
       slots.set(slotId,{status:"connected",mode:"imported"});
       await finishLogin(slotId,importedClient,user);
@@ -2038,7 +2045,7 @@ http.createServer(async (req, res) => {
     }
   }
   if (url.pathname === "/new") {
-    const created = `account-${nextSlot++}`;
+    const created = allocateEnrollmentSlot();
     enrollmentOwners.bind(created,browserOwner.principal,browserOwner.headers);
     slots.set(created, { status: "idle", mode: "qr" });
     void startQr(created);
@@ -2845,7 +2852,7 @@ http.createServer(async (req, res) => {
     try {
       const payload = await readJsonBody(req);
       const phone = normalizeLoginPhone(payload.phone);
-      const created = `account-${nextSlot++}`;
+      const created = allocateEnrollmentSlot();
       slots.set(created, { status: "idle", mode: "phone", phone });
       void startPhone(created);
       res.writeHead(202, { "content-type": "application/json" });
@@ -2881,7 +2888,7 @@ http.createServer(async (req, res) => {
     const params = await readBody(req);
     const phone = (params.get("phone") || "").trim();
     if (phone) {
-      const created = `account-${nextSlot++}`;
+      const created = allocateEnrollmentSlot();
       enrollmentOwners.bind(created,browserOwner.principal,browserOwner.headers);
       slots.set(created, { status: "idle", mode: "phone", phone });
       void startPhone(created);
