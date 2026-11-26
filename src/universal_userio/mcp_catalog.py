@@ -41,7 +41,7 @@ def schema(
 
 CHANNEL_SCHEMA = {
     "type": "string",
-    "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "yandex"],
+    "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "yandex", "dion"],
 }
 IGNORED_CHATS_SCHEMA = {
     "type": "array",
@@ -513,6 +513,26 @@ TELEGRAM_CALL_SPECS = (
         schema({'call_id':{'type':'string'}},['call_id'])),
 )
 TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
+
+DION_CALL_SPECS = (
+    ToolSpec('userio.calls.dion.start',
+        'Create or join one explicitly authorized native headless DION WebRTC call. '
+        'Omit room_id to create a new DION room, or pass an existing DION room slug/URL to join. '
+        'Keep request_id: accepted or unknown calls are never replayed under another ID.',
+        schema({'account_ref':{'type':'string','pattern':r'^dion:[A-Za-z0-9._:@-]{1,128}:[A-Za-z0-9._:@-]{1,128}$'},
+                'room_id':{'type':'string','maxLength':2048},
+                'request_id':{'type':'string','minLength':16,'maxLength':128},
+                'max_seconds':{'type':'integer','minimum':30,'maximum':3600},
+                'confirm':{'type':'boolean'}},
+               ['account_ref','request_id','confirm'])),
+    ToolSpec('userio.calls.dion.get',
+        'Read this owned DION call receipt without creating or joining another room.',
+        schema({'call_id':{'type':'string'}},['call_id'])),
+    ToolSpec('userio.calls.dion.stop',
+        'Leave this owned DION call; never creates or joins another room.',
+        schema({'call_id':{'type':'string'}},['call_id'])),
+)
+TOOL_SPECS = (*TOOL_SPECS, *DION_CALL_SPECS)
 
 MESSAGE_PREPARE_SPECS = (
     ToolSpec('userio.messages.prepare',

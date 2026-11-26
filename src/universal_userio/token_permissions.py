@@ -6,6 +6,7 @@ READ_ONLY_TOOLS = frozenset({
     'userio.meetings.telemost.get',
     'userio.calls.matrix.get',
     'userio.calls.telegram.get',
+    'userio.calls.dion.get',
     'userio.messenger.events',
     'userio.messenger.capabilities', 'userio.messenger.history', 'userio.messenger.get', 'userio.messenger.resolve', 'userio.messenger.media',
     "userio.accounts.list", "userio.channels.list", "userio.channels.search",

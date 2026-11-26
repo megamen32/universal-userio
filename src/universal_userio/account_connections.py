@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from .service import UserIOService
 
 log = logging.getLogger("userio.account_connections")
-_PROVIDER_TYPES = frozenset({"matrix", "email", "vk", "max", "yandex", "webhook"})
+_PROVIDER_TYPES = frozenset({"matrix", "email", "vk", "max", "yandex", "dion", "webhook"})
 _ID_RE = re.compile(r"^[a-z0-9]{24,64}$")
 _HOST_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,249}[a-z0-9]$")
 _MX_ID = re.compile(r"^@[^\s:]{1,255}:[a-zA-Z0-9.-]+(?::\d+)?$")
@@ -297,7 +297,7 @@ class UserAccountPoller:
                         accounts = [dict(r) for r in self.service._store._connection.execute(
                             """SELECT user_id,id,provider,credential_ref
                                FROM provider_accounts WHERE enabled=1
-                                 AND provider IN ('matrix','email','vk','max','yandex')
+                                 AND provider IN ('matrix','email','vk','max','yandex','dion')
                                  AND credential_ref LIKE 'connector:%'
                                ORDER BY user_id,id""",
                         )]
@@ -337,6 +337,9 @@ class UserAccountPoller:
             elif account["provider"] == "yandex":
                 from .yandex.sync import poll
                 poll(self.service, secret)
+            elif account["provider"] == "dion":
+                from .dion_chat import poll_dion
+                poll_dion(self.service, secret)
             elif account["provider"] == "vk" and secret.get("kind") == "community":
                 self.poll_vk_community(secret)
             elif account["provider"] == "vk" and secret.get("kind") == "personal":

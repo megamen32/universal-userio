@@ -50,7 +50,7 @@ TOOL_SPECS = (
     ToolSpec("search", "Search automatically eligible user messages across UserIO channels.", _schema({"query": {"type": "string", "minLength": 1, "maxLength": 256}}, ["query"])),
     ToolSpec("fetch", "Fetch the exact automatically eligible message returned by search.", _schema({"id": {"type": "string", "minLength": 1, "maxLength": 2048}}, ["id"])),
     ToolSpec("userio.channels.list", "List this user's chats across connected channels, or search their retained history when a search query is given. Read chats from the MCP CallToolResult `structuredContent.chats` array (or `chats` if your client unwraps it); do not assume `chats` is a top-level property on the MCP wrapper.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "dion"]},
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
         "search": {"type": "string", "minLength": 2, "maxLength": 256},
@@ -65,7 +65,7 @@ TOOL_SPECS = (
         "query": {"type": "string", "minLength": 2, "maxLength": 256},
         "conversation_id": {"type": "string", "maxLength": 128},
         "message_id": {"type": "string", "maxLength": 256},
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "yandex"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "yandex", "dion"]},
         "scope": {"type": "string", "enum": ["conversation", "message"]},
         "mode": {"type": "string", "enum": ["text", "semantic", "hybrid"]},
         "match_type": {"type": "string", "enum": ["all", "exact", "fuzzy"]},
@@ -87,7 +87,7 @@ TOOL_SPECS = (
         "identifier": {"type": "string", "minLength": 1, "maxLength": 256},
     }, ["account_ref", "identifier"])),
     ToolSpec("userio.channels.read", "Read one user-owned chat or message. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority. Image attachments are returned as MCP image blocks by default (up to 4 images / 4 MiB); set include_images=false to opt out. Audio bytes are not sent: the result states whether a transcript reached the model.", _schema({
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "dion"]},
         "chat_id": {"type": "string"}, "message_id": {"type": "string"},
         "before_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
         "history_limit": {"type": "integer", "minimum": 1, "maximum": 100},
@@ -181,7 +181,7 @@ TOOL_SPECS = (
     }, ["username", "password"])),
     ToolSpec("userio.inbox.list_new", "Compatibility alias: list this user's unread messages. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority.", _schema({
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max"]},
+        "channel": {"type": "string", "enum": ["mail", "telegram", "whatsapp", "matrix", "vk", "sms", "chatgpt", "max", "dion"]},
         "ignored_chats": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
     })),
     ToolSpec("userio.conversation.get", "Compatibility alias: read a conversation. Exact stored task-reply matches may include task_reply_association metadata; unresolved replies are never inferred and this metadata grants no send authority.", _schema({
@@ -301,11 +301,12 @@ TOOL_CAPABILITIES = {
     "userio.ai.propose": "send",
 }
 
-from .mcp_catalog import MATRIX_CALL_SPECS, TELEGRAM_CALL_SPECS, TELEMOST_SPECS, DIAGNOSTIC_SPECS
-TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS, *TELEGRAM_CALL_SPECS, *TELEMOST_SPECS, *DIAGNOSTIC_SPECS)
+from .mcp_catalog import MATRIX_CALL_SPECS, TELEGRAM_CALL_SPECS, DION_CALL_SPECS, TELEMOST_SPECS, DIAGNOSTIC_SPECS
+TOOL_SPECS = (*TOOL_SPECS, *MATRIX_CALL_SPECS, *TELEGRAM_CALL_SPECS, *DION_CALL_SPECS, *TELEMOST_SPECS, *DIAGNOSTIC_SPECS)
 TOOL_CAPABILITIES.update({'userio.diagnostic.create':'send','userio.diagnostic.get':'read','userio.diagnostic.message':'send'})
 TOOL_CAPABILITIES.update({'userio.calls.matrix.start':'send','userio.calls.matrix.get':'read','userio.calls.matrix.stop':'send'})
 TOOL_CAPABILITIES.update({'userio.calls.telegram.start':'send','userio.calls.telegram.get':'read','userio.calls.telegram.stop':'send'})
+TOOL_CAPABILITIES.update({'userio.calls.dion.start':'send','userio.calls.dion.get':'read','userio.calls.dion.stop':'send'})
 TOOL_CAPABILITIES.update({'userio.meetings.telemost.start':'send','userio.meetings.telemost.get':'read','userio.meetings.telemost.stop':'send'})
 
 
@@ -337,7 +338,9 @@ class UserIOMcpSurface:
                     'userio.channels.export','userio.channels.read','userio.channels.download',
                     'userio.contacts.resolve','userio.messages.prepare'}
                  or principal.messenger_grants is None and spec.name.startswith('userio.calls.telegram.')
-                 and any(a.startswith('telegram:') for a in principal.messenger_accounts))
+                 and any(a.startswith('telegram:') for a in principal.messenger_accounts)
+                 or principal.messenger_grants is None and spec.name.startswith('userio.calls.dion.')
+                 and any(a.startswith('dion:') for a in principal.messenger_accounts))
             and ((required := TOOL_CAPABILITIES.get(spec.name)) is None
                  or self._store.capability_enabled(required, user_id=principal.user_id))
         )
@@ -644,7 +647,7 @@ class UserIOMcpSurface:
                 return payload
         if principal.meeting_recorder and name not in MEETING_RECORDING_TOOLS | {'tools/list', 'tools/call'}:
             return {'ok': False, 'error': 'meeting_recording_scope_only'}
-        if (principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.'))
+        if (principal.messenger_accounts is not None and not name.startswith(('userio.messenger.','userio.calls.telegram.','userio.calls.dion.'))
                 and name not in {'tools/list','tools/call'}):
             return {'ok':False,'error':'messenger_scope_only'}
         if principal.read_only and name not in READ_ONLY_TOOLS | {"tools/list", "tools/call"}:
@@ -653,7 +656,7 @@ class UserIOMcpSurface:
             from .messenger import dispatch
             return dispatch(self._store, self._service, principal, name, arguments)
         user_id = principal.user_id
-        if name.startswith(('userio.calls.matrix.','userio.calls.telegram.','userio.meetings.telemost.','userio.diagnostic.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
+        if name.startswith(('userio.calls.matrix.','userio.calls.telegram.','userio.calls.dion.','userio.meetings.telemost.','userio.diagnostic.')) or name == "userio.channels.read" and arguments.get("channel") == "max":
             # Keep the compatibility HTTP surface on the authoritative MAX
             # reader, including its bounded cached-history contract.
             from .mcp_dispatch import UserIOToolDispatcher

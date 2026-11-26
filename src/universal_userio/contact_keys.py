@@ -46,6 +46,8 @@ def peer_conversation_key(
         return f"max:{account_ref}:{peer_id}"
     if source == "vk" and account_ref.startswith("vk:") and peer_id:
         return f"vk:{account_ref}:{peer_id}"
+    if source == "dion" and account_ref.startswith("dion:") and peer_id:
+        return f"dion:{account_ref}:{peer_id}"
     if source == "sms":
         if native_sms:
             # The native Android gateway keys a thread by the normalized address.

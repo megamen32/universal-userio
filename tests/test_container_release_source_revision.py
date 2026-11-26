@@ -61,6 +61,9 @@ def _published_repository(tmp_path):
     package = repository / 'src/universal_userio'
     package.mkdir(parents=True)
     (package / 'service.py').write_text('COMMITTED = True\n')
+    helper = repository / 'tools/dion-call-helper'
+    helper.mkdir(parents=True)
+    (helper / 'go.mod').write_text('module userio/dion-call-helper\n')
     for relative in SERVICE_PATHS:
         target = repository / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +102,7 @@ def test_an_explicit_published_revision_builds_from_the_committed_tree(tmp_path,
         body = archive.extractfile('src/universal_userio/service.py').read().decode()
         identity = json.loads(archive.extractfile('deploy/containers/release.json').read())
     assert 'src/universal_userio/service.py' in names
+    assert 'tools/dion-call-helper/go.mod' in names
     assert 'COMMITTED' in body and 'UNCOMMITTED' not in body
     assert identity['commit'] == revision
 
