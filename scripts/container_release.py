@@ -452,7 +452,7 @@ def build_context(destination: Path, *, portable_voice=False, revision=None):
     mode = 'w:gz' if destination.suffix == '.gz' else 'w'
     with tarfile.open(fileobj=io.BytesIO(archive), mode='r:') as source, tarfile.open(destination, mode) as target:
         for member in source:
-            if member.name.startswith(('src/', 'deploy/', 'scripts/', 'tools/userio-ocr/')) or member.name in ('pyproject.toml', 'Dockerfile', '.dockerignore'):
+            if member.name.startswith(('src/', 'deploy/', 'scripts/', 'tools/userio-ocr/', 'tools/dion-call-helper/')) or member.name in ('pyproject.toml', 'Dockerfile', '.dockerignore'):
                 target.addfile(member, source.extractfile(member) if member.isfile() else None)
         for name, data in additions.items():
             info = tarfile.TarInfo(name); info.size = len(data); info.mode = 0o755 if name.endswith('/himalaya') else 0o644

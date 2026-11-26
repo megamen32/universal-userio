@@ -72,6 +72,26 @@ A subsequent focused RED/GREEN regression prevents `refresh_pending` accounts
 from returning refresh ownership to the browser. Five handoff tests now pass.
 This correction is versioned 0.9.40 and is not yet installed on M1.
 
+The next browser-side backend probe ended `OUTCOME_UNKNOWN` because Chrome
+disconnected after dispatch (create-tab request `dion-backend-account-20261126`).
+The original GPTAdmin task was reconciled to completion; its nested browser
+receipt, not the outer task status, contains that failure. A subsequent live
+`browser_status` returned no browsers. Do not repeat that create blindly: inspect
+tabs/command receipt after reconnect. No auth import, provider refresh, messages
+or calls were requested. The default-profile popup lease may have expired and
+must be reclaimed before use. Remaining acceptance is blocked at browser
+reconnect and supported UserIO connection setup, not at the earlier file scope.
+
+Chrome was subsequently launched normally in the exact Default profile and all
+three browser connections returned. A bounded tab list found no earlier owned
+popup/backend tab, establishing no remaining created-tab effect. A fresh linked
+backend tab reached the existing authenticated `/accounts` page. The initially
+guessed `/connect-accounts` route returned 404; its same-tab screenshot was saved
+and inspected before navigating to the source-confirmed `/accounts` route.
+The installed account page has no DION controls yet, consistent with its older
+backend revision. The next gate is isolated candidate packaging/live readback,
+not missing UserIO login. No owner password or manual QA is required.
+
 ## Public protocol evidence
 
 Downloaded only public web-client JavaScript to

@@ -11,7 +11,14 @@
     if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) {
       throw new Error("dion_handoff_requires_https");
     }
-    return root.UserIO.call("GET", "/v1/dion/accounts", undefined, connectionId);
+    try {
+      return await root.UserIO.call("GET", "/v1/dion/accounts", undefined, connectionId);
+    } catch (error) {
+      if (/not found|HTTP 404/i.test(String(error.message))) {
+        throw new Error("Сервер UserIO ещё не поддерживает DION. Требуется обновление сервера, повторный вход в DION не нужен.");
+      }
+      throw error;
+    }
   }
   async function blockRefresh() {
     await chrome.declarativeNetRequest.updateDynamicRules({removeRuleIds: [RULE], addRules: [{

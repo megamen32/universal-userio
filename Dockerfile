@@ -3,7 +3,7 @@ FROM node:22-slim AS node
 FROM golang:1.26.1-trixie AS dion-call-build
 WORKDIR /build
 COPY tools/dion-call-helper /build
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/userio-dion-call-helper .
+RUN CGO_ENABLED=0 GOMAXPROCS=2 go build -p 2 -trimpath -ldflags="-s -w" -o /out/userio-dion-call-helper .
 
 FROM rust:1.95-trixie AS ocr-build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
