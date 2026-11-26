@@ -5,7 +5,7 @@ import "testing"
 func TestFixtureLifecycleBoundary(t *testing.T) {
 	for _, action := range []string{"create", "join", "leave"} {
 		r := request{Action: action, AccountRef: "dion:org:user", RoomID: "fixture-room", RequestID: "req-1", TestFixture: true}
-		if got := handle(r); got.Status != "accepted" { t.Fatalf("%s: %#v", action, got) }
+		if got := handle(r); got.Status != "unavailable" { t.Fatalf("%s: %#v", action, got) }
 	}
 }
 

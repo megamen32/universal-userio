@@ -47,7 +47,7 @@ func handle(r request) response {
 	if err := validate(r); err != nil { return response{RequestID:r.RequestID, Status:"rejected", Error:err.Error()} }
 	// Deliberately no provider call yet: this makes the boundary testable without
 	// credentials or accidentally placing a real call during development.
-	return response{RequestID:r.RequestID, Status:"accepted"}
+	return response{RequestID:r.RequestID, Status:"unavailable", Error:"upstream_core_not_connected"}
 }
 
 func main() {
