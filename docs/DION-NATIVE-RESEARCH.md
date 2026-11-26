@@ -27,6 +27,13 @@ web-client asset `/mf/chats/static/js/async/6173.a3920354.js` defines:
 - JSON envelopes: `{encrypted: base64(nonce || ciphertext || tag)}`.
 - Request headers: `Dc-Crypto-Session-Id`, `Dc-Encoded-Data-Over-Json: true`,
   and `Dc-Encode-Codec-Type: b64`. The frontend re-handshakes on HTTP 428.
+- The static transport recursively converts request JSON keys to snake_case
+  before encryption and response JSON keys to camelCase after decryption.
+  Native Python should parse the decrypted wire keys directly rather than
+  assume the frontend's post-conversion object is the server schema.
+- GET query arrays use repeated keys (`ids=a&ids=b`), not JSON arrays or
+  comma-separated strings. GET query parameters are not encrypted by this
+  transport; JSON request bodies are encrypted.
 - `GET /v2/conversations` defaults to `limit=50`.
 - `GET /v1/conversations/{id}/history`, `GET /v1/messages/{id}`,
   `GET /v1/conversations/{id}/intermediate?ids=...`.
@@ -35,6 +42,13 @@ web-client asset `/mf/chats/static/js/async/6173.a3920354.js` defines:
 - `GET /v1/connect/wss` returns an encrypted response. WebSocket event names,
   history query parameters, paging termination and message schema still need
   extraction; do not assume the provisional normalized parser is a wire schema.
+
+The inspected HAR contains the notifier module, but a bounded search across
+its captured chat JavaScript found no `.getHistory(` or `.batchCreate(` call
+sites. Thus the service method definitions establish routes, not the history
+pagination contract or outgoing message payload. Do not connect the provisional
+parser to durable cursors until actual history response fields are established;
+its field aliases are not protocol evidence.
 
 `dion_chat_crypto.py` implements the observed crypto, with an independent Node
 WebCrypto interoperability test and tamper rejection. It makes no requests and
