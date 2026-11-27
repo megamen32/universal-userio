@@ -351,7 +351,7 @@ export function App() {
   const activeConversation = useRef("")
   const telegramHistoryRead = useRef(0)
   const deepLinkFetch = useRef("")
-  const [deepLinkHash, setDeepLinkHash] = useState(window.location.hash)
+  const [deepLinkHash, setDeepLinkHash] = useState(window.location.hash || `${window.location.pathname}${window.location.search}`)
   const secretaryRequest = useRef(new SecretaryRequests())
   const notify = (message: string) => {
     setToast(message)
@@ -442,7 +442,7 @@ export function App() {
     // A source may belong to an old chat outside this recent-list page.
     // Its conversation API, not presence in the sidebar, determines access.
     setSelectedChat((current) => current && (data.conversations.some((item) => item.id === current)
-      || parseDeepLink(window.location.hash)?.conversationId === current) ? current : "")
+      || parseDeepLink(window.location.hash || `${window.location.pathname}${window.location.search}`)?.conversationId === current) ? current : "")
   }, [account, activeChannel, inboxFolders.active, inboxFolders.folders])
 
   useEffect(() => {
@@ -540,7 +540,7 @@ export function App() {
         } }
       }
     }
-    const target = parseDeepLink(window.location.hash)
+    const target = parseDeepLink(window.location.hash || `${window.location.pathname}${window.location.search}`)
     if (target?.conversationId === result.id && target.messageId
         && !result.messages.some(message => message.message_id === target.messageId)) {
       // The latest page omits old sources. Re-read the exact source on refresh
@@ -596,7 +596,7 @@ export function App() {
       return
     }
     if (conversation?.source === 'phone' && phoneHistoryWindow.current === conversation.id && !phoneFollowLatest.current) return
-    const source = parseDeepLink(window.location.hash)
+    const source = parseDeepLink(window.location.hash || `${window.location.pathname}${window.location.search}`)
     if (source?.conversationId === conversation?.id && source?.messageId) return
     bottomRef.current?.scrollIntoView({ block: "end" })
   }, [conversation?.id, conversation?.messages.length, conversation?.drafts.length])
@@ -760,12 +760,18 @@ export function App() {
   // Hash changes include a second search hit in the same conversation. Wait
   // for that conversation's real data before loading a source outside its page.
   useEffect(() => {
-    const changed = () => { deepLinkFetch.current = ""; setDeepLinkHash(window.location.hash) }
+    const changed = () => { deepLinkFetch.current = ""; setDeepLinkHash(window.location.hash || `${window.location.pathname}${window.location.search}`) }
     window.addEventListener("hashchange", changed)
-    return () => window.removeEventListener("hashchange", changed)
+    window.addEventListener("popstate", changed)
+    return () => { window.removeEventListener("hashchange", changed); window.removeEventListener("popstate", changed) }
   }, [])
   useEffect(() => {
     const target = parseDeepLink(deepLinkHash)
+    if (target && window.location.hash.startsWith("#/chat/")) {
+      const query = target.messageId ? `?m=${encodeURIComponent(target.messageId)}` : ""
+      window.history.replaceState({}, "", `/app/chat/${encodeURIComponent(target.conversationId)}${query}`)
+      setDeepLinkHash(`${window.location.pathname}${window.location.search}`)
+    }
     if (target && userCapabilities.read) openChat(target.conversationId)
   }, [deepLinkHash, userCapabilities.read])
   useEffect(() => {
@@ -785,7 +791,7 @@ export function App() {
         })
         const message = result.result?.structuredContent?.message
         if (!message || message.conversation_id !== target.conversationId || message.message_id !== target.messageId
-            || window.location.hash !== deepLinkHash || activeConversation.current !== target.conversationId) return
+            || (window.location.hash || `${window.location.pathname}${window.location.search}`) !== deepLinkHash || activeConversation.current !== target.conversationId) return
         setConversation(current => current?.id === message.conversation_id ? { ...current,
           messages: current.messages.some(entry => entry.message_id === message.message_id) ? current.messages
             : [...current.messages, message].sort((a, b) => a.received_at - b.received_at) } : current)
