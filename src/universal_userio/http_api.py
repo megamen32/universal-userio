@@ -1906,13 +1906,15 @@ def handler(
                     login_options=self._login_options(self._query_value("next") or "/"),
                     notice=self._query_value("code_sent"), next_path=self._query_value("next")).encode())
                 return
+            if requested_path.startswith("/app-assets/") and self._static("/assets/" + requested_path.removeprefix("/app-assets/")):
+                return
             if requested_path == "/app" or requested_path.startswith("/app/"):
                 target = requested_path + (f"?{urlparse(self.path).query}" if urlparse(self.path).query else "")
                 if self._principal(allow_proxy=True) is None:
                     self._redirect("/login?" + urlencode({"next": target}))
                     return
-                if self._static("/"):
-                    return
+                self._html(200, (_STATIC_ROOT / "index.html").read_bytes().replace(b'/assets/', b'/app-assets/'))
+                return
             if requested_path == "/signup":
                 if self._auto_account_enabled() or self._cookie_principal("userio_web_session") is not None:
                     self._redirect("/")
