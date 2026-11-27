@@ -20,6 +20,8 @@ const assert = require('node:assert/strict');
     await page.locator(`[data-read-message="${fixture.message}"]`).waitFor({state:'visible'});
     assert.match(await page.locator(`[data-read-message="${fixture.message}"]`).innerText(), /DEEPLINK FIXTURE MESSAGE/);
     const direct = `http://127.0.0.1:${fixture.port}/app/chat/${fixture.chat}?m=${fixture.message}`;
+    // The separate live frontend may not have the backend's newly built bundle.
+    await page.route('**/assets/index-*.js', route => route.fulfill({status: 404, body: ''}));
     await page.goto(direct);
     await page.locator(`[data-read-message="${fixture.message}"]`).waitFor({state:'visible'});
     assert.equal(page.url(), direct);
