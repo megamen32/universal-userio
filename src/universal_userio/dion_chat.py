@@ -454,6 +454,22 @@ class DionChatClient:
     def upload_attachment(self, data: bytes, *, filename: str, mime_type: str) -> dict[str, Any]:
         return self._file_request(data=data, filename=filename, mime_type=mime_type)
 
+    def create_conversation(self, *, title: str, kind: str,
+                            participant_ids: tuple[str, ...] = ()) -> dict[str, Any]:
+        """Create one native DION conversation; creation cannot be blindly replayed."""
+        if kind not in {"GROUP", "CHANNEL"} or not isinstance(title, str) or not title.strip() or len(title.strip()) > 128:
+            raise DionChatRejected("DION invalid conversation title or type")
+        if len(participant_ids) > 50 or len(set(participant_ids)) != len(participant_ids) or any(
+                not isinstance(value, str) or not _PROVIDER_ID.fullmatch(value) for value in participant_ids):
+            raise DionChatRejected("DION invalid conversation member IDs")
+        result = self._request("POST", "/v1/conversations",
+            body={"name": title.strip(), "conversation_type": kind,
+                  "members_id": list(participant_ids)}, side_effect=True)
+        peer = str(result.get("conversation_id") or "")
+        if not _PROVIDER_ID.fullmatch(peer) or result.get("conversation_type") != kind:
+            raise DionChatUncertain("DION conversation creation receipt is ambiguous")
+        return result
+
     def conversation(self, conversation_id: str) -> dict[str, Any]:
         cid = urllib.parse.quote(str(conversation_id), safe="")
         return self._request("GET", f"/v1/conversations/{cid}")
@@ -590,6 +606,25 @@ def _client(service: Any, user_id: str, account_id: str) -> tuple[DionChatClient
     return DionChatClient(broker, account_id), secret
 
 
+def project_dion_conversation(service, user_id: str, account_id: str, row: Mapping[str, Any]):
+    peer = str(row.get("conversation_id") or "")
+    kind = {"GROUP": "group", "CHANNEL": "channel"}.get(row.get("conversation_type"))
+    if kind is None:
+        return None
+    if not _PROVIDER_ID.fullmatch(peer):
+        raise DionChatError("DION conversation identity invalid")
+    title = str(row.get("name") or "").strip()[:320]
+    store = service._store
+    record = store.ensure_contact_conversation("dion", peer, user_id=user_id,
+        account_ref=account_id, peer_id=peer, conversation_kind=kind, route_id="dion")
+    if title:
+        with store._lock, store._connection:
+            store._connection.execute(
+                "INSERT OR REPLACE INTO contact_names (user_id,source,sender,name,updated_at) VALUES (?,?,?,?,?)",
+                (user_id, "dion", f"chat:{account_id}:{peer}", title, time.time()))
+    return record
+
+
 def poll_dion(service: Any, account: Mapping[str, Any]) -> None:
     user_id = str(account["user_id"])
     account_id = str(account["account_id"])
@@ -620,6 +655,7 @@ def poll_dion(service: Any, account: Mapping[str, Any]) -> None:
         conversation_id = str(conversation.get("conversation_id") or "")
         if not conversation_id:
             raise DionChatError("DION conversation ID missing")
+        project_dion_conversation(service, user_id, account_id, conversation)
         cursor_key = f"dion:history:{account_id}:{conversation_id}"
         stored_after = str(service._store.user_preference(cursor_key, user_id=user_id) or "")
         after = stored_after

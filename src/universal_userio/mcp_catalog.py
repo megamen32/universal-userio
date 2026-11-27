@@ -445,6 +445,17 @@ MESSENGER_SPECS = (
                 'action':{'type':'string','enum':['reply','edit','sticker','file']},
                 'payload':{'type':'object'},'request_id':{'type':'string','minLength':16,'maxLength':128}},
                ['account_ref','conversation_id','source_message_id','action','payload','request_id'])),
+    ToolSpec('userio.messenger.dion_admin.propose',
+        'Prepare native DION group or channel creation for explicit approval. '
+        'Use title and optional exact participant_ids (empty creates an isolated conversation). '
+        'Then approve this exact action hash; do not repeat uncertain creation.',
+        schema({'account_ref':{'type':'string','pattern':r'^dion:[A-Za-z0-9._:@-]{1,128}:[A-Za-z0-9._:@-]{1,128}$'},
+                'operation':{'type':'string','enum':['group_create','channel_create']},
+                'payload':schema({'title':{'type':'string','minLength':1,'maxLength':128},
+                    'participant_ids':{'type':'array','maxItems':50,'uniqueItems':True,
+                        'items':{'type':'string','pattern':r'^[A-Za-z0-9_-]{1,160}$'}}},['title']),
+                'request_id':{'type':'string','minLength':16,'maxLength':128}},
+               ['account_ref','operation','payload','request_id'])),
     ToolSpec('userio.messenger.telegram_admin.create',
         'Create a Telegram group or private broadcast channel immediately in one call, without approval. '
         'Use a stable telegram:<TelegramUserID> account_ref. Keep request_id for idempotency: '
@@ -623,6 +634,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.get': 'read',
     'userio.messenger.safe_action': 'send',
     'userio.messenger.propose': 'send',
+    'userio.messenger.dion_admin.propose': 'send',
     'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.approve': 'send',

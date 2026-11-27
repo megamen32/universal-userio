@@ -7,7 +7,7 @@ import hashlib
 from .contracts import DeliveryNotSubmittedError
 from .dion_chat import (_client, _owned_message, download_owned_attachment,
                         dion_message, DionChatUncertain, DionChatRejected,
-                        reconcile_dion_receipt, _PROVIDER_ID)
+                        reconcile_dion_receipt, project_dion_conversation, _PROVIDER_ID)
 
 
 class DionMessengerProvider:
@@ -123,6 +123,42 @@ class DionMessengerProvider:
             raise DionChatUncertain("DION message receipt is not yet visible")
         return {"account_ref": self.account_ref, "peer_id": e["peer_id"],
                 "provider_message_id": message_id, "receipt": receipt}
+
+    def execute_creation(self, e):
+        if e["user_id"] != self.authorized_user or e["account_ref"] != self.account_ref:
+            raise PermissionError("DION account route mismatch")
+        if e["operation"] not in {"group_create", "channel_create"}:
+            raise DeliveryNotSubmittedError("DION creation operation unsupported")
+        p = e["payload"]
+        kind = "GROUP" if e["operation"] == "group_create" else "CHANNEL"
+        try:
+            client, _ = _client(self.service, self.authorized_user, self.account_ref)
+        except Exception as exc:
+            raise DeliveryNotSubmittedError("DION account unavailable before creation") from exc
+        result = client.create_conversation(title=p["title"], kind=kind,
+                                            participant_ids=tuple(p["participant_ids"]))
+        peer = str(result["conversation_id"])
+        # A successful creation receipt is durable even if subsequent GET is
+        # unavailable. Never repeat POST to resolve an uncertain readback.
+        verified = False
+        try:
+            info = client.conversation(peer)
+            verified = (info.get("conversation_id") == peer
+                        and info.get("conversation_type") == kind
+                        and info.get("name") == p["title"])
+        except Exception:
+            pass
+        return {"account_ref": self.account_ref, "operation": e["operation"],
+                "peer_id": peer, "conversation_type": kind,
+                "title": p["title"], "readback_verified": verified,
+                "status": "complete" if verified else "partial",
+                "receipt": "dion:create:" + peer,
+                "url": "https://dion.vc/chats/conversations/" + peer}
+
+    def project_creation(self, e, receipt):
+        return project_dion_conversation(self.service, self.authorized_user, self.account_ref,
+            {"conversation_id": receipt["peer_id"], "conversation_type": receipt["conversation_type"],
+             "name": receipt["title"]})
 
     def project_receipt(self, e, result):
         conversation = self.service._store.conversation(e["conversation_id"],

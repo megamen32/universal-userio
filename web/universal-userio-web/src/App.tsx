@@ -76,7 +76,7 @@ const channelIcon = (source: string) => {
 }
 const displayChannel = (source: string) => {
   const provider = providerForSource(source)
-  return ({ telegram: "Telegram", whatsapp: "WhatsApp", gmail: "Почта", max: "MAX", vk: "VK", matrix: "Matrix", sms: "СМС", phone: "Звонки", telemost: "Яндекс Телемост", yandex: "Яндекс Телемост", chatgpt: "ChatGPT" } as Record<string, string>)[provider] || provider[0]?.toUpperCase() + provider.slice(1)
+  return ({ telegram: "Telegram", whatsapp: "WhatsApp", gmail: "Почта", max: "MAX", vk: "VK", matrix: "Matrix", sms: "СМС", phone: "Звонки", telemost: "Яндекс Телемост", yandex: "Яндекс Телемост", chatgpt: "ChatGPT", dion: "DION" } as Record<string, string>)[provider] || provider[0]?.toUpperCase() + provider.slice(1)
 }
 const matrixAccountDetails = (chat: Chat, accounts: Account[]) => (chat.account_refs || [])
   .map(id => {
@@ -210,9 +210,9 @@ const mediaLabel = (body: string) => {
 const MessageBody = ({ message, conversationId, onAttachmentClick }: { message: Message; conversationId?: string; onAttachmentClick: (m: Message, index?: number, download?: boolean) => void }) => {
   const attachments = messageAttachments(message.attachments)
   if (attachments.length) return <div className="min-w-0 max-w-full space-y-2 [overflow-wrap:anywhere]">
-    {message.body.trim() && !MEDIA_PLACEHOLDER.test(message.body.trim()) && message.body !== '[Вложение VK]' && <p className="whitespace-pre-wrap">{message.body}</p>}
+    {message.body.trim() && !MEDIA_PLACEHOLDER.test(message.body.trim()) && !['[Вложение VK]', '[Вложение DION]'].includes(message.body) && <p className="whitespace-pre-wrap">{message.body}</p>}
     {attachments.map(attachment => {
-      const available = message.source === 'max' || message.source === 'telegram' || attachment.index === 0
+      const available = message.source === 'max' || message.source === 'telegram' || message.source === 'dion' || attachment.index === 0
       const unavailable = 'Это вложение пока нельзя скачать'
       return <div key={attachment.index} data-attachment-index={attachment.index} className="w-full min-w-0 max-w-sm rounded-xl border border-current/15 p-2.5">
       {attachment.kind === 'sticker' && attachment.src

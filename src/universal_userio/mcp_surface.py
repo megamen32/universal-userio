@@ -259,6 +259,7 @@ TOOL_CAPABILITIES = {
     'userio.messenger.safe_action': 'send',
     'userio.messenger.button_click': 'send',
     'userio.messenger.propose': 'send',
+    'userio.messenger.dion_admin.propose': 'send',
     'userio.messenger.telegram_admin.create': 'send',
     'userio.messenger.telegram_admin.propose': 'send',
     'userio.messenger.upload': 'send',
@@ -330,6 +331,10 @@ class UserIOMcpSurface:
             and (spec.name not in {'userio.messenger.telegram_admin.create','userio.messenger.telegram_admin.propose'}
                  or principal.messenger_accounts is None and principal.messenger_grants is None
                  or any(g.get('telegram_admin') for g in principal.messenger_grants or ()))
+            and (spec.name != 'userio.messenger.dion_admin.propose'
+                 or principal.messenger_accounts is None and principal.messenger_grants is None
+                 or any(g.get('dion_admin') and g['access']=='read_write' and g['chats'] is None
+                        for g in principal.messenger_grants or ()))
             and (not principal.meeting_recorder or spec.name in MEETING_RECORDING_TOOLS)
             and (principal.messenger_accounts is None or spec.name.startswith('userio.messenger.')
                  or principal.messenger_grants is not None and spec.name in {
