@@ -3,6 +3,10 @@ import { bodyAndAttachments, loadWhisperApiKey, telegramAudioDescriptor, transcr
 
 async function main() {
 
+  assert.deepStrictEqual(bodyAndAttachments({id: 77, message: '', media: {className: 'MessageMediaUnsupported'}}, null), {
+    body: '[Telegram unsupported media]', attachments: [{kind: 'unsupported', provider_ref: '77'}],
+  });
+
   function voice(id) {
     return { id: id || 7, message: "", media: { document: { mimeType: "audio/ogg", attributes: [{ className: "DocumentAttributeAudio", voice: true }] } } };
   }

@@ -12,6 +12,7 @@ import re
 import time
 
 from .contracts import DeliveryNotSubmittedError, ProviderAuthenticationRequiredError
+from .channels.core import AdapterNotSupported
 from .source_projection import canonical_author, canonical_source
 
 SCHEMA = 'userio.messenger.v1'
@@ -1019,6 +1020,10 @@ def dispatch(store, service, principal, name, arguments):
         return {'ok':False,'error':'provider_not_submitted',
                 'message':'Операция отклонена до отправки. Проверьте статус того же действия.',
                 'action_status':'proposed'}
+    except AdapterNotSupported as error:
+        if op == 'media':
+            return {'ok':False,'error':'provider_media_unavailable'}
+        return {'ok':False,'error':str(error).strip("'")}
     except (KeyError, ValueError, PermissionError) as error:
         return {'ok':False,'error':str(error).strip("'")}
     except Exception as error:

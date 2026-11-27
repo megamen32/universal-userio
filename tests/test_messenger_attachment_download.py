@@ -7,6 +7,8 @@ import pytest
 from universal_userio.contracts import InboxMessage, UserPrincipal
 from universal_userio.adapters import TelegramChannelAdapter
 from universal_userio.messenger import Messenger
+from universal_userio.messenger import dispatch as dispatch_messenger
+from universal_userio.channels.core import AdapterNotSupported
 from universal_userio.messenger_max import MaxMessengerProvider
 from universal_userio.messenger_telegram_mirror import TelegramMirrorProvider
 from universal_userio.contracts import ChannelFile
@@ -14,6 +16,17 @@ from universal_userio.mcp_surface import UserIOMcpSurface
 from universal_userio.max_ingress import message_envelope
 from universal_userio.service import UserIOService
 from universal_userio.store import SQLiteUserIOStore
+
+
+def test_messenger_media_provider_failure_is_not_invalid_argument(monkeypatch):
+    class BrokenMessenger:
+        def __init__(self, *_args): pass
+        def media(self, **_kwargs): raise AdapterNotSupported('bridge refused download')
+
+    monkeypatch.setattr('universal_userio.messenger.Messenger', BrokenMessenger)
+    principal = type('Principal', (), {'read_only': False})()
+    result = dispatch_messenger(None, None, principal, 'userio.messenger.media', {})
+    assert result['error'] == 'provider_media_unavailable'
 
 
 class MaxFixture:

@@ -148,6 +148,11 @@ export function bodyAndAttachments(message, audioResult) {
     if (!media && !action) return { body: visible, attachments: [] };
     const mediaClass = String(value(media, "className", ""));
     if (mediaClass === "MessageMediaEmpty" && !action) return { body: visible, attachments: [] };
+    if (mediaClass === "MessageMediaUnsupported" && !action) {
+      return { body: visible || "[Telegram unsupported media]", attachments: [
+        { kind: "unsupported", provider_ref: String(value(message, "id", "")) },
+      ] };
+    }
     const document = value(media, "document", null);
     const attributes = document && Array.isArray(document.attributes) ? document.attributes : [];
     const audio = telegramAudioDescriptor(message);
