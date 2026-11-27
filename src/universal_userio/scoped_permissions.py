@@ -337,8 +337,8 @@ def _dispatch_scoped_channels(store, service, principal, name, arguments):
             include_images = arguments.get('include_images',True)
             if type(include_images) is not bool: raise ValueError('include_images_must_be_boolean')
             channel_ref, separator, provider_ref = file_ref.partition(':')
-            if not separator or channel_ref not in {'telegram','max'}:
-                raise ValueError('mcp_resource_mode_requires_telegram_or_max')
+            if not separator or channel_ref not in {'telegram','max','dion'}:
+                raise ValueError('mcp_resource_mode_requires_supported_channel')
             from .mcp_files import MAX_MCP_FILE_BYTES, indexed_download
             if channel_ref=='telegram':
                 download_args={'file_ref':provider_ref,'max_bytes':MAX_MCP_FILE_BYTES}

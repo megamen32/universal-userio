@@ -149,8 +149,9 @@ TOOL_SPECS = (
     ),
     ToolSpec(
         "userio.channels.download",
-        "Download a Telegram attachment as base64 or MCP content. Documents use Firecrawl AnyDoc; videos return up to four key frames and a transcript. Set include_images=false to omit image/frame bytes.",
+        "Download a Telegram, MAX or DION attachment as base64 or MCP content. Documents use Firecrawl AnyDoc; videos return up to four key frames and a transcript. Set include_images=false to omit image/frame bytes.",
         schema({"file_ref": {"type": "string"},
+                "attachment_index":{"type":"integer","minimum":0,"maximum":7,"default":0},
                 "mode":{"type":"string","enum":["base64","mcp_resource"],"default":"base64"},
                 "include_images":{"type":"boolean","default":True}}, ["file_ref"]),
     ),
@@ -516,11 +517,12 @@ TOOL_SPECS = (*TOOL_SPECS, *TELEGRAM_CALL_SPECS)
 
 DION_CALL_SPECS = (
     ToolSpec('userio.calls.dion.start',
-        'Create or join one explicitly authorized native headless DION WebRTC call. '
-        'Omit room_id to create a new DION room, or pass an existing DION room slug/URL to join. '
+        'Create or join an explicitly authorized isolated DION VP8 data tunnel. No microphone or speech audio. '
+        'Omit room_id to create a new isolated room; joining requires isolated_tunnel=true. Never use ordinary shared meetings. '
         'Keep request_id: accepted or unknown calls are never replayed under another ID.',
         schema({'account_ref':{'type':'string','pattern':r'^dion:[A-Za-z0-9._:@-]{1,128}:[A-Za-z0-9._:@-]{1,128}$'},
                 'room_id':{'type':'string','maxLength':2048},
+                'isolated_tunnel':{'type':'boolean','default':False},
                 'request_id':{'type':'string','minLength':16,'maxLength':128},
                 'max_seconds':{'type':'integer','minimum':30,'maximum':3600},
                 'confirm':{'type':'boolean'}},

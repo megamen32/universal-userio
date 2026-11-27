@@ -2572,6 +2572,24 @@ def handler(
                 if message is None or str(message.get("conversation_id") or "") != real_id:
                     self._reply(404, {"error": "message not found"})
                     return
+                if source_hint == 'dion':
+                    from .dion_chat import download_owned_attachment, DionChatError, DionReauthRequired, DionAuthError
+                    if not service._store.capability_enabled('download', user_id=user_id):
+                        self._reply(403, {'error':'DION download capability disabled'}); return
+                    try:
+                        file = download_owned_attachment(service, user_id, message_id,
+                            attachment_index=attachment_index)
+                    except KeyError:
+                        self._reply(404, {'error':'DION attachment not found'}); return
+                    except PermissionError:
+                        self._reply(403, {'error':'DION attachment access denied'}); return
+                    except DionReauthRequired:
+                        self._reply(401, {'error':'DION reauthentication required'}); return
+                    except (DionChatError, DionAuthError, OSError):
+                        self._reply(502, {'error':'DION attachment unavailable or changed'}); return
+                    except ValueError:
+                        self._reply(400, {'error':'DION invalid attachment request'}); return
+                    self._reply_raw(200, file.data, content_type=file.content_type, filename=file.filename); return
                 if source_hint=='max':
                     from .matrix_max_media import download as max_binary
                     attachments=service._store.attachments_for_message(
@@ -2666,6 +2684,25 @@ def handler(
                         for a in attachments
                     ],
                 }
+                if source_hint == 'dion' and attachments:
+                    if not service._store.capability_enabled('download', user_id=user_id):
+                        self._reply(403, {'error':'DION download capability disabled'}); return
+                    account = next((a for a in service._store.accounts(user_id=user_id)
+                        if a['id'] == conv.get('account_ref') and a['provider'] == 'dion'
+                        and a['enabled'] and 'read' in a['capabilities']), None)
+                    selected = next((a for a in payload['attachments'] if a['idx'] == attachment_index), None)
+                    if selected is None:
+                        self._reply(404, {'error':'DION attachment not found'}); return
+                    base = f'/v1/conversations/{quote(real_id,safe="")}/media/{quote(message_id,safe="")}/raw'
+                    for a in payload['attachments']:
+                        size = a.get('size')
+                        supported = bool(account and a.get('attachment_id') and a['idx'] < 8
+                            and (size is None or 0 <= size <= 20*1024*1024))
+                        a.update(available=supported,
+                            download_url=f"{base}?attachment_index={a['idx']}" if supported else None)
+                    payload.update({k:selected[k] for k in ('kind','filename','content_type','size','available','download_url')})
+                    payload['reason'] = '' if selected['available'] else 'DION attachment unavailable'
+                    self._reply(200,payload); return
                 if source_hint=='max' and attachments:
                     from .matrix_max_media import metadata as max_metadata
                     if attachment_index >= len(attachments):
