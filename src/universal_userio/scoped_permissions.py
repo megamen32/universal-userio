@@ -12,14 +12,17 @@ def validate_grants(store, user_id, grants):
     owned = {a['id']: a for a in store.accounts(user_id=user_id)}
     result, seen = [], set()
     for grant in grants:
-        if not isinstance(grant, dict) or set(grant) - {'account_ref', 'access', 'chats', 'telegram_admin'} or not {'account_ref', 'access', 'chats'} <= set(grant):
+        if not isinstance(grant, dict) or set(grant) - {'account_ref', 'access', 'chats', 'telegram_admin', 'dion_admin'} or not {'account_ref', 'access', 'chats'} <= set(grant):
             raise ValueError('Неверный формат прав аккаунта.')
         ref, access, chats = grant['account_ref'], grant['access'], grant['chats']
         telegram_admin = grant.get('telegram_admin', False)
+        dion_admin = grant.get('dion_admin', False)
         if not isinstance(ref, str) or ref in seen or ref not in owned or not owned[ref]['enabled']:
             raise ValueError('Аккаунт должен быть подключён к вашему UserIO и выбран один раз.')
         if type(telegram_admin) is not bool or telegram_admin and owned[ref]['provider'] != 'telegram':
             raise ValueError('Право управления группами и каналами доступно только Telegram-аккаунтам.')
+        if type(dion_admin) is not bool or dion_admin and (owned[ref]['provider'] != 'dion' or access != 'read_write' or chats is not None):
+            raise ValueError('Создание групп и каналов DION требует права записи на весь аккаунт.')
         if access not in {'read_only', 'read_write'}:
             raise ValueError('Выберите чтение либо чтение и запись.')
         if chats is not None:
@@ -40,7 +43,7 @@ def validate_grants(store, user_id, grants):
                 chat_ids.add(cid)
         seen.add(ref)
         result.append({'account_ref':ref, 'access':access, 'chats':chats,
-                       'telegram_admin':telegram_admin})
+                       'telegram_admin':telegram_admin, **({'dion_admin':dion_admin} if 'dion_admin' in grant else {})})
     return result
 
 
@@ -150,6 +153,7 @@ def enforce(store, principal, name, args):
         if grant is None or grant['chats'] is not None:
             raise PermissionError('account_scope_required_for_identity_history')
         return
+    dion_admin = op == 'dion_admin.propose'
     admin = op in {'telegram_admin.create', 'telegram_admin.propose'}
     admin_operation = args.get('operation', '') if admin else ''
     if op in {'get','approve'}:
@@ -162,8 +166,14 @@ def enforce(store, principal, name, args):
             raise KeyError('action_not_found')
         envelope = json.loads(row['envelope'])
         ref, cid = envelope['account_ref'], envelope['conversation_id']
+        dion_admin = envelope.get('action') == 'dion_create'
         admin = envelope.get('action') == 'telegram_admin'
         admin_operation = envelope.get('operation', '') if admin else ''
+    if dion_admin:
+        grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
+        if not grant or not grant.get('dion_admin',False) or grant['access']!='read_write' or grant['chats'] is not None:
+            raise PermissionError('dion_admin_permission_required')
+        return
     if admin:
         grant = next((g for g in principal.messenger_grants or () if g['account_ref'] == ref), None)
         if grant is None:

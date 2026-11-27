@@ -20,6 +20,7 @@ READ_OPERATIONS = frozenset({'read', 'history', 'has_contacted', 'download'})
 TELEGRAM_ADMIN_OPERATIONS = frozenset({'group_create', 'group_invite', 'group_remove',
                                       'channel_create', 'channel_delete'})
 TELEGRAM_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
+DION_CREATE_OPERATIONS = frozenset({'group_create', 'channel_create'})
 SAFE_ACTIONS = frozenset({'react', 'typing', 'button_click'})
 
 
@@ -116,6 +117,26 @@ class Messenger:
             'availability': support['availability'], 'operations': operations,
         }
 
+    def _dion_creation_capability(self, account_ref, account=None, provider=None):
+        account = account or self._account(account_ref)
+        provider = provider or self._provider(account_ref)
+        supported = account['provider'] == 'dion' and callable(getattr(provider,'execute_creation',None))
+        reason = ''
+        if not supported: reason = 'provider_not_supported'
+        elif not account['enabled']: reason = 'account_disabled'
+        elif self.principal.read_only: reason = 'read_only_token'
+        elif 'reply' not in account['capabilities']: reason = 'account_capability_disabled'
+        elif not self.store.capability_enabled('send', user_id=self.user): reason = 'user_capability_disabled'
+        elif self.principal.messenger_grants is not None:
+            grant = next((g for g in self.principal.messenger_grants if g['account_ref'] == account_ref),None)
+            if not grant or not grant.get('dion_admin',False) or grant['access'] != 'read_write':
+                reason = 'dion_admin_permission_required'
+            elif grant['chats'] is not None: reason = 'dion_admin_create_requires_account_scope'
+        elif self.principal.messenger_accounts is not None: reason = 'dion_admin_permission_required'
+        return {'supported':supported,'allowed':supported and not reason,'reason':reason,
+                'actions':sorted(DION_CREATE_OPERATIONS),
+                'direct_actions':[],'approval_required_actions':sorted(DION_CREATE_OPERATIONS)}
+
     def capabilities(self, account_ref):
         account = self._account(account_ref)
         provider = self._provider(account_ref)
@@ -173,6 +194,7 @@ class Messenger:
                                     else 'messenger_actions' if self.principal.messenger_accounts is not None
                                     else 'read_only' if self.principal.read_only else 'full_access'),
                 'operations':result,
+                'dion_admin':self._dion_creation_capability(account_ref, account, provider),
                 'first_contact':self._first_contact(account_ref, account),
                 'telegram_admin':{'supported':admin_supported,'allowed':admin_supported and not admin_reason,
                     'reason':admin_reason,'actions':sorted(TELEGRAM_ADMIN_OPERATIONS),
@@ -767,6 +789,71 @@ class Messenger:
                     (self.user,action_id,request_id,canonical(envelope).decode(),action_hash,'proposed',time.time()))
         return self.get(action_id)
 
+    def propose_dion_creation(self, account_ref, operation, payload, request_id):
+        if operation not in DION_CREATE_OPERATIONS: raise ValueError('invalid_dion_creation_operation')
+        caps = self._dion_creation_capability(account_ref)
+        if not caps['allowed']: raise PermissionError(caps['reason'])
+        if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9:_-]{16,128}',request_id):
+            raise ValueError('request_id_required')
+        if not isinstance(payload,dict) or set(payload)-{'title','participant_ids'}:
+            raise ValueError('invalid_dion_creation_payload')
+        title=payload.get('title')
+        if not isinstance(title,str) or not title.strip() or len(title.strip())>128:
+            raise ValueError('title_required')
+        users=payload.get('participant_ids',[])
+        if (not isinstance(users,list) or len(users)>50
+                or any(not isinstance(v,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',v) for v in users)
+                or len(set(users))!=len(users)):
+            raise ValueError('exact_dion_participant_ids_required')
+        envelope={'schema':SCHEMA,'user_id':self.user,'account_ref':account_ref,'channel':'dion',
+                  'conversation_id':'','peer_id':'','action':'dion_create','operation':operation,
+                  'payload':{'title':title.strip(),'participant_ids':users},'request_id':request_id}
+        action_id='action_'+hashlib.sha256((self.user+'\0'+request_id).encode()).hexdigest()
+        envelope['action_id']=action_id
+        action_hash=digest(envelope)
+        self._init_actions()
+        with self.store._lock,self.store._connection:
+            self.store._connection.execute('BEGIN IMMEDIATE')
+            row=self.store._connection.execute('SELECT hash FROM messenger_actions WHERE user_id=? AND id=?',(self.user,action_id)).fetchone()
+            if row and row['hash']!=action_hash: raise ValueError('idempotency_conflict')
+            if not row:
+                self.store._connection.execute('INSERT INTO messenger_actions (user_id,id,request_id,envelope,hash,status,created_at) VALUES (?,?,?,?,?,?,?)',
+                    (self.user,action_id,request_id,canonical(envelope).decode(),action_hash,'proposed',time.time()))
+        return self.get(action_id)
+
+    def _execute_dion_creation(self, action):
+        e=action['envelope']; action_id=action['id']
+        caps=self._dion_creation_capability(e['account_ref'])
+        if not caps['allowed']: raise PermissionError(caps['reason'])
+        if action['status']=='accepted':
+            return action
+        if action['status']=='sending': raise ValueError('delivery_uncertain_do_not_retry')
+        provider=self._provider(e['account_ref'])
+        if not provider or getattr(provider,'account_ref',None)!=e['account_ref']:
+            raise ValueError('provider_account_conflict')
+        with self.store._lock,self.store._connection:
+            self.store._connection.execute('BEGIN IMMEDIATE')
+            changed=self.store._connection.execute("UPDATE messenger_actions SET status='sending' WHERE user_id=? AND id=? AND status='proposed'",(self.user,action_id)).rowcount
+            if changed!=1: raise ValueError('delivery_claim_conflict')
+        try:
+            result=provider.execute_creation(e)
+            kind='GROUP' if e['operation']=='group_create' else 'CHANNEL'
+            if (not isinstance(result,dict) or result.get('account_ref')!=e['account_ref']
+                    or result.get('operation')!=e['operation'] or result.get('conversation_type')!=kind
+                    or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',str(result.get('peer_id') or ''))
+                    or result.get('status') not in {'complete','partial'} or not result.get('receipt')):
+                raise RuntimeError('dion_creation_receipt_identity_conflict')
+            with self.store._lock,self.store._connection:
+                self.store._connection.execute("UPDATE messenger_actions SET status='accepted',receipt=? WHERE user_id=? AND id=? AND status='sending'",
+                    (canonical(result).decode(),self.user,action_id))
+        except DeliveryNotSubmittedError:
+            with self.store._lock,self.store._connection:
+                self.store._connection.execute("UPDATE messenger_actions SET status='proposed' WHERE user_id=? AND id=? AND status='sending'",(self.user,action_id))
+            raise
+        try: provider.project_creation(e,result)
+        except Exception: pass
+        return self.get(action_id)
+
     def get(self, action_id):
         self._init_actions()
         with self.store._lock:
@@ -786,6 +873,9 @@ class Messenger:
 
     def _execute_action(self, action, question_proof=None):
         action_id = action['id']; e = action['envelope']
+        if e.get('action')=='dion_create':
+            if question_proof is not None: raise ValueError('question_proof_not_supported_for_action')
+            return self._execute_dion_creation(action)
         if e.get('action')=='telegram_admin':
             if not self.capabilities(e['account_ref'])['telegram_admin']['allowed']:
                 raise PermissionError(self.capabilities(e['account_ref'])['telegram_admin']['reason'])
@@ -916,6 +1006,7 @@ def dispatch(store, service, principal, name, arguments):
         if op == 'safe_action': return {'ok':True,'action':api.safe_action(**arguments)}
         if op == 'button_click': return {'ok':True,'action':api.click_button(**arguments)}
         if op == 'propose': return {'ok':True,'action':api.propose(**arguments)}
+        if op == 'dion_admin.propose': return {'ok':True,'action':api.propose_dion_creation(**arguments)}
         if op == 'telegram_admin.create': return {'ok':True,'action':api.create_telegram(**arguments)}
         if op == 'telegram_admin.propose': return {'ok':True,'action':api.propose_telegram_admin(**arguments)}
         if op == 'get': return {'ok':True,'action':api.get(**arguments)}
