@@ -1009,6 +1009,13 @@ class StoredChannelAdapter:
 class DionChannelAdapter(StoredChannelAdapter):
     channel = "dion"
 
+    def download(self, *, file_ref: str, attachment_index: int = 0,
+                 max_bytes: int | None = None) -> ChannelFile:
+        from .dion_chat import download_owned_attachment
+        return download_owned_attachment(self._service, self._user_id, file_ref,
+                                         attachment_index=attachment_index,
+                                         max_bytes=max_bytes)
+
 
 class YandexChannelAdapter(StoredChannelAdapter):
     channel = "yandex"
@@ -2421,7 +2428,7 @@ class UnifiedChannels(StoredChannelAdapter):
         channel, separator, provider_ref = file_ref.partition(":")
         if separator and channel in self._types:
             adapter = self.adapter(channel)
-            if channel == "telegram":
+            if channel in {"telegram", "dion"}:
                 return adapter.download(file_ref=provider_ref, attachment_index=attachment_index,
                                         max_bytes=max_bytes)
             if channel == "max":

@@ -51,11 +51,13 @@ class DionCalls:
             raise KeyError("call not found")
         if record.get("status") in {"accepted", "active"} and call_id not in self.active:
             record["status"] = "unknown"
+        record.setdefault("media_mode", "vp8_data_tunnel")
+        record.setdefault("audio_supported", False)
         return record
 
     def start(
         self, *, user_id, account_ref, request_id, confirm=False,
-        room_id="", max_seconds=600,
+        room_id="", max_seconds=600, isolated_tunnel=False,
     ):
         if confirm is not True:
             raise ValueError("explicit call confirmation required")
@@ -74,6 +76,8 @@ class DionCalls:
             raise KeyError("DION account not found")
 
         action = "join" if str(room_id).strip() else "create"
+        if action == "join" and isolated_tunnel is not True:
+            raise ValueError("ordinary DION audio meetings are not supported; isolated_tunnel confirmation required")
         config = {
             "user_id": user_id,
             "account_ref": account_ref,
@@ -104,6 +108,8 @@ class DionCalls:
                 "request_id": str(request_id),
                 "fingerprint": fingerprint,
                 "status": "accepted",
+                "media_mode": "vp8_data_tunnel",
+                "audio_supported": False,
                 "created_at": time.time(),
             }
             self._save(record)

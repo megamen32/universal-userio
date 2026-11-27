@@ -71,6 +71,7 @@ PLATFORM_DROPIN = Path('/etc/systemd/system/agentcall-gatewayd.service.d/userio-
 BACKEND_SOURCE_HASH_PATHS = tuple('src/universal_userio/' + f for f in (
     'messenger.py', 'mcp_catalog.py', 'mcp_surface.py', 'service.py', 'http_api.py', 'agent_channel.py',
     'messenger_max.py', 'messenger_vk.py', 'scoped_permissions.py',
+    'dion_auth.py', 'dion_chat.py', 'dion_calls.py', 'messenger_dion.py', 'source_projection.py',
     'delivery_reconciliation.py', 'provider_readback.py', 'gmail_sent_reconciliation.py', 'channels/max_client.py', 'channels/whatsapp.py', 'channels/sms_gateway.py', 'store.py', 'adapters.py', 'runtime.py',
     'voice/agentcall_phone_tts.py', 'messenger_telegram_mirror.py',
     'relay_account_bridge.py', 'contact_start.py', 'mcp_dispatch.py',
@@ -348,7 +349,7 @@ def assert_idle():
     # the max_seconds + 240s transport deadline and 70s consumer shutdown grace.
     call_statuses = {'accepted', 'ringing', 'active', 'unknown'}
     now = time.time()
-    for name in ('telegram-calls', 'matrix-calls'):
+    for name in ('telegram-calls', 'matrix-calls', 'dion-calls'):
         for path in (Path('/var/lib/universal-userio') / name).glob('*/call.json'):
             try:
                 record = json.loads(path.read_text())
@@ -362,7 +363,8 @@ def assert_idle():
                     max_seconds = 120
                 else:
                     max_seconds = int(record['max_seconds'])
-                if not 30 <= max_seconds <= 600 or now < started_at:
+                upper_bound = 3600 if name == 'dion-calls' else 600
+                if not 30 <= max_seconds <= upper_bound or now < started_at:
                     raise ValueError('call deadline is invalid')
                 if now - started_at <= max_seconds + 310:
                     raise RuntimeError('active or unresolved RTC call prevents cutover')

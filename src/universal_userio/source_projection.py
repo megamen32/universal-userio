@@ -46,6 +46,8 @@ def canonical_author(*, channel: str, account_ref: str, conversation_kind: str, 
     outgoing = direction == "outgoing"
     if channel == "gmail":
         default_id = gmail_sender_id if outgoing else sender
+    elif channel == "dion" and outgoing:
+        default_id = account_ref.rsplit(":", 1)[-1] if account_ref.startswith("dion:") else sender
     elif channel == "telegram" and outgoing:
         default_id = account_ref.split(":", 1)[-1] if account_ref.startswith("telegram:") else sender
     elif channel == "telegram" and conversation_kind == "direct":

@@ -84,14 +84,14 @@ def test_dion_call_request_id_conflict_does_not_start_second_call(setup):
     manager = DionCalls(service, root=root/"calls", helper_path=helper)
     record = manager.start(
         user_id=store.default_user_id, account_ref=account_id,
-        request_id="request-dion-000002", room_id="room-a",
+        request_id="request-dion-000002", room_id="room-a", isolated_tunnel=True,
         confirm=True, max_seconds=30,
     )
     wait_for(manager, record["call_id"], store.default_user_id, "active")
     with pytest.raises(ValueError, match="conflict"):
         manager.start(
             user_id=store.default_user_id, account_ref=account_id,
-            request_id="request-dion-000002", room_id="room-b",
+            request_id="request-dion-000002", room_id="room-b", isolated_tunnel=True,
             confirm=True, max_seconds=30,
         )
     manager.stop(record["call_id"], store.default_user_id)
@@ -118,3 +118,18 @@ def test_dion_call_tools_are_exposed_with_correct_read_write_annotations(setup):
     assert "userio.calls.dion.stop" in tools
     assert tools["userio.calls.dion.get"]["annotations"]["readOnlyHint"] is True
     assert tools["userio.calls.dion.start"]["annotations"]["readOnlyHint"] is False
+
+
+def test_dion_refuses_ordinary_shared_meeting_and_reports_data_only(setup):
+    service, store, account_id, helper, root = setup
+    manager = DionCalls(service, root=root/"calls", helper_path=helper)
+    with pytest.raises(ValueError, match="ordinary DION audio"):
+        manager.start(user_id=store.default_user_id, account_ref=account_id,
+                      request_id="request-dion-ordinary", confirm=True, room_id="ordinary")
+    record = manager.start(user_id=store.default_user_id, account_ref=account_id,
+                           request_id="request-dion-isolated", confirm=True)
+    assert record["audio_supported"] is False
+    assert record["media_mode"] == "vp8_data_tunnel"
+    wait_for(manager, record["call_id"], store.default_user_id, "active")
+    manager.stop(record["call_id"], store.default_user_id)
+    wait_for(manager, record["call_id"], store.default_user_id, "completed")

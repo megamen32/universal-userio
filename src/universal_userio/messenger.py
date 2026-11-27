@@ -57,6 +57,10 @@ class Messenger:
         if account['provider']=='max' and account['enabled'] and str(account['credential_ref']).startswith('connector:'):
             from .messenger_max import PersonalMaxMessengerProvider
             provider=PersonalMaxMessengerProvider(self.service,account_ref,self.user)
+        if (provider is None and account['provider']=='dion' and account['enabled']
+                and str(account['credential_ref']).startswith('connector:')):
+            from .messenger_dion import DionMessengerProvider
+            provider=DionMessengerProvider(self.service,account_ref,self.user)
         if provider is None:
             account=self._account(account_ref)
             if (account['provider']=='vk' and account_ref.startswith('vk:')
@@ -234,7 +238,12 @@ class Messenger:
             provider_id = mid[len(peer+':'):]
         elif conv['source'] == 'max' and mid.startswith('max-'+peer+'-'):
             provider_id = mid[len('max-'+peer+'-'):]
-        if conv['source'] not in {'telegram','max','vk'}: provider_id=mid
+        if conv['source']=='dion':
+            prefix=account_ref+'|'+peer+':'
+            if not mid.startswith(prefix) or not re.fullmatch(r'[A-Za-z0-9_-]{1,160}',mid[len(prefix):]):
+                raise ValueError('provider_source_id_unavailable')
+            provider_id=mid[len(prefix):]
+        elif conv['source'] not in {'telegram','max','vk'}: provider_id=mid
         if not provider_id or conv['source'] in {'telegram','max','vk'} and not re.fullmatch(r'[1-9][0-9]*', provider_id):
             raise ValueError('provider_source_id_unavailable')
         routing = {}
@@ -847,6 +856,8 @@ class Messenger:
                 raise RuntimeError('provider_receipt_identity_conflict')
             mid = result.get('provider_message_id')
             valid_id = isinstance(mid,str) and bool(re.fullmatch(r'[1-9][0-9]*',mid))
+            if e['channel']=='dion':
+                valid_id = isinstance(mid,str) and bool(re.fullmatch(r'[A-Za-z0-9_-]{1,160}',mid))
             if e['channel']=='gmail':
                 from .messenger_email import mail_id
                 valid_id = mail_id(mid) and '@' in mid
